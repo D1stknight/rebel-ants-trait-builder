@@ -811,3 +811,149 @@ function maybeRestoreAutosave() {
     setTimeout(tick, 400);
   })();
 })();
+/* ========= AUTOSAVE v4 — hooks Fabric when the canvas is created ========= */
+(function autosaveV4(){
+  const KEY = 'ra_autosave_v1';
+  let wired = false;          // have we attached listeners yet?
+  let C = null;               // canvas instance once found
+
+  // Safe storage (falls back if localStorage is blocked)
+  function store(){
+    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
+    catch(e){ return sessionStorage; }
+  }
+
+  // Tiny status chip (bottom-right) so you know it worked
+  function show(msg){
+    let chip = document.getElementById('raDebug');
+    if (!chip) {
+      chip = document.createElement('div');
+      chip.id = 'raDebug';
+      Object.assign(chip.style, {
+        position:'fixed', bottom:'8px', right:'8px', zIndex:'99999',
+        background:'rgba(0,0,0,.6)', color:'#fff', padding:'6px 8px',
+        borderRadius:'6px', fontSize:'12px', pointerEvents:'none'
+      });
+      document.body.appendChild(chip);
+    }
+    chip.textContent = msg;
+    setTimeout(()=>{ if (chip.textContent === msg) chip.textContent = ''; }, 1200);
+  }
+
+  // Add 3 buttons in the Canvas card so you can drive it
+  function addButtons(){
+    if (document.getElementById('raAutoRow')) return;
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+
+    const row = document.createElement('div');
+    row.id = 'raAutoRow';
+    row.style.marginTop = '6px';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'btn small'; saveBtn.textContent = 'Save now';
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'btn small'; restoreBtn.style.marginLeft='6px';
+    restoreBtn.textContent = 'Restore last session';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn small danger'; clearBtn.style.marginLeft='6px';
+    clearBtn.textContent = 'Clear saved';
+
+    row.append(saveBtn, restoreBtn, clearBtn);
+    holder.appendChild(row);
+
+    saveBtn.addEventListener('click', saveNow);
+    restoreBtn.addEventListener('click', () => restoreNow(false));
+    clearBtn.addEventListener('click', () => { store().removeItem(KEY); show('Saved session cleared'); });
+  }
+
+  // Ensure restored images load (CORS)
+  function patchImageCORS(){
+    if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
+      const orig = fabric.Image.fromObject;
+      fabric.Image.fromObject = function(obj, cb){
+        obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
+        return orig.call(this, obj, cb);
+      };
+      fabric.Image._raPatched = true;
+    }
+  }
+
+  function saveNow(){
+    if (!C) return;
+    try {
+      const json = C.toJSON(['_isWatermark','_isOverlayWM']);
+      store().setItem(KEY, JSON.stringify(json));
+      show('Saved just now');
+    } catch(e){ show('Save error'); }
+  }
+
+  function restoreNow(ask){
+    const raw = store().getItem(KEY);
+    if (!raw) { alert('Nothing saved yet'); return; }
+    if (ask && !confirm('Restore your last session?')) return;
+    try {
+      patchImageCORS();
+      const json = JSON.parse(raw);
+      C.loadFromJSON(json, () => {
+        C.renderAll();
+        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+        show('Restored');
+      });
+    } catch(e){ alert('Could not restore this session.'); }
+  }
+
+  // Attach listeners once we have the canvas
+  function wireOnce(){
+    if (wired || !C) return;
+    wired = true;
+    ['object:added','object:modified','object:removed','mouse:up'].forEach(evt=>{
+      try { C.on(evt, saveNow); } catch(e){}
+    });
+    window.addEventListener('beforeunload', saveNow);
+    addButtons();
+    setTimeout(() => { if (store().getItem(KEY)) restoreNow(true); }, 600);
+    show('Ready');
+  }
+
+  // MAIN HOOK: intercept Fabric canvas creation so we always catch it
+  function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
+      setTimeout(hookFabric, 200); return;
+    }
+    const origInit = fabric.Canvas.prototype.initialize;
+    fabric.Canvas.prototype.initialize = function(...args){
+      const result = origInit.apply(this, args);
+      try {
+        C = this;              // we now have the canvas instance
+        window.canvas = this;  // also expose it (handy for other tools)
+        wireOnce();            // turn on autosave/restore
+      } catch(e){}
+      return result;
+    };
+
+    // If the canvas already existed before our hook, try to find it
+    setTimeout(() => {
+      if (!C) {
+        try {
+          for (const k in window) {
+            const v = window[k];
+            if (v && typeof v.getObjects === 'function' && v.upperCanvasEl) { C = v; break; }
+          }
+        } catch(e){}
+        if (C) { window.canvas = C; wireOnce(); }
+      }
+    }, 300);
+  }
+
+  // Keep nudging the UI (buttons) in case the Canvas card renders late
+  (function ping(){
+    addButtons();
+    setTimeout(ping, 400);
+  })();
+
+  hookFabric();
+})();
