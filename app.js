@@ -404,13 +404,16 @@ function maybeRestoreAutosave() {
   } catch(e) { /* ignore */ }
 }
 
-// Hook: save often
-(function hookAutosave(){
-  if (!window.canvas) return;
-  ['object:added','object:modified','object:removed'].forEach(evt=>{
-    canvas.on(evt, saveAutosave);
-  });
-  window.addEventListener('beforeunload', saveAutosave);
-  // Try restoring once when the app is ready
-  setTimeout(maybeRestoreAutosave, 600);
+// Start autosave when the canvas actually exists
+(function startAutosaveWhenReady(){
+  const timer = setInterval(()=>{
+    if (!window.canvas) return;
+    ['object:added','object:modified','object:removed'].forEach(evt=>{
+      canvas.on(evt, saveAutosave);
+    });
+    window.addEventListener('beforeunload', saveAutosave);
+    // Ask once per load if there is something to restore
+    setTimeout(maybeRestoreAutosave, 800);
+    clearInterval(timer);
+  }, 250);
 })();
