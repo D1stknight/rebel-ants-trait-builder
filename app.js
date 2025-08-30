@@ -1058,3 +1058,193 @@ function maybeRestoreAutosave() {
     setTimeout(nudge, 600);
   })();
 })();
+/* ===== RA PATCH — Manual Save + Checkpoints + Optional Timed Autosave =====
+   - Kills old autosave-on-every-move by removing Fabric event listeners.
+   - Adds a clean control row in the Canvas card:
+       [Save now] [Clear saved] [Save checkpoint] [Restore checkpoint] [Autosave: Off/On (5m)]
+   - Hides any old "Restore last session / Restore autosave" button.
+   - Autosave is OFF by default. Turn it ON with the toggle. Edit MINUTES below if you want 3m.
+============================================================================ */
+
+(function RA_PATCH_MANUAL_SAVE(){
+  // --- Config ---
+  const AUTOSAVE_MINUTES = 5;      // change to 3 if you prefer every 3 minutes
+  const AUTOSAVE_KEY     = 'ra_autosave_v1';
+  const CHECKPOINT_KEY   = 'ra_checkpoint_v1';
+  const AUTOSAVE_FLAG    = 'ra_autosave_enabled_v1'; // remembers your toggle choice
+
+  // --- Storage helper (falls back if localStorage is blocked) ---
+  function store(){
+    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
+    catch(e){ return sessionStorage; }
+  }
+
+  // --- Find Fabric canvas robustly ---
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    try {
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+          && typeof v.add === 'function'
+          && typeof v.loadFromJSON === 'function'
+          && typeof v.toJSON === 'function'
+          && v.upperCanvasEl) return v;
+      }
+    } catch(e){}
+    const el = document.querySelector('canvas');
+    if (el && el.fabric && typeof el.fabric.loadFromJSON === 'function') return el.fabric;
+    return null;
+  }
+
+  // --- Small status chip so you know it worked ---
+  function toast(msg){
+    let chip = document.getElementById('raToast');
+    if (!chip){
+      chip = document.createElement('div');
+      chip.id = 'raToast';
+      Object.assign(chip.style, {
+        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
+        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
+        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
+      });
+      document.body.appendChild(chip);
+    }
+    chip.textContent = msg;
+    setTimeout(()=>{ if (chip.textContent === msg) chip.textContent = ''; }, 1200);
+  }
+
+  // --- Hide old autosave UI (if it exists) ---
+  function hideOldAutosaveUI(){
+    const oldA = document.getElementById('restoreBtn');      // our earlier injected button
+    if (oldA) oldA.style.display = 'none';
+    const legacy = Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent||'').trim().toLowerCase() === 'restore last session'
+              || (b.textContent||'').trim().toLowerCase() === 'restore autosave');
+    if (legacy) legacy.style.display = 'none';
+    const oldRow = document.getElementById('raAutoRow');      // earlier row container
+    if (oldRow) oldRow.remove();
+  }
+
+  // --- Remove old autosave event hooks (stop "save on every move") ---
+  function silenceOldAutosave(){
+    const c = findCanvas(); if (!c) return;
+    ['object:added','object:modified','object:removed','mouse:up','selection:updated']
+      .forEach(evt => { try { c.off(evt); } catch(e){} });
+    // keep any export/watermark listeners your app uses; we only remove common autosave events
+  }
+
+  // --- Manual save / clear (uses the same AUTOSAVE_KEY for compatibility) ---
+  function manualSave(){
+    const c = findCanvas(); if (!c){ toast('Canvas not ready'); return; }
+    try{
+      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
+      store().setItem(AUTOSAVE_KEY, JSON.stringify(json));
+      toast('Saved just now');
+    }catch(e){ toast('Save error'); }
+  }
+  function manualClear(){
+    store().removeItem(AUTOSAVE_KEY);
+    toast('Saved session cleared');
+  }
+
+  // --- Checkpoints (manual, independent of autosave) ---
+  function saveCheckpoint(){
+    const c = findCanvas(); if (!c){ setTimeout(saveCheckpoint, 300); return; }
+    try{
+      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
+      store().setItem(CHECKPOINT_KEY, JSON.stringify(json));
+      toast('Checkpoint saved');
+    }catch(e){ toast('Checkpoint save error'); }
+  }
+  function restoreCheckpoint(){
+    const c = findCanvas(); if (!c){ setTimeout(restoreCheckpoint, 300); return; }
+    const raw = store().getItem(CHECKPOINT_KEY);
+    if (!raw){ toast('No checkpoint'); return; }
+    try{
+      const json = JSON.parse(raw);
+      c.loadFromJSON(json, ()=>{
+        c.renderAll();
+        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+        toast('Checkpoint restored');
+      });
+    }catch(e){ toast('Checkpoint restore error'); }
+  }
+
+  // --- Optional timed autosave (OFF by default; toggle to enable) ---
+  let timer = null;
+  function autosaveEnabled(){ return store().getItem(AUTOSAVE_FLAG) === '1'; }
+  function setAutosaveEnabled(on){
+    if (on){ store().setItem(AUTOSAVE_FLAG,'1'); startTimer(); }
+    else   { store().removeItem(AUTOSAVE_FLAG); stopTimer(); }
+    updateToggleLabel();
+  }
+  function startTimer(){
+    stopTimer();
+    if (!autosaveEnabled()) return;
+    timer = setInterval(()=>{ manualSave(); }, AUTOSAVE_MINUTES*60*1000);
+  }
+  function stopTimer(){ if (timer){ clearInterval(timer); timer = null; } }
+  function toggleAutosave(){ setAutosaveEnabled(!autosaveEnabled()); }
+
+  // --- UI row in the Canvas card ---
+  function insertControls(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+
+    // ensure only one row
+    let row = document.getElementById('raCtrlRow');
+    if (row) return;
+
+    row = document.createElement('div');
+    row.id = 'raCtrlRow';
+    row.style.marginTop = '6px';
+
+    const bSave = document.createElement('button');
+    bSave.id='raSaveNow'; bSave.className='btn small'; bSave.textContent='Save now';
+
+    const bClear = document.createElement('button');
+    bClear.id='raClearSaved'; bClear.className='btn small danger'; bClear.style.marginLeft='6px'; bClear.textContent='Clear saved';
+
+    const bSCk = document.createElement('button');
+    bSCk.id='raSaveCk'; bSCk.className='btn small'; bSCk.style.marginLeft='6px'; bSCk.textContent='Save checkpoint';
+
+    const bRCk = document.createElement('button');
+    bRCk.id='raRestoreCk'; bRCk.className='btn small'; bRCk.style.marginLeft='6px'; bRCk.textContent='Restore checkpoint';
+
+    const bAuto = document.createElement('button');
+    bAuto.id='raAutoToggle'; bAuto.className='btn small'; bAuto.style.marginLeft='6px'; bAuto.textContent='Autosave: Off';
+
+    row.append(bSave, bClear, bSCk, bRCk, bAuto);
+    holder.appendChild(row);
+
+    bSave.addEventListener('click', manualSave);
+    bClear.addEventListener('click', manualClear);
+    bSCk.addEventListener('click', saveCheckpoint);
+    bRCk.addEventListener('click', restoreCheckpoint);
+    bAuto.addEventListener('click', toggleAutosave);
+
+    updateToggleLabel();
+  }
+
+  function updateToggleLabel(){
+    const btn = document.getElementById('raAutoToggle');
+    if (!btn) return;
+    btn.textContent = autosaveEnabled() ? `Autosave: On (${AUTOSAVE_MINUTES}m)` : 'Autosave: Off';
+  }
+
+  // --- Keep things tidy and working even if UI loads late ---
+  function tick(){
+    hideOldAutosaveUI();
+    insertControls();
+    // set window.canvas for other tools if we can
+    const c = findCanvas(); if (c && !window.canvas) window.canvas = c;
+    // disable old move-based autosave
+    silenceOldAutosave();
+    // manage the timer according to your toggle
+    if (autosaveEnabled() && !timer) startTimer();
+    setTimeout(tick, 500);
+  }
+  tick();
+})();
