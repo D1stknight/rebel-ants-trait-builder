@@ -2067,3 +2067,92 @@ function maybeRestoreAutosave() {
   (function boot(){ hideLegacyUI(); insertRow(); })();
   document.addEventListener('ra:canvas-ready', ()=>{ hideLegacyUI(); insertRow(); });
 })();
+/* === RA_BASE_LOCK — auto-lock the base NFT image so it can't move === */
+(function RA_BASE_LOCK(){
+  let baseLocked = false;
+
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.add==='function' && typeof v.loadFromJSON==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function lockAsBase(img, c){
+    if (!img || img._isBase) return;
+    img._isBase = true;
+    img.selectable = false;
+    img.evented = false;
+    img.hasControls = false;
+    img.lockMovementX = img.lockMovementY = true;
+    img.hoverCursor = 'default';
+    try { c.sendToBack(img); } catch(e){}
+    c.discardActiveObject();
+    c.requestRenderAll();
+    baseLocked = true;
+  }
+
+  function isBaseCandidate(obj, c){
+    if (!obj || obj.type !== 'image') return false;
+    const imgs = c.getObjects('image');
+    if (imgs.length === 1) return true; // first image on canvas
+    const w = obj.width * obj.scaleX, h = obj.height * obj.scaleY;
+    const cw = c.getWidth(), ch = c.getHeight();
+    return (w >= cw * 0.9 && h >= ch * 0.9); // very large image ≈ base
+  }
+
+  function attach(){
+    const c = findCanvas(); if (!c){ setTimeout(attach, 300); return; }
+    // Lock the first suitable image that gets added
+    c.on('object:added', e=>{
+      const o = e.target || e; if (!o) return;
+      if (!baseLocked && isBaseCandidate(o, c)) lockAsBase(o, c);
+    });
+  }
+
+  function resetLockSoon(){
+    baseLocked = false;
+    setTimeout(()=>{
+      const c = findCanvas(); if (!c) return;
+      const imgs = c.getObjects('image');
+      if (imgs.length){
+        // choose the largest image as base if not already marked
+        const base = imgs.reduce((a,b)=>{
+          const sa=(a.width*a.scaleX)*(a.height*a.scaleY), sb=(b.width*b.scaleX)*(b.height*b.scaleY);
+          return sb>sa ? b : a;
+        });
+        lockAsBase(base, c);
+      }
+    }, 800);
+  }
+
+  function wireLoadAndClearButtons(){
+    const btns = Array.from(document.querySelectorAll('button'));
+    const byText = t => btns.find(b => (b.textContent||'').trim().toLowerCase() === t);
+    const clearBase   = byText('clear base');
+    const load        = byText('load');            // paste URL → Load
+    const loadByToken = byText('load by token');   // token loader
+    [clearBase, load, loadByToken].forEach(btn=>{
+      if (btn && !btn._raBL){
+        btn._raBL = true;
+        btn.addEventListener('click', ()=> resetLockSoon());
+      }
+    });
+  }
+
+  attach();
+  wireLoadAndClearButtons();
+  document.addEventListener('ra:canvas-ready', ()=>{ baseLocked=false; resetLockSoon(); });
+  const obs = new MutationObserver(()=> wireLoadAndClearButtons());
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
