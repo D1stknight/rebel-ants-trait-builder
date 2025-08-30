@@ -1486,3 +1486,221 @@ function maybeRestoreAutosave() {
     setTimeout(tick, 500);
   })();
 })();
+/* ========= RA FINAL PATCH — reliable canvas + clean controls (no move-autosave) ========= */
+(function RA_FINAL_PATCH(){
+  // ----- Config -----
+  const AUTOSAVE_MINUTES = 5; // timed autosave interval if you toggle it on
+  const SNAP_KEY   = 'ra_autosave_v1';      // manual snapshot ("Save now")
+  const CKPT_KEY   = 'ra_checkpoint_v1';    // manual checkpoint
+  const FLAG_KEY   = 'ra_autosave_enabled_v1'; // remembers toggle
+
+  // ----- Small toast so you know actions worked -----
+  function toast(msg){
+    let el = document.getElementById('raToast');
+    if(!el){
+      el = document.createElement('div');
+      Object.assign(el.style,{
+        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
+        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
+        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
+      });
+      el.id = 'raToast';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    setTimeout(()=>{ if(el.textContent===msg) el.textContent=''; }, 1200);
+  }
+
+  // ----- Safe storage -----
+  function store(){
+    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
+    catch(e){ return sessionStorage; }
+  }
+
+  // ----- Robust canvas finder -----
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    try {
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.toJSON === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && v.upperCanvasEl) return v;
+      }
+    } catch(e){}
+    const el = document.querySelector('canvas');
+    if (el && el.fabric && typeof el.fabric.loadFromJSON === 'function') return el.fabric;
+    return null;
+  }
+
+  // ----- Hook Fabric once: as soon as a canvas is created, expose it -----
+  (function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
+      setTimeout(hookFabric, 200); return;
+    }
+    if (fabric.Canvas.prototype._raHooked) return;
+    const orig = fabric.Canvas.prototype.initialize;
+    fabric.Canvas.prototype.initialize = function(...args){
+      const res = orig.apply(this, args);
+      window.canvas = this; // expose for our tools
+      document.dispatchEvent(new CustomEvent('ra:canvas-ready',{detail:this}));
+      return res;
+    };
+    fabric.Canvas.prototype._raHooked = true;
+
+    // If canvas already existed before hook, try to grab it
+    setTimeout(()=>{ const c = findCanvas(); if (c) { window.canvas = c; document.dispatchEvent(new CustomEvent('ra:canvas-ready',{detail:c})); } }, 300);
+  })();
+
+  // ----- Kill legacy autosave + UI (stop flicker & duplicates) -----
+  (function hideLegacy(){
+    const css = document.createElement('style');
+    css.textContent = `
+      #raAutoRow, #restoreBtn, #raDebug, #saveStatus { display:none !important; visibility:hidden !important; height:0 !important; overflow:hidden !important; }
+      #raAutoRow * { display:none !important; }
+    `;
+    (document.head||document.documentElement).appendChild(css);
+
+    const kill = ()=> {
+      const c = findCanvas();
+      if (c) {
+        ['object:added','object:modified','object:removed','mouse:up','selection:updated'].forEach(evt=>{
+          try { c.off(evt); } catch(e){}
+        });
+      }
+      // hide any stray legacy buttons by label
+      Array.from(document.querySelectorAll('button')).forEach(b=>{
+        const t = (b.textContent||'').trim().toLowerCase();
+        if (t === 'restore last session' || t === 'restore autosave') b.style.display = 'none';
+      });
+    };
+    kill();
+    const obs = new MutationObserver(kill);
+    obs.observe(document.body, { childList:true, subtree:true });
+  })();
+
+  // ----- Helper: run when canvas is really there (retry up to 10x) -----
+  function withCanvas(fn, tries=0){
+    const c = findCanvas();
+    if (c) { if(!window.canvas) window.canvas = c; return fn(c); }
+    if (tries >= 10) { toast('Canvas not ready'); return; }
+    setTimeout(()=>withCanvas(fn, tries+1), 200);
+  }
+
+  // ----- Snapshot (manual "Save now") & Clear -----
+  function saveSnapshot(){ withCanvas(c=>{
+    try {
+      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
+      store().setItem(SNAP_KEY, JSON.stringify(json));
+      toast('Saved just now');
+    } catch(e){ toast('Save error'); }
+  });}
+  function clearSnapshot(){ store().removeItem(SNAP_KEY); toast('Saved session cleared'); }
+
+  // ----- Checkpoints (manual) -----
+  function saveCheckpoint(){ withCanvas(c=>{
+    try {
+      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
+      store().setItem(CKPT_KEY, JSON.stringify(json));
+      toast('Checkpoint saved');
+    } catch(e){ toast('Checkpoint save error'); }
+  });}
+  function restoreCheckpoint(){
+    const raw = store().getItem(CKPT_KEY);
+    if (!raw) { toast('No checkpoint'); return; }
+    withCanvas(c=>{
+      try {
+        // ensure images load okay when restoring
+        if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
+          const orig = fabric.Image.fromObject;
+          fabric.Image.fromObject = function(obj, cb){
+            obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
+            return orig.call(this, obj, cb);
+          };
+          fabric.Image._raPatched = true;
+        }
+        const json = JSON.parse(raw);
+        c.loadFromJSON(json, ()=>{
+          c.renderAll();
+          if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+          toast('Checkpoint restored');
+        });
+      } catch(e){ toast('Checkpoint restore error'); }
+    });
+  }
+
+  // ----- Optional timed autosave (OFF by default) -----
+  let timer = null;
+  function autosaveEnabled(){ return store().getItem(FLAG_KEY) === '1'; }
+  function setAutosave(on){
+    if (on) store().setItem(FLAG_KEY,'1'); else store().removeItem(FLAG_KEY);
+    updateToggle(); restartTimer();
+  }
+  function restartTimer(){
+    if (timer) { clearInterval(timer); timer = null; }
+    if (!autosaveEnabled()) return;
+    timer = setInterval(saveSnapshot, AUTOSAVE_MINUTES*60*1000);
+  }
+
+  // ----- Clean control row (one line, centered with your styles) -----
+  function insertControls(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+
+    let row = document.getElementById('raCtrlRowUnified');
+    if (!row){
+      row = document.createElement('div');
+      row.id = 'raCtrlRowUnified';
+      row.className = 'row tight';           // uses your layout class → one line
+      row.style.marginTop = '6px';
+
+      function Btn(id,label,cls){
+        const b = document.createElement('button');
+        b.id = id; b.className = 'btn small' + (cls?' '+cls:''); b.textContent = label;
+        return b;
+      }
+
+      const bSave  = Btn('raSaveNow','Save now');
+      const bClear = Btn('raClearSaved','Clear saved','danger');
+      const bSCk   = Btn('raSaveCk','Save checkpoint');
+      const bRCk   = Btn('raRestoreCk','Restore checkpoint');
+      const bAuto  = Btn('raAutoToggle','Autosave: Off');
+
+      bSave.addEventListener('click', saveSnapshot);
+      bClear.addEventListener('click', clearSnapshot);
+      bSCk.addEventListener('click', saveCheckpoint);
+      bRCk.addEventListener('click', restoreCheckpoint);
+      bAuto.addEventListener('click', ()=> setAutosave(!autosaveEnabled()));
+
+      row.append(bSave, bClear, bSCk, bRCk, bAuto);
+      holder.appendChild(row);
+      updateToggle();
+    }
+  }
+
+  function updateToggle(){
+    const b = document.getElementById('raAutoToggle');
+    if (!b) return;
+    b.textContent = autosaveEnabled() ? `Autosave: On (${AUTOSAVE_MINUTES}m)` : 'Autosave: Off';
+  }
+
+  // ----- Keep things stable even if the UI re-renders -----
+  const obs = new MutationObserver(()=> insertControls());
+  obs.observe(document.body, { childList:true, subtree:true });
+
+  // Insert controls ASAP; keep toggle label current; keep timer in sync
+  function init(){
+    insertControls();
+    updateToggle();
+    restartTimer();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+  document.addEventListener('ra:canvas-ready', ()=> { updateToggle(); }); // when Fabric fires
+})();
