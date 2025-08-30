@@ -376,3 +376,41 @@
   async function fabricFromURL(url){ return await new Promise((res)=> fabric.Image.fromURL(url, img=>res(img), { crossOrigin:'anonymous' })); }
 
 })();
+
+// ===== AUTOSAVE (simple & safe) =====
+const AUTOSAVE_KEY = 'ra_autosave_v1';
+
+// Save current canvas to the browser
+function saveAutosave() {
+  try {
+    if (!window.canvas) return;
+    const json = canvas.toJSON(['_isWatermark','_isOverlayWM']); // keep our flags
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(json));
+  } catch(e) { /* ignore */ }
+}
+
+// Ask to restore the last session
+function maybeRestoreAutosave() {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw) return;
+    if (!confirm('Restore your last session?')) return;
+    const json = JSON.parse(raw);
+    canvas.loadFromJSON(json, () => {
+      canvas.renderAll();
+      // Re-hide watermarks if needed (Pro, etc.)
+      if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+    });
+  } catch(e) { /* ignore */ }
+}
+
+// Hook: save often
+(function hookAutosave(){
+  if (!window.canvas) return;
+  ['object:added','object:modified','object:removed'].forEach(evt=>{
+    canvas.on(evt, saveAutosave);
+  });
+  window.addEventListener('beforeunload', saveAutosave);
+  // Try restoring once when the app is ready
+  setTimeout(maybeRestoreAutosave, 600);
+})();
