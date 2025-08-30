@@ -971,3 +971,90 @@ function maybeRestoreAutosave() {
   // Safety: after 3s, always restore the original confirm anyway
   setTimeout(() => { window.confirm = originalConfirm; }, 3000);
 })();
+/* ===== Manual Checkpoints (independent of autosave) + relabel autosave button ===== */
+(function raCheckpoints(){
+  const CK = 'ra_checkpoint_v1';
+
+  function getCanvas(){
+    return (window.canvas && typeof window.canvas.loadFromJSON === 'function') ? window.canvas : null;
+  }
+
+  function toast(msg){
+    let el = document.getElementById('raCkToast');
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'raCkToast';
+      Object.assign(el.style,{
+        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
+        background:'rgba(0,0,0,.7)', color:'#fff', padding:'6px 10px',
+        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
+      });
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    setTimeout(()=>{ if(el.textContent===msg) el.textContent=''; }, 1200);
+  }
+
+  function saveCheckpoint(){
+    const c = getCanvas(); if(!c){ alert('Canvas not ready yet'); return; }
+    try{
+      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
+      localStorage.setItem(CK, JSON.stringify(json));
+      toast('Checkpoint saved');
+    }catch(e){ alert('Could not save checkpoint'); }
+  }
+
+  function restoreCheckpoint(){
+    const c = getCanvas(); if(!c){ alert('Canvas not ready yet'); return; }
+    const raw = localStorage.getItem(CK);
+    if(!raw){ alert('No checkpoint yet'); return; }
+    try{
+      const json = JSON.parse(raw);
+      c.loadFromJSON(json, ()=>{
+        c.renderAll();
+        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+        toast('Checkpoint restored');
+      });
+    }catch(e){ alert('Could not restore checkpoint'); }
+  }
+
+  // Put 2 new buttons next to the autosave row
+  function insertCheckpointButtons(){
+    const row = document.getElementById('raAutoRow');
+    if(!row){ setTimeout(insertCheckpointButtons, 400); return; }
+    if(document.getElementById('saveCkBtn')) return;
+
+    const saveCk = document.createElement('button');
+    saveCk.id = 'saveCkBtn';
+    saveCk.className = 'btn small';
+    saveCk.style.marginLeft = '6px';
+    saveCk.textContent = 'Save checkpoint';
+
+    const restoreCk = document.createElement('button');
+    restoreCk.id = 'restoreCkBtn';
+    restoreCk.className = 'btn small';
+    restoreCk.style.marginLeft = '6px';
+    restoreCk.textContent = 'Restore checkpoint';
+
+    row.append(saveCk, restoreCk);
+    saveCk.addEventListener('click', saveCheckpoint);
+    restoreCk.addEventListener('click', restoreCheckpoint);
+  }
+
+  // Rename the old autosave restore button so it’s clear what it does
+  function relabelAutosaveButton(){
+    const rb = document.getElementById('restoreBtn'); // created by the autosave block
+    if (rb && rb.textContent.trim().toLowerCase() === 'restore last session') {
+      rb.textContent = 'Restore autosave';
+    }
+  }
+
+  insertCheckpointButtons();
+  relabelAutosaveButton();
+  // Keep nudging in case the UI renders late
+  (function nudge(){
+    insertCheckpointButtons();
+    relabelAutosaveButton();
+    setTimeout(nudge, 600);
+  })();
+})();
