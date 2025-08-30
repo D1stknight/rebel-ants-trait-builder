@@ -1248,3 +1248,45 @@ function maybeRestoreAutosave() {
   }
   tick();
 })();
+/* ===== RA PATCH — De‑flicker: hide legacy autosave UI permanently ===== */
+(function RA_PATCH_DEFLICKER(){
+  // 1) Add CSS that hides the legacy autosave row & button if they exist
+  try {
+    const css = document.createElement('style');
+    css.id = 'raDeflickerCSS';
+    css.textContent = `
+      #raAutoRow { display:none !important; visibility:hidden !important; height:0 !important; overflow:hidden !important; }
+      #restoreBtn { display:none !important; }
+    `;
+    document.head && document.head.appendChild(css);
+  } catch(e){}
+
+  // 2) Function that hides any legacy controls the moment they appear
+  function hideLegacy(){
+    // Hide the old row (inserted by older autosave code)
+    const row = document.getElementById('raAutoRow');
+    if (row) { row.style.display='none'; row.style.visibility='hidden'; row.style.height='0'; row.style.overflow='hidden'; }
+
+    // Hide any old restore button by id
+    const rb = document.getElementById('restoreBtn');
+    if (rb) rb.style.display='none';
+
+    // Hide any restore button by label (covers "Restore last session" / "Restore autosave")
+    const btns = Array.from(document.querySelectorAll('button'));
+    btns.forEach(b=>{
+      const t = (b.textContent||'').trim().toLowerCase();
+      if (t === 'restore last session' || t === 'restore autosave') {
+        b.style.display = 'none';
+      }
+    });
+  }
+
+  // 3) Run once now, then watch the page and re‑hide if the legacy row reappears
+  hideLegacy();
+  const obs = new MutationObserver(hideLegacy);
+  obs.observe(document.body, { childList: true, subtree: true });
+
+  // 4) Keep our manual controls stable:
+  //    - ensure our own control row exists (created by the earlier manual-save patch)
+  //    - never remove it; just keep legacy hidden
+})();
