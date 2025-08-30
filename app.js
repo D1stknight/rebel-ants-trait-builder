@@ -451,3 +451,107 @@ function maybeRestoreAutosave() {
     tryInsert();
   }
 })();
+
+/* ========= AUTOSAVE + RESTORE BUTTON (self-contained) ========= */
+(function autosaveBundle(){
+  const AUTOSAVE_KEY = 'ra_autosave_v1';
+
+  // Save the whole canvas (keeps our watermark flags)
+  function saveNow() {
+    try {
+      if (!window.canvas) return;
+      const json = canvas.toJSON(['_isWatermark','_isOverlayWM']);
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(json));
+      showSavedBadge();
+    } catch (e) { /* ignore */ }
+  }
+
+  // Restore from local storage (optionally ask first)
+  function restoreNow(ask = false) {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (!raw) { alert('Nothing to restore yet. Make a change first.'); return; }
+      if (ask && !confirm('Restore your last session?')) return;
+
+      // Ensure images load with CORS
+      if (window.fabric && fabric.Image && !fabric.Image._patchedForCORS) {
+        const origFromObject = fabric.Image.fromObject;
+        fabric.Image.fromObject = function(obj, cb){
+          obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
+          return origFromObject.call(this, obj, cb);
+        };
+        fabric.Image._patchedForCORS = true;
+      }
+
+      const json = JSON.parse(raw);
+      canvas.loadFromJSON(json, () => {
+        canvas.renderAll();
+        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+      });
+    } catch (e) {
+      alert('Could not restore this session.');
+    }
+  }
+
+  // Little "Saved just now" indicator so you know it ran
+  function showSavedBadge(){
+    let el = document.getElementById('saveStatus');
+    if (!el) {
+      const exportHeader = Array.from(document.querySelectorAll('h3'))
+        .find(h => h.textContent && h.textContent.trim().toLowerCase() === 'export');
+      el = document.createElement('div');
+      el.id = 'saveStatus';
+      el.style.opacity = '0.7';
+      el.style.fontSize = '12px';
+      el.style.margin = '6px 0';
+      if (exportHeader && exportHeader.parentNode) {
+        exportHeader.parentNode.insertBefore(el, exportHeader.nextSibling);
+      } else {
+        document.body.appendChild(el);
+      }
+    }
+    el.textContent = 'Saved just now';
+    setTimeout(() => { if (el) el.textContent = ''; }, 1500);
+  }
+
+  // Add a "Restore last session" button right after "Clear All"
+  function insertRestoreButton(){
+    if (document.getElementById('restoreBtn')) return;
+    const btns = Array.from(document.querySelectorAll('button'));
+    const clearAllBtn = btns.find(b => (b.textContent||'').trim().toLowerCase() === 'clear all');
+    if (!clearAllBtn) return; // panel not in the DOM yet
+
+    const rb = document.createElement('button');
+    rb.id = 'restoreBtn';
+    rb.className = 'btn small';
+    rb.textContent = 'Restore last session';
+    rb.addEventListener('click', () => restoreNow(false));
+    clearAllBtn.insertAdjacentElement('afterend', rb);
+  }
+
+  // Start once the canvas actually exists
+  function startWhenReady(){
+    if (!window.canvas) { setTimeout(startWhenReady, 250); return; }
+
+    // Save on common actions
+    ['object:added','object:modified','object:removed'].forEach(evt => {
+      canvas.on(evt, saveNow);
+    });
+    window.addEventListener('beforeunload', saveNow);
+
+    // Add the button and ask once to restore (if there is data)
+    insertRestoreButton();
+    setTimeout(() => {
+      if (localStorage.getItem(AUTOSAVE_KEY)) restoreNow(true);
+    }, 800);
+  }
+
+  // Try inserting the button as soon as the page is ready too
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', insertRestoreButton);
+  } else {
+    insertRestoreButton();
+  }
+
+  startWhenReady();
+})();
