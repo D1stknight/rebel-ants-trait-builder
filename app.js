@@ -957,3 +957,17 @@ function maybeRestoreAutosave() {
 
   hookFabric();
 })();
+/* Cancel the "Restore your last session?" pop-up once per load */
+(function cancelAutoRestorePromptOnce(){
+  const originalConfirm = window.confirm;
+  window.confirm = function (msg) {
+    if (typeof msg === 'string' && msg.toLowerCase().includes('restore your last session')) {
+      // Cancel this one prompt and immediately restore the normal confirm
+      window.confirm = originalConfirm;
+      return false;
+    }
+    return originalConfirm(msg);
+  };
+  // Safety: after 3s, always restore the original confirm anyway
+  setTimeout(() => { window.confirm = originalConfirm; }, 3000);
+})();
