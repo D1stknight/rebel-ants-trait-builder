@@ -693,3 +693,121 @@ function maybeRestoreAutosave() {
     if (attached) clearInterval(poll);
   }, 250);
 })();
+/* ========= AUTOSAVE v3 (self-contained, with UI + status) ========= */
+(function autosaveV3(){
+  const KEY = 'ra_autosave_v1';
+  let attached = false;
+  let C = null; // canvas instance once found
+
+  // Try several ways to find the Fabric canvas
+  function getCanvas(){
+    // 1) Same-file variable (many builds use this)
+    try { if (typeof canvas !== 'undefined' && canvas && typeof canvas.getObjects === 'function') return canvas; } catch(e){}
+    // 2) Global
+    if (window.canvas && typeof window.canvas.getObjects === 'function') return window.canvas;
+    // 3) Scan window for a Fabric canvas-like object
+    try {
+      for (const k in window) {
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.toJSON === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && v.upperCanvasEl) return v;
+      }
+    } catch(e){}
+    // 4) Last resort: first <canvas> element’s Fabric instance (some builds attach a backref)
+    const el = document.querySelector('canvas');
+    if (el && el.fabric && typeof el.fabric.toJSON === 'function') return el.fabric;
+    return null;
+  }
+
+  // Storage helper (falls back if localStorage is blocked)
+  function store(){ try{ localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }catch(e){ return sessionStorage; } }
+
+  // Small status chip (bottom-right) so you know autosave fired
+  function status(msg){
+    let tag = document.getElementById('raDebug');
+    if (!tag) {
+      tag = document.createElement('div');
+      tag.id = 'raDebug';
+      tag.style.position='fixed'; tag.style.bottom='8px'; tag.style.right='8px';
+      tag.style.background='rgba(0,0,0,.6)'; tag.style.color='#fff';
+      tag.style.padding='6px 8px'; tag.style.borderRadius='6px';
+      tag.style.fontSize='12px'; tag.style.zIndex='99999'; tag.style.pointerEvents='none';
+      document.body.appendChild(tag);
+    }
+    tag.textContent = msg;
+  }
+
+  function saveNow(){
+    C = C || getCanvas(); if (!C) { status('autosave: no canvas'); return; }
+    try {
+      const json = C.toJSON(['_isWatermark','_isOverlayWM']);
+      store().setItem(KEY, JSON.stringify(json));
+      status('Saved just now');
+      setTimeout(()=>status('Ready'), 1200);
+    } catch(e){ status('save error'); }
+  }
+
+  function restoreNow(){
+    C = C || getCanvas(); if (!C) { alert('Canvas not ready yet'); return; }
+    const raw = store().getItem(KEY);
+    if (!raw) { alert('Nothing saved yet'); return; }
+    try {
+      // Make sure images load cross-origin when restoring
+      if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
+        const orig = fabric.Image.fromObject;
+        fabric.Image.fromObject = function(obj, cb){
+          obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
+          return orig.call(this, obj, cb);
+        };
+        fabric.Image._raPatched = true;
+      }
+      const json = JSON.parse(raw);
+      C.loadFromJSON(json, ()=>{
+        C.renderAll();
+        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+        status('Restored');
+        setTimeout(()=>status('Ready'), 1200);
+      });
+    } catch(e){ alert('Could not restore this session.'); }
+  }
+
+  // Add **three** buttons into the Canvas card so you can drive it
+  function insertButtons(){
+    if (document.getElementById('restoreBtn')) return;
+    const h3s = [...document.querySelectorAll('h3')];
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+
+    const row = document.createElement('div'); row.style.marginTop='6px';
+    const rb = document.createElement('button'); rb.id='restoreBtn'; rb.className='btn small'; rb.textContent='Restore last session';
+    const sb = document.createElement('button'); sb.id='saveNowBtn'; sb.className='btn small'; sb.style.marginLeft='6px'; sb.textContent='Save now';
+    const cb = document.createElement('button'); cb.id='clearSavedBtn'; cb.className='btn small danger'; cb.style.marginLeft='6px'; cb.textContent='Clear saved';
+
+    row.appendChild(rb); row.appendChild(sb); row.appendChild(cb);
+    holder.appendChild(row);
+
+    rb.addEventListener('click', restoreNow);
+    sb.addEventListener('click', saveNow);
+    cb.addEventListener('click', ()=>{ store().removeItem(KEY); status('Saved session cleared'); });
+  }
+
+  function attach(){
+    C = C || getCanvas(); if (!C) return;
+    if (attached) return; attached = true;
+    ['object:added','object:modified','object:removed','mouse:up'].forEach(evt=>{
+      try { C.on(evt, saveNow); } catch(e){}
+    });
+    window.addEventListener('beforeunload', saveNow);
+    status('Ready');
+  }
+
+  // Keep trying until everything is ready
+  (function tick(){
+    insertButtons();
+    attach();
+    setTimeout(tick, 400);
+  })();
+})();
