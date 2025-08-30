@@ -555,3 +555,140 @@ function maybeRestoreAutosave() {
 
   startWhenReady();
 })();
+
+/* ========= AUTOSAVE v2 (robust) ========= */
+(function autosaveV2(){
+  const KEY = 'ra_autosave_v1';
+  let attached = false;
+  let C = null; // canvas instance, once found
+
+  // Find the Fabric canvas instance, even if it's not window.canvas
+  function findCanvas(){
+    if (C && C.getObjects) return C;
+    if (window.canvas && typeof window.canvas.getObjects === 'function') { C = window.canvas; return C; }
+    try {
+      // scan window for an object that looks like a Fabric canvas
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.toJSON === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && v.upperCanvasEl) {
+          C = v; return C;
+        }
+      }
+    } catch(e){}
+    return null;
+  }
+
+  // Storage fallback: try localStorage, else use sessionStorage
+  function getStore(){
+    try { localStorage.setItem('__ra_test__','1'); localStorage.removeItem('__ra_test__'); return localStorage; }
+    catch(e){ return sessionStorage; }
+  }
+
+  function showSavedBadge(){
+    let el = document.getElementById('saveStatus');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'saveStatus';
+      el.style.opacity = '0.7';
+      el.style.fontSize = '12px';
+      el.style.margin = '6px 0';
+      // Try to put it in the Canvas card; otherwise add near the Export card; otherwise body
+      const h3s = Array.from(document.querySelectorAll('h3'));
+      const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+      const exportH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'export');
+      if (canvasH3 && canvasH3.parentNode) canvasH3.parentNode.appendChild(el);
+      else if (exportH3 && exportH3.parentNode) exportH3.parentNode.appendChild(el);
+      else document.body.appendChild(el);
+    }
+    el.textContent = 'Saved just now';
+    setTimeout(()=>{ if (el) el.textContent = ''; }, 1200);
+  }
+
+  function saveNow(){
+    const c = findCanvas(); if (!c) return;
+    try {
+      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
+      getStore().setItem(KEY, JSON.stringify(json));
+      showSavedBadge();
+    } catch(e){}
+  }
+
+  function patchImageCORS(){
+    if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
+      const orig = fabric.Image.fromObject;
+      fabric.Image.fromObject = function(obj, cb){
+        obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
+        return orig.call(this, obj, cb);
+      };
+      fabric.Image._raPatched = true;
+    }
+  }
+
+  function restoreNow(ask){
+    const c = findCanvas();
+    if (!c) { alert('Canvas not ready yet. Try again in a moment.'); return; }
+
+    const raw = getStore().getItem(KEY);
+    if (!raw) { alert('Nothing to restore yet. Make a change first.'); return; }
+    if (ask && !confirm('Restore your last session?')) return;
+
+    try {
+      patchImageCORS();
+      const json = JSON.parse(raw);
+      c.loadFromJSON(json, ()=> {
+        c.renderAll();
+        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+      });
+    } catch(e) {
+      alert('Could not restore this session.');
+    }
+  }
+
+  function insertRestoreButton(){
+    if (document.getElementById('restoreBtn')) return;
+    // Prefer to put it in the Canvas card
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const container = (canvasH3 && canvasH3.parentNode) ? canvasH3.parentNode : document.body;
+
+    // Also try to find the "Clear All" button to place ours right after it
+    const btns = Array.from(document.querySelectorAll('button'));
+    const clearAllBtn = btns.find(b => (b.textContent||'').replace(/\s+/g,' ').trim().toLowerCase() === 'clear all');
+
+    const rb = document.createElement('button');
+    rb.id = 'restoreBtn';
+    rb.className = 'btn small';
+    rb.textContent = 'Restore last session';
+    rb.addEventListener('click', ()=> restoreNow(false));
+
+    if (clearAllBtn) clearAllBtn.insertAdjacentElement('afterend', rb);
+    else container.appendChild(rb);
+  }
+
+  function attachOnce(){
+    if (attached) return;
+    const c = findCanvas(); if (!c) return;
+
+    attached = true;
+    ['object:added','object:modified','object:removed','selection:updated','mouse:up'].forEach(evt=>{
+      c.on(evt, saveNow);
+    });
+    window.addEventListener('beforeunload', saveNow);
+
+    insertRestoreButton();
+
+    // Ask once shortly after load
+    setTimeout(()=>{ if (getStore().getItem(KEY)) restoreNow(true); }, 800);
+  }
+
+  // Keep trying until the canvas exists, then attach
+  const poll = setInterval(()=>{
+    insertRestoreButton();
+    attachOnce();
+    if (attached) clearInterval(poll);
+  }, 250);
+})();
