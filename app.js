@@ -417,3 +417,37 @@ function maybeRestoreAutosave() {
     clearInterval(timer);
   }, 250);
 })();
+
+// Insert a "Restore last session" button next to "Clear All" (no HTML edit needed)
+(function insertRestoreButton(){
+  function tryInsert() {
+    // If it's already there, do nothing
+    if (document.getElementById('restoreBtn')) return;
+
+    // Find the existing "Clear All" button on the page
+    const btns = Array.from(document.querySelectorAll('button'));
+    const clearAllBtn = btns.find(b => b.textContent && b.textContent.trim().toLowerCase() === 'clear all');
+    if (!clearAllBtn) return; // page not ready yet
+
+    // Make our Restore button
+    const rb = document.createElement('button');
+    rb.id = 'restoreBtn';
+    rb.className = 'btn small';
+    rb.textContent = 'Restore last session';
+
+    // Place it right after "Clear All"
+    clearAllBtn.insertAdjacentElement('afterend', rb);
+
+    // When clicked, ask to restore the saved canvas
+    rb.addEventListener('click', () => {
+      if (typeof maybeRestoreAutosave === 'function') maybeRestoreAutosave();
+    });
+  }
+
+  // Try once the page is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', tryInsert);
+  } else {
+    tryInsert();
+  }
+})();
