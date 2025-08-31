@@ -2635,3 +2635,57 @@ function maybeRestoreAutosave() {
   // Run a few times early to catch async image loads
   let tries = 0; (function early(){ fixCanvas(); if (++tries<8) setTimeout(early, 600); })();
 })();
+
+/* === RA_EXPORT_OPEN_FIX — force export to open only in a new tab === */
+(function RA_EXPORT_OPEN_FIX(){
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+  function getMultiplier(){
+    const txt = (document.querySelector('.export-quality')?.textContent
+                 || document.querySelector('#exportQuality')?.value
+                 || '').toLowerCase();
+    const m = (txt.match(/x\s*([1-8])/i)||[])[1];
+    return Math.max(1, parseInt(m||'1',10));
+  }
+  function wire(){
+    const el = Array.from(document.querySelectorAll('button,a'))
+      .find(n => /open\s*in\s*new\s*tab/i.test(n.textContent||''));
+    if (!el || el._raWiredOpen) return;
+    el._raWiredOpen = true;
+    el.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      const c = findCanvas(); if (!c){ alert('Canvas not ready'); return false; }
+      const win = window.open('', '_blank');                   // open tab synchronously (popup‑safe)
+      if (!win) { alert('Popup blocked. Please allow popups for this site.'); return false; }
+      win.document.title = 'Exporting…';
+      win.document.body.style.margin = '0';
+      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
+      try{
+        const mult = getMultiplier();
+        const dataUrl = c.toDataURL({ format:'png', multiplier: mult });
+        win.document.body.innerHTML = `<img src="${dataUrl}" style="display:block;max-width:100%;height:auto">`;
+      }catch(err){
+        win.close();
+        alert('Export failed (browser security/CORS). Try a different image or domain with CORS headers.');
+      }
+      return false;
+    }, { passive:false });
+  }
+  wire();
+  const obs = new MutationObserver(wire);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
