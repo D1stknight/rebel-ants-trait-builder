@@ -3658,3 +3658,208 @@ function maybeRestoreAutosave() {
 
   attach();
 })();
+
+/* === RA_QOL_TOOLS_V1 — nudge keys, shortcuts, center buttons, snap-to guides === */
+(function(){
+  if (window.__RA_QOL_V1) return;
+  window.__RA_QOL_V1 = true;
+
+  // ------- helpers -------
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function'){
+          return v;
+        }
+      }
+    }catch(e){}
+    return null;
+  }
+
+  // ------- inject small Selection tools row -------
+  function findSelectionCard(){
+    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='selection');
+    return h3 ? h3.parentNode : null;
+  }
+
+  function ensureSelectionTools(){
+    if ($('#raSelTools')) return true;
+    const card = findSelectionCard(); if (!card) return false;
+
+    const row = document.createElement('div');
+    row.id = 'raSelTools';
+    row.style.cssText = 'margin-top:8px;border-top:1px solid #2a2a2e;padding-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center';
+
+    row.innerHTML = `
+      <div style="font-weight:600;opacity:.85">Quick Align</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="raTiny" data-act="centerH" title="Center horizontally">Center H</button>
+        <button class="raTiny" data-act="centerV" title="Center vertically">Center V</button>
+        <button class="raTiny" data-act="centerBoth" title="Center on canvas">Center HV</button>
+        <button class="raTiny" data-act="snapToggle" title="Snap to center/edges while moving">Snap: Off</button>
+      </div>
+      <div style="opacity:.6;font-size:11px;margin-left:auto">Arrows=1px, Shift+Arrows=10px, ⌘/Ctrl+D duplicate</div>
+    `;
+
+    // tiny button styling
+    row.querySelectorAll('.raTiny').forEach(b=>{
+      b.style.cssText = 'background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:6px 10px;cursor:pointer';
+    });
+
+    row.addEventListener('click', (e)=>{
+      const btn = e.target.closest('.raTiny'); if (!btn) return;
+      const act = btn.getAttribute('data-act');
+      if (act==='snapToggle'){
+        window.raSnapEnabled = !window.raSnapEnabled;
+        btn.textContent = 'Snap: ' + (window.raSnapEnabled ? 'On' : 'Off');
+        if (!window.raSnapEnabled) hideGuides();
+        return;
+      }
+      const c = findCanvas(); if (!c) return;
+      const obj = c.getActiveObject(); if (!obj) return;
+      const cw = c.getWidth(), ch = c.getHeight();
+      if (act==='centerH' || act==='centerBoth'){ obj.set({ left: cw/2 }); }
+      if (act==='centerV' || act==='centerBoth'){ obj.set({ top:  ch/2 }); }
+      obj.setCoords(); c.requestRenderAll();
+    });
+
+    card.appendChild(row);
+    return true;
+  }
+
+  // ------- Keyboard shortcuts -------
+  function isTypingInInput(ev){
+    const t = ev.target;
+    if (!t) return false;
+    const tag = (t.tagName||'').toLowerCase();
+    const editable = t.isContentEditable;
+    return editable || tag==='input' || tag==='textarea' || tag==='select';
+  }
+
+  function onKey(ev){
+    if (isTypingInInput(ev)) return;
+
+    const c = findCanvas(); if (!c) return;
+    const obj = c.getActiveObject(); 
+    const hasObj = !!obj;
+
+    // Nudge with arrows
+    const arrows = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'];
+    if (hasObj && arrows.includes(ev.key)){
+      const d = ev.shiftKey ? 10 : 1;
+      if (ev.key==='ArrowLeft')  obj.left -= d;
+      if (ev.key==='ArrowRight') obj.left += d;
+      if (ev.key==='ArrowUp')    obj.top  -= d;
+      if (ev.key==='ArrowDown')  obj.top  += d;
+      obj.setCoords(); c.requestRenderAll();
+      ev.preventDefault(); return;
+    }
+
+    // Delete selected
+    if (hasObj && (ev.key==='Delete' || ev.key==='Backspace')){
+      c.remove(obj);
+      c.discardActiveObject();
+      c.requestRenderAll();
+      ev.preventDefault(); return;
+    }
+
+    // Duplicate (Cmd/Ctrl + D)
+    if (hasObj && ( (ev.metaKey && ev.key.toLowerCase()==='d') || (ev.ctrlKey && ev.key.toLowerCase()==='d') )){
+      try{
+        obj.clone(clone=>{
+          clone.set({ left: (obj.left||0)+10, top:(obj.top||0)+10 });
+          c.add(clone); c.setActiveObject(clone); c.requestRenderAll();
+        });
+      }catch(e){}
+      ev.preventDefault(); return;
+    }
+
+    // Layer shortcuts
+    const k = ev.key;
+    const isCmd = ev.metaKey || ev.ctrlKey;
+    if (hasObj && isCmd && (k==='[' || k===']')){
+      try{
+        if (ev.shiftKey && k===']') c.bringToFront(obj);
+        else if (ev.shiftKey && k==='[') c.sendToBack(obj);
+        else if (k===']') c.bringForward(obj);
+        else if (k==='[') c.sendBackwards(obj);
+        c.requestRenderAll();
+      }catch(e){}
+      ev.preventDefault(); 
+      return;
+    }
+  }
+
+  document.addEventListener('keydown', onKey);
+
+  // ------- Snap-to guides (simple center/edge snap) -------
+  let guideH = null, guideV = null;
+
+  function ensureGuides(){
+    const c = findCanvas(); if (!c) return;
+    if (guideH && guideV) return;
+    const w = c.getWidth(), h = c.getHeight();
+
+    if (window.fabric){
+      guideH = new fabric.Line([0, h/2, w, h/2], { stroke:'rgba(255,255,255,0.18)', selectable:false, evented:false, excludeFromExport:true, visible:false });
+      guideV = new fabric.Line([w/2, 0, w/2, h], { stroke:'rgba(255,255,255,0.18)', selectable:false, evented:false, excludeFromExport:true, visible:false });
+      try { c.add(guideH); c.add(guideV); c.sendToBack(guideH); c.sendToBack(guideV); } catch(e){}
+    }
+  }
+
+  function hideGuides(){
+    if (guideH) guideH.set({ visible:false });
+    if (guideV) guideV.set({ visible:false });
+    const c = findCanvas(); if (c) c.requestRenderAll();
+  }
+
+  function snapMoving(obj){
+    if (!window.raSnapEnabled) return;
+    const c = findCanvas(); if (!c) return;
+    ensureGuides();
+    const cw = c.getWidth(), ch = c.getHeight();
+    const tol = 8; // px threshold
+
+    let snapped = false;
+
+    // centers
+    if (Math.abs(obj.left - cw/2) <= tol){ obj.left = cw/2; snapped = true; if (guideV) guideV.set({ visible:true }); }
+    else { if (guideV) guideV.set({ visible:false }); }
+    if (Math.abs(obj.top - ch/2) <= tol){ obj.top = ch/2; snapped = true; if (guideH) guideH.set({ visible:true }); }
+    else { if (guideH) guideH.set({ visible:false }); }
+
+    // edges (object origin is center; use half width/height)
+    const halfW = (obj.getScaledWidth ? obj.getScaledWidth()/2 : (obj.width||0)*obj.scaleX/2) || 0;
+    const halfH = (obj.getScaledHeight? obj.getScaledHeight()/2: (obj.height||0)*obj.scaleY/2) || 0;
+
+    // left edge
+    if (Math.abs((obj.left - halfW) - 0) <= tol){ obj.left = halfW; snapped = true; }
+    // right edge
+    if (Math.abs((obj.left + halfW) - cw) <= tol){ obj.left = cw - halfW; snapped = true; }
+    // top edge
+    if (Math.abs((obj.top - halfH) - 0) <= tol){ obj.top = halfH; snapped = true; }
+    // bottom edge
+    if (Math.abs((obj.top + halfH) - ch) <= tol){ obj.top = ch - halfH; snapped = true; }
+
+    if (snapped){ obj.setCoords(); c.requestRenderAll(); }
+  }
+
+  // hook Fabric events (safe if already present)
+  (function attachFabricHooks(){
+    const c = findCanvas();
+    if (!c){ setTimeout(attachFabricHooks, 300); return; }
+
+    c.on('object:moving', (e)=>{ if (e && e.target) snapMoving(e.target); });
+    c.on('mouse:up', hideGuides);
+  })();
+
+  // ensure UI appears even if the panel renders later
+  (function waitUI(){
+    if (!ensureSelectionTools()){ setTimeout(waitUI, 300); return; }
+  })();
+})();
