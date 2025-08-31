@@ -2736,3 +2736,141 @@ function maybeRestoreAutosave() {
   const obs = new MutationObserver(nuke);
   obs.observe(document.body, { childList:true, subtree:true });
 })();
+
+/* === RA_RESTORE_CK_UI_AND_HIDE_FIX ===
+   - Ensures the "Save checkpoint" / "Restore checkpoint" row is present.
+   - Hides ONLY the "Fix canvas" button (does not remove any other UI).
+   - Works even if the UI re-renders (observer will re-apply).
+*/
+(function RA_RESTORE_CK_UI_AND_HIDE_FIX(){
+  const CKPT_KEY = 'ra_checkpoint_v1';
+
+  // Small toast so you know actions worked
+  function toast(msg){
+    let el = document.getElementById('raToast_ck');
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'raToast_ck';
+      Object.assign(el.style,{
+        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
+        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
+        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
+      });
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    setTimeout(()=>{ if(el.textContent===msg) el.textContent=''; }, 1200);
+  }
+
+  // Safe storage (fallback if localStorage is blocked)
+  function store(){
+    try { localStorage.setItem('__ra_ck__','1'); localStorage.removeItem('__ra_ck__'); return localStorage; }
+    catch(e){ return sessionStorage; }
+  }
+
+  // Find Fabric canvas robustly
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.toJSON === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  // Retry helper so clicking early doesn’t fail
+  function withCanvas(fn, tries=0){
+    const c = findCanvas();
+    if (c) return fn(c);
+    if (tries > 25) { toast('Canvas not ready'); return; }  // ~5s total
+    setTimeout(()=>withCanvas(fn, tries+1), 200);
+  }
+
+  // Checkpoint functions (same key as before so existing checkpoint is preserved)
+  function saveCheckpoint(){ withCanvas(c=>{
+    try{
+      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
+      store().setItem(CKPT_KEY, JSON.stringify(json));
+      toast('Checkpoint saved');
+    }catch(e){ toast('Checkpoint save error'); }
+  });}
+
+  function restoreCheckpoint(){
+    const raw = store().getItem(CKPT_KEY);
+    if (!raw){ toast('No checkpoint'); return; }
+    withCanvas(c=>{
+      try{
+        if (window.fabric && fabric.Image && !fabric.Image._raCkCors){
+          const orig = fabric.Image.fromObject;
+          fabric.Image.fromObject = function(obj, cb){
+            obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
+            return orig.call(this, obj, cb);
+          };
+          fabric.Image._raCkCors = true;
+        }
+        const json = JSON.parse(raw);
+        c.loadFromJSON(json, ()=>{
+          c.renderAll();
+          if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
+          toast('Checkpoint restored');
+        });
+      }catch(e){ toast('Checkpoint restore error'); }
+    });
+  }
+
+  // Insert ONE clean row in the Canvas card if missing
+  function ensureCheckpointRow(){
+    // If our existing row or any Save/Restore checkpoint buttons already exist, do nothing
+    const already =
+      document.getElementById('raCkRow')
+      || Array.from(document.querySelectorAll('button')).some(b => /save\s*checkpoint/i.test(b.textContent||''))
+      && Array.from(document.querySelectorAll('button')).some(b => /restore\s*checkpoint/i.test(b.textContent||''));
+    if (already) return;
+
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+
+    const row = document.createElement('div');
+    row.id = 'raCkRow';
+    row.className = 'row tight';
+    Object.assign(row.style, { display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'6px' });
+
+    const mk = (label)=>{ const b=document.createElement('button'); b.className='btn small'; b.textContent=label; return b; };
+    const bSave = mk('Save checkpoint');
+    const bRestore = mk('Restore checkpoint');
+    bSave.addEventListener('click', saveCheckpoint);
+    bRestore.addEventListener('click', restoreCheckpoint);
+
+    row.append(bSave, bRestore);
+    holder.appendChild(row);
+  }
+
+  // Hide ONLY the Fix canvas button (don’t touch anything else)
+  function hideFixCanvasOnly(){
+    document.querySelectorAll('#raFixCanvas').forEach(el=>{
+      el.style.display='none'; el.style.visibility='hidden';
+    });
+  }
+
+  // Initial pass + keep it stable if UI re-renders
+  function tick(){
+    ensureCheckpointRow();
+    hideFixCanvasOnly();
+  }
+  tick();
+  const obs = new MutationObserver(tick);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
