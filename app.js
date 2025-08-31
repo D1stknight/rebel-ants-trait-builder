@@ -3223,128 +3223,6 @@ function maybeRestoreAutosave() {
   })();
 })();
 
-/* === RA_PUBLISHED_SHELF_V1 — Overlays panel "Published Overlays" row + manifest loader === */
-(function RA_PUBLISHED_SHELF_V1(){
-  window.raPublishedOverlays = window.raPublishedOverlays || []; // [{name, src}]
-
-  const $  = s => document.querySelector(s);
-  const $$ = s => Array.from(document.querySelectorAll(s));
-
-  function findOverlaysCard(){
-    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-    return h3 ? h3.parentNode : null;
-  }
-
-  function robustAddToCanvas(url, name){
-    const findCanvas = ()=>{
-      if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-      try{
-        for (const k in window){
-          const v = window[k];
-          if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function') return v;
-        }
-      }catch(e){}
-      return null;
-    };
-    const wait = (fn, tries=0)=>{
-      const c = findCanvas();
-      if (c) return fn(c);
-      if (tries>25) return; setTimeout(()=>wait(fn, tries+1), 200);
-    };
-    wait(c=>{
-      if (!window.fabric || !fabric.Image){ return; }
-      const isBlob = /^blob:/i.test(url);
-      const opts = isBlob ? {} : { crossOrigin:'anonymous' };
-      fabric.Image.fromURL(url, img=>{
-        if (!img) return;
-        img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
-        try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
-        c.requestRenderAll();
-        if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
-      }, opts);
-    });
-  }
-
-  function ensureShelf(){
-    if ($('#raPublishedShelf')) return true;
-    const card = findOverlaysCard(); if (!card) return false;
-
-    const shelf = document.createElement('div');
-    shelf.id = 'raPublishedShelf';
-    shelf.style.cssText = 'margin-top:8px;';
-    shelf.innerHTML = `
-      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
-      <div id="raPublishedGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
-    `;
-    card.appendChild(shelf);
-    return true;
-  }
-
-  function renderShelf(){
-    if (!ensureShelf()) { setTimeout(renderShelf, 300); return; }
-    const grid = $('#raPublishedGrid'); if (!grid) return;
-    grid.innerHTML = '';
-    (window.raPublishedOverlays||[]).forEach(item=>{
-      const tile = document.createElement('div');
-      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${item.src}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
-      `;
-      tile.addEventListener('click', ()=> robustAddToCanvas(item.src, item.name));
-      grid.appendChild(tile);
-    });
-  }
-
-  // Expose a helper for the admin dock to publish items here
-  window.raPublishToOverlaysShelf = async function(name, fileOrData){
-    const toDataURL = file => new Promise((res,rej)=>{
-      const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
-    });
-    let src = null;
-    if (typeof File !== 'undefined' && fileOrData instanceof File){
-      src = await toDataURL(fileOrData);
-    } else if (typeof fileOrData === 'string'){
-      src = fileOrData; // can be data: URL or http(s)
-    }
-    if (!src) return;
-    window.raPublishedOverlays.push({ name, src });
-    renderShelf();
-  };
-
-  // Export the current published overlays to overlays.json
-  window.raExportPublishedPack = function(){
-    const data = { version:1, items:(window.raPublishedOverlays||[]).map(it=>({ name: it.name, dataURL: it.src })) };
-    const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'overlays.json';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
-  };
-
-  // Optional: load a remote pack via ?manifest=<URL>
-  (async function loadManifestFromQuery(){
-    try{
-      const m = new URLSearchParams(location.search).get('manifest');
-      if (m){
-        const resp = await fetch(m, { cache: 'no-store' });
-        const json = await resp.json();
-        if (json && Array.isArray(json.items)){
-          json.items.forEach(it=>{
-            const src = it.dataURL || it.url;
-            if (src) window.raPublishedOverlays.push({ name: it.name || 'overlay', src });
-          });
-        }
-      }
-    }catch(e){}
-    renderShelf();
-  })();
-})();
-
 /* === RA_ADMIN_DOCK_V4 — Admin dock with Publish + Add + Export pack (isolated) === */
 (function RA_ADMIN_DOCK_V4(){
   const isAdmin = /(\?|&)admin=1\b/.test(location.search);
@@ -3515,4 +3393,152 @@ function maybeRestoreAutosave() {
   }
 
   renderTiles();
+})();
+
+/* === RA_PUBLISHED_SHELF_V2 — Published Overlays row with default manifest + admin delete === */
+(function RA_PUBLISHED_SHELF_V2(){
+  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+  window.raPublishedOverlays = window.raPublishedOverlays || []; // [{name, src}]
+
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+
+  function findOverlaysCard(){
+    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase() === 'overlays');
+    return h3 ? h3.parentNode : null;
+  }
+
+  function robustAddToCanvas(url, name){
+    function findCanvas(){
+      if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+      try {
+        for (const k in window){
+          const v = window[k];
+          if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function') return v;
+        }
+      } catch(e){}
+      return null;
+    }
+    function wait(fn, tries=0){
+      const c = findCanvas();
+      if (c) return fn(c);
+      if (tries>25) return; setTimeout(()=>wait(fn, tries+1), 200);
+    }
+    wait(c=>{
+      if (!window.fabric || !fabric.Image) return;
+      const isBlob = /^blob:/i.test(url);
+      const opts   = isBlob ? {} : { crossOrigin:'anonymous' };
+      fabric.Image.fromURL(url, img=>{
+        if (!img) return;
+        img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+        try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+        c.requestRenderAll();
+        if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+      }, opts);
+    });
+  }
+
+  function ensureShelf(){
+    if ($('#raPublishedShelf')) return true;
+    const card = findOverlaysCard(); if (!card) return false;
+
+    const shelf = document.createElement('div');
+    shelf.id = 'raPublishedShelf';
+    shelf.style.cssText = 'margin-top:8px;';
+    shelf.innerHTML = `
+      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+      <div id="raPublishedGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+    `;
+    card.appendChild(shelf);
+    return true;
+  }
+
+  function renderShelf(){
+    if (!ensureShelf()) { setTimeout(renderShelf, 300); return; }
+    const grid = $('#raPublishedGrid'); if (!grid) return;
+    grid.innerHTML = '';
+    (window.raPublishedOverlays||[]).forEach((item, idx)=>{
+      const tile = document.createElement('div');
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+      tile.innerHTML = `
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${item.src}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+        </div>
+        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+        ${isAdmin ? '<button class="ra-pub-del" title="Remove" style="position:absolute;top:3px;right:5px;background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:2px 6px;cursor:pointer">×</button>' : ''}
+      `;
+      // Add to canvas (ignore delete click)
+      tile.addEventListener('click', (ev)=>{
+        if (isAdmin && ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
+        robustAddToCanvas(item.src, item.name);
+      });
+      // Admin delete
+      if (isAdmin){
+        const del = tile.querySelector('.ra-pub-del');
+        if (del){
+          del.addEventListener('click', (ev)=>{
+            ev.stopPropagation();
+            const arr = window.raPublishedOverlays;
+            arr.splice(idx,1);
+            renderShelf();
+          });
+        }
+      }
+      grid.appendChild(tile);
+    });
+  }
+
+  // Helper for the Admin Dock: publish one item here
+  window.raPublishToOverlaysShelf = async function(name, fileOrData){
+    const toDataURL = file => new Promise((res,rej)=>{
+      const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
+    });
+    let src = null;
+    if (typeof File !== 'undefined' && fileOrData instanceof File){
+      src = await toDataURL(fileOrData);
+    } else if (typeof fileOrData === 'string'){
+      src = fileOrData; // data: URL or http(s)
+    }
+    if (!src) return;
+    window.raPublishedOverlays.push({ name, src });
+    renderShelf();
+  };
+
+  // Export current published overlays to overlays.json
+  window.raExportPublishedPack = function(){
+    const data = { version:1, items:(window.raPublishedOverlays||[]).map(it=>({ name: it.name, dataURL: it.src })) };
+    const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'overlays.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
+  };
+
+  // Load a manifest for ALL users: default /overlays.json (or ?manifest=URL)
+  async function loadManifestFrom(url){
+    try{
+      // bust cache so testers see updates immediately
+      const bust = (url.indexOf('?')>-1 ? '&' : '?') + 't=' + Date.now();
+      const resp = await fetch(url + bust, { cache: 'no-store' });
+      if (!resp.ok) return;
+      const json = await resp.json();
+      if (json && Array.isArray(json.items)){
+        // Replace the list with the manifest so everyone sees the same set
+        window.raPublishedOverlays = json.items
+          .map(it => ({ name: it.name || 'overlay', src: it.dataURL || it.url }))
+          .filter(it => !!it.src);
+        renderShelf();
+      }
+    }catch(e){ /* ignore if file not present yet */ }
+  }
+
+  (async function init(){
+    ensureShelf();
+    renderShelf();
+    const qp = new URLSearchParams(location.search);
+    const manifestURL = qp.get('manifest') || '/overlays.json';
+    await loadManifestFrom(manifestURL);
+  })();
 })();
