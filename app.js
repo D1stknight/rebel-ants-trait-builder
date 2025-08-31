@@ -2725,3 +2725,14 @@ function maybeRestoreAutosave() {
   const obs = new MutationObserver(wire);
   obs.observe(document.body, { childList:true, subtree:true });
 })();
+
+/* === RA_HIDE_FIX_CANVAS — hide manual button; keep auto-clean === */
+(function RA_HIDE_FIX_CANVAS(){
+  function nuke(){
+    document.querySelectorAll('#raFixCanvas').forEach(el => el.remove());
+  }
+  nuke();
+  // If the UI re-renders and tries to add it again, remove it again.
+  const obs = new MutationObserver(nuke);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
