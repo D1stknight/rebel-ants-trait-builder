@@ -3607,3 +3607,136 @@ function maybeRestoreAutosave() {
 
   init();
 })();
+
+/* === RA_PUBLISHED_FIX_BUNDLE_V1 — one-click add (no duplicates), scaled/centered, clear-all compatible === */
+(function(){
+  if (window.__RA_PUB_FIX) return; 
+  window.__RA_PUB_FIX = true;
+
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function'){
+          return v;
+        }
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function addViaFabricScaled(src, name){
+    const c = findCanvas(); 
+    if (!c || !window.fabric || !fabric.Image) return;
+    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin:'anonymous' };
+    fabric.Image.fromURL(src, img=>{
+      if (!img) return;
+
+      const cw = c.getWidth(), ch = c.getHeight();
+      const maxDim = Math.min(cw, ch) * 0.60;                    // fit within 60% of canvas
+      const iw = img.width  || maxDim, 
+            ih = img.height || maxDim;
+      const scale = Math.min(1, maxDim / Math.max(iw, ih));      // keep aspect ratio
+
+      img.set({
+        originX: 'center',
+        originY: 'center',
+        left:    cw/2,
+        top:     ch/2,
+        selectable: true,
+        evented:    true,
+        hasControls: true,
+        hasBorders:  true
+      });
+      if (isFinite(scale) && scale > 0) img.scale(scale);
+
+      // Mark so "Clear All Overlays" can remove it if the app misses it
+      img.raOverlay = true;
+
+      try { 
+        c.add(img); 
+        c.bringToFront(img); 
+        c.setActiveObject(img); 
+      } catch(e){}
+      c.requestRenderAll();
+
+      // Keep app bookkeeping in sync if it exposes helpers
+      if (Array.isArray(window.overlayList)) {
+        try{ window.overlayList.push(img); }catch(e){}
+      }
+      if (typeof window.registerOverlayInstance === 'function') {
+        try{ window.registerOverlayInstance(img, { name }); }catch(e){}
+      }
+
+      if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
+    }, opts);
+  }
+
+  // De-duplicate rapid double handlers (tile handler + delegate) firing at once
+  function clickOnceGuard(){
+    if (window.__RA_PUB_CLICK_LOCK) return true;
+    window.__RA_PUB_CLICK_LOCK = true;
+    setTimeout(()=>{ window.__RA_PUB_CLICK_LOCK = false; }, 200);
+    return false;
+  }
+
+  function handlePublishedClick(ev){
+    const grid = document.getElementById('raPublishedGrid'); 
+    if (!grid) return;
+
+    const tile = ev.target.closest('#raPublishedGrid > div');
+    if (!tile) return;
+
+    // Ignore the admin delete (×) button
+    if (ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
+
+    // Stop double-add
+    if (clickOnceGuard()) return;
+
+    // Pull src + name from the tile
+    const imgEl  = tile.querySelector('img');
+    const nameEl = tile.querySelector('div:nth-child(2)');
+    const src  = imgEl ? imgEl.getAttribute('src') : null;
+    const name = nameEl ? (nameEl.textContent||'overlay').trim() : 'overlay';
+    if (!src) return;
+
+    // Prefer app's native path if available (same as built-ins)
+    if (typeof window.addOverlayToCanvas === 'function'){
+      try { window.addOverlayToCanvas(src, name); return; } catch(e){}
+    }
+    // Fallback to Fabric (scaled + centered)
+    addViaFabricScaled(src, name);
+  }
+
+  function attachHandlers(){
+    const grid = document.getElementById('raPublishedGrid');
+    if (!grid){ setTimeout(attachHandlers, 250); return; }
+    // Delegate click once; avoid multiple binds
+    if (!grid.__raPubBound){
+      grid.__raPubBound = true;
+      grid.style.pointerEvents = 'auto';
+      grid.addEventListener('click', handlePublishedClick);
+    }
+
+    // Fallback for "Clear All Overlays" to also remove our raOverlay items
+    const clearBtn = Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent||'').trim().toLowerCase() === 'clear all overlays');
+    if (clearBtn && !clearBtn.__raBound){
+      clearBtn.__raBound = true;
+      clearBtn.addEventListener('click', ()=>{
+        setTimeout(()=>{
+          const c = findCanvas(); if (!c) return;
+          const extras = c.getObjects().filter(o => o && o.raOverlay === true);
+          extras.forEach(o => c.remove(o));
+          c.requestRenderAll();
+          if (Array.isArray(window.overlayList)) {
+            window.overlayList = window.overlayList.filter(o => !(o && o.raOverlay));
+          }
+        }, 60); // run just after the app's own clear-all logic
+      });
+    }
+  }
+
+  attachHandlers();
+})();
