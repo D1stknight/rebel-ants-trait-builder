@@ -2156,3 +2156,153 @@ function maybeRestoreAutosave() {
   const obs = new MutationObserver(()=> wireLoadAndClearButtons());
   obs.observe(document.body, { childList:true, subtree:true });
 })();
+
+/* ===== RA_BASE_LOCK_V2 — unbreakable base lock (works on load, add, restore) ===== */
+(function RA_BASE_LOCK_V2(){
+  let baseObj = null;      // the object we consider "base"
+  let lockedOnce = false;  // stops re-picking random large overlays later
+
+  // Find Fabric canvas (robust)
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas')
+            || document.querySelector('canvas.lower-canvas')
+            || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.loadFromJSON === 'function'
+            && typeof v.add === 'function'
+            && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function area(o){ return (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1); }
+
+  // Decide if an image is the "base" (very large compared to canvas, and it's early)
+  function isBaseCandidate(o, c){
+    if (!o || o.type !== 'image') return false;
+    const cw = c.getWidth(), ch = c.getHeight();
+    const a = area(o), ca = cw*ch;
+    // Must cover at least ~70% of canvas area OR be within 90% of width/height
+    const bigByArea = a >= ca*0.7;
+    const bigBySide = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) >= cw*0.9
+                   && (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) >= ch*0.9;
+    return bigByArea || bigBySide;
+  }
+
+  function lock(o, c){
+    if (!o || !c) return;
+    baseObj = o;
+    lockedOnce = true;
+    o._isBase = true;
+    o.selectable = false;
+    o.evented = false;
+    o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = true;
+    o.perPixelTargetFind = false;
+    o.hoverCursor = 'default';
+    try { c.sendToBack(o); } catch(e){}
+    // If base accidentally became active, deselect it
+    try { if (c.getActiveObject() === o) { c.discardActiveObject(); } } catch(e){}
+    c.requestRenderAll();
+  }
+
+  // Scan canvas for a base image and lock it
+  function scanAndLock(c){
+    if (!c) return;
+    // Prefer an already-marked base (e.g., after restore)
+    const marked = c.getObjects('image').find(img => img._isBase === true);
+    if (marked) { lock(marked, c); return; }
+    if (lockedOnce) return; // we already chose a base earlier
+
+    const imgs = c.getObjects('image');
+    if (!imgs.length) return;
+    // Sort by area (largest first)
+    imgs.sort((a,b)=> area(b)-area(a));
+    const candidate = imgs[0];
+    if (isBaseCandidate(candidate, c)) lock(candidate, c);
+  }
+
+  // Keep base unselectable even if something tries to select it
+  function guardSelection(c){
+    c.on('selection:created', e=>{
+      const o = c.getActiveObject();
+      if (o === baseObj) { c.discardActiveObject(); c.requestRenderAll(); }
+    });
+    c.on('selection:updated', e=>{
+      const o = c.getActiveObject();
+      if (o === baseObj) { c.discardActiveObject(); c.requestRenderAll(); }
+    });
+    c.on('mouse:down', e=>{
+      const t = e && e.target;
+      if (t === baseObj) {
+        c.discardActiveObject();
+        c.requestRenderAll();
+      }
+    });
+  }
+
+  // Wrap Fabric so we re-lock after JSON restores (checkpoints) too
+  function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
+      setTimeout(hookFabric, 200); return;
+    }
+    if (!fabric.Canvas.prototype._raBaseLocked){
+      const origInit = fabric.Canvas.prototype.initialize;
+      fabric.Canvas.prototype.initialize = function(...args){
+        const res = origInit.apply(this, args);
+        // expose canvas
+        window.canvas = this;
+        // lock on creation
+        setTimeout(()=>{ scanAndLock(this); guardSelection(this); }, 0);
+        return res;
+      };
+      // Re-lock after loadFromJSON (e.g., restoring checkpoints)
+      const origLoad = fabric.Canvas.prototype.loadFromJSON;
+      fabric.Canvas.prototype.loadFromJSON = function(json, cb, reviver){
+        const self = this;
+        return origLoad.call(this, json, function(){
+          try { scanAndLock(self); guardSelection(self); } catch(e){}
+          if (typeof cb === 'function') cb.apply(self, arguments);
+        }, reviver);
+      };
+      // When a big image is added, consider it for base (only if we haven't locked yet)
+      const origAdd = fabric.Canvas.prototype.add;
+      fabric.Canvas.prototype.add = function(...args){
+        const res = origAdd.apply(this, args);
+        try {
+          const last = args && args[0];
+          if (!lockedOnce && last && last.type === 'image' && isBaseCandidate(last, this)) {
+            lock(last, this);
+          } else {
+            // still scan, in case order is odd
+            scanAndLock(this);
+          }
+        } catch(e){}
+        return res;
+      };
+      fabric.Canvas.prototype._raBaseLocked = true;
+    }
+
+    // If canvas already exists, apply guards and scan now
+    setTimeout(()=>{ const c = findCanvas(); if (c){ window.canvas = c; scanAndLock(c); guardSelection(c);} }, 300);
+  }
+
+  // Also try periodically in case UI loads late
+  (function tick(){
+    const c = findCanvas();
+    if (c){ window.canvas = c; scanAndLock(c); guardSelection(c); }
+    setTimeout(tick, 800);
+  })();
+
+  hookFabric();
+})();
