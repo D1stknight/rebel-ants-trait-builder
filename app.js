@@ -2945,138 +2945,6 @@ function maybeRestoreAutosave() {
   obs.observe(document.body, { childList:true, subtree:true });
 })();
 
-/* === RA_ADMIN_PERM_V4 — inline permanent overlays (admin adds PNGs; users can't delete) ===
-   - Shows a small "Permanent Overlays" row ABOVE the normal Overlays grid.
-   - Admin (URL has ?admin=1): "Add Permanent PNGs" + small × on tiles to remove (session only).
-   - Users: see the tiles but NO × (can't remove). Tiles are click-to-add to canvas.
-   - Nothing auto-adds to canvas; click a tile to add (centered, top layer).
-*/
-(function RA_ADMIN_PERM_V4(){
-  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
-  const $ = s => document.querySelector(s);
-  const $$ = s => Array.from(document.querySelectorAll(s));
-
-  // Keep this session's permanent tiles (blob URLs + names)
-  window.raPermOverlays = window.raPermOverlays || [];
-
-  function findOverlaysCard(){
-    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-    return h3 ? h3.parentNode : null;
-  }
-
-  function ensureInlineRow(){
-    const card = findOverlaysCard(); if (!card) return null;
-    // Create the inline row once; always place it just above the main grid
-    let row = $('#raPermInlineRow');
-    if (!row){
-      row = document.createElement('div');
-      row.id = 'raPermInlineRow';
-      row.style.margin = '8px 0';
-      row.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <div style="font-weight:600;opacity:.8">Permanent Overlays</div>
-          ${isAdmin ? `
-            <label class="btn small" style="margin-left:auto;">
-              Add Permanent PNGs
-              <input id="raPermInlineInput" type="file" accept="image/png" multiple style="display:none">
-            </label>
-          ` : ''}
-        </div>
-        <div id="raPermInlineGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px;max-height:220px;overflow:auto;"></div>
-      `;
-      // Insert above the first grid‑looking element in the card; fallback to append
-      const firstGrid = Array.from(card.querySelectorAll('div')).find(d=>{
-        const cs = getComputedStyle(d);
-        return (cs.display.includes('grid') || cs.display.includes('flex')) &&
-               d.querySelector('img');
-      });
-      if (firstGrid) card.insertBefore(row, firstGrid); else card.appendChild(row);
-
-      if (isAdmin){
-        $('#raPermInlineInput').addEventListener('change', onFilesChosen);
-      }
-    }
-    return row;
-  }
-
-  function niceName(file){
-    return file.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
-  }
-
-  function onFilesChosen(e){
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    files.forEach(f=>{
-      const url = URL.createObjectURL(f);
-      window.raPermOverlays.push({ name: niceName(f), url, _blobURL:url });
-    });
-    e.target.value = ''; // allow picking same files again next time
-    renderInlineGrid();
-  }
-
-  function addOverlayToCanvas(url, name){
-    // Prefer your app hook if present
-    if (typeof window.addOverlayToCanvas === 'function'){
-      try { window.addOverlayToCanvas(url, name); return; } catch(e){}
-    }
-    // Fallback: Fabric
-    const c = window.canvas;
-    if (!c || !window.fabric || !fabric.Image) return;
-    fabric.Image.fromURL(url, img=>{
-      img.set({
-        originX:'center', originY:'center',
-        left: c.getWidth()/2, top: c.getHeight()/2,
-        crossOrigin:'anonymous'
-      });
-      try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
-      c.requestRenderAll();
-      if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
-    }, { crossOrigin:'anonymous' });
-  }
-
-  function renderInlineGrid(){
-    const row = ensureInlineRow(); if (!row) return;
-    const grid = $('#raPermInlineGrid'); if (!grid) return;
-    grid.innerHTML = '';
-    window.raPermOverlays.forEach((it, idx)=>{
-      const tile = document.createElement('div');
-      tile.className = 'thumb ra-perm-thumb';
-      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-        ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
-      `;
-      tile.addEventListener('click', (ev)=>{
-        if (ev.target && ev.target.classList && ev.target.classList.contains('perm-del')) return;
-        addOverlayToCanvas(it.url, it.name);
-      });
-      if (isAdmin){
-        const del = tile.querySelector('.perm-del');
-        if (del) del.addEventListener('click', (ev)=>{
-          ev.stopPropagation();
-          const item = window.raPermOverlays[idx];
-          try { if (item && item._blobURL) URL.revokeObjectURL(item._blobURL); } catch(e){}
-          window.raPermOverlays.splice(idx,1);
-          renderInlineGrid();
-        });
-      }
-      grid.appendChild(tile);
-    });
-  }
-
-  function boot(){
-    ensureInlineRow();
-    renderInlineGrid();
-  }
-  boot();
-
-  const obs = new MutationObserver(()=> boot());
-  obs.observe(document.body, { childList:true, subtree:true });
-})();
-
 /* === RA_BG_SEND_BACK_V1 — send huge dark rectangles behind everything on size change === */
 (function RA_BG_SEND_BACK_V1(){
   function findCanvas(){
@@ -3239,148 +3107,6 @@ function maybeRestoreAutosave() {
   setInterval(normalize, 1000);
 })();
 
-/* === RA_PERM_MIX_ADD_V5 — mix permanents into main grid; robust click-to-add; admin-only delete === */
-(function RA_PERM_MIX_ADD_V5(){
-  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
-
-  function findCanvas(){
-    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[k]; if (v && v.upperCanvasEl) return v;
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.loadFromJSON==='function') return v;
-      }
-    }catch(e){}
-    return null;
-  }
-  function withCanvas(fn, tries=0){
-    const c=findCanvas(); if (c) return fn(c);
-    if (tries>25) return; setTimeout(()=>withCanvas(fn,tries+1),200);
-  }
-  function robustAdd(url, name){
-    withCanvas(c=>{
-      const before=c.getObjects().length;
-      const isBlob = /^blob:/i.test(url);
-      let usedHook=false;
-      // Use your app hook for non-blob URLs; many hooks ignore blob: URLs
-      if (!isBlob && typeof window.addOverlayToCanvas==='function'){
-        try{ window.addOverlayToCanvas(url,name); usedHook=true; }catch(e){}
-      }
-      // If nothing appeared, fallback to Fabric
-      setTimeout(()=>{
-        const after=c.getObjects().length;
-        if (after>before) { c.requestRenderAll(); return; }
-        if (!window.fabric || !fabric.Image) return;
-        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
-        fabric.Image.fromURL(url, img=>{
-          img.set({
-            originX:'center', originY:'center',
-            left:c.getWidth()/2, top:c.getHeight()/2
-          });
-          try{ c.add(img); c.bringToFront(img); c.setActiveObject(img);}catch(e){}
-          c.requestRenderAll();
-          if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
-        }, opts);
-      }, usedHook?200:0);
-    });
-  }
-
-  // Find the main overlays grid (heuristic)
-  function findOverlaysCard(){
-    return Array.from(document.querySelectorAll('h3'))
-      .find(h => (h.textContent||'').trim().toLowerCase()==='overlays')?.parentNode || null;
-  }
-  function findMainOverlayGrid(){
-    const card = findOverlaysCard(); if (!card) return null;
-    const candidates = Array.from(card.querySelectorAll('div'));
-    let best=null,bestScore=-1;
-    candidates.forEach(div=>{
-      const imgs=div.querySelectorAll('img').length;
-      const tiles=[...div.children].filter(ch => ch.querySelector && ch.querySelector('img')).length;
-      const score=imgs + tiles*2;
-      if (score>bestScore && (imgs+tiles)>=3){ best=div; bestScore=score; }
-    });
-    return best;
-  }
-
-  // Render our permanents into the main grid (at the very top)
-  function renderPermsIntoMain(){
-    const grid=findMainOverlayGrid(); if (!grid) return;
-    // Hide any inline shelf grid if present (from older patch), keep the "Add Permanent PNGs" button
-    const inline = document.getElementById('raPermInlineGrid'); if (inline) inline.style.display='none';
-
-    // Remove previous clones
-    grid.querySelectorAll('.ra-perm-clone').forEach(n=>n.remove());
-
-    const arr = window.raPermOverlays || [];
-    arr.forEach((it, idx)=>{
-      const tile=document.createElement('div');
-      tile.className='ra-perm-clone';
-      tile.style.cssText='position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
-      tile.dataset.idx = String(idx);
-      tile.innerHTML=`
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-        ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
-      `;
-      // Insert at top
-      grid.insertBefore(tile, grid.firstChild);
-    });
-    if (!isAdmin){
-      grid.querySelectorAll('.ra-perm-clone .perm-del').forEach(b=> b.remove());
-    }
-  }
-
-  // Capture clicks on our permanent tiles (one reliable handler)
-  function onClickCapture(e){
-    const del = e.target && e.target.closest && e.target.closest('.perm-del');
-    const tile = e.target && e.target.closest && e.target.closest('.ra-perm-clone');
-    if (!tile) return;
-    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
-    if (del && isAdmin){
-      const idx = parseInt(tile.dataset.idx||'-1',10);
-      const arr = window.raPermOverlays || [];
-      if (idx>=0 && arr[idx]){
-        try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
-        arr.splice(idx,1);
-      }
-      tile.remove();
-      return false;
-    }
-    const img = tile.querySelector('img');
-    const url = img?.currentSrc || img?.src;
-    const name = (img?.alt||'').trim();
-    if (url) robustAdd(url,name);
-    return false;
-  }
-
-  // Re-render when files are chosen via the admin input
-  function wireAdminInput(){
-    const inp = document.getElementById('raPermInlineInput');
-    if (inp && !inp._raMixWired){
-      inp._raMixWired=true;
-      inp.addEventListener('change', ()=> setTimeout(renderPermsIntoMain, 0));
-    }
-  }
-
-  function tick(){
-    renderPermsIntoMain();
-    wireAdminInput();
-  }
-  tick();
-  document.addEventListener('click', onClickCapture, true);
-  new MutationObserver(tick).observe(document.body,{childList:true,subtree:true});
-  setInterval(renderPermsIntoMain, 1000); // keep fresh if UI re-renders
-})();
-
 /* === RA_BG_INTERCEPT_V3 — convert huge dark rects into canvas background (before render) === */
 (function RA_BG_INTERCEPT_V3(){
   function parseRGBA(v){
@@ -3428,149 +3154,6 @@ function maybeRestoreAutosave() {
     fabric.Canvas.prototype._raBgInterceptV3 = true;
   }
   hook();
-})();
-
-/* === RA_PERM_MIX_ADD_V6 — admin Add PNGs actually populates tiles; click reliably adds === */
-(function RA_PERM_MIX_ADD_V6(){
-  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
-
-  // Session list of permanent items
-  window.raPermOverlays = window.raPermOverlays || [];
-
-  function findOverlaysCard(){
-    const h3 = Array.from(document.querySelectorAll('h3'))
-      .find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-    return h3 ? h3.parentNode : null;
-  }
-  function findMainOverlayGrid(){
-    const card = findOverlaysCard(); if (!card) return null;
-    const divs = Array.from(card.querySelectorAll('div'));
-    let best=null, bestScore=-1;
-    divs.forEach(d=>{
-      const imgs=d.querySelectorAll('img').length;
-      const tiles=[...d.children].filter(ch => ch.querySelector && ch.querySelector('img')).length;
-      const score=imgs + tiles*2;
-      if (score>bestScore && (imgs+tiles)>=3){ best=d; bestScore=score; }
-    });
-    return best;
-  }
-
-  // Ensure we have the small admin bar with the input
-  function ensureAdminBar(){
-    if (!isAdmin) return;
-    if (document.getElementById('raPermInlineInput')) return;
-    const card = findOverlaysCard(); const grid = findMainOverlayGrid();
-    if (!card || !grid) return;
-    const bar = document.createElement('div');
-    bar.className = 'row tight';
-    bar.style.margin = '6px 0';
-    bar.innerHTML = `
-      <label class="btn small">
-        Add Permanent PNGs
-        <input id="raPermInlineInput" type="file" accept="image/png" multiple style="display:none">
-      </label>
-    `;
-    card.insertBefore(bar, grid);
-    document.getElementById('raPermInlineInput').addEventListener('change', onFilesChosen);
-  }
-
-  // Convert file list into shelf items
-  function niceName(file){ return file.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim(); }
-  function onFilesChosen(e){
-    const files = Array.from(e.target.files||[]);
-    if (!files.length) return;
-    files.forEach(f=>{
-      const url = URL.createObjectURL(f);
-      window.raPermOverlays.push({ name:niceName(f), url, _blobURL:url });
-    });
-    e.target.value = ''; // allow re-choosing same files later
-    renderPermsIntoMain();
-  }
-
-  // Robust add: try app hook first (for remote URLs), Fabric fallback (for blob: too)
-  function withCanvas(fn, tries=0){
-    const c = window.canvas; if (c && c.upperCanvasEl) return fn(c);
-    if (tries>25) return; setTimeout(()=>withCanvas(fn, tries+1), 200);
-  }
-  function robustAdd(url, name){
-    withCanvas(c=>{
-      const before=c.getObjects().length;
-      const isBlob = /^blob:/i.test(url);
-      let usedHook=false;
-      if (!isBlob && typeof window.addOverlayToCanvas==='function'){
-        try{ window.addOverlayToCanvas(url,name); usedHook=true; }catch(e){}
-      }
-      setTimeout(()=>{
-        const after=c.getObjects().length;
-        if (after>before){ c.requestRenderAll(); return; }
-        if (!window.fabric || !fabric.Image) return;
-        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
-        fabric.Image.fromURL(url, img=>{
-          img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
-          try{ c.add(img); c.bringToFront(img); c.setActiveObject(img);}catch(e){}
-          c.requestRenderAll();
-          if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
-        }, opts);
-      }, usedHook?200:0);
-    });
-  }
-
-  // Render permanent tiles at the very top of the main overlays grid
-  function renderPermsIntoMain(){
-    const grid = findMainOverlayGrid(); if (!grid) return;
-    // Remove previous clones
-    grid.querySelectorAll('.ra-perm-clone').forEach(n=>n.remove());
-    (window.raPermOverlays||[]).forEach((it, idx)=>{
-      const tile = document.createElement('div');
-      tile.className='ra-perm-clone';
-      tile.style.cssText='position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
-      tile.dataset.idx = String(idx);
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-        ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
-      `;
-      grid.insertBefore(tile, grid.firstChild);
-    });
-    if (!isAdmin){
-      grid.querySelectorAll('.ra-perm-clone .perm-del').forEach(b=> b.remove());
-    }
-  }
-
-  // One capture handler to add or delete
-  function onClickCapture(e){
-    const tile = e.target && e.target.closest && e.target.closest('.ra-perm-clone');
-    if (!tile) return;
-    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
-    const del = e.target && e.target.closest('.perm-del');
-    const idx = parseInt(tile.dataset.idx||'-1',10);
-    if (del && isAdmin){
-      const arr = window.raPermOverlays||[];
-      if (idx>=0 && arr[idx]){
-        try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
-        arr.splice(idx,1);
-      }
-      tile.remove();
-      return false;
-    }
-    const img = tile.querySelector('img');
-    const url = img?.currentSrc || img?.src;
-    const name = (img?.alt||'').trim();
-    if (url) robustAdd(url,name);
-    return false;
-  }
-
-  function tick(){
-    ensureAdminBar();
-    renderPermsIntoMain();
-  }
-  tick();
-  document.addEventListener('click', onClickCapture, true);
-  new MutationObserver(tick).observe(document.body,{childList:true,subtree:true});
-  // Safety: re-render if UI reflows
-  setInterval(renderPermsIntoMain, 1000);
 })();
 
 /* === RA_BG_NOFLASH_V4 — stop dark background rects before they render (no flicker) === */
@@ -3640,284 +3223,53 @@ function maybeRestoreAutosave() {
   })();
 })();
 
-/* === RA_PERM_INLINE_V7 — admin Add PNGs shows tiles & reliably adds to canvas (fallback shelf) === */
-(function RA_PERM_INLINE_V7(){
-  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
-  window.raPermOverlays = window.raPermOverlays || []; // session list
-
-  const $  = s => document.querySelector(s);
-  const $$ = s => Array.from(document.querySelectorAll(s));
-
-  function findOverlaysCard(){
-    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-    return h3 ? h3.parentNode : null;
-  }
-  function findMainGrid(){
-    const card = findOverlaysCard(); if (!card) return null;
-    const divs = Array.from(card.querySelectorAll('div'));
-    let best=null, score=-1;
-    divs.forEach(d=>{
-      const imgs = d.querySelectorAll('img').length;
-      const tiles = [...d.children].filter(ch => ch.querySelector && ch.querySelector('img')).length;
-      const s = imgs + tiles*2;
-      if (s>score && (imgs+tiles)>=3){ best=d; score=s; }
-    });
-    return best;
-  }
-
-  // Admin input row (always try to place above the main grid)
-  function ensureAdminRow(){
-    if (!isAdmin) return;
-    if ($('#raPermV7Bar')) return;
-    const card = findOverlaysCard(); const grid = findMainGrid();
-    if (!card) return;
-    const bar = document.createElement('div');
-    bar.id = 'raPermV7Bar';
-    bar.className = 'row tight';
-    bar.style.margin = '6px 0';
-    bar.innerHTML = `
-      <label class="btn small">
-        Add Permanent PNGs
-        <input id="raPermV7Input" type="file" accept="image/png" multiple style="display:none">
-      </label>
-    `;
-    if (grid) card.insertBefore(bar, grid); else card.appendChild(bar);
-    $('#raPermV7Input').addEventListener('change', onFilesChosen);
-  }
-
-  // Fallback shelf (if we can't detect the main grid)
-  function ensureShelf(){
-    if ($('#raPermV7Shelf')) return;
-    const card = findOverlaysCard(); if (!card) return;
-    const shelf = document.createElement('div');
-    shelf.id = 'raPermV7Shelf';
-    shelf.style.cssText = 'margin:6px 0;';
-    shelf.innerHTML = `
-      <div style="font-weight:600;opacity:.8">Permanent Overlays</div>
-      <div id="raPermV7ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px;max-height:220px;overflow:auto;"></div>
-    `;
-    card.appendChild(shelf);
-  }
-
-  function niceName(f){ return f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim(); }
-
-  function onFilesChosen(e){
-    const files = Array.from(e.target.files||[]);
-    if (!files.length) return;
-    files.forEach(f=>{
-      const url = URL.createObjectURL(f);
-      window.raPermOverlays.push({ name:niceName(f), url, _blobURL:url });
-    });
-    e.target.value = ''; // allow same files next time
-    renderTiles();
-  }
-
-  // Robust add to canvas (app hook first for remote, Fabric fallback incl. blob:)
-  function withCanvas(fn, tries=0){
-    const c = window.canvas; if (c && c.upperCanvasEl) return fn(c);
-    if (tries>25) return; setTimeout(()=>withCanvas(fn, tries+1), 200);
-  }
-  function robustAdd(url, name){
-    withCanvas(c=>{
-      const before = c.getObjects().length;
-      const isBlob = /^blob:/i.test(url);
-      let usedHook = false;
-
-      if (!isBlob && typeof window.addOverlayToCanvas==='function'){
-        try { window.addOverlayToCanvas(url, name); usedHook = true; } catch(e){}
-      }
-      setTimeout(()=>{
-        const after = c.getObjects().length;
-        if (after > before){ c.requestRenderAll(); return; }
-        if (!window.fabric || !fabric.Image) return;
-        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
-        fabric.Image.fromURL(url, img=>{
-          img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
-          try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
-          c.requestRenderAll();
-          if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
-        }, opts);
-      }, usedHook ? 200 : 0);
-    });
-  }
-
-  // Render: prefer main grid; otherwise fallback shelf
-  function renderTiles(){
-    const grid = findMainGrid();
-    const arr = window.raPermOverlays || [];
-
-    if (grid){
-      // Clear previous clones in main grid
-      grid.querySelectorAll('.ra-perm-v7').forEach(n=>n.remove());
-      arr.forEach((it, idx)=>{
-        const tile = document.createElement('div');
-        tile.className = 'ra-perm-v7';
-        tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
-        tile.dataset.idx = String(idx);
-        tile.innerHTML = `
-          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-            <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
-          </div>
-          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-          ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
-        `;
-        grid.insertBefore(tile, grid.firstChild);
-      });
-      if (!isAdmin){ grid.querySelectorAll('.ra-perm-v7 .perm-del').forEach(b=> b.remove()); }
-      // Hide shelf if we rendered in the main grid
-      const shelf = $('#raPermV7Shelf'); if (shelf) shelf.style.display='none';
-    } else {
-      // Render in fallback shelf
-      ensureShelf();
-      const sgrid = $('#raPermV7ShelfGrid'); if (!sgrid) return;
-      sgrid.innerHTML = '';
-      arr.forEach((it, idx)=>{
-        const tile = document.createElement('div');
-        tile.className = 'ra-perm-v7';
-        tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
-        tile.dataset.idx = String(idx);
-        tile.innerHTML = `
-          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-            <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
-          </div>
-          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-          ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
-        `;
-        sgrid.appendChild(tile);
-      });
-    }
-  }
-
-  // One capture handler for add/remove on our tiles
-  function onClickCapture(e){
-    const tile = e.target && e.target.closest && e.target.closest('.ra-perm-v7');
-    if (!tile) return;
-    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
-    const del = e.target && e.target.closest('.perm-del');
-    const idx = parseInt(tile.dataset.idx||'-1',10);
-    if (del && isAdmin){
-      const arr = window.raPermOverlays||[];
-      if (idx>=0 && arr[idx]){
-        try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
-        arr.splice(idx,1);
-      }
-      tile.remove();
-      return false;
-    }
-    const img = tile.querySelector('img');
-    const url = img?.currentSrc || img?.src;
-    const name = (img?.alt||'').trim();
-    if (url) robustAdd(url, name);
-    return false;
-  }
-
-  function boot(){
-    ensureAdminRow();
-    renderTiles();
-  }
-  boot();
-  document.addEventListener('click', onClickCapture, true);
-  const mo = new MutationObserver(boot);
-  mo.observe(document.body, { childList:true, subtree:true });
-})();
-
-/* === RA_ADMIN_DOCK_V1 — isolated admin dock (no interference with existing UI) ===
-   - Visible only if URL has ?admin=1
-   - Floating panel at bottom-right with:
-       • Add PNGs  (fresh file picker each click)
-       • A small grid of tiles (session-only)
+/* === RA_ADMIN_DOCK_V2 — isolated admin dock (no interference with existing UI) ===
+   - Visible only with ?admin=1
+   - Floating panel at bottom-right:
+       • Add PNGs (fresh file picker each click; opens every time)
+       • Grid of tiles (session-only)
        • Click tile -> add to canvas (centered, top)
-       • × on a tile to remove it from the grid
-   - No global click capture, no mutation of your Overlays DOM
+       • × on a tile -> remove it from the dock (admin only)
+   - No global click capture; does not touch the Overlays panel DOM.
 */
-(function RA_ADMIN_DOCK_V1(){
+(function RA_ADMIN_DOCK_V2(){
   const isAdmin = /(\?|&)admin=1\b/.test(location.search);
   if (!isAdmin) return;
 
-  // Guard: don't install twice
+  // Use a unique store so nothing else can overwrite it
+  window.raAdminDockPerms = window.raAdminDockPerms || [];
+
+  // Avoid double-mount
   if (document.getElementById('raAdminDock')) return;
 
-  // Session list for this browser session
-  window.raPermOverlays = window.raPermOverlays || [];
-
-  // Create dock
-  const dock = document.createElement('div');
-  dock.id = 'raAdminDock';
-  dock.style.cssText = [
-    'position:fixed','right:16px','bottom:16px','width:300px',
-    'background:#0e0f13','border:1px solid #2a2a2e','border-radius:12px',
-    'box-shadow:0 10px 24px rgba(0,0,0,.45)','color:#e7e7ea',
-    'font:13px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif',
-    'z-index: 999999','user-select:none'
-  ].join(';');
-
-  dock.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #222;">
-      <strong>Admin Overlays</strong>
-      <button id="raDockClose" style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
-    </div>
-    <div id="raDockBody" style="padding:10px 12px;">
-      <div style="display:flex;gap:8px;align-items:center;">
-        <button id="raDockAdd" style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
-        <button id="raDockClear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
-      </div>
-      <div id="raDockGrid" style="margin-top:10px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
-      <div style="opacity:.65;margin-top:8px">Only visible to you (?admin=1). Session-only.</div>
-    </div>
-  `;
-  document.body.appendChild(dock);
-
-  // Hide/show
-  document.getElementById('raDockClose').addEventListener('click', ()=>{
-    const body = document.getElementById('raDockBody');
-    if (!body) return;
-    const hidden = body.style.display === 'none';
-    body.style.display = hidden ? 'block' : 'none';
-    document.getElementById('raDockClose').textContent = hidden ? 'Hide' : 'Show';
-  });
-
-  // Fresh file input each click so picker opens every time
-  document.getElementById('raDockAdd').addEventListener('click', ()=>{
-    const inp = document.createElement('input');
-    inp.type = 'file';
-    inp.accept = 'image/png';
-    inp.multiple = true;
-    inp.style.display = 'none';
-    inp.addEventListener('change', (e)=>{
-      const files = Array.from(e.target.files||[]);
-      if (files.length){
-        files.forEach(f=>{
-          const url  = URL.createObjectURL(f);
-          const name = f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
-          window.raPermOverlays.push({ name, url, _blobURL:url });
-        });
-        renderDockTiles();
+  // Helpers
+  function findCanvas(){
+    // Prefer your global Fabric canvas if present
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    // Try to discover another Fabric canvas instance
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function'){
+          return v;
+        }
       }
-      inp.remove();
-    }, { once:true });
-    document.body.appendChild(inp);
-    inp.click();
-  });
-
-  // Clear all tiles (admin dock only)
-  document.getElementById('raDockClear').addEventListener('click', ()=>{
-    (window.raPermOverlays||[]).forEach(it=>{ try{ if (it._blobURL) URL.revokeObjectURL(it._blobURL); }catch(e){} });
-    window.raPermOverlays.length = 0;
-    renderDockTiles();
-  });
-
-  // Add selected PNG to canvas (robust: app hook (remote) then Fabric (incl. blob:))
+    }catch(e){}
+    return null;
+  }
   function addToCanvas(url, name){
-    const waitCanvas = (fn, tries=0)=>{
-      const c = window.canvas;
-      if (c && c.upperCanvasEl) return fn(c);
-      if (tries>25) return; setTimeout(()=>waitCanvas(fn, tries+1), 200);
+    const wait = (fn, tries=0)=>{
+      const c = findCanvas();
+      if (c) return fn(c);
+      if (tries>25) return;
+      setTimeout(()=>wait(fn, tries+1), 200);
     };
-    waitCanvas(c=>{
+    wait(c=>{
       const before = c.getObjects().length;
-      const isBlob = /^blob:/i.test(url);
-      let usedHook = false;
+      const isBlob  = /^blob:/i.test(url);
+      let usedHook  = false;
 
+      // If your app exposes a helper, prefer it for remote URLs
       if (!isBlob && typeof window.addOverlayToCanvas === 'function'){
         try { window.addOverlayToCanvas(url, name); usedHook = true; } catch(e){}
       }
@@ -3925,7 +3277,7 @@ function maybeRestoreAutosave() {
       setTimeout(()=>{
         const after = c.getObjects().length;
         if (after > before){ c.requestRenderAll(); return; }
-
+        // Fabric fallback (works for blob: and remote)
         if (!window.fabric || !fabric.Image) return;
         const opts = isBlob ? {} : { crossOrigin:'anonymous' };
         fabric.Image.fromURL(url, img=>{
@@ -3938,10 +3290,56 @@ function maybeRestoreAutosave() {
     });
   }
 
-  function renderDockTiles(){
+  // Dock UI
+  const dock = document.createElement('div');
+  dock.id = 'raAdminDock';
+  dock.style.cssText = [
+    'position:fixed','right:16px','bottom:16px','width:300px',
+    'background:#0e0f13','border:1px solid #2a2a2e','border-radius:12px',
+    'box-shadow:0 10px 24px rgba(0,0,0,.45)','color:#e7e7ea',
+    'font:13px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif',
+    'z-index: 999999'
+  ].join(';');
+
+  dock.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #222;">
+      <strong>Admin Overlays</strong>
+      <button id="raDockToggle" style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+    </div>
+    <div id="raDockBody" style="padding:10px 12px;">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <button id="raDockAdd"  style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
+        <button id="raDockClear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
+      </div>
+      <div id="raDockMsg" style="opacity:.75;margin-bottom:6px;display:none;"></div>
+      <div id="raDockGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+      <div style="opacity:.55;margin-top:8px">Only visible to you (?admin=1). Session-only.</div>
+    </div>
+  `;
+  document.body.appendChild(dock);
+
+  // Toggle
+  document.getElementById('raDockToggle').addEventListener('click', ()=>{
+    const body = document.getElementById('raDockBody');
+    const btn  = document.getElementById('raDockToggle');
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
+    btn.textContent = hidden ? 'Hide' : 'Show';
+  });
+
+  // Status helper
+  function setMsg(text){
+    const el = document.getElementById('raDockMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  // Render tiles
+  function render(){
     const grid = document.getElementById('raDockGrid'); if (!grid) return;
     grid.innerHTML = '';
-    (window.raPermOverlays||[]).forEach((it, idx)=>{
+    (window.raAdminDockPerms||[]).forEach((it, idx)=>{
       const tile = document.createElement('div');
       tile.style.cssText = 'position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;cursor:pointer;';
       tile.innerHTML = `
@@ -3951,25 +3349,54 @@ function maybeRestoreAutosave() {
         <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
         <button title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#aaa;font-size:16px;line-height:1;cursor:pointer;">×</button>
       `;
-      // Add on click (ignore delete button)
       tile.addEventListener('click', (ev)=>{
         if (ev.target && ev.target.tagName==='BUTTON') return;
+        setMsg('Adding to canvas…');
         addToCanvas(it.url, it.name);
+        setTimeout(()=>setMsg(''), 600);
       });
-      // Delete this tile
       tile.querySelector('button').addEventListener('click', (ev)=>{
         ev.stopPropagation();
-        const arr = window.raPermOverlays||[];
+        const arr = window.raAdminDockPerms||[];
         const pos = arr.indexOf(it);
-        if (pos >= 0){
+        if (pos>=0){
           try{ if (arr[pos]._blobURL) URL.revokeObjectURL(arr[pos]._blobURL); }catch(e){}
           arr.splice(pos,1);
         }
-        renderDockTiles();
+        render();
       });
       grid.appendChild(tile);
     });
   }
 
-  renderDockTiles();
+  // Fresh file input each click so dialog opens every time (Safari/Chrome)
+  document.getElementById('raDockAdd').addEventListener('click', ()=>{
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/png';
+    inp.multiple = true;
+    inp.style.display = 'none';
+    inp.addEventListener('change', (e)=>{
+      const files = Array.from(e.target.files||[]);
+      if (!files.length){ inp.remove(); return; }
+      files.forEach(f=>{
+        const url  = URL.createObjectURL(f);
+        const name = f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
+        (window.raAdminDockPerms||[]).push({ name, url, _blobURL:url });
+      });
+      render();
+      inp.remove();
+    }, { once:true });
+    document.body.appendChild(inp);
+    inp.click();
+  });
+
+  // Clear the dock (session-only)
+  document.getElementById('raDockClear').addEventListener('click', ()=>{
+    (window.raAdminDockPerms||[]).forEach(it=>{ try{ if (it._blobURL) URL.revokeObjectURL(it._blobURL); }catch(e){} });
+    window.raAdminDockPerms.length = 0;
+    render();
+  });
+
+  render();
 })();
