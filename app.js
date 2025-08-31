@@ -1,7 +1,4 @@
 (function(){
-  const CONTRACT="0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
-  const RESERVOIR="https://api.reservoir.tools/tokens/v7?media=true&tokens=";
-  (function(){
   const CONTRACT  = "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
   const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
