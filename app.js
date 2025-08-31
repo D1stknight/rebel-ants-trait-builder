@@ -376,7 +376,66 @@ async function loadBaseImage(dataUrl, isRebel){
 
   canvas.requestRenderAll();
 }
-  // Reorder within overlay band only
+
+async function addOverlayToCanvas(dataUrl, isPermanent){
+  const img = await fabricFromURL(dataUrl);
+  img.set({ originX:'center', originY:'center' });
+
+  // scale overlay to a comfortable size
+  const cw = canvas.getWidth(), ch = canvas.getHeight();
+  const maxW = cw * 0.80, maxH = ch * 0.80;
+  const sc = Math.min(maxW / img.width, maxH / img.height, 1);
+  img.scale(sc);
+
+  let obj;
+
+  if (isPermanent) {
+    img._kind = 'overlay';
+    obj = img;
+  } else {
+    // Group with two small corner stamps
+    const wmTL = await fabricFromURL(WM_SRC);
+    const wmBR = await fabricFromURL(WM_SRC);
+    const bw = img.width*sc, bh = img.height*sc;
+
+    const wmTargetW = Math.max(16, bw*0.08);
+    const margin    = Math.max(6,  bw*0.02);
+
+    const scaleTL = wmTargetW / wmTL.width;
+    const scaleBR = wmTargetW / wmBR.width;
+    wmTL.scale(scaleTL); wmBR.scale(scaleBR);
+
+    Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'TL' });
+    Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'BR' });
+
+    wmTL.set({
+      originX:'center', originY:'center',
+      left: -bw/2 + margin + (wmTL.width*scaleTL/2),
+      top:  -bh/2 + margin + (wmTL.height*scaleTL/2)
+    });
+    wmBR.set({
+      originX:'center', originY:'center',
+      left:  bw/2 - margin - (wmBR.width*scaleBR/2),
+      top:   bh/2 - margin - (wmBR.height*scaleBR/2)
+    });
+
+    const group = new fabric.Group([img, wmTL, wmBR], { originX:'center', originY:'center' });
+    group._kind = 'overlay';
+
+    // swap legacy stamps inside this overlay group too
+    swapOldStampsInGroup(group);
+
+    obj = group;
+  }
+
+  canvas.add(obj);
+  obj.set({ left: cw/2, top: ch/2 }); obj.setCoords();
+  canvas.setActiveObject(obj);
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+  return obj;
+}  
+// Reorder within overlay band only
   function reorderOverlay(dir){
     const o=canvas.getActiveObject(); if(!o || o._kind!=='overlay') return;
     const objs=canvas.getObjects();
