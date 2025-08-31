@@ -3962,3 +3962,49 @@ function maybeRestoreAutosave() {
   if (document.readyState === 'complete') boot();
   else window.addEventListener('load', boot);
 })();
+
+/* RA_CANVAS_GUARD_FIX_V4 — normalize window.canvas and stop "c.on is not a function" floods */
+(function(){
+  if (window.__RA_CANVAS_GUARD_FIX_V4) return; 
+  window.__RA_CANVAS_GUARD_FIX_V4 = true;
+
+  // Find the real Fabric canvas instance
+  function findFabricCanvas(){
+    const c = window.canvas;
+    if (c && typeof c.on === 'function' && c.upperCanvasEl) return c;
+    for (const k in window){
+      try {
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.on === 'function' && typeof v.add === 'function'){
+          return v;
+        }
+      } catch(_) {}
+    }
+    return null;
+  }
+
+  // Normalize window.canvas if possible
+  const fc = findFabricCanvas();
+  if (fc) { window.canvas = fc; }
+
+  // If wiring runs too early, install harmless stubs to prevent crashes
+  if (!window.canvas || typeof window.canvas.on !== 'function'){
+    const stub = window.canvas || {};
+    if (typeof stub.on  !== 'function') stub.on  = function(){};
+    if (typeof stub.off !== 'function') stub.off = function(){};
+    if (typeof stub.add !== 'function') stub.add = function(){};
+    window.canvas = stub;
+  }
+
+  // If an earlier MutationObserver is spamming "wire" on a non-Fabric canvas, stop it once
+  try {
+    if (window.__raObserver && typeof window.__raObserver.disconnect === 'function'){
+      window.__raObserver.disconnect();
+      // Re-attach safely after init settles
+      setTimeout(function(){
+        const c2 = findFabricCanvas();
+        if (c2) window.canvas = c2;
+      }, 400);
+    }
+  } catch(e){}
+})();
