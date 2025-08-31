@@ -3976,3 +3976,182 @@ function maybeRestoreAutosave() {
   // Keep trying as the panel renders/changes
   new MutationObserver(boot).observe(document.body, { childList:true, subtree:true });
 })();
+
+/* === RA_PERM_UNIFIED_V9 — ONE "Add Permanent PNGs", working tiles, admin-only delete ===
+   - Cleans up older admin UI (any previous "Add Permanent PNGs" buttons/shelves).
+   - Shows exactly ONE button (admin only) inside the Overlays panel.
+   - Each click creates a fresh <input type=file> so the picker opens every time.
+   - Selected PNGs appear as tiles in a small "Permanent Overlays" shelf.
+   - Click a tile -> adds to canvas (centered, on top).
+   - Admin sees × on tiles (remove from shelf, session-only). Users don’t see this shelf.
+*/
+(function RA_PERM_UNIFIED_V9(){
+  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+  if (!isAdmin) return; // keep totally invisible for non-admin users
+
+  // Session list lives across renders while page stays open
+  window.raPermOverlays = window.raPermOverlays || [];
+
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+
+  function findOverlaysCard(){
+    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+    return h3 ? h3.parentNode : null;
+  }
+
+  // Remove any leftover admin bars/shelves/buttons from older patches
+  function cleanupOldUI(card){
+    if (!card) return;
+    // Known containers from earlier attempts
+    ['#raPermInlineRow','#raPermV7Bar','#raPermAdminOne','#raPermSafeBar',
+     '#raPermShelf','#raPermV7Shelf','#raPermShelfOne','#raPermSafeShelf']
+     .forEach(sel => $$(sel).forEach(n => n.remove()));
+
+    // Any stray clones/tiles from older patches
+    ['.ra-perm-thumb','.ra-perm-clone','.ra-perm-v7','.ra-perm-x','.ra-perm-safe-tile']
+      .forEach(sel => $$(sel).forEach(n => n.remove()));
+
+    // Any extra buttons that literally say "Add Permanent PNGs" but are not ours
+    Array.from(card.querySelectorAll('button')).forEach(b=>{
+      const t = (b.textContent||'').trim().toLowerCase();
+      if (t==='add permanent pngs' && b.id !== 'raPermUnifiedBtn'){
+        // remove its containing row if present, else the button itself
+        const row = b.closest('.row') || b.parentElement;
+        if (row && row.parentElement===card) row.remove(); else b.remove();
+      }
+    });
+  }
+
+  function ensureAdminUI(){
+    const card = findOverlaysCard(); if (!card) return null;
+
+    cleanupOldUI(card); // first, clean duplicates
+
+    // Admin bar (one time)
+    let bar = $('#raPermUnifiedBar');
+    if (!bar){
+      bar = document.createElement('div');
+      bar.id = 'raPermUnifiedBar';
+      bar.className = 'row tight';
+      bar.style.margin = '8px 0 6px 0';
+      bar.innerHTML = `<button id="raPermUnifiedBtn" class="btn small">Add Permanent PNGs</button>`;
+      // Place at the top of the Overlays card
+      card.insertBefore(bar, card.firstChild);
+
+      // Fresh input on every click so Safari/Chrome always reopen the dialog
+      $('#raPermUnifiedBtn').addEventListener('click', ()=>{
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = 'image/png';
+        inp.multiple = true;
+        inp.style.display = 'none';
+        inp.addEventListener('change', (e)=>{
+          const files = Array.from(e.target.files||[]);
+          if (files.length){
+            files.forEach(f=>{
+              const url  = URL.createObjectURL(f);
+              const name = f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
+              window.raPermOverlays.push({ name, url, _blobURL:url });
+            });
+            renderShelf();
+          }
+          inp.remove(); // dispose so next click uses a brand-new input
+        }, { once:true });
+        document.body.appendChild(inp);
+        inp.click();
+      });
+    }
+
+    // Shelf (one time)
+    let shelf = $('#raPermUnifiedShelf');
+    if (!shelf){
+      shelf = document.createElement('div');
+      shelf.id = 'raPermUnifiedShelf';
+      shelf.style.cssText = 'margin:6px 0;';
+      shelf.innerHTML = `
+        <div style="font-weight:600;opacity:.8">Permanent Overlays</div>
+        <div id="raPermUnifiedGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px;max-height:220px;overflow:auto;"></div>
+      `;
+      // Put shelf just after the bar (keeps the main overlays grid untouched)
+      if (bar && bar.nextSibling) card.insertBefore(shelf, bar.nextSibling);
+      else card.appendChild(shelf);
+    }
+    return shelf;
+  }
+
+  // Add to canvas: try your app hook for remote URLs; fallback to Fabric for everything incl. blob:
+  function addToCanvas(url, name){
+    const waitCanvas = (fn, tries=0)=>{
+      const c = window.canvas;
+      if (c && c.upperCanvasEl) return fn(c);
+      if (tries>25) return; setTimeout(()=>waitCanvas(fn, tries+1), 200);
+    };
+    waitCanvas(c=>{
+      const before = c.getObjects().length;
+      const isBlob  = /^blob:/i.test(url);
+      let usedHook  = false;
+
+      if (!isBlob && typeof window.addOverlayToCanvas === 'function'){
+        try { window.addOverlayToCanvas(url, name); usedHook = true; } catch(e){}
+      }
+      setTimeout(()=>{
+        const after = c.getObjects().length;
+        if (after > before){ c.requestRenderAll(); return; }
+        if (!window.fabric || !fabric.Image) return;
+        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
+        fabric.Image.fromURL(url, img=>{
+          img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+          try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+          c.requestRenderAll();
+          if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
+        }, opts);
+      }, usedHook ? 200 : 0);
+    });
+  }
+
+  function renderShelf(){
+    const grid = $('#raPermUnifiedGrid'); if (!grid) return;
+    grid.innerHTML = '';
+    (window.raPermOverlays||[]).forEach((it, i)=>{
+      const tile = document.createElement('div');
+      tile.className = 'ra-perm-unified-tile';
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
+      tile.innerHTML = `
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+        </div>
+        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+        <button class="perm-del" title="Remove"
+          style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>
+      `;
+      // Click to add
+      tile.addEventListener('click', (ev)=>{
+        if ((ev.target && ev.target.classList && ev.target.classList.contains('perm-del'))) return;
+        addToCanvas(it.url, it.name);
+      });
+      // Delete (admin-only shelf)
+      tile.querySelector('.perm-del').addEventListener('click', (ev)=>{
+        ev.stopPropagation();
+        const arr = window.raPermOverlays||[];
+        const idx = arr.findIndex(x => x === it);
+        if (idx>=0){
+          try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
+          arr.splice(idx,1);
+        }
+        renderShelf();
+      });
+      grid.appendChild(tile);
+    });
+  }
+
+  function boot(){
+    const shelf = ensureAdminUI();
+    if (shelf) renderShelf();
+  }
+  boot();
+
+  // Keep it stable if the Overlays card rerenders
+  const mo = new MutationObserver(()=> boot());
+  mo.observe(document.body, { childList:true, subtree:true });
+})();
