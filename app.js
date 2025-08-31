@@ -2735,3 +2735,926 @@ function maybeRestoreAutosave() {
     (document.head || document.documentElement).appendChild(st);
   }catch(e){}
 })();
+
+/* === RA_ZOOM_PAN_V1 — zoom to pointer, Space‑drag to pan, clamp zoom; keep base locked === */
+(function RA_ZOOM_PAN_V1(){
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  function centerPoint(c){ return new fabric.Point(c.getWidth()/2, c.getHeight()/2); }
+  function updateZoomUI(c){ const el = document.getElementById('zoomVal'); if (el) el.textContent = Math.round(c.getZoom()*100) + '%'; }
+
+  function wire(){
+    const c = findCanvas(); if (!c) { setTimeout(wire, 200); return; }
+
+    // --- Mouse wheel: zoom to cursor ---
+    if (!c._raWheelZoom){
+      c.on('mouse:wheel', function(opt){
+        const e = opt.e;
+        let zoom = c.getZoom();
+        zoom *= Math.pow(0.999, e.deltaY);           // smooth zoom
+        zoom = clamp(zoom, 0.25, 6);
+        const pt = new fabric.Point(e.offsetX, e.offsetY);
+        c.zoomToPoint(pt, zoom);
+        e.preventDefault(); e.stopPropagation();
+        updateZoomUI(c);
+      });
+      c._raWheelZoom = true;
+    }
+
+    // --- Space‑drag: pan the viewport ---
+    let isPanning = false, last = {x:0,y:0}, spaceDown = false;
+    if (!c._raPanWired){
+      document.addEventListener('keydown', (e)=>{ if (e.code==='Space'){ spaceDown = true; c.defaultCursor='grab'; }});
+      document.addEventListener('keyup',   (e)=>{ if (e.code==='Space'){ spaceDown = false; c.defaultCursor='default'; }});
+
+      c.on('mouse:down', (opt)=>{
+        const e = opt.e;
+        if (spaceDown || e.button===1){              // Space or middle‑mouse
+          isPanning = true; last.x = e.clientX; last.y = e.clientY;
+          c.setCursor('grabbing'); c.renderAll();
+          e.preventDefault();
+        }
+      });
+      c.on('mouse:move', (opt)=>{
+        if (!isPanning) return;
+        const e = opt.e, vt = c.viewportTransform;
+        vt[4] += e.clientX - last.x;                 // translate X
+        vt[5] += e.clientY - last.y;                 // translate Y
+        last.x = e.clientX; last.y = e.clientY;
+        c.requestRenderAll();
+        e.preventDefault();
+      });
+      c.on('mouse:up', ()=>{
+        isPanning = false;
+        c.setCursor(spaceDown ? 'grab' : 'default');
+      });
+      c._raPanWired = true;
+    }
+
+    // --- Hook the + / – / Reset buttons to center‑zoom & recenter ---
+    function id(x){ return document.getElementById(x); }
+    const zOut = id('zoomOut'), zIn = id('zoomIn'), zReset = id('zoomReset');
+
+    function setZoomAbs(newZoom, point){
+      newZoom = clamp(newZoom, 0.25, 6);
+      const p = point || centerPoint(c);
+      c.zoomToPoint(p, newZoom);
+      updateZoomUI(c);
+    }
+
+    if (zIn && !zIn._raZoom){   zIn.addEventListener('click', ()=> setZoomAbs(c.getZoom()*1.15)); zIn._raZoom = true; }
+    if (zOut && !zOut._raZoom){ zOut.addEventListener('click', ()=> setZoomAbs(c.getZoom()/1.15)); zOut._raZoom = true; }
+    if (zReset && !zReset._raZoom){
+      zReset.addEventListener('click', ()=>{
+        c.setViewportTransform([1,0,0,1,0,0]);       // recenter pan
+        setZoomAbs(1);
+      });
+      zReset._raZoom = true;
+    }
+  }
+
+  wire();
+  document.addEventListener('ra:canvas-ready', wire);
+  const obs = new MutationObserver(wire);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
+
+/* === RA_ZOOM_PAN_V2 — pan with Space/right-drag; wheel=zoom, Shift/Alt/Space+wheel=pAN === */
+(function RA_ZOOM_PAN_V2(){
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  function centerPoint(c){ return new fabric.Point(c.getWidth()/2, c.getHeight()/2); }
+  function setZoomAbs(c, z, point){
+    z = clamp(z, 0.25, 6);
+    c.zoomToPoint(point || centerPoint(c), z);
+    const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = Math.round(c.getZoom()*100)+'%';
+  }
+
+  function wire(){
+    const c = findCanvas(); if (!c){ setTimeout(wire, 200); return; }
+    if (c._raZoomPanV2) return;
+
+    // Remove any previous wheel listeners to avoid double-handling
+    try { if (c.__eventListeners && c.__eventListeners['mouse:wheel']) c.__eventListeners['mouse:wheel'] = []; } catch(e){}
+
+    // --- Wheel: Zoom by default; hold Shift/Alt/Space to PAN with wheel ---
+    let spaceDown = false;
+    document.addEventListener('keydown', (e)=>{ if (e.code==='Space'){ spaceDown = true; c.defaultCursor='grab'; }}, false);
+    document.addEventListener('keyup',   (e)=>{ if (e.code==='Space'){ spaceDown = false; c.defaultCursor='default'; }}, false);
+
+    c.on('mouse:wheel', function(opt){
+      const e = opt.e;
+      const panMode = spaceDown || e.shiftKey || e.altKey;
+      if (panMode){
+        // Pan using wheel deltas (natural: content moves with your fingers)
+        const vt = c.viewportTransform;
+        vt[4] -= e.deltaX;
+        vt[5] -= e.deltaY;
+        c.requestRenderAll();
+      }else{
+        // Zoom to pointer
+        let zoom = c.getZoom();
+        zoom *= Math.pow(0.999, e.deltaY);
+        zoom = clamp(zoom, 0.25, 6);
+        const pt = new fabric.Point(e.offsetX, e.offsetY);
+        c.zoomToPoint(pt, zoom);
+      }
+      e.preventDefault(); e.stopPropagation();
+      const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = Math.round(c.getZoom()*100)+'%';
+    });
+
+    // --- Drag pan: Space + left drag OR right/middle drag pans the viewport ---
+    let isPanning = false, last = {x:0,y:0};
+    c.on('mouse:down', (opt)=>{
+      const e = opt.e;
+      const right = e.button === 2;
+      const middle = e.button === 1 || e.buttons === 4;
+      if (spaceDown || right || middle){
+        isPanning = true;
+        last.x = e.clientX; last.y = e.clientY;
+        c.setCursor('grabbing');
+        e.preventDefault();
+      }
+    });
+    c.on('mouse:move', (opt)=>{
+      if (!isPanning) return;
+      const e = opt.e;
+      const vt = c.viewportTransform;
+      vt[4] += e.clientX - last.x;   // translate X
+      vt[5] += e.clientY - last.y;   // translate Y
+      last.x = e.clientX; last.y = e.clientY;
+      c.requestRenderAll();
+      e.preventDefault();
+    });
+    c.on('mouse:up', ()=>{
+      isPanning = false;
+      c.setCursor(spaceDown ? 'grab' : 'default');
+    });
+
+    // --- Hook + / – / Reset buttons to center-zoom and recentre pan ---
+    const id = s => document.getElementById(s);
+    const zIn = id('zoomIn'), zOut = id('zoomOut'), zReset = id('zoomReset');
+    if (zIn && !zIn._raZ2){   zIn.addEventListener('click', ()=> setZoomAbs(c, c.getZoom()*1.15)); zIn._raZ2 = true; }
+    if (zOut && !zOut._raZ2){ zOut.addEventListener('click', ()=> setZoomAbs(c, c.getZoom()/1.15)); zOut._raZ2 = true; }
+    if (zReset && !zReset._raZ2){
+      zReset.addEventListener('click', ()=>{
+        c.setViewportTransform([1,0,0,1,0,0]);      // reset pan
+        setZoomAbs(c, 1);                           // reset zoom
+      });
+      zReset._raZ2 = true;
+    }
+
+    c._raZoomPanV2 = true;
+  }
+
+  wire();
+  document.addEventListener('ra:canvas-ready', wire);
+  const obs = new MutationObserver(wire);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
+
+/* === RA_BG_SEND_BACK_V1 — send huge dark rectangles behind everything on size change === */
+(function RA_BG_SEND_BACK_V1(){
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
+    if (el){
+      const cand = [ 'fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas' ]
+        .map(k=>el[k]).find(v => v && v.upperCanvasEl);
+      if (cand) return cand;
+    }
+    return null;
+  }
+  function parseRGBA(v){
+    if (!v) return null;
+    const s=(''+v).trim().toLowerCase();
+    if (s==='black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const h=s.slice(1); const x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
+      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
+    return null;
+  }
+  function isDark(fill){
+    const c=parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a]=c; if (a<0.6) return false;
+    const lum=(0.299*r+0.587*g+0.114*b)/255;
+    return lum<0.25; // dark greys included
+  }
+  function sendDarkRectsToBack(){
+    const c=findCanvas(); if (!c) return;
+    const cw=c.getWidth(), ch=c.getHeight();
+    let changed=false;
+    c.getObjects('rect').forEach(o=>{
+      const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
+      const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
+      const huge = (w>=cw*0.8 || h>=ch*0.8);
+      if (huge && isDark(o.fill) && !o._isBase){
+        o._isBgRect = true;
+        o.selectable=false; o.evented=false; o.hasControls=false;
+        o.lockMovementX = o.lockMovementY = true;
+        try { c.sendToBack(o); changed=true; } catch(e){}
+      }
+    });
+    if (changed) c.requestRenderAll();
+  }
+
+  // Run on object add (some builders add a new rect on resize)
+  (function hook(){
+    const c=findCanvas();
+    if (c && !c._raBgOrderHooked){
+      c.on('object:added', ()=> setTimeout(sendDarkRectsToBack, 0));
+      c._raBgOrderHooked = true;
+    } else if (!c){
+      setTimeout(hook, 300);
+    }
+  })();
+
+  // Nudge after clicks on common size buttons (700/900/1024/1200)
+  function wireSizeButtons(){
+    const btns = Array.from(document.querySelectorAll('button'));
+    btns.forEach(b=>{
+      const t=(b.textContent||'').trim();
+      if (/^(700|900|1024|1200)$/i.test(t) && !b._raSizeWired){
+        b._raSizeWired=true;
+        b.addEventListener('click', ()=> setTimeout(sendDarkRectsToBack, 120));
+      }
+    });
+  }
+  wireSizeButtons();
+  const mo=new MutationObserver(()=> wireSizeButtons());
+  mo.observe(document.body, { childList:true, subtree:true });
+
+  // Also run periodically as a safety net
+  setInterval(sendDarkRectsToBack, 800);
+})();
+
+/* === RA_BG_NORMALIZE_V2 — replace huge dark rects with backgroundColor (no more flicker) === */
+(function RA_BG_NORMALIZE_V2(){
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[k]; if (v && v.upperCanvasEl) return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.loadFromJSON==='function') return v;
+      }
+    }catch(e){}
+    return null;
+  }
+  function parseRGBA(v){
+    if (!v) return null;
+    const s=(''+v).trim().toLowerCase();
+    if (s==='black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const h=s.slice(1); const x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
+      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
+    return null;
+  }
+  function isDarkFill(fill){
+    const c=parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a]=c; if (a<0.55) return false;
+    const lum=(0.299*r+0.587*g+0.114*b)/255;
+    return lum<0.25; // allow very dark greys too
+  }
+  function isHugeRect(o,c){
+    if (!o || o.type!=='rect') return false;
+    const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
+    const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
+    return (w>=c.getWidth()*0.8 || h>=c.getHeight()*0.8);
+  }
+  function normalize(){
+    const c=findCanvas(); if (!c) return;
+    let bg=null, removed=false;
+    const objs=c.getObjects('rect');
+    for (let i=objs.length-1;i>=0;i--){
+      const o=objs[i];
+      if (isHugeRect(o,c) && isDarkFill(o.fill) && !o._isBase){
+        bg = o.fill || bg;
+        try{ c.remove(o); removed=true; }catch(e){}
+      }
+    }
+    if (bg || removed){
+      try{ c.setBackgroundColor(bg||c.backgroundColor||'#000', ()=>c.requestRenderAll()); }
+      catch(e){ c.backgroundColor = bg||c.backgroundColor||'#000'; c.requestRenderAll(); }
+    }
+  }
+  // Normalize whenever objects are added/modified or sizes change
+  (function hook(){
+    const c=findCanvas();
+    if (c && !c._raBgNorm2){
+      c.on('object:added', ()=> setTimeout(normalize,0));
+      c.on('object:modified', ()=> setTimeout(normalize,0));
+      c._raBgNorm2=true;
+    } else if (!c){ setTimeout(hook,300); }
+  })();
+  // Nudge after clicking common size buttons
+  function wireSizeButtons(){
+    Array.from(document.querySelectorAll('button')).forEach(b=>{
+      const t=(b.textContent||'').trim();
+      if (/^(700|900|1024|1200)$/i.test(t) && !b._raBgBtn){
+        b._raBgBtn=true; b.addEventListener('click', ()=> setTimeout(normalize,120));
+      }
+    });
+  }
+  wireSizeButtons();
+  new MutationObserver(wireSizeButtons).observe(document.body,{childList:true,subtree:true});
+  // Safety sweep
+  setInterval(normalize, 1000);
+})();
+
+/* === RA_BG_INTERCEPT_V3 — convert huge dark rects into canvas background (before render) === */
+(function RA_BG_INTERCEPT_V3(){
+  function parseRGBA(v){
+    if (!v) return null;
+    const s=(''+v).trim().toLowerCase();
+    if (s==='black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const h=s.slice(1), x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
+      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
+    return null;
+  }
+  function isDark(fill){
+    const c=parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a]=c; if (a<0.55) return false;
+    const lum=(0.299*r+0.587*g+0.114*b)/255;
+    return lum<0.25; // include very dark greys
+  }
+  function hook(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.add){ setTimeout(hook,200); return; }
+    if (fabric.Canvas.prototype._raBgInterceptV3) return;
+    const origAdd = fabric.Canvas.prototype.add;
+    fabric.Canvas.prototype.add = function(...args){
+      const obj = args[0];
+      try{
+        if (obj && obj.type==='rect') {
+          const c = this;
+          const w = (obj.getScaledWidth? obj.getScaledWidth(): (obj.width||0)*(obj.scaleX||1));
+          const h = (obj.getScaledHeight? obj.getScaledHeight(): (obj.height||0)*(obj.scaleY||1));
+          const cw = c.getWidth(), ch = c.getHeight();
+          const huge = (w>=cw*0.8 || h>=ch*0.8);
+          if (huge && isDark(obj.fill)){
+            const fill = obj.fill;
+            try { c.setBackgroundColor(fill, ()=> c.requestRenderAll()); }
+            catch(e){ c.backgroundColor = fill; c.requestRenderAll(); }
+            return obj; // do NOT add the rect → no flicker
+          }
+        }
+      }catch(e){}
+      return origAdd.apply(this, args);
+    };
+    fabric.Canvas.prototype._raBgInterceptV3 = true;
+  }
+  hook();
+})();
+
+/* === RA_BG_NOFLASH_V4 — stop dark background rects before they render (no flicker) === */
+(function RA_BG_NOFLASH_V4(){
+  function parseRGBA(v){
+    if (!v) return null;
+    const s=(''+v).trim().toLowerCase();
+    if (s==='black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const h=s.slice(1), x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
+      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
+    return null;
+  }
+  function isDark(fill){
+    const c=parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a]=c; if (a<0.55) return false;
+    const lum=(0.299*r+0.587*g+0.114*b)/255;
+    return lum<0.25; // include very dark greys
+  }
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[k]; if (v && v.upperCanvasEl) return v;
+      }
+    }
+    return null;
+  }
+  function install(c){
+    if (c._raNoFlashV4) return;
+    c._raNoFlashV4 = true;
+    let toRemove = [];
+    // Hide candidate rects BEFORE render so they never flash
+    c.on('before:render', ()=>{
+      toRemove.length = 0;
+      const cw=c.getWidth(), ch=c.getHeight();
+      (c.getObjects()||[]).forEach(o=>{
+        if (!o || o.type!=='rect' || o._isBase) return;
+        const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
+        const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
+        const huge = (w>=cw*0.8 || h>=ch*0.8);
+        if (huge && isDark(o.fill)){
+          try { c.backgroundColor = o.fill || c.backgroundColor || '#000'; } catch(e){}
+          o.visible = false;
+          toRemove.push(o);
+        }
+      });
+    });
+    // Remove them right after render, then re-render once (quickly)
+    c.on('after:render', ()=>{
+      if (!toRemove.length) return;
+      toRemove.forEach(o=>{ try{ c.remove(o);}catch(e){} });
+      toRemove.length = 0;
+      c.requestRenderAll();
+    });
+    // If something adds after size change, force a pass
+    c.on('object:added', ()=> setTimeout(()=>c.requestRenderAll(),0));
+  }
+  (function hook(){
+    const c = findCanvas();
+    if (c) install(c); else setTimeout(hook, 300);
+  })();
+})();
+
+/* === RA_ADMIN_DOCK_V4 — Admin dock with Publish + Add + Export pack (isolated) === */
+(function RA_ADMIN_DOCK_V4(){
+  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+  if (!isAdmin) return;
+  if (document.getElementById('raAdminDock')) return;
+
+  window.raAdminDockPerms = window.raAdminDockPerms || []; // [{name,file,url}]
+
+  // Canvas helpers
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function') return v;
+      }
+    }catch(e){}
+    return null;
+  }
+  function waitCanvas(fn, tries=0){
+    const c = findCanvas();
+    if (c) return fn(c);
+    if (tries>25) return; setTimeout(()=>waitCanvas(fn, tries+1), 200);
+  }
+  function fileToDataURL(file){
+    return new Promise((resolve,reject)=>{
+      const fr = new FileReader(); fr.onload = ()=>resolve(fr.result); fr.onerror = reject; fr.readAsDataURL(file);
+    });
+  }
+  function addToCanvasFromDataURL(dataURL, name){
+    waitCanvas(c=>{
+      if (!window.fabric || !fabric.Image) return;
+      const imgEl = new Image();
+      imgEl.onload = ()=>{
+        const fImg = new fabric.Image(imgEl);
+        fImg.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+        try { c.add(fImg); c.bringToFront(fImg); c.setActiveObject(fImg); } catch(e){}
+        c.requestRenderAll();
+        if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+      };
+      imgEl.src = dataURL;
+    });
+  }
+
+  // Dock UI
+  const dock = document.createElement('div');
+  dock.id = 'raAdminDock';
+  dock.style.cssText = [
+    'position:fixed','right:16px','bottom:16px','width:320px',
+    'background:#0e0f13','border:1px solid #2a2a2e','border-radius:12px',
+    'box-shadow:0 10px 24px rgba(0,0,0,.45)','color:#e7e7ea',
+    'font:13px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif',
+    'z-index: 999999'
+  ].join(';');
+  dock.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #222;">
+      <strong>Admin Overlays</strong>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="raDockExport"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
+        <button id="raDockToggle"  style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+      </div>
+    </div>
+    <div id="raDockBody" style="padding:10px 12px;">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <button id="raDockAdd"  style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
+        <button id="raDockClear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
+        <div id="raDockMsg" style="opacity:.75;min-height:18px"></div>
+      </div>
+      <div id="raDockGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
+      <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add to the Overlays panel row. Share permanently by uploading the exported <code>overlays.json</code> and appending <code>?manifest=URL</code> to your link.</div>
+    </div>
+  `;
+  document.body.appendChild(dock);
+
+  // Toggle + Export
+  document.getElementById('raDockToggle').addEventListener('click', ()=>{
+    const body = document.getElementById('raDockBody');
+    const btn  = document.getElementById('raDockToggle');
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
+    btn.textContent = hidden ? 'Hide' : 'Show';
+  });
+  document.getElementById('raDockExport').addEventListener('click', ()=>{
+    if (typeof window.raExportPublishedPack === 'function') window.raExportPublishedPack();
+  });
+
+  // File picker (fresh input every click)
+  document.getElementById('raDockAdd').addEventListener('click', ()=>{
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/png'; inp.multiple = true; inp.style.display='none';
+    inp.addEventListener('change', (e)=>{
+      const files = Array.from(e.target.files||[]);
+      if (files.length){
+        files.forEach(f=>{
+          const url = URL.createObjectURL(f);
+          window.raAdminDockPerms.push({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim(), file: f, url });
+        });
+        renderTiles();
+      }
+      inp.remove();
+    }, { once:true });
+    document.body.appendChild(inp);
+    inp.click();
+  });
+
+  // Clear dock
+  document.getElementById('raDockClear').addEventListener('click', ()=>{
+    (window.raAdminDockPerms||[]).forEach(it=>{ try{ if (it.url && /^blob:/i.test(it.url)) URL.revokeObjectURL(it.url); }catch(e){} });
+    window.raAdminDockPerms.length = 0;
+    renderTiles();
+  });
+
+  function setMsg(txt){ const el = document.getElementById('raDockMsg'); if (el) el.textContent = txt||''; }
+
+  function renderTiles(){
+    const grid = document.getElementById('raDockGrid'); if (!grid) return;
+    grid.innerHTML = '';
+    (window.raAdminDockPerms||[]).forEach(it=>{
+      const tile = document.createElement('div');
+      tile.style.cssText = 'position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;';
+      tile.innerHTML = `
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+        </div>
+        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+        <div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">
+          <button data-act="publish" class="raTinyBtn">Publish</button>
+          <button data-act="add"      class="raTinyBtn">Add</button>
+          <button data-act="del"      class="raTinyBtn" title="Remove">×</button>
+        </div>
+      `;
+      // style tiny buttons
+      tile.querySelectorAll('.raTinyBtn').forEach(b=>{
+        b.style.cssText = 'background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:3px 8px;cursor:pointer;font-size:12px;';
+      });
+      tile.addEventListener('click', async (ev)=>{
+        const btn = ev.target.closest('button'); if (!btn) return;
+        const act = btn.getAttribute('data-act');
+        if (act==='del'){
+          const arr = window.raAdminDockPerms||[];
+          const idx = arr.indexOf(it);
+          if (idx>=0){
+            try{ if (arr[idx].url && /^blob:/i.test(arr[idx].url)) URL.revokeObjectURL(arr[idx].url); }catch(e){}
+            arr.splice(idx,1);
+          }
+          renderTiles();
+          return;
+        }
+        if (act==='publish'){
+          if (typeof window.raPublishToOverlaysShelf === 'function'){
+            // prefer dataURL for portability
+            const dataURL = await fileToDataURL(it.file);
+            await window.raPublishToOverlaysShelf(it.name, dataURL);
+            setMsg(`Published: ${it.name}`);
+            setTimeout(()=>setMsg(''), 1000);
+          }
+          return;
+        }
+        if (act==='add'){
+          const dataURL = await fileToDataURL(it.file);
+          addToCanvasFromDataURL(dataURL, it.name);
+          setMsg(`Added: ${it.name}`);
+          setTimeout(()=>setMsg(''), 800);
+        }
+      });
+      grid.appendChild(tile);
+    });
+  }
+
+  renderTiles();
+})();
+
+/* === RA_PUBLISHED_SHELF_V2 — Published Overlays row with default manifest + admin delete === */
+(function RA_PUBLISHED_SHELF_V2(){
+  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+  window.raPublishedOverlays = window.raPublishedOverlays || []; // [{name, src}]
+
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+
+  function findOverlaysCard(){
+    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase() === 'overlays');
+    return h3 ? h3.parentNode : null;
+  }
+
+  function robustAddToCanvas(url, name){
+    function findCanvas(){
+      if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+      try {
+        for (const k in window){
+          const v = window[k];
+          if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function') return v;
+        }
+      } catch(e){}
+      return null;
+    }
+    function wait(fn, tries=0){
+      const c = findCanvas();
+      if (c) return fn(c);
+      if (tries>25) return; setTimeout(()=>wait(fn, tries+1), 200);
+    }
+    wait(c=>{
+      if (!window.fabric || !fabric.Image) return;
+      const isBlob = /^blob:/i.test(url);
+      const opts   = isBlob ? {} : { crossOrigin:'anonymous' };
+      fabric.Image.fromURL(url, img=>{
+        if (!img) return;
+        img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+        try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+        c.requestRenderAll();
+        if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+      }, opts);
+    });
+  }
+
+  function ensureShelf(){
+    if ($('#raPublishedShelf')) return true;
+    const card = findOverlaysCard(); if (!card) return false;
+
+    const shelf = document.createElement('div');
+    shelf.id = 'raPublishedShelf';
+    shelf.style.cssText = 'margin-top:8px;';
+    shelf.innerHTML = `
+      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+      <div id="raPublishedGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+    `;
+    card.appendChild(shelf);
+    return true;
+  }
+
+  function renderShelf(){
+    if (!ensureShelf()) { setTimeout(renderShelf, 300); return; }
+    const grid = $('#raPublishedGrid'); if (!grid) return;
+    grid.innerHTML = '';
+    (window.raPublishedOverlays||[]).forEach((item, idx)=>{
+      const tile = document.createElement('div');
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+      tile.innerHTML = `
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${item.src}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+        </div>
+        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+        ${isAdmin ? '<button class="ra-pub-del" title="Remove" style="position:absolute;top:3px;right:5px;background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:2px 6px;cursor:pointer">×</button>' : ''}
+      `;
+      // Add to canvas (ignore delete click)
+      tile.addEventListener('click', (ev)=>{
+        if (isAdmin && ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
+        robustAddToCanvas(item.src, item.name);
+      });
+      // Admin delete
+      if (isAdmin){
+        const del = tile.querySelector('.ra-pub-del');
+        if (del){
+          del.addEventListener('click', (ev)=>{
+            ev.stopPropagation();
+            const arr = window.raPublishedOverlays;
+            arr.splice(idx,1);
+            renderShelf();
+          });
+        }
+      }
+      grid.appendChild(tile);
+    });
+  }
+
+  // Helper for the Admin Dock: publish one item here
+  window.raPublishToOverlaysShelf = async function(name, fileOrData){
+    const toDataURL = file => new Promise((res,rej)=>{
+      const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
+    });
+    let src = null;
+    if (typeof File !== 'undefined' && fileOrData instanceof File){
+      src = await toDataURL(fileOrData);
+    } else if (typeof fileOrData === 'string'){
+      src = fileOrData; // data: URL or http(s)
+    }
+    if (!src) return;
+    window.raPublishedOverlays.push({ name, src });
+    renderShelf();
+  };
+
+  // Export current published overlays to overlays.json
+  window.raExportPublishedPack = function(){
+    const data = { version:1, items:(window.raPublishedOverlays||[]).map(it=>({ name: it.name, dataURL: it.src })) };
+    const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'overlays.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
+  };
+
+  // Load a manifest for ALL users: default /overlays.json (or ?manifest=URL)
+  async function loadManifestFrom(url){
+    try{
+      // bust cache so testers see updates immediately
+      const bust = (url.indexOf('?')>-1 ? '&' : '?') + 't=' + Date.now();
+      const resp = await fetch(url + bust, { cache: 'no-store' });
+      if (!resp.ok) return;
+      const json = await resp.json();
+      if (json && Array.isArray(json.items)){
+        // Replace the list with the manifest so everyone sees the same set
+        window.raPublishedOverlays = json.items
+          .map(it => ({ name: it.name || 'overlay', src: it.dataURL || it.url }))
+          .filter(it => !!it.src);
+        renderShelf();
+      }
+    }catch(e){ /* ignore if file not present yet */ }
+  }
+
+  (async function init(){
+    ensureShelf();
+    renderShelf();
+    const qp = new URLSearchParams(location.search);
+    const manifestURL = qp.get('manifest') || '/overlays.json';
+    await loadManifestFrom(manifestURL);
+  })();
+})();
+
+/* === RA_PUBLISHED_MONO_HANDLER_V2 — add-once (capture), scaled/centered, clear-all compatible === */
+(function(){
+  if (window.__RA_PUB_MONO) return; 
+  window.__RA_PUB_MONO = true;
+
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function'){
+          return v;
+        }
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function addViaFabricScaled(src, name){
+    const c = findCanvas(); 
+    if (!c || !window.fabric || !fabric.Image) return;
+    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin:'anonymous' };
+    fabric.Image.fromURL(src, img=>{
+      if (!img) return;
+
+      const cw = c.getWidth(), ch = c.getHeight();
+      const maxDim = Math.min(cw, ch) * 0.60;
+      const iw = img.width  || maxDim, ih = img.height || maxDim;
+      const scale = Math.min(1, maxDim / Math.max(iw, ih));
+
+      img.set({
+        originX:'center', originY:'center',
+        left:cw/2, top:ch/2,
+        selectable:true, evented:true, hasControls:true, hasBorders:true
+      });
+      if (isFinite(scale) && scale>0) img.scale(scale);
+
+      // Mark for our clear-all safety
+      img.raOverlay = true;
+
+      try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+      c.requestRenderAll();
+
+      // Keep any app bookkeeping in sync if present
+      if (Array.isArray(window.overlayList)) {
+        try { window.overlayList.push(img); } catch(e){}
+      }
+      if (typeof window.registerOverlayInstance === 'function') {
+        try { window.registerOverlayInstance(img, { name }); } catch(e){}
+      }
+
+      if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
+    }, opts);
+  }
+
+  // One-click guard (by src)
+  function dedupe(src){
+    const now = Date.now();
+    if (window.__raLastAddKey===src && now - (window.__raLastAddAt||0) < 800) return true;
+    window.__raLastAddKey = src; window.__raLastAddAt = now; return false;
+  }
+
+  // CAPTURE-phase handler: runs before any bubble handlers, then stops propagation.
+  function onTileClickCapture(ev){
+    const grid = document.getElementById('raPublishedGrid');
+    if (!grid || !grid.contains(ev.target)) return;
+
+    // Ignore the admin delete (×) button
+    if (ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
+
+    // Identify the tile and its image
+    const tile   = ev.target.closest('#raPublishedGrid > div'); if (!tile) return;
+    const imgEl  = tile.querySelector('img'); if (!imgEl) return;
+    const nameEl = tile.querySelector('div:nth-child(2)');
+    const src  = imgEl.getAttribute('src');
+    const name = nameEl ? (nameEl.textContent||'overlay').trim() : 'overlay';
+    if (!src) return;
+
+    // Only our path (scaled + centered)
+    if (!dedupe(src)) addViaFabricScaled(src, name);
+
+    // Kill other listeners (prevents native/bubble adds that caused duplicates/huge size)
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    ev.stopPropagation();
+  }
+
+  function attach(){
+    // Global capture so we run before tile/bubble handlers
+    if (!window.__RA_PUB_CAPTURE_BOUND){
+      window.__RA_PUB_CAPTURE_BOUND = true;
+      document.addEventListener('click', onTileClickCapture, { capture:true });
+    }
+
+    // Safety: make "Clear All Overlays" also remove items we added
+    const clearBtn = Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent||'').trim().toLowerCase()==='clear all overlays');
+    if (clearBtn && !clearBtn.__raBound2){
+      clearBtn.__raBound2 = true;
+      clearBtn.addEventListener('click', ()=>{
+        setTimeout(()=>{
+          const c = findCanvas(); if (!c) return;
+          const extras = c.getObjects().filter(o => o && o.raOverlay === true);
+          extras.forEach(o => c.remove(o));
+          c.requestRenderAll();
+          if (Array.isArray(window.overlayList)) {
+            window.overlayList = window.overlayList.filter(o => !(o && o.raOverlay));
+          }
+        }, 60);
+      });
+    }
+  }
+
+  attach();
+})();
