@@ -3223,30 +3223,35 @@ function maybeRestoreAutosave() {
   })();
 })();
 
-/* === RA_ADMIN_DOCK_V2 — isolated admin dock (no interference with existing UI) ===
+/* === RA_ADMIN_DOCK_V3 — isolated admin dock with FileReader-based add (reliable) ===
    - Visible only with ?admin=1
-   - Floating panel at bottom-right:
-       • Add PNGs (fresh file picker each click; opens every time)
-       • Grid of tiles (session-only)
-       • Click tile -> add to canvas (centered, top)
-       • × on a tile -> remove it from the dock (admin only)
-   - No global click capture; does not touch the Overlays panel DOM.
+   - Bottom-right floating dock: Add PNGs, Clear, tiles grid
+   - Uses FileReader to turn files into data: URLs → creates fabric.Image from <img>
+   - Click tile => adds to Fabric canvas (centered, on top). × removes tile from dock.
+   - Also cleans up any stray "Add Permanent PNGs" buttons inside the Overlays panel.
 */
-(function RA_ADMIN_DOCK_V2(){
+(function RA_ADMIN_DOCK_V3(){
   const isAdmin = /(\?|&)admin=1\b/.test(location.search);
   if (!isAdmin) return;
 
-  // Use a unique store so nothing else can overwrite it
-  window.raAdminDockPerms = window.raAdminDockPerms || [];
+  // ---- Clean up any leftover overlay-panel admin buttons from older patches ----
+  (function cleanOverlayButtons(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const overlaysH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+    if (!overlaysH3) return;
+    const card = overlaysH3.parentNode;
+    Array.from(card.querySelectorAll('button')).forEach(b=>{
+      const txt=(b.textContent||'').trim().toLowerCase();
+      if (txt==='add permanent pngs') b.remove();
+    });
+  })();
 
-  // Avoid double-mount
-  if (document.getElementById('raAdminDock')) return;
+  // ---- State (session-only) ----------------------------------------------------
+  window.raAdminDockPerms = window.raAdminDockPerms || []; // {name, file, url, dataURL?}
 
-  // Helpers
+  // ---- Helpers ----------------------------------------------------------------
   function findCanvas(){
-    // Prefer your global Fabric canvas if present
     if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-    // Try to discover another Fabric canvas instance
     try{
       for (const k in window){
         const v = window[k];
@@ -3257,40 +3262,75 @@ function maybeRestoreAutosave() {
     }catch(e){}
     return null;
   }
-  function addToCanvas(url, name){
-    const wait = (fn, tries=0)=>{
-      const c = findCanvas();
-      if (c) return fn(c);
-      if (tries>25) return;
-      setTimeout(()=>wait(fn, tries+1), 200);
-    };
-    wait(c=>{
-      const before = c.getObjects().length;
-      const isBlob  = /^blob:/i.test(url);
-      let usedHook  = false;
+  function waitCanvas(fn, tries=0){
+    const c = findCanvas();
+    if (c) return fn(c);
+    if (tries>25) return; // ~5s max
+    setTimeout(()=>waitCanvas(fn, tries+1), 200);
+  }
+  function fileToDataURL(file){
+    return new Promise((resolve,reject)=>{
+      const fr = new FileReader();
+      fr.onload = ()=>resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+  }
+  function setMsg(text){
+    const el = document.getElementById('raDockMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
 
-      // If your app exposes a helper, prefer it for remote URLs
-      if (!isBlob && typeof window.addOverlayToCanvas === 'function'){
-        try { window.addOverlayToCanvas(url, name); usedHook = true; } catch(e){}
+  async function addItemToCanvas(it){
+    setMsg('Adding to canvas…');
+    await new Promise(r=>setTimeout(r,10)); // let UI paint
+    waitCanvas(async c=>{
+      try{
+        let dataURL = it.dataURL;
+        if (!dataURL && it.file) dataURL = await fileToDataURL(it.file);
+
+        if (dataURL && window.fabric && fabric.Image){
+          const imgEl = new Image();
+          imgEl.onload = ()=>{
+            const fImg = new fabric.Image(imgEl);
+            fImg.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+            try { c.add(fImg); c.bringToFront(fImg); c.setActiveObject(fImg); } catch(e){}
+            c.requestRenderAll();
+            if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+            setMsg('');
+          };
+          imgEl.src = dataURL;
+          return;
+        }
+
+        // Fallback: try fromURL (works for http(s) and some blob: in some browsers)
+        if (window.fabric && fabric.Image){
+          const opts = (it.url && /^blob:/i.test(it.url)) ? {} : { crossOrigin:'anonymous' };
+          fabric.Image.fromURL(it.url, img=>{
+            if (!img){ setMsg('Could not load image.'); return; }
+            img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+            try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+            c.requestRenderAll();
+            if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+            setMsg('');
+          }, opts);
+          return;
+        }
+
+        setMsg('Canvas not ready.');
+      }catch(err){
+        setMsg('Add failed.');
+      }finally{
+        setTimeout(()=>setMsg(''), 1200);
       }
-
-      setTimeout(()=>{
-        const after = c.getObjects().length;
-        if (after > before){ c.requestRenderAll(); return; }
-        // Fabric fallback (works for blob: and remote)
-        if (!window.fabric || !fabric.Image) return;
-        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
-        fabric.Image.fromURL(url, img=>{
-          img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
-          try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
-          c.requestRenderAll();
-          if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
-        }, opts);
-      }, usedHook ? 200 : 0);
     });
   }
 
-  // Dock UI
+  // ---- Build dock (only once) -------------------------------------------------
+  if (document.getElementById('raAdminDock')) return;
+
   const dock = document.createElement('div');
   dock.id = 'raAdminDock';
   dock.style.cssText = [
@@ -3300,7 +3340,6 @@ function maybeRestoreAutosave() {
     'font:13px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif',
     'z-index: 999999'
   ].join(';');
-
   dock.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #222;">
       <strong>Admin Overlays</strong>
@@ -3313,12 +3352,11 @@ function maybeRestoreAutosave() {
       </div>
       <div id="raDockMsg" style="opacity:.75;margin-bottom:6px;display:none;"></div>
       <div id="raDockGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
-      <div style="opacity:.55;margin-top:8px">Only visible to you (?admin=1). Session-only.</div>
+      <div style="opacity:.55;margin-top:8px">Only visible to you (?admin=1). Session‑only.</div>
     </div>
   `;
   document.body.appendChild(dock);
 
-  // Toggle
   document.getElementById('raDockToggle').addEventListener('click', ()=>{
     const body = document.getElementById('raDockBody');
     const btn  = document.getElementById('raDockToggle');
@@ -3327,19 +3365,36 @@ function maybeRestoreAutosave() {
     btn.textContent = hidden ? 'Hide' : 'Show';
   });
 
-  // Status helper
-  function setMsg(text){
-    const el = document.getElementById('raDockMsg');
-    if (!el) return;
-    el.textContent = text || '';
-    el.style.display = text ? 'block' : 'none';
-  }
+  // Add PNGs (fresh input per click so the dialog always opens)
+  document.getElementById('raDockAdd').addEventListener('click', ()=>{
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/png'; inp.multiple = true; inp.style.display='none';
+    inp.addEventListener('change', async (e)=>{
+      const files = Array.from(e.target.files||[]);
+      if (files.length){
+        files.forEach(f=>{
+          const url = URL.createObjectURL(f);
+          window.raAdminDockPerms.push({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim(), file: f, url });
+        });
+        renderTiles();
+      }
+      inp.remove();
+    }, { once:true });
+    document.body.appendChild(inp);
+    inp.click();
+  });
 
-  // Render tiles
-  function render(){
+  // Clear dock (and release blobs)
+  document.getElementById('raDockClear').addEventListener('click', ()=>{
+    (window.raAdminDockPerms||[]).forEach(it=>{ try{ if (it.url && /^blob:/i.test(it.url)) URL.revokeObjectURL(it.url); }catch(e){} });
+    window.raAdminDockPerms.length = 0;
+    renderTiles();
+  });
+
+  function renderTiles(){
     const grid = document.getElementById('raDockGrid'); if (!grid) return;
     grid.innerHTML = '';
-    (window.raAdminDockPerms||[]).forEach((it, idx)=>{
+    (window.raAdminDockPerms||[]).forEach((it)=>{
       const tile = document.createElement('div');
       tile.style.cssText = 'position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;cursor:pointer;';
       tile.innerHTML = `
@@ -3349,54 +3404,25 @@ function maybeRestoreAutosave() {
         <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
         <button title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#aaa;font-size:16px;line-height:1;cursor:pointer;">×</button>
       `;
+      // Add to canvas
       tile.addEventListener('click', (ev)=>{
         if (ev.target && ev.target.tagName==='BUTTON') return;
-        setMsg('Adding to canvas…');
-        addToCanvas(it.url, it.name);
-        setTimeout(()=>setMsg(''), 600);
+        addItemToCanvas(it);
       });
+      // Remove tile
       tile.querySelector('button').addEventListener('click', (ev)=>{
         ev.stopPropagation();
         const arr = window.raAdminDockPerms||[];
-        const pos = arr.indexOf(it);
-        if (pos>=0){
-          try{ if (arr[pos]._blobURL) URL.revokeObjectURL(arr[pos]._blobURL); }catch(e){}
-          arr.splice(pos,1);
+        const idx = arr.indexOf(it);
+        if (idx>=0){
+          try{ if (arr[idx].url && /^blob:/i.test(arr[idx].url)) URL.revokeObjectURL(arr[idx].url); }catch(e){}
+          arr.splice(idx,1);
         }
-        render();
+        renderTiles();
       });
       grid.appendChild(tile);
     });
   }
 
-  // Fresh file input each click so dialog opens every time (Safari/Chrome)
-  document.getElementById('raDockAdd').addEventListener('click', ()=>{
-    const inp = document.createElement('input');
-    inp.type = 'file';
-    inp.accept = 'image/png';
-    inp.multiple = true;
-    inp.style.display = 'none';
-    inp.addEventListener('change', (e)=>{
-      const files = Array.from(e.target.files||[]);
-      if (!files.length){ inp.remove(); return; }
-      files.forEach(f=>{
-        const url  = URL.createObjectURL(f);
-        const name = f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
-        (window.raAdminDockPerms||[]).push({ name, url, _blobURL:url });
-      });
-      render();
-      inp.remove();
-    }, { once:true });
-    document.body.appendChild(inp);
-    inp.click();
-  });
-
-  // Clear the dock (session-only)
-  document.getElementById('raDockClear').addEventListener('click', ()=>{
-    (window.raAdminDockPerms||[]).forEach(it=>{ try{ if (it._blobURL) URL.revokeObjectURL(it._blobURL); }catch(e){} });
-    window.raAdminDockPerms.length = 0;
-    render();
-  });
-
-  render();
+  renderTiles();
 })();
