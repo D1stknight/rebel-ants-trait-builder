@@ -254,6 +254,70 @@ document.getElementById("clearCanvas").addEventListener("click", () => {
     baseGroup=null; canvas.requestRenderAll();
   }
 
+  // Deep-swap any watermark-like children inside a fabric.Group to the current WM_SRC.
+// Works on old autosaves where stamps were embedded differently.
+function swapOldStampsInGroup(group) {
+  if (!group || group.type !== 'group' || !Array.isArray(group._objects)) return;
+
+  // Heuristic to recognize existing watermark objects inside the group
+  function looksLikeStamp(child, gw, gh) {
+    if (!child || child.type !== 'image') return false;
+
+    // Already marked by newer code:
+    if (child._isWatermark || child._isOverlayWM || child.raWM) return true;
+
+    // Heuristic for older sessions:
+    // - non-interactive image
+    // - sits near one of the group corners (group is center-origin)
+    // - relatively small vs the group image
+    try {
+      const ow = child.getScaledWidth?.()  || (child.width  ||0)*(child.scaleX||1);
+      const oh = child.getScaledHeight?.() || (child.height ||0)*(child.scaleY||1);
+      const small = ow <= gw*0.55 && oh <= gh*0.55;
+
+      const nearTL = (Math.abs(child.left + gw/2) <= 40) && (Math.abs(child.top + gh/2) <= 40);
+      const nearBR = (Math.abs(child.left - gw/2) <= 40) && (Math.abs(child.top - gh/2) <= 40);
+
+      const nonInteractive = (child.selectable === false) && (child.evented === false);
+      return nonInteractive && small && (nearTL || nearBR);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  const gw = group.getScaledWidth?.()  || (group.width  ||0)*(group.scaleX||1);
+  const gh = group.getScaledHeight?.() || (group.height ||0)*(group.scaleY||1);
+
+  let changed = false;
+  group._objects.forEach(child => {
+    if (!looksLikeStamp(child, gw, gh)) return;
+
+    // Swap the image source to the current watermark (WM_SRC).
+    // Prefer setSrc (async-safe); fall back to element src.
+    try {
+      if (typeof child.setSrc === 'function') {
+        child.setSrc(WM_SRC, () => canvas && canvas.requestRenderAll && canvas.requestRenderAll());
+        changed = true;
+      } else if (child._element) {
+        child._element.src = WM_SRC;
+        changed = true;
+      }
+    } catch (_) {
+      // If anything blocks swapping, hide it; the current group also receives fresh stamps anyway.
+      try { child.opacity = 0; child.selectable = false; child.evented = false; } catch (_) {}
+      changed = true;
+    }
+
+    // Tag it so future passes recognize it fast
+    child._isWatermark = true;
+  });
+
+  if (changed) {
+    try {
+      group.addWithUpdate && group.addWithUpdate();
+    } catch (_) {}
+  }
+}
   async function loadBaseImage(dataUrl, isRebel){
     // remove old base
     clearBaseOnly();
