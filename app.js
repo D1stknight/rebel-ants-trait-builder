@@ -2689,3 +2689,94 @@ function maybeRestoreAutosave() {
   const obs = new MutationObserver(wire);
   obs.observe(document.body, { childList:true, subtree:true });
 })();
+
+/* === RA_OPEN_NEW_TAB_ONLY_V2 — force open ONLY in a new tab; block page nav === */
+(function RA_OPEN_NEW_TAB_ONLY_V2(){
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function getMultiplier(){
+    const txt = (document.querySelector('.export-quality')?.textContent
+                 || document.querySelector('#exportQuality')?.value
+                 || '').toLowerCase();
+    const m = (txt.match(/x\s*([1-8])/i)||[])[1];
+    return Math.max(1, parseInt(m||'1',10));
+  }
+
+  function isOpenNewTabEl(node){
+    const el = node && node.closest && node.closest('button,a');
+    if (!el) return null;
+    const t = (el.textContent||'').trim().toLowerCase();
+    return /open\s*in\s*new\s*tab/.test(t) ? el : null;
+  }
+
+  function openOnlyNewTab(){
+    const c = findCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
+    // Open target tab synchronously (popup-safe)
+    const win = window.open('', '_blank');
+    if (!win){ alert('Popup blocked. Please allow popups for this site.'); return; }
+    win.document.title = 'Exporting…';
+    win.document.body.style.margin = '0';
+    win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult });
+      win.document.body.innerHTML = `<img src="${dataUrl}" style="display:block;max-width:100%;height:auto">`;
+    }catch(e){
+      win.close();
+      alert('Export failed (browser security / CORS). Try a different image or use your hosted domain with CORS headers.');
+    }
+  }
+
+  // Kill default navigation + any earlier click handlers and run our exporter instead.
+  function captureHandler(e){
+    const el = isOpenNewTabEl(e.target);
+    if (!el) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    e.stopPropagation();
+    openOnlyNewTab();
+    return false;
+  }
+
+  // Neutralize any anchor href so the page can’t navigate even without JS handlers.
+  function neutralizeAnchor(){
+    const el = Array.from(document.querySelectorAll('a,button'))
+      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
+    if (el && el.tagName === 'A'){
+      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
+      el.setAttribute('href', 'javascript:void(0)');
+      el.removeAttribute('target'); // we manage the new tab ourselves
+    }
+  }
+
+  // Wire once and keep wiring after UI updates.
+  function wire(){
+    neutralizeAnchor();
+  }
+  wire();
+
+  // Global capture listeners (fire BEFORE any existing click handlers)
+  // This ensures no duplicate action and no same-tab navigation.
+  document.addEventListener('pointerdown', captureHandler, true);
+  document.addEventListener('mousedown',   captureHandler, true);
+  document.addEventListener('click',       captureHandler, true);
+
+  const obs = new MutationObserver(wire);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
