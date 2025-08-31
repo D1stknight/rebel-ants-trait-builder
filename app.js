@@ -3907,3 +3907,58 @@ function maybeRestoreAutosave() {
   if (document.readyState === 'complete') bump();
   else window.addEventListener('load', bump);
 })();
+
+/* RA_WM_FORCE_SWAP_V3 — remove old watermark objects and apply the new file with cache-bust */
+(function(){
+  if (window.__RA_WM_FORCE_V3) return; window.__RA_WM_FORCE_V3 = true;
+
+  function pickUrl(){
+    // Prefer root; if not found, use assets. Both are cache-busted.
+    const root   = '/watermark.png?v=wm3';
+    const assets = '/assets/watermark.png?v=wm3';
+    return new Promise(resolve=>{
+      const img = new Image();
+      img.onload  = ()=> resolve(root);
+      img.onerror = ()=> resolve(assets);
+      img.src = root;
+    });
+  }
+
+  function getCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    for (const k in window) {
+      const v = window[k];
+      if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function') return v;
+    }
+    return null;
+  }
+
+  async function swap(){
+    if (typeof window.raSetWatermarkLogo !== 'function') return;
+    const url = await pickUrl();
+
+    // Remove any existing watermark objects so we don't keep the old image in memory
+    const c = getCanvas();
+    if (c){
+      ['__raWmTL','__raWmBR'].forEach(key=>{
+        const o = c[key];
+        if (o){ try{ c.remove(o); }catch(e){} c[key]=null; }
+      });
+      c.requestRenderAll();
+    }
+
+    // Re-apply with your usual sizing/opacity
+    try {
+      window.raSetWatermarkLogo(url, { opacity:0.18, sizePct:0.16, corners:'both', margin:14 });
+      console.log('[WM] applied:', url);
+    } catch(e){}
+  }
+
+  function boot(){
+    if (typeof window.raSetWatermarkLogo === 'function') swap();
+    else setTimeout(boot, 150);
+  }
+
+  if (document.readyState === 'complete') boot();
+  else window.addEventListener('load', boot);
+})();
