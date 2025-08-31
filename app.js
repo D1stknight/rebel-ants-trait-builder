@@ -2735,3 +2735,102 @@ function maybeRestoreAutosave() {
     (document.head || document.documentElement).appendChild(st);
   }catch(e){}
 })();
+
+/* === RA_ZOOM_PAN_V1 — zoom to pointer, Space‑drag to pan, clamp zoom; keep base locked === */
+(function RA_ZOOM_PAN_V1(){
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  function centerPoint(c){ return new fabric.Point(c.getWidth()/2, c.getHeight()/2); }
+  function updateZoomUI(c){ const el = document.getElementById('zoomVal'); if (el) el.textContent = Math.round(c.getZoom()*100) + '%'; }
+
+  function wire(){
+    const c = findCanvas(); if (!c) { setTimeout(wire, 200); return; }
+
+    // --- Mouse wheel: zoom to cursor ---
+    if (!c._raWheelZoom){
+      c.on('mouse:wheel', function(opt){
+        const e = opt.e;
+        let zoom = c.getZoom();
+        zoom *= Math.pow(0.999, e.deltaY);           // smooth zoom
+        zoom = clamp(zoom, 0.25, 6);
+        const pt = new fabric.Point(e.offsetX, e.offsetY);
+        c.zoomToPoint(pt, zoom);
+        e.preventDefault(); e.stopPropagation();
+        updateZoomUI(c);
+      });
+      c._raWheelZoom = true;
+    }
+
+    // --- Space‑drag: pan the viewport ---
+    let isPanning = false, last = {x:0,y:0}, spaceDown = false;
+    if (!c._raPanWired){
+      document.addEventListener('keydown', (e)=>{ if (e.code==='Space'){ spaceDown = true; c.defaultCursor='grab'; }});
+      document.addEventListener('keyup',   (e)=>{ if (e.code==='Space'){ spaceDown = false; c.defaultCursor='default'; }});
+
+      c.on('mouse:down', (opt)=>{
+        const e = opt.e;
+        if (spaceDown || e.button===1){              // Space or middle‑mouse
+          isPanning = true; last.x = e.clientX; last.y = e.clientY;
+          c.setCursor('grabbing'); c.renderAll();
+          e.preventDefault();
+        }
+      });
+      c.on('mouse:move', (opt)=>{
+        if (!isPanning) return;
+        const e = opt.e, vt = c.viewportTransform;
+        vt[4] += e.clientX - last.x;                 // translate X
+        vt[5] += e.clientY - last.y;                 // translate Y
+        last.x = e.clientX; last.y = e.clientY;
+        c.requestRenderAll();
+        e.preventDefault();
+      });
+      c.on('mouse:up', ()=>{
+        isPanning = false;
+        c.setCursor(spaceDown ? 'grab' : 'default');
+      });
+      c._raPanWired = true;
+    }
+
+    // --- Hook the + / – / Reset buttons to center‑zoom & recenter ---
+    function id(x){ return document.getElementById(x); }
+    const zOut = id('zoomOut'), zIn = id('zoomIn'), zReset = id('zoomReset');
+
+    function setZoomAbs(newZoom, point){
+      newZoom = clamp(newZoom, 0.25, 6);
+      const p = point || centerPoint(c);
+      c.zoomToPoint(p, newZoom);
+      updateZoomUI(c);
+    }
+
+    if (zIn && !zIn._raZoom){   zIn.addEventListener('click', ()=> setZoomAbs(c.getZoom()*1.15)); zIn._raZoom = true; }
+    if (zOut && !zOut._raZoom){ zOut.addEventListener('click', ()=> setZoomAbs(c.getZoom()/1.15)); zOut._raZoom = true; }
+    if (zReset && !zReset._raZoom){
+      zReset.addEventListener('click', ()=>{
+        c.setViewportTransform([1,0,0,1,0,0]);       // recenter pan
+        setZoomAbs(1);
+      });
+      zReset._raZoom = true;
+    }
+  }
+
+  wire();
+  document.addEventListener('ra:canvas-ready', wire);
+  const obs = new MutationObserver(wire);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
