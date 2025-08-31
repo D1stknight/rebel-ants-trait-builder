@@ -726,3 +726,227 @@
     }
   }
 })();
+
+/* === RA_PATCH: Published shelf + admin delete + quick size buttons === */
+(function(){
+  'use strict';
+
+  // --------- small helpers (scoped) ---------
+  const $  = (id)  => document.getElementById(id);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+
+  // Unify storage across variants. We maintain both window.raPublishedOverlays and localStorage('ra2_published').
+  function getShelf(){
+    let items = [];
+    try {
+      if (Array.isArray(window.raPublishedOverlays)) {
+        items = window.raPublishedOverlays
+          .map(it => ({ name: it.name || 'overlay', src: it.src || it.dataURL }))
+          .filter(it => !!it.src);
+      }
+    } catch(_) {}
+    if (!items.length) {
+      try {
+        const raw = (localStorage||sessionStorage).getItem('ra2_published');
+        const arr = raw ? JSON.parse(raw) : [];
+        items = (arr||[])
+          .map(it => ({ name: it.name || 'overlay', src: it.dataURL || it.src }))
+          .filter(it => !!it.src);
+      } catch(_) {}
+    }
+    return items;
+  }
+  function setShelf(items){
+    const clean = (items||[]).map(it => ({ name: it.name || 'overlay', src: it.src }));
+    // window model
+    window.raPublishedOverlays = clean.map(it => ({ name: it.name, src: it.src }));
+    // localStorage mirror (portable)
+    try {
+      const packed = clean.map(it => ({ name: it.name, dataURL: it.src }));
+      (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(packed));
+    } catch(_){}
+  }
+
+  async function srcToDataURL(src){
+    if (/^data:/i.test(src)) return src;                         // already portable
+    try {
+      const res  = await fetch(src);
+      const blob = await res.blob();
+      return await new Promise((resolve) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.readAsDataURL(blob);
+      });
+    } catch(_) { return src; }
+  }
+
+  // Prefer the existing Published shelf grid if present (raPublishedGrid). Otherwise we add our own.
+  function ensureShelfUI(){
+    let grid = $('raPublishedGrid');
+    if (grid) return grid;
+
+    if (!$('raPatchShelfWrap')) {
+      const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase() === 'overlays');
+      const parent = h3 ? h3.parentNode : document.body;
+      const wrap = document.createElement('div');
+      wrap.id = 'raPatchShelfWrap';
+      wrap.style.marginTop = '8px';
+      wrap.innerHTML = `
+        <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+        <div id="raPatchShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+      `;
+      parent.appendChild(wrap);
+    }
+    return $('raPatchShelfGrid');
+  }
+
+  function tileHTML(item, showDelete){
+    const name = (item.name||'').replace(/"/g,'&quot;');
+    return `
+      <div class="raPatchTile" style="position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;">
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${item.src}" alt="${name}" style="max-width:100%;max-height:80px"/>
+        </div>
+        <div class="raPatchName" style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}</div>
+        ${showDelete ? '<button class="ra-pub-del" title="Remove" style="position:absolute;top:3px;right:5px;background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:2px 6px;cursor:pointer">×</button>' : ''}
+      </div>`;
+  }
+
+  function addOverlayToCanvasFallback(src){
+    const c = window.canvas;
+    if (!c || !window.fabric || !fabric.Image) return;
+    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin:'anonymous' };
+    fabric.Image.fromURL(src, img=>{
+      if (!img) return;
+      img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+      try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(_){}
+      c.requestRenderAll && c.requestRenderAll();
+    }, opts);
+  }
+  function addOverlaySmart(src){
+    if (typeof window.addOverlayToCanvas === 'function') {
+      try { window.addOverlayToCanvas(src, false); return; } catch(_) {}
+    }
+    addOverlayToCanvasFallback(src);
+  }
+
+  function renderShelf(){
+    const grid = ensureShelfUI(); if (!grid) return;
+    const items = getShelf();
+    grid.innerHTML = items.map(it => tileHTML(it, isAdmin)).join('');
+    grid.querySelectorAll('.raPatchTile').forEach((tile, idx)=>{
+      // Click tile to add to canvas (ignore delete)
+      tile.addEventListener('click', (ev)=>{
+        if (isAdmin && ev.target && ev.target.classList.contains('ra-pub-del')) return;
+        const img = tile.querySelector('img');
+        if (img && img.src) addOverlaySmart(img.src);
+      });
+      // Admin delete
+      const del = tile.querySelector('.ra-pub-del');
+      if (isAdmin && del){
+        del.addEventListener('click', (ev)=>{
+          ev.stopPropagation();
+          const arr = getShelf();
+          arr.splice(idx, 1);
+          setShelf(arr);
+          renderShelf();
+        });
+      }
+    });
+  }
+
+  // Capture admin "Publish" button clicks (works with our Admin Dock or any button labeled "Publish")
+  function wirePublishCapture(){
+    if (window.__raPublishCaptureBound) return;
+    window.__raPublishCaptureBound = true;
+
+    document.addEventListener('click', async (ev)=>{
+      const btn = ev.target && ev.target.closest('button');
+      if (!btn) return;
+      const label = (btn.textContent||'').trim().toLowerCase();
+      const isPublish = btn.getAttribute('data-act') === 'publish' || label === 'publish';
+      if (!isPublish) return;
+
+      // Locate the tile in the dock
+      const tile = btn.closest('#raAdminDock #raDockGrid > div, #raDockGrid > div, .raTile, [data-admin-tile]') || btn.closest('div');
+      const img  = tile ? tile.querySelector('img') : null;
+
+      // best-effort name: last small text div in the tile
+      let name = 'overlay';
+      if (tile){
+        const texts = Array.from(tile.querySelectorAll('div')).map(d => (d.textContent||'').trim()).filter(Boolean);
+        if (texts.length) name = texts[texts.length-1];
+      }
+
+      let src = img && img.getAttribute('src');
+      if (!src) return;
+
+      // convert to dataURL so it's portable/persistent
+      const dataURL = await srcToDataURL(src);
+
+      // add (dedupe by dataURL)
+      const arr = getShelf();
+      if (!arr.some(it => it.src === dataURL)) {
+        arr.push({ name, src: dataURL });
+        setShelf(arr);
+      }
+      renderShelf();
+
+      // show a small message in the dock if present
+      const msg = $('raDockMsg'); if (msg){ msg.textContent = `Published: ${name}`; setTimeout(()=>{ msg.textContent=''; }, 1000); }
+
+      // prevent any other publish handlers that might be broken/duplicate
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      ev.stopPropagation();
+    }, true); // capture
+  }
+
+  // Make the 700 / 900 / 1024 / 1200 buttons resize the canvas (not zoom)
+  function wireSizeButtons(){
+    if (window.__raSizeButtonsPatched) return;
+    window.__raSizeButtonsPatched = true;
+
+    const SIZES = ['700','900','1024','1200'];
+    document.addEventListener('click', (ev)=>{
+      const el = ev.target && ev.target.closest('button,a');
+      if (!el) return;
+      const txt = (el.textContent||'').trim();
+      if (!SIZES.includes(txt)) return;
+
+      const n = parseInt(txt, 10);
+      if (!isFinite(n)) return;
+
+      // keep the <select id="canvasSize"> in sync if present
+      const sel = $('canvasSize'); if (sel) sel.value = String(n);
+
+      // invoke the app's resize helper (not zoom)
+      if (typeof window.setCanvasSize === 'function') {
+        try { window.setCanvasSize(n); } catch(_) {}
+      }
+
+      // stop any other listeners (e.g., old zoom handlers) from acting on this click
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      ev.stopPropagation();
+    }, true); // capture
+  }
+
+  function init(){
+    renderShelf();
+    wirePublishCapture();
+    wireSizeButtons();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  // Re-render the shelf if the Overlays card (or its grid) appears later
+  const mo = new MutationObserver(()=> renderShelf());
+  mo.observe(document.body, { childList:true, subtree:true });
+
+})();
