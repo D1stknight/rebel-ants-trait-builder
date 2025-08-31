@@ -3542,3 +3542,68 @@ function maybeRestoreAutosave() {
     await loadManifestFrom(manifestURL);
   })();
 })();
+
+/* === RA_PUBLISHED_SHELF_CLICK_ENABLE_V1 — make Published Overlays tiles act like built-ins === */
+(function(){
+  if (window.__RA_PUB_CLICK_FIX) return; 
+  window.__RA_PUB_CLICK_FIX = true;
+
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function'){
+          return v;
+        }
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function addViaFabric(src){
+    const c = findCanvas(); if (!c || !window.fabric || !fabric.Image) return;
+    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin:'anonymous' };
+    fabric.Image.fromURL(src, img=>{
+      if (!img) return;
+      img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+      try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+      c.requestRenderAll();
+      if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+    }, opts);
+  }
+
+  function handleClick(ev){
+    // Only clicks inside the Published Overlays grid
+    const grid = document.getElementById('raPublishedGrid');
+    if (!grid) return;
+    const tile = ev.target.closest('#raPublishedGrid > div');
+    if (!tile) return;
+
+    // Ignore admin delete button
+    if (ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
+
+    // Get src + name from the tile
+    const img = tile.querySelector('img');
+    const nameEl = tile.querySelector('div:nth-child(2)');
+    const src  = img ? img.getAttribute('src') : null;
+    const name = nameEl ? (nameEl.textContent||'overlay').trim() : 'overlay';
+    if (!src) return;
+
+    // Prefer the app’s native helper (same path as built-ins)
+    if (typeof window.addOverlayToCanvas === 'function'){
+      try { window.addOverlayToCanvas(src, name); return; } catch(e){}
+    }
+    // Fallback to Fabric
+    addViaFabric(src);
+  }
+
+  function init(){
+    const grid = document.getElementById('raPublishedGrid');
+    if (!grid){ setTimeout(init, 250); return; }
+    grid.style.pointerEvents = 'auto';
+    grid.addEventListener('click', handleClick);
+  }
+
+  init();
+})();
