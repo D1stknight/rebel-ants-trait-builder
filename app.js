@@ -2306,3 +2306,184 @@ function maybeRestoreAutosave() {
 
   hookFabric();
 })();
+
+/* ===== RA_BLOCKER_CLEAN + HARD_BASE_LOCK =====
+   - Removes any huge black rectangle that sits over the canvas.
+   - Re-locks the true base NFT (largest near-full-canvas image).
+   - Runs on load, on add, on restore; plus a "Fix canvas" button.
+================================================ */
+(function RA_BLOCKER_AND_BASE_LOCK(){
+  let baseObj = null; // the locked base image
+
+  // 1) Find Fabric canvas reliably
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') { window.canvas = v; return v; }
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && typeof v.toJSON === 'function'
+            && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    }catch(e){}
+    return null;
+  }
+
+  // 2) Helpers
+  function area(o){ return (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1); }
+  function scaledW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)); }
+  function scaledH(o){ return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)); }
+
+  function isBlackish(fill){
+    if (!fill) return false;
+    const s = (''+fill).trim().toLowerCase();
+    if (s === 'black' || s === '#000' || s === '#000000' || s === 'rgb(0,0,0)' || s === 'rgba(0,0,0,1)') return true;
+    // rgba(...) parser
+    const m = s.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\)/);
+    if (m){
+      const r=+m[1], g=+m[2], b=+m[3], a=(m[4]===undefined?1:+m[4]);
+      return (r<12 && g<12 && b<12 && a>=0.95);
+    }
+    return false;
+  }
+
+  function isHuge(o, c){
+    const cw = c.getWidth(), ch = c.getHeight();
+    const a = area(o), ca = cw*ch;
+    return a >= ca*0.6 || (scaledW(o) >= cw*0.9 && scaledH(o) >= ch*0.9);
+  }
+
+  function isBaseCandidate(o, c){
+    return o && o.type === 'image' && isHuge(o,c);
+  }
+
+  // 3) Lock an object as the unmovable base
+  function lockBase(o, c){
+    if (!o || !c) return;
+    baseObj = o;
+    o._isBase = true;
+    o.selectable = false;
+    o.evented = false;
+    o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = true;
+    o.perPixelTargetFind = false;
+    o.hoverCursor = 'default';
+    try { c.sendToBack(o); } catch(e){}
+    // Drop selection if base became active
+    try { if (c.getActiveObject() === o) c.discardActiveObject(); } catch(e){}
+  }
+
+  // 4) Remove any huge black rect that blocks the view
+  function scrubBlockers(c){
+    let removed = false;
+    const objs = c.getObjects();
+    for (let i=objs.length-1;i>=0;i--){
+      const o = objs[i];
+      if (o && o.type === 'rect' && isHuge(o,c) && isBlackish(o.fill) && !o._isBase){
+        try { c.remove(o); removed = true; } catch(e){ /* ignore */ }
+      }
+    }
+    if (removed) c.requestRenderAll();
+  }
+
+  // 5) Pick/lock base if needed (largest image)
+  function ensureBase(c){
+    if (baseObj && c.getObjects().includes(baseObj)) return;
+    const imgs = c.getObjects('image');
+    if (!imgs.length) return;
+    imgs.sort((a,b)=> area(b)-area(a));
+    const cand = imgs[0];
+    if (isBaseCandidate(cand, c)) lockBase(cand, c);
+    try { c.requestRenderAll(); } catch(e){}
+  }
+
+  // 6) Keep base unselectable even if something tries to select it
+  function guardSelection(c){
+    ['selection:created','selection:updated'].forEach(evt=>{
+      c.on(evt, ()=> {
+        const a = c.getActiveObject();
+        if (a === baseObj){ c.discardActiveObject(); c.requestRenderAll(); }
+      });
+    });
+    c.on('mouse:down', e=>{
+      if (e && e.target === baseObj){ c.discardActiveObject(); c.requestRenderAll(); }
+    });
+  }
+
+  // 7) Run cleanup + base lock now
+  function cleanAndLock(){
+    const c = findCanvas(); if (!c) return;
+    scrubBlockers(c);
+    ensureBase(c);
+    guardSelection(c);
+  }
+
+  // 8) Hook Fabric so we run after adds/restores
+  (function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
+      setTimeout(hookFabric, 200); return;
+    }
+    if (!fabric.Canvas.prototype._raCleanLock){
+      const origInit = fabric.Canvas.prototype.initialize;
+      fabric.Canvas.prototype.initialize = function(...args){
+        const res = origInit.apply(this, args);
+        window.canvas = this;
+        setTimeout(cleanAndLock, 0);
+        return res;
+      };
+      const origAdd = fabric.Canvas.prototype.add;
+      fabric.Canvas.prototype.add = function(...args){
+        const res = origAdd.apply(this, args);
+        setTimeout(cleanAndLock, 0);
+        return res;
+      };
+      const origLoad = fabric.Canvas.prototype.loadFromJSON;
+      fabric.Canvas.prototype.loadFromJSON = function(json, cb, reviver){
+        const self = this;
+        return origLoad.call(this, json, function(){
+          try { cleanAndLock(); } catch(e){}
+          if (typeof cb === 'function') cb.apply(self, arguments);
+        }, reviver);
+      };
+      fabric.Canvas.prototype._raCleanLock = true;
+    }
+    // If canvas already exists, run once shortly
+    setTimeout(cleanAndLock, 300);
+  })();
+
+  // 9) Add a small "Fix canvas" button in Canvas card (manual safety)
+  function insertFixButton(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+
+    // Put it next to your checkpoint row if present; otherwise just add a tiny row
+    const row = document.getElementById('raCkRow');
+    const place = row || holder;
+
+    if (!document.getElementById('raFixCanvas')){
+      const btn = document.createElement('button');
+      btn.id = 'raFixCanvas';
+      btn.className = 'btn small';
+      btn.style.marginLeft = '6px';
+      btn.textContent = 'Fix canvas';
+      btn.addEventListener('click', ()=> cleanAndLock());
+      (row ? row.appendChild(btn) : holder.appendChild(btn));
+    }
+  }
+
+  insertFixButton();
+  const obs = new MutationObserver(()=> insertFixButton());
+  obs.observe(document.body, { childList:true, subtree:true });
+
+  // 10) Keep trying briefly in case UI loads slow
+  (function tick(){ cleanAndLock(); setTimeout(tick, 800); })();
+})();
