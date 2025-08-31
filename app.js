@@ -3821,129 +3821,99 @@ function maybeRestoreAutosave() {
   mo.observe(document.body, { childList:true, subtree:true });
 })();
 
-/* === RA_ADMIN_PERM_SAFE_V1 — admin-only permanent PNG shelf (no global handlers) ===
-   - Visible only with ?admin=1
-   - Adds one "Add Permanent PNGs" button above a small shelf inside the Overlays card
-   - Each click creates a fresh <input type=file> so the picker always opens
-   - Picked PNGs appear as tiles; click tile => add to canvas (centered, top)
-   - Admin sees × to remove tiles (session-only); users don't see the shelf
+/* === RA_ADMIN_DOCK_V1 — isolated admin dock (no interference with existing UI) ===
+   - Visible only if URL has ?admin=1
+   - Floating panel at bottom-right with:
+       • Add PNGs  (fresh file picker each click)
+       • A small grid of tiles (session-only)
+       • Click tile -> add to canvas (centered, top)
+       • × on a tile to remove it from the grid
+   - No global click capture, no mutation of your Overlays DOM
 */
-(function RA_ADMIN_PERM_SAFE_V1(){
+(function RA_ADMIN_DOCK_V1(){
   const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+  if (!isAdmin) return;
 
-  // Session list (local to this browser session)
+  // Guard: don't install twice
+  if (document.getElementById('raAdminDock')) return;
+
+  // Session list for this browser session
   window.raPermOverlays = window.raPermOverlays || [];
 
-  const $  = s => document.querySelector(s);
-  const $$ = s => Array.from(document.querySelectorAll(s));
+  // Create dock
+  const dock = document.createElement('div');
+  dock.id = 'raAdminDock';
+  dock.style.cssText = [
+    'position:fixed','right:16px','bottom:16px','width:300px',
+    'background:#0e0f13','border:1px solid #2a2a2e','border-radius:12px',
+    'box-shadow:0 10px 24px rgba(0,0,0,.45)','color:#e7e7ea',
+    'font:13px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif',
+    'z-index: 999999','user-select:none'
+  ].join(';');
 
-  function findOverlaysCard(){
-    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-    return h3 ? h3.parentNode : null;
-  }
+  dock.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #222;">
+      <strong>Admin Overlays</strong>
+      <button id="raDockClose" style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+    </div>
+    <div id="raDockBody" style="padding:10px 12px;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button id="raDockAdd" style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
+        <button id="raDockClear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
+      </div>
+      <div id="raDockGrid" style="margin-top:10px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+      <div style="opacity:.65;margin-top:8px">Only visible to you (?admin=1). Session-only.</div>
+    </div>
+  `;
+  document.body.appendChild(dock);
 
-  function ensureAdminBarAndShelf(){
-    if (!isAdmin) return;
-    const card = findOverlaysCard(); if (!card) return;
+  // Hide/show
+  document.getElementById('raDockClose').addEventListener('click', ()=>{
+    const body = document.getElementById('raDockBody');
+    if (!body) return;
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
+    document.getElementById('raDockClose').textContent = hidden ? 'Hide' : 'Show';
+  });
 
-    // Bar (one time)
-    if (!$('#raPermSafeBar')){
-      const bar = document.createElement('div');
-      bar.id = 'raPermSafeBar';
-      bar.className = 'row tight';
-      bar.style.margin = '8px 0 6px 0';
-      bar.innerHTML = `<button id="raPermSafeBtn" class="btn small">Add Permanent PNGs</button>`;
-      // Put bar at top of Overlays card
-      card.insertBefore(bar, card.firstChild);
-
-      // Fresh file input on every click so picker always opens
-      $('#raPermSafeBtn').addEventListener('click', ()=>{
-        const inp = document.createElement('input');
-        inp.type = 'file';
-        inp.accept = 'image/png';
-        inp.multiple = true;
-        inp.style.display = 'none';
-        inp.addEventListener('change', (e)=>{
-          const files = Array.from(e.target.files||[]);
-          if (files.length){
-            files.forEach(f=>{
-              const url  = URL.createObjectURL(f);
-              const name = f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
-              window.raPermOverlays.push({ name, url, _blobURL:url });
-            });
-            renderShelf();        // show tiles
-          }
-          inp.remove();           // dispose so next click creates a new one
-        }, { once:true });
-        document.body.appendChild(inp);
-        inp.click();
-      });
-    }
-
-    // Shelf (one time)
-    if (!$('#raPermSafeShelf')){
-      const shelf = document.createElement('div');
-      shelf.id = 'raPermSafeShelf';
-      shelf.style.cssText = 'margin:6px 0;';
-      shelf.innerHTML = `
-        <div style="font-weight:600;opacity:.8">Permanent Overlays</div>
-        <div id="raPermSafeGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px;max-height:220px;overflow:auto;"></div>
-      `;
-      // Place shelf just after the bar
-      const bar = $('#raPermSafeBar');
-      if (bar && bar.nextSibling) card.insertBefore(shelf, bar.nextSibling);
-      else card.appendChild(shelf);
-    }
-  }
-
-  function renderShelf(){
-    const grid = $('#raPermSafeGrid'); if (!grid) return;
-    grid.innerHTML = '';
-    (window.raPermOverlays||[]).forEach((it, idx)=>{
-      const tile = document.createElement('div');
-      tile.className = 'ra-perm-safe-tile';
-      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-        <button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;${isAdmin?'':'display:none;'}">×</button>
-      `;
-
-      // Click = add to canvas
-      tile.addEventListener('click', (ev)=>{
-        if (ev.target && ev.target.classList && ev.target.classList.contains('perm-del')) return;
-        robustAddToCanvas(it.url, it.name);
-      });
-
-      // Admin-only delete
-      const del = tile.querySelector('.perm-del');
-      if (isAdmin && del){
-        del.addEventListener('click', (ev)=>{
-          ev.stopPropagation();
-          const arr = window.raPermOverlays||[];
-          const i = arr.findIndex(x => x === it);
-          if (i>=0){
-            try{ if (arr[i]._blobURL) URL.revokeObjectURL(arr[i]._blobURL); }catch(e){}
-            arr.splice(i,1);
-          }
-          renderShelf();
+  // Fresh file input each click so picker opens every time
+  document.getElementById('raDockAdd').addEventListener('click', ()=>{
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/png';
+    inp.multiple = true;
+    inp.style.display = 'none';
+    inp.addEventListener('change', (e)=>{
+      const files = Array.from(e.target.files||[]);
+      if (files.length){
+        files.forEach(f=>{
+          const url  = URL.createObjectURL(f);
+          const name = f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
+          window.raPermOverlays.push({ name, url, _blobURL:url });
         });
+        renderDockTiles();
       }
+      inp.remove();
+    }, { once:true });
+    document.body.appendChild(inp);
+    inp.click();
+  });
 
-      grid.appendChild(tile);
-    });
-  }
+  // Clear all tiles (admin dock only)
+  document.getElementById('raDockClear').addEventListener('click', ()=>{
+    (window.raPermOverlays||[]).forEach(it=>{ try{ if (it._blobURL) URL.revokeObjectURL(it._blobURL); }catch(e){} });
+    window.raPermOverlays.length = 0;
+    renderDockTiles();
+  });
 
-  // Add to canvas: use app hook if available; else Fabric
-  function robustAddToCanvas(url, name){
-    const tryLater = (fn, tries=0) => {
+  // Add selected PNG to canvas (robust: app hook (remote) then Fabric (incl. blob:))
+  function addToCanvas(url, name){
+    const waitCanvas = (fn, tries=0)=>{
       const c = window.canvas;
       if (c && c.upperCanvasEl) return fn(c);
-      if (tries>25) return; setTimeout(()=>tryLater(fn, tries+1), 200);
+      if (tries>25) return; setTimeout(()=>waitCanvas(fn, tries+1), 200);
     };
-    tryLater(c=>{
+    waitCanvas(c=>{
       const before = c.getObjects().length;
       const isBlob = /^blob:/i.test(url);
       let usedHook = false;
@@ -3955,149 +3925,7 @@ function maybeRestoreAutosave() {
       setTimeout(()=>{
         const after = c.getObjects().length;
         if (after > before){ c.requestRenderAll(); return; }
-        if (!window.fabric || !fabric.Image) return;
-        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
-        fabric.Image.fromURL(url, img=>{
-          img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
-          try{ c.add(img); c.bringToFront(img); c.setActiveObject(img); }catch(e){}
-          c.requestRenderAll();
-          if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
-        }, opts);
-      }, usedHook ? 200 : 0);
-    });
-  }
 
-  function boot(){
-    if (!isAdmin) return;           // Only you see/administer this
-    ensureAdminBarAndShelf();
-    renderShelf();
-  }
-  boot();
-  // Keep trying as the panel renders/changes
-  new MutationObserver(boot).observe(document.body, { childList:true, subtree:true });
-})();
-
-/* === RA_PERM_UNIFIED_V9 — ONE "Add Permanent PNGs", working tiles, admin-only delete ===
-   - Cleans up older admin UI (any previous "Add Permanent PNGs" buttons/shelves).
-   - Shows exactly ONE button (admin only) inside the Overlays panel.
-   - Each click creates a fresh <input type=file> so the picker opens every time.
-   - Selected PNGs appear as tiles in a small "Permanent Overlays" shelf.
-   - Click a tile -> adds to canvas (centered, on top).
-   - Admin sees × on tiles (remove from shelf, session-only). Users don’t see this shelf.
-*/
-(function RA_PERM_UNIFIED_V9(){
-  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
-  if (!isAdmin) return; // keep totally invisible for non-admin users
-
-  // Session list lives across renders while page stays open
-  window.raPermOverlays = window.raPermOverlays || [];
-
-  const $  = s => document.querySelector(s);
-  const $$ = s => Array.from(document.querySelectorAll(s));
-
-  function findOverlaysCard(){
-    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-    return h3 ? h3.parentNode : null;
-  }
-
-  // Remove any leftover admin bars/shelves/buttons from older patches
-  function cleanupOldUI(card){
-    if (!card) return;
-    // Known containers from earlier attempts
-    ['#raPermInlineRow','#raPermV7Bar','#raPermAdminOne','#raPermSafeBar',
-     '#raPermShelf','#raPermV7Shelf','#raPermShelfOne','#raPermSafeShelf']
-     .forEach(sel => $$(sel).forEach(n => n.remove()));
-
-    // Any stray clones/tiles from older patches
-    ['.ra-perm-thumb','.ra-perm-clone','.ra-perm-v7','.ra-perm-x','.ra-perm-safe-tile']
-      .forEach(sel => $$(sel).forEach(n => n.remove()));
-
-    // Any extra buttons that literally say "Add Permanent PNGs" but are not ours
-    Array.from(card.querySelectorAll('button')).forEach(b=>{
-      const t = (b.textContent||'').trim().toLowerCase();
-      if (t==='add permanent pngs' && b.id !== 'raPermUnifiedBtn'){
-        // remove its containing row if present, else the button itself
-        const row = b.closest('.row') || b.parentElement;
-        if (row && row.parentElement===card) row.remove(); else b.remove();
-      }
-    });
-  }
-
-  function ensureAdminUI(){
-    const card = findOverlaysCard(); if (!card) return null;
-
-    cleanupOldUI(card); // first, clean duplicates
-
-    // Admin bar (one time)
-    let bar = $('#raPermUnifiedBar');
-    if (!bar){
-      bar = document.createElement('div');
-      bar.id = 'raPermUnifiedBar';
-      bar.className = 'row tight';
-      bar.style.margin = '8px 0 6px 0';
-      bar.innerHTML = `<button id="raPermUnifiedBtn" class="btn small">Add Permanent PNGs</button>`;
-      // Place at the top of the Overlays card
-      card.insertBefore(bar, card.firstChild);
-
-      // Fresh input on every click so Safari/Chrome always reopen the dialog
-      $('#raPermUnifiedBtn').addEventListener('click', ()=>{
-        const inp = document.createElement('input');
-        inp.type = 'file';
-        inp.accept = 'image/png';
-        inp.multiple = true;
-        inp.style.display = 'none';
-        inp.addEventListener('change', (e)=>{
-          const files = Array.from(e.target.files||[]);
-          if (files.length){
-            files.forEach(f=>{
-              const url  = URL.createObjectURL(f);
-              const name = f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
-              window.raPermOverlays.push({ name, url, _blobURL:url });
-            });
-            renderShelf();
-          }
-          inp.remove(); // dispose so next click uses a brand-new input
-        }, { once:true });
-        document.body.appendChild(inp);
-        inp.click();
-      });
-    }
-
-    // Shelf (one time)
-    let shelf = $('#raPermUnifiedShelf');
-    if (!shelf){
-      shelf = document.createElement('div');
-      shelf.id = 'raPermUnifiedShelf';
-      shelf.style.cssText = 'margin:6px 0;';
-      shelf.innerHTML = `
-        <div style="font-weight:600;opacity:.8">Permanent Overlays</div>
-        <div id="raPermUnifiedGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px;max-height:220px;overflow:auto;"></div>
-      `;
-      // Put shelf just after the bar (keeps the main overlays grid untouched)
-      if (bar && bar.nextSibling) card.insertBefore(shelf, bar.nextSibling);
-      else card.appendChild(shelf);
-    }
-    return shelf;
-  }
-
-  // Add to canvas: try your app hook for remote URLs; fallback to Fabric for everything incl. blob:
-  function addToCanvas(url, name){
-    const waitCanvas = (fn, tries=0)=>{
-      const c = window.canvas;
-      if (c && c.upperCanvasEl) return fn(c);
-      if (tries>25) return; setTimeout(()=>waitCanvas(fn, tries+1), 200);
-    };
-    waitCanvas(c=>{
-      const before = c.getObjects().length;
-      const isBlob  = /^blob:/i.test(url);
-      let usedHook  = false;
-
-      if (!isBlob && typeof window.addOverlayToCanvas === 'function'){
-        try { window.addOverlayToCanvas(url, name); usedHook = true; } catch(e){}
-      }
-      setTimeout(()=>{
-        const after = c.getObjects().length;
-        if (after > before){ c.requestRenderAll(); return; }
         if (!window.fabric || !fabric.Image) return;
         const opts = isBlob ? {} : { crossOrigin:'anonymous' };
         fabric.Image.fromURL(url, img=>{
@@ -4110,48 +3938,38 @@ function maybeRestoreAutosave() {
     });
   }
 
-  function renderShelf(){
-    const grid = $('#raPermUnifiedGrid'); if (!grid) return;
+  function renderDockTiles(){
+    const grid = document.getElementById('raDockGrid'); if (!grid) return;
     grid.innerHTML = '';
-    (window.raPermOverlays||[]).forEach((it, i)=>{
+    (window.raPermOverlays||[]).forEach((it, idx)=>{
       const tile = document.createElement('div');
-      tile.className = 'ra-perm-unified-tile';
-      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
+      tile.style.cssText = 'position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;cursor:pointer;';
       tile.innerHTML = `
         <div style="height:80px;display:flex;align-items:center;justify-content:center;">
           <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
         </div>
         <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-        <button class="perm-del" title="Remove"
-          style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>
+        <button title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#aaa;font-size:16px;line-height:1;cursor:pointer;">×</button>
       `;
-      // Click to add
+      // Add on click (ignore delete button)
       tile.addEventListener('click', (ev)=>{
-        if ((ev.target && ev.target.classList && ev.target.classList.contains('perm-del'))) return;
+        if (ev.target && ev.target.tagName==='BUTTON') return;
         addToCanvas(it.url, it.name);
       });
-      // Delete (admin-only shelf)
-      tile.querySelector('.perm-del').addEventListener('click', (ev)=>{
+      // Delete this tile
+      tile.querySelector('button').addEventListener('click', (ev)=>{
         ev.stopPropagation();
         const arr = window.raPermOverlays||[];
-        const idx = arr.findIndex(x => x === it);
-        if (idx>=0){
-          try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
-          arr.splice(idx,1);
+        const pos = arr.indexOf(it);
+        if (pos >= 0){
+          try{ if (arr[pos]._blobURL) URL.revokeObjectURL(arr[pos]._blobURL); }catch(e){}
+          arr.splice(pos,1);
         }
-        renderShelf();
+        renderDockTiles();
       });
       grid.appendChild(tile);
     });
   }
 
-  function boot(){
-    const shelf = ensureAdminUI();
-    if (shelf) renderShelf();
-  }
-  boot();
-
-  // Keep it stable if the Overlays card rerenders
-  const mo = new MutationObserver(()=> boot());
-  mo.observe(document.body, { childList:true, subtree:true });
+  renderDockTiles();
 })();
