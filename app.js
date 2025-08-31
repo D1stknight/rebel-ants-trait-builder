@@ -3155,3 +3155,228 @@ function maybeRestoreAutosave() {
   // Also run periodically as a safety net
   setInterval(sendDarkRectsToBack, 800);
 })();
+
+/* === RA_BG_NORMALIZE_V2 — replace huge dark rects with backgroundColor (no more flicker) === */
+(function RA_BG_NORMALIZE_V2(){
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[k]; if (v && v.upperCanvasEl) return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.loadFromJSON==='function') return v;
+      }
+    }catch(e){}
+    return null;
+  }
+  function parseRGBA(v){
+    if (!v) return null;
+    const s=(''+v).trim().toLowerCase();
+    if (s==='black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const h=s.slice(1); const x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
+      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
+    return null;
+  }
+  function isDarkFill(fill){
+    const c=parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a]=c; if (a<0.55) return false;
+    const lum=(0.299*r+0.587*g+0.114*b)/255;
+    return lum<0.25; // allow very dark greys too
+  }
+  function isHugeRect(o,c){
+    if (!o || o.type!=='rect') return false;
+    const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
+    const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
+    return (w>=c.getWidth()*0.8 || h>=c.getHeight()*0.8);
+  }
+  function normalize(){
+    const c=findCanvas(); if (!c) return;
+    let bg=null, removed=false;
+    const objs=c.getObjects('rect');
+    for (let i=objs.length-1;i>=0;i--){
+      const o=objs[i];
+      if (isHugeRect(o,c) && isDarkFill(o.fill) && !o._isBase){
+        bg = o.fill || bg;
+        try{ c.remove(o); removed=true; }catch(e){}
+      }
+    }
+    if (bg || removed){
+      try{ c.setBackgroundColor(bg||c.backgroundColor||'#000', ()=>c.requestRenderAll()); }
+      catch(e){ c.backgroundColor = bg||c.backgroundColor||'#000'; c.requestRenderAll(); }
+    }
+  }
+  // Normalize whenever objects are added/modified or sizes change
+  (function hook(){
+    const c=findCanvas();
+    if (c && !c._raBgNorm2){
+      c.on('object:added', ()=> setTimeout(normalize,0));
+      c.on('object:modified', ()=> setTimeout(normalize,0));
+      c._raBgNorm2=true;
+    } else if (!c){ setTimeout(hook,300); }
+  })();
+  // Nudge after clicking common size buttons
+  function wireSizeButtons(){
+    Array.from(document.querySelectorAll('button')).forEach(b=>{
+      const t=(b.textContent||'').trim();
+      if (/^(700|900|1024|1200)$/i.test(t) && !b._raBgBtn){
+        b._raBgBtn=true; b.addEventListener('click', ()=> setTimeout(normalize,120));
+      }
+    });
+  }
+  wireSizeButtons();
+  new MutationObserver(wireSizeButtons).observe(document.body,{childList:true,subtree:true});
+  // Safety sweep
+  setInterval(normalize, 1000);
+})();
+
+/* === RA_PERM_MIX_ADD_V5 — mix permanents into main grid; robust click-to-add; admin-only delete === */
+(function RA_PERM_MIX_ADD_V5(){
+  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[k]; if (v && v.upperCanvasEl) return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.loadFromJSON==='function') return v;
+      }
+    }catch(e){}
+    return null;
+  }
+  function withCanvas(fn, tries=0){
+    const c=findCanvas(); if (c) return fn(c);
+    if (tries>25) return; setTimeout(()=>withCanvas(fn,tries+1),200);
+  }
+  function robustAdd(url, name){
+    withCanvas(c=>{
+      const before=c.getObjects().length;
+      const isBlob = /^blob:/i.test(url);
+      let usedHook=false;
+      // Use your app hook for non-blob URLs; many hooks ignore blob: URLs
+      if (!isBlob && typeof window.addOverlayToCanvas==='function'){
+        try{ window.addOverlayToCanvas(url,name); usedHook=true; }catch(e){}
+      }
+      // If nothing appeared, fallback to Fabric
+      setTimeout(()=>{
+        const after=c.getObjects().length;
+        if (after>before) { c.requestRenderAll(); return; }
+        if (!window.fabric || !fabric.Image) return;
+        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
+        fabric.Image.fromURL(url, img=>{
+          img.set({
+            originX:'center', originY:'center',
+            left:c.getWidth()/2, top:c.getHeight()/2
+          });
+          try{ c.add(img); c.bringToFront(img); c.setActiveObject(img);}catch(e){}
+          c.requestRenderAll();
+          if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+        }, opts);
+      }, usedHook?200:0);
+    });
+  }
+
+  // Find the main overlays grid (heuristic)
+  function findOverlaysCard(){
+    return Array.from(document.querySelectorAll('h3'))
+      .find(h => (h.textContent||'').trim().toLowerCase()==='overlays')?.parentNode || null;
+  }
+  function findMainOverlayGrid(){
+    const card = findOverlaysCard(); if (!card) return null;
+    const candidates = Array.from(card.querySelectorAll('div'));
+    let best=null,bestScore=-1;
+    candidates.forEach(div=>{
+      const imgs=div.querySelectorAll('img').length;
+      const tiles=[...div.children].filter(ch => ch.querySelector && ch.querySelector('img')).length;
+      const score=imgs + tiles*2;
+      if (score>bestScore && (imgs+tiles)>=3){ best=div; bestScore=score; }
+    });
+    return best;
+  }
+
+  // Render our permanents into the main grid (at the very top)
+  function renderPermsIntoMain(){
+    const grid=findMainOverlayGrid(); if (!grid) return;
+    // Hide any inline shelf grid if present (from older patch), keep the "Add Permanent PNGs" button
+    const inline = document.getElementById('raPermInlineGrid'); if (inline) inline.style.display='none';
+
+    // Remove previous clones
+    grid.querySelectorAll('.ra-perm-clone').forEach(n=>n.remove());
+
+    const arr = window.raPermOverlays || [];
+    arr.forEach((it, idx)=>{
+      const tile=document.createElement('div');
+      tile.className='ra-perm-clone';
+      tile.style.cssText='position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
+      tile.dataset.idx = String(idx);
+      tile.innerHTML=`
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+        </div>
+        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+        ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
+      `;
+      // Insert at top
+      grid.insertBefore(tile, grid.firstChild);
+    });
+    if (!isAdmin){
+      grid.querySelectorAll('.ra-perm-clone .perm-del').forEach(b=> b.remove());
+    }
+  }
+
+  // Capture clicks on our permanent tiles (one reliable handler)
+  function onClickCapture(e){
+    const del = e.target && e.target.closest && e.target.closest('.perm-del');
+    const tile = e.target && e.target.closest && e.target.closest('.ra-perm-clone');
+    if (!tile) return;
+    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
+    if (del && isAdmin){
+      const idx = parseInt(tile.dataset.idx||'-1',10);
+      const arr = window.raPermOverlays || [];
+      if (idx>=0 && arr[idx]){
+        try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
+        arr.splice(idx,1);
+      }
+      tile.remove();
+      return false;
+    }
+    const img = tile.querySelector('img');
+    const url = img?.currentSrc || img?.src;
+    const name = (img?.alt||'').trim();
+    if (url) robustAdd(url,name);
+    return false;
+  }
+
+  // Re-render when files are chosen via the admin input
+  function wireAdminInput(){
+    const inp = document.getElementById('raPermInlineInput');
+    if (inp && !inp._raMixWired){
+      inp._raMixWired=true;
+      inp.addEventListener('change', ()=> setTimeout(renderPermsIntoMain, 0));
+    }
+  }
+
+  function tick(){
+    renderPermsIntoMain();
+    wireAdminInput();
+  }
+  tick();
+  document.addEventListener('click', onClickCapture, true);
+  new MutationObserver(tick).observe(document.body,{childList:true,subtree:true});
+  setInterval(renderPermsIntoMain, 1000); // keep fresh if UI re-renders
+})();
