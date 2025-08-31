@@ -315,110 +315,67 @@ function swapOldStampsInGroup(group) {
     } catch (_) {}
   }
 }
-  async function loadBaseImage(dataUrl, isRebel){
-    // remove old base
-    clearBaseOnly();
+async function loadBaseImage(dataUrl, isRebel){
+  // remove old base
+  clearBaseOnly();
 
-    // create base image
-    const img = await fabricFromURL(dataUrl);
-    img.set({ originX:'center', originY:'center' });
+  // create base image
+  const img = await fabricFromURL(dataUrl);
+  img.set({ originX:'center', originY:'center' });
 
-    // scale to fit (no upscaling >1)
-    const cw=canvas.getWidth(), ch=canvas.getHeight();
-    const sc=Math.min(cw/img.width, ch/img.height, 1);
-    img.scale(sc);
+  // scale to fit (no upscaling >1)
+  const cw = canvas.getWidth(), ch = canvas.getHeight();
+  const sc = Math.min(cw / img.width, ch / img.height, 1);
+  img.scale(sc);
 
-    if(isRebel){
-      img._isBase=true;
-      canvas.add(img);
-      img.set({ left:cw/2, top:ch/2 }); img.setCoords();
-      baseGroup = img;
-    } else {
-  // add two corner watermarks grouped with base
-  const wmTL = await fabricFromURL(WM_SRC);
-  const wmBR = await fabricFromURL(WM_SRC);
-  const bw = img.width*sc, bh = img.height*sc;
-  const wmTargetW = bw * 0.15;
-  const margin    = Math.max(8, bw*0.02);
+  if (isRebel) {
+    // Rebel Ant path → no watermark
+    img._isBase = true;
+    img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+    canvas.add(img);
+    baseGroup = img;
+  } else {
+    // Non‑RA path → group base image + 2 corner watermarks
+    const wmTL = await fabricFromURL(WM_SRC);
+    const wmBR = await fabricFromURL(WM_SRC);
 
-  const scaleTL = wmTargetW / wmTL.width;
-  const scaleBR = wmTargetW / wmBR.width;
-  wmTL.scale(scaleTL); wmBR.scale(scaleBR);
+    const bw = img.width * sc,  bh = img.height * sc;
+    const wmTargetW = bw * 0.15;
+    const margin    = Math.max(8, bw*0.02);
 
-  // Tag as watermarks (helps future swaps)
-  Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'TL' });
-  Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'BR' });
+    const scaleTL = wmTargetW / wmTL.width;
+    const scaleBR = wmTargetW / wmBR.width;
+    wmTL.scale(scaleTL); wmBR.scale(scaleBR);
 
-  // Place relative to center‑origin group
-  wmTL.set({
-    originX:'center', originY:'center',
-    left: -bw/2 + margin + wmTL.width*scaleTL/2,
-    top:  -bh/2 + margin + wmTL.height*scaleTL/2
-  });
-  wmBR.set({
-    originX:'center', originY:'center',
-    left:  bw/2 - margin - wmBR.width*scaleBR/2,
-    top:   bh/2 - margin - wmBR.height*scaleBR/2
-  });
+    Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'TL' });
+    Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'BR' });
 
-  const group = new fabric.Group([img, wmTL, wmBR], {
-    left:cw/2, top:ch/2, originX:'center', originY:'center'
-  });
-  group._isBase = true;
+    wmTL.set({
+      originX:'center', originY:'center',
+      left: -bw/2 + margin + (wmTL.width*scaleTL/2),
+      top:  -bh/2 + margin + (wmTL.height*scaleTL/2)
+    });
+    wmBR.set({
+      originX:'center', originY:'center',
+      left:  bw/2 - margin - (wmBR.width*scaleBR/2),
+      top:   bh/2 - margin - (wmBR.height*scaleBR/2)
+    });
 
-  // 🔁 Deep‑swap any old (yellow) stamps that might be present from autosaves
-  swapOldStampsInGroup(group);
+    const group = new fabric.Group([img, wmTL, wmBR], {
+      left:cw/2, top:ch/2, originX:'center', originY:'center'
+    });
+    group._isBase = true;
 
-  canvas.add(group);
-  group.setCoords();
-  baseGroup = group;
-}
-if (isPermanent) {
-  img._kind = 'overlay';
-  obj = img;
-} else {
-  // Group with tiny corner watermarks
-  const wmTL = await fabricFromURL(WM_SRC);
-  const wmBR = await fabricFromURL(WM_SRC);
-  const bw = img.width*sc, bh = img.height*sc;
-  const wmTargetW = Math.max(16, bw*0.08);
-  const margin    = Math.max(6,  bw*0.02);
+    // swap any old stamps inside legacy groups
+    swapOldStampsInGroup(group);
 
-  const scaleTL = wmTargetW / wmTL.width;
-  const scaleBR = wmTargetW / wmBR.width;
-  wmTL.scale(scaleTL); wmBR.scale(scaleBR);
-
-  // Tag as watermarks (helps future swaps)
-  Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'TL' });
-  Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'BR' });
-
-  wmTL.set({
-    originX:'center', originY:'center',
-    left: -bw/2 + margin + wmTL.width*scaleTL/2,
-    top:  -bh/2 + margin + wmTL.height*scaleTL/2
-  });
-  wmBR.set({
-    originX:'center', originY:'center',
-    left:  bw/2 - margin - wmBR.width*scaleBR/2,
-    top:   bh/2 - margin - wmBR.height*scaleBR/2
-  });
-
-  const group = new fabric.Group([img, wmTL, wmBR], { originX:'center', originY:'center' });
-  group._kind = 'overlay';
-
-  // 🔁 Deep‑swap any old (yellow) stamps inside this overlay group too
-  swapOldStampsInGroup(group);
-
-  obj = group;
-}    
-    canvas.add(obj);
-    obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
-    canvas.setActiveObject(obj);
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-    return obj;
+    canvas.add(group);
+    group.setCoords();
+    baseGroup = group;
   }
 
+  canvas.requestRenderAll();
+}
   // Reorder within overlay band only
   function reorderOverlay(dir){
     const o=canvas.getActiveObject(); if(!o || o._kind!=='overlay') return;
