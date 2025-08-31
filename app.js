@@ -4008,3 +4008,46 @@ function maybeRestoreAutosave() {
     }
   } catch(e){}
 })();
+
+/* RA_CANVAS_WIRE_GUARD_v5 — prevent "c.on is not a function" retries */
+(function(){
+  if (window.__RA_CANVAS_WIRE_GUARD_v5) return;
+  window.__RA_CANVAS_WIRE_GUARD_v5 = true;
+
+  function getFabricCanvas(){
+    const c = window.canvas;
+    if (c && c.upperCanvasEl && typeof c.on === 'function' && typeof c.add === 'function') return c;
+    for (const k in window){
+      try {
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.on === 'function' && typeof v.add === 'function') return v;
+      } catch(e){}
+    }
+    return null;
+  }
+
+  (function waitForFabric(){
+    const fc = getFabricCanvas();
+    if (fc) { window.canvas = fc; return; }
+    setTimeout(waitForFabric, 120);
+  })();
+
+  const NativeMO = window.MutationObserver;
+  if (NativeMO) {
+    window.MutationObserver = function(cb){
+      const wrapped = function(mList, obs){
+        try {
+          const fc = getFabricCanvas();
+          if (fc) window.canvas = fc;
+          if (!window.canvas || typeof window.canvas.on !== 'function') return; // too early, skip
+          return cb && cb(mList, obs);
+        } catch (e) {
+          if (/\.on is not a function/.test(String(e))) return; // swallow this one known failure
+          throw e;
+        }
+      };
+      return new NativeMO(wrapped);
+    };
+    window.MutationObserver.prototype = NativeMO.prototype;
+  }
+})();
