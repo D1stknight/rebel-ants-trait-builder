@@ -29,64 +29,144 @@
   let canvas, backgroundRect=null, overlayList=[], idLabel=null, baseGroup=null;
   let zoom=1;
 
-  document.addEventListener("DOMContentLoaded", ()=>{
-    if(!window.fabric){ alert("fabric.js failed to load. Check internet or open via a local server."); return; }
-    canvas=new fabric.Canvas("c",{ backgroundColor:"transparent", preserveObjectStacking:true, enableRetinaScaling:true, selectionBorderColor:'#22d3ee', selectionColor:'rgba(34,211,238,.08)'});
-    window.canvas = canvas;    
-    initBackgroundRect("#0d0e13");
-    setCanvasSize(parseInt(document.getElementById("canvasSize").value,10));
-    setZoom(1);
+document.addEventListener("DOMContentLoaded", () => {
+  if (!window.fabric) {
+    alert("fabric.js failed to load. Check internet or open via a local server.");
+    return;
+  }
 
-    // Permanents
-    overlayList=(window.__EMBED_OVERLAYS__||[]).map(m=>({name:m.name, src:m.src, perm:true}));
-    renderOverlayGrid();
+  // Create Fabric canvas
+  canvas = new fabric.Canvas("c", {
+    backgroundColor: "transparent",
+    preserveObjectStacking: true,
+    enableRetinaScaling: true,
+    selectionBorderColor: "#22d3ee",
+    selectionColor: "rgba(34,211,238,.08)"
+  });
 
-    // Upload base
-    document.getElementById("baseUpload").addEventListener("change", async (e)=>{
-      const f=e.target.files?.[0]; if(!f) return;
-      const data=await fileToDataURL(f);
-      await loadBaseImage(data,false); // non-RA => add watermarks
+  // Expose the real Fabric canvas globally (important!)
+  window.canvas = canvas;
+
+  // Background and initial size
+  initBackgroundRect("#0d0e13");
+
+  const sizeEl = document.getElementById("canvasSize");
+  if (sizeEl) sizeEl.value = "700";                  // keep selector in sync
+  setCanvasSize(parseInt(sizeEl ? sizeEl.value : "700", 10));
+  setZoom(1);
+
+  // Permanents → embed to the grid as non-deletable
+  overlayList = (window.__EMBED_OVERLAYS__ || [])
+    .map(m => ({ name: m.name, src: m.src, perm: true }));
+  renderOverlayGrid();
+
+  /* -------------------- Base image: local upload -------------------- */
+  const baseUploadEl = document.getElementById("baseUpload");
+  if (baseUploadEl) {
+    baseUploadEl.addEventListener("change", async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const data = await fileToDataURL(f);
+      await loadBaseImage(data, false); // non‑RA => add watermarks
     });
-    document.getElementById("clearUpload").addEventListener("click", ()=>{
-      document.getElementById("baseUpload").value="";
+  }
+
+  const clearUploadEl = document.getElementById("clearUpload");
+  if (clearUploadEl) {
+    clearUploadEl.addEventListener("click", () => {
+      const inp = document.getElementById("baseUpload");
+      if (inp) inp.value = "";
       clearBaseOnly();
     });
+  }
 
-    // Paste URL
-    document.getElementById("loadUrl").addEventListener("click", async ()=>{
-      const url=document.getElementById("baseUrl").value.trim(); if(!url) return;
-      const data=await fetchAsDataURL(url);
-      await loadBaseImage(data,false);
+  /* -------------------- Base image: paste URL -------------------- */
+  const loadUrlBtn = document.getElementById("loadUrl");
+  if (loadUrlBtn) {
+    loadUrlBtn.addEventListener("click", async () => {
+      const url = (document.getElementById("baseUrl").value || "").trim();
+      if (!url) return;
+      const data = await fetchAsDataURL(url);
+      await loadBaseImage(data, false); // non‑RA => add watermarks
     });
+  }
 
-    // Token loader (v21d flow)
-    document.getElementById("loadToken").addEventListener("click", async ()=>{
-      const id=(document.getElementById("tokenIdInput").value||"").trim();
-      const status=document.getElementById("tokenStatus");
-      if(!id){ status.textContent="Enter a token ID."; return; }
-      status.textContent="Fetching token…";
-      try{
-        const imgUrl=await fetchImageByTokenId(CONTRACT,id);
-        if(!imgUrl){ status.textContent="No image URL found."; return; }
-        status.textContent="Downloading image…";
-        const data=await fetchAsDataURL(imgUrl);
-        await loadBaseImage(data,true); // RA => no watermark
-        addOrUpdateTokenLabel(id); // auto ID label
-        status.textContent="Loaded 👍";
-      }catch(e){ status.textContent="Failed to load token image."; }
-    });
+  /* -------------------- Base image: load by token ID -------------------- */
+  const loadTokenBtn = document.getElementById("loadToken");
+  if (loadTokenBtn) {
+    loadTokenBtn.addEventListener("click", async () => {
+      const id = (document.getElementById("tokenIdInput").value || "").trim();
+      const status = document.getElementById("tokenStatus");
+      if (!id) { if (status) status.textContent = "Enter a token ID."; return; }
 
-    // Canvas controls
-    document.getElementById("zoomIn").addEventListener("click",()=>setZoom(zoom*1.1));
-    document.getElementById("zoomOut").addEventListener("click",()=>setZoom(zoom/1.1));
-    document.getElementById("zoomReset").addEventListener("click",()=>{ setZoom(1); canvas.setViewportTransform([1,0,0,1,0,0]); });
-    document.getElementById("canvasSize").addEventListener("change",(e)=>setCanvasSize(parseInt(e.target.value,10)));
-    document.getElementById("clearBase").addEventListener("click",clearBaseOnly);
-    document.getElementById("clearCanvas").addEventListener("click",()=>{
-      const keep=[backgroundRect];
-      canvas.getObjects().slice().forEach(o=>{ if(!keep.includes(o)) canvas.remove(o); });
-      idLabel=null; baseGroup=null; canvas.requestRenderAll();
+      if (status) status.textContent = "Fetching token…";
+      try {
+        const imgUrl = await fetchImageByTokenId(CONTRACT, id);
+        if (!imgUrl) { if (status) status.textContent = "No image URL found."; return; }
+
+        if (status) status.textContent = "Downloading image…";
+        const data = await fetchAsDataURL(imgUrl);
+        await loadBaseImage(data, true);   // RA => no watermark
+        addOrUpdateTokenLabel(id);         // auto ID label
+        if (status) status.textContent = "Loaded 👍";
+      } catch (e) {
+        if (status) status.textContent = "Failed to load token image.";
+      }
     });
+  }
+
+  /* -------------------- (Optional) Canvas controls -------------------- */
+  const zi = document.getElementById("zoomIn");
+  if (zi) zi.addEventListener("click", () => setZoom(zoom * 1.1));
+
+  const zo = document.getElementById("zoomOut");
+  if (zo) zo.addEventListener("click", () => setZoom(zoom / 1.1));
+
+  const zr = document.getElementById("zoomReset");
+  if (zr) zr.addEventListener("click", () => {
+    setZoom(1);
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  });
+
+  const sizeSel = document.getElementById("canvasSize");
+  if (sizeSel) sizeSel.addEventListener("change", (e) =>
+    setCanvasSize(parseInt(e.target.value, 10))
+  );
+
+  const clearBaseBtn = document.getElementById("clearBase");
+  if (clearBaseBtn) clearBaseBtn.addEventListener("click", clearBaseOnly);
+
+  const clearCanvasBtn = document.getElementById("clearCanvas");
+  if (clearCanvasBtn) {
+    clearCanvasBtn.addEventListener("click", () => {
+      const keep = [backgroundRect];
+      canvas.getObjects().slice().forEach(o => { if (!keep.includes(o)) canvas.remove(o); });
+      idLabel = null; baseGroup = null;
+      canvas.requestRenderAll();
+    });
+  }
+});
+
+/* -------------------- Canvas controls -------------------- */
+document.getElementById("zoomIn").addEventListener("click",  () => setZoom(zoom * 1.1));
+document.getElementById("zoomOut").addEventListener("click", () => setZoom(zoom / 1.1));
+document.getElementById("zoomReset").addEventListener("click", () => {
+  setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+});
+document.getElementById("canvasSize").addEventListener("change", (e) => {
+  setCanvasSize(parseInt(e.target.value, 10));
+});
+
+document.getElementById("clearBase").addEventListener("click", clearBaseOnly);
+
+document.getElementById("clearCanvas").addEventListener("click", () => {
+  const keep = [backgroundRect]; // keep the dark background rectangle only
+  canvas.getObjects().slice().forEach(o => { if (!keep.includes(o)) canvas.remove(o); });
+  idLabel = null;
+  baseGroup = null;
+  canvas.requestRenderAll();
+});
 
     // Token ID style live controls
     ['change','input'].forEach(ev=>{
