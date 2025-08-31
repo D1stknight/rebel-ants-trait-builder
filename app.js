@@ -2636,62 +2636,8 @@ function maybeRestoreAutosave() {
   let tries = 0; (function early(){ fixCanvas(); if (++tries<8) setTimeout(early, 600); })();
 })();
 
-/* === RA_EXPORT_OPEN_FIX — force export to open only in a new tab === */
-(function RA_EXPORT_OPEN_FIX(){
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
-      }
-    }catch(e){}
-    return null;
-  }
-  function getMultiplier(){
-    const txt = (document.querySelector('.export-quality')?.textContent
-                 || document.querySelector('#exportQuality')?.value
-                 || '').toLowerCase();
-    const m = (txt.match(/x\s*([1-8])/i)||[])[1];
-    return Math.max(1, parseInt(m||'1',10));
-  }
-  function wire(){
-    const el = Array.from(document.querySelectorAll('button,a'))
-      .find(n => /open\s*in\s*new\s*tab/i.test(n.textContent||''));
-    if (!el || el._raWiredOpen) return;
-    el._raWiredOpen = true;
-    el.addEventListener('click', (e)=>{
-      e.preventDefault(); e.stopPropagation();
-      const c = findCanvas(); if (!c){ alert('Canvas not ready'); return false; }
-      const win = window.open('', '_blank');                   // open tab synchronously (popup‑safe)
-      if (!win) { alert('Popup blocked. Please allow popups for this site.'); return false; }
-      win.document.title = 'Exporting…';
-      win.document.body.style.margin = '0';
-      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
-      try{
-        const mult = getMultiplier();
-        const dataUrl = c.toDataURL({ format:'png', multiplier: mult });
-        win.document.body.innerHTML = `<img src="${dataUrl}" style="display:block;max-width:100%;height:auto">`;
-      }catch(err){
-        win.close();
-        alert('Export failed (browser security/CORS). Try a different image or domain with CORS headers.');
-      }
-      return false;
-    }, { passive:false });
-  }
-  wire();
-  const obs = new MutationObserver(wire);
-  obs.observe(document.body, { childList:true, subtree:true });
-})();
-
-/* === RA_OPEN_NEW_TAB_ONLY_V2 — force open ONLY in a new tab; block page nav === */
-(function RA_OPEN_NEW_TAB_ONLY_V2(){
+/* === RA_OPEN_NEW_TAB_ONLY_V3 — single open via CLICK only; never hijack builder === */
+(function RA_OPEN_NEW_TAB_ONLY_V3(){
   function findCanvas(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
@@ -2724,12 +2670,22 @@ function maybeRestoreAutosave() {
     return /open\s*in\s*new\s*tab/.test(t) ? el : null;
   }
 
+  // Ensure the anchor itself can't navigate even if something else fires
+  function neutralizeLink(){
+    const el = Array.from(document.querySelectorAll('a,button'))
+      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
+    if (el && el.tagName === 'A'){
+      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
+      el.setAttribute('href','javascript:void(0)');
+      el.removeAttribute('target');
+    }
+  }
+
   function openOnlyNewTab(){
     const c = findCanvas();
     if (!c){ alert('Canvas not ready'); return; }
-    // Open target tab synchronously (popup-safe)
-    const win = window.open('', '_blank');
-    if (!win){ alert('Popup blocked. Please allow popups for this site.'); return; }
+    const win = window.open('', '_blank');         // popup‑safe: open synchronously on click
+    if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
     win.document.title = 'Exporting…';
     win.document.body.style.margin = '0';
     win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
@@ -2739,43 +2695,32 @@ function maybeRestoreAutosave() {
       win.document.body.innerHTML = `<img src="${dataUrl}" style="display:block;max-width:100%;height:auto">`;
     }catch(e){
       win.close();
-      alert('Export failed (browser security / CORS). Try a different image or use your hosted domain with CORS headers.');
+      alert('Export failed (security/CORS). Try a different image or your hosted domain with CORS headers.');
     }
   }
 
-  // Kill default navigation + any earlier click handlers and run our exporter instead.
-  function captureHandler(e){
+  // Handle ONLY the CLICK event (capture) and guard against accidental double‑fires
+  let lastOpenAt = 0;
+  function onClickCapture(e){
     const el = isOpenNewTabEl(e.target);
     if (!el) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    e.stopPropagation();
+    const now = Date.now();
+    if (now - lastOpenAt < 400) {                 // guard: ignore rapid duplicates
+      e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false;
+    }
+    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
+    lastOpenAt = now;
     openOnlyNewTab();
     return false;
   }
 
-  // Neutralize any anchor href so the page can’t navigate even without JS handlers.
-  function neutralizeAnchor(){
-    const el = Array.from(document.querySelectorAll('a,button'))
-      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
-    if (el && el.tagName === 'A'){
-      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
-      el.setAttribute('href', 'javascript:void(0)');
-      el.removeAttribute('target'); // we manage the new tab ourselves
-    }
-  }
-
-  // Wire once and keep wiring after UI updates.
   function wire(){
-    neutralizeAnchor();
+    neutralizeLink(); // keep doing this in case UI re-renders
   }
   wire();
 
-  // Global capture listeners (fire BEFORE any existing click handlers)
-  // This ensures no duplicate action and no same-tab navigation.
-  document.addEventListener('pointerdown', captureHandler, true);
-  document.addEventListener('mousedown',   captureHandler, true);
-  document.addEventListener('click',       captureHandler, true);
+  // IMPORTANT: Only listen to CLICK (not pointerdown/mousedown) to avoid duplicate opens
+  document.addEventListener('click', onClickCapture, true);
 
   const obs = new MutationObserver(wire);
   obs.observe(document.body, { childList:true, subtree:true });
