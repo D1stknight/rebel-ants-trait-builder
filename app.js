@@ -2487,3 +2487,151 @@ function maybeRestoreAutosave() {
   // 10) Keep trying briefly in case UI loads slow
   (function tick(){ cleanAndLock(); setTimeout(tick, 800); })();
 })();
+
+/* ===== RA_KILL_BLACK_BOX_V3 — remove large dark blocker + keep base locked ===== */
+(function RA_KILL_BLACK_BOX_V3(){
+  let baseObj = null;
+
+  // --- helpers ---
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') { window.canvas = v; return v; }
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && typeof v.toJSON === 'function'
+            && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    }catch(e){}
+    return null;
+  }
+  const area    = o => (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1);
+  const sW      = o => (o.getScaledWidth ? o.getScaledWidth()  : (o.width||0)*(o.scaleX||1));
+  const sH      = o => (o.getScaledHeight? o.getScaledHeight() : (o.height||0)*(o.scaleY||1));
+
+  function parseRGBA(val){
+    if (!val) return null;
+    const s = (''+val).trim().toLowerCase();
+    if (s === 'black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const hex = s.replace('#','');
+      const h = hex.length===3 ? hex.split('').map(x=>x+x).join('') : hex;
+      const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m = s.match(/rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s]+([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]===undefined?1:+m[4] ];
+    return null;
+  }
+  function isDarkish(fill){
+    const c = parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a] = c; if (a < 0.4) return false;
+    // perceived luminance
+    const lum = (0.299*r + 0.587*g + 0.114*b)/255;
+    return lum < 0.22; // allow very dark greys (not only pure black)
+  }
+  function isHuge(o,c){
+    const cw=c.getWidth(), ch=c.getHeight();
+    return (sW(o)>=cw*0.8 || sH(o)>=ch*0.8 || area(o) >= cw*ch*0.35);
+  }
+  function isBlocker(o,c){
+    return o && o.type==='rect' && isHuge(o,c) && isDarkish(o.fill) && !o._isBase;
+  }
+
+  function lockBase(o,c){
+    if (!o || !c) return;
+    baseObj = o;
+    o._isBase = true;
+    o.selectable = false;
+    o.evented = false;
+    o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = true;
+    o.perPixelTargetFind = false;
+    o.hoverCursor = 'default';
+    try { c.sendToBack(o); } catch(e){}
+    try { if (c.getActiveObject() === o) c.discardActiveObject(); } catch(e){}
+  }
+
+  function ensureBase(c){
+    if (baseObj && c.getObjects().includes(baseObj)) return;
+    const imgs = c.getObjects('image');
+    if (!imgs.length) return;
+    imgs.sort((a,b)=> area(b)-area(a));
+    lockBase(imgs[0], c);
+  }
+
+  function guardBaseSelection(c){
+    ['selection:created','selection:updated'].forEach(evt=>{
+      c.on(evt, ()=>{ if (c.getActiveObject()===baseObj){ c.discardActiveObject(); c.requestRenderAll(); }});
+    });
+    c.on('mouse:down', e=>{ if (e && e.target===baseObj){ c.discardActiveObject(); c.requestRenderAll(); }});
+  }
+
+  function nukeBlockers(c){
+    let removed = 0;
+    c.getObjects().forEach(o=>{
+      try{ if (isBlocker(o,c)) { c.remove(o); removed++; } }catch(e){}
+    });
+    if (removed) c.requestRenderAll();
+    return removed;
+  }
+
+  function fixCanvas(){
+    const c = findCanvas(); if (!c) return;
+    nukeBlockers(c);
+    ensureBase(c);
+    guardBaseSelection(c);
+    c.requestRenderAll();
+  }
+
+  // Hook Fabric so fix runs on add/restore too
+  (function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) { setTimeout(hookFabric, 200); return; }
+    if (fabric.Canvas.prototype._raKillBox) return;
+    const init = fabric.Canvas.prototype.initialize;
+    fabric.Canvas.prototype.initialize = function(...args){ const r=init.apply(this,args); window.canvas=this; setTimeout(fixCanvas,0); return r; };
+    const add  = fabric.Canvas.prototype.add;
+    fabric.Canvas.prototype.add = function(...args){ const r=add.apply(this,args); setTimeout(fixCanvas,0); return r; };
+    const load = fabric.Canvas.prototype.loadFromJSON;
+    fabric.Canvas.prototype.loadFromJSON = function(json, cb, rev){
+      const self=this;
+      return load.call(this,json,function(){
+        try{ fixCanvas(); }catch(e){}
+        if (typeof cb==='function') cb.apply(self, arguments);
+      }, rev);
+    };
+    fabric.Canvas.prototype._raKillBox = true;
+    setTimeout(fixCanvas, 300);
+  })();
+
+  // Add a small "Fix canvas" button next to your checkpoint row
+  function insertFixBtn(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+    const row = document.getElementById('raCkRow') || holder;
+    if (!document.getElementById('raFixCanvas')){
+      const b = document.createElement('button');
+      b.id = 'raFixCanvas';
+      b.className = 'btn small';
+      b.style.marginLeft = '6px';
+      b.textContent = 'Fix canvas';
+      b.addEventListener('click', fixCanvas);
+      (row ? row.appendChild(b) : holder.appendChild(b));
+    }
+  }
+  insertFixBtn();
+  const obs = new MutationObserver(()=> insertFixBtn());
+  obs.observe(document.body, { childList:true, subtree:true });
+
+  // Run a few times early to catch async image loads
+  let tries = 0; (function early(){ fixCanvas(); if (++tries<8) setTimeout(early, 600); })();
+})();
