@@ -144,54 +144,55 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-    // Token ID style live controls
-    ['change','input'].forEach(ev=>{
-      document.getElementById("idFormat").addEventListener(ev,()=>{ if(idLabel) { idLabel.text = formatTokenId(document.getElementById("tokenIdDisplay").value, document.getElementById("idFormat").value); canvas.requestRenderAll(); }});
-      document.getElementById("idSize").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('fontSize', parseInt(document.getElementById("idSize").value,10)||52); canvas.requestRenderAll(); }});
-      document.getElementById("idColor").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('fill', document.getElementById("idColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("idStrokeColor").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('stroke', document.getElementById("idStrokeColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("idStrokeWidth").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('strokeWidth', parseInt(document.getElementById("idStrokeWidth").value,10)||0); canvas.requestRenderAll(); }});
-    });
-    document.getElementById("deleteTokenId").addEventListener("click",()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
+document.addEventListener('DOMContentLoaded', () => {
+  // Token ID style live controls
+  ['change','input'].forEach(ev=>{
+    document.getElementById("idFormat").addEventListener(ev,()=>{ if(idLabel) { idLabel.text = formatTokenId(document.getElementById("tokenIdDisplay").value, document.getElementById("idFormat").value); canvas.requestRenderAll(); }});
+    document.getElementById("idSize").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('fontSize', parseInt(document.getElementById("idSize").value,10)||52); canvas.requestRenderAll(); }});
+    document.getElementById("idColor").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('fill', document.getElementById("idColor").value); canvas.requestRenderAll(); }});
+    document.getElementById("idStrokeColor").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('stroke', document.getElementById("idStrokeColor").value); canvas.requestRenderAll(); }});
+    document.getElementById("idStrokeWidth").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('strokeWidth', parseInt(document.getElementById("idStrokeWidth").value,10)||0); canvas.requestRenderAll(); }});
+  });
+  document.getElementById("deleteTokenId").addEventListener("click",()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
 
-    // Custom text
-    document.getElementById("addCustomText").addEventListener("click",()=>{
-      const val=(document.getElementById("customText").value||"").trim(); if(!val) return;
-      const txt=new fabric.Textbox(val,{ left:canvas.getWidth()/2, top:canvas.getHeight()/2, originX:"center", originY:"center",
-        width: Math.floor(canvas.getWidth()*0.8), textAlign:"left",
-        fontFamily: document.getElementById("fontFamily").value,
-        fontSize: parseInt(document.getElementById("fontSize").value,10)||48,
-        fill: document.getElementById("fontColor").value,
-        stroke: document.getElementById("strokeColor").value,
-        strokeWidth: parseInt(document.getElementById("strokeWidth").value,10)||0,
-        editable:true
-      });
-      txt._kind='customText';
-      canvas.add(txt).setActiveObject(txt); bringInterfaceToFront(); canvas.requestRenderAll();
+  // Custom text
+  document.getElementById("addCustomText").addEventListener("click",()=>{
+    const val=(document.getElementById("customText").value||"").trim(); if(!val) return;
+    const txt=new fabric.Textbox(val,{ left:canvas.getWidth()/2, top:canvas.getHeight()/2, originX:"center", originY:"center",
+      width: Math.floor(canvas.getWidth()*0.8), textAlign:"left",
+      fontFamily: document.getElementById("fontFamily").value,
+      fontSize: parseInt(document.getElementById("fontSize").value,10)||48,
+      fill: document.getElementById("fontColor").value,
+      stroke: document.getElementById("strokeColor").value,
+      strokeWidth: parseInt(document.getElementById("strokeWidth").value,10)||0,
+      editable:true
     });
-    ['change','input'].forEach(ev=>{
-      document.getElementById("fontFamily").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', document.getElementById("fontFamily").value); canvas.requestRenderAll(); }});
-      document.getElementById("fontSize").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt(document.getElementById("fontSize").value,10)||48); canvas.requestRenderAll(); }});
-      document.getElementById("fontColor").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fill', document.getElementById("fontColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("strokeColor").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('stroke', document.getElementById("strokeColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("strokeWidth").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('strokeWidth', parseInt(document.getElementById("strokeWidth").value,10)||0); canvas.requestRenderAll(); }});
-    });
-    document.getElementById("delSelectedText").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }});
-    document.getElementById("delAllText").addEventListener("click",()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='customText') canvas.remove(o); }); canvas.requestRenderAll(); });
+    txt._kind='customText';
+    canvas.add(txt).setActiveObject(txt); bringInterfaceToFront(); canvas.requestRenderAll();
+  });
+  ['change','input'].forEach(ev=>{
+    document.getElementById("fontFamily").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', document.getElementById("fontFamily").value); canvas.requestRenderAll(); }});
+    document.getElementById("fontSize").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt(document.getElementById("fontSize").value,10)||48); canvas.requestRenderAll(); }});
+    document.getElementById("fontColor").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fill', document.getElementById("fontColor").value); canvas.requestRenderAll(); }});
+    document.getElementById("strokeColor").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('stroke', document.getElementById("strokeColor").value); canvas.requestRenderAll(); }});
+    document.getElementById("strokeWidth").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('strokeWidth', parseInt(document.getElementById("strokeWidth").value,10)||0); canvas.requestRenderAll(); }});
+  });
+  document.getElementById("delSelectedText").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }});
+  document.getElementById("delAllText").addEventListener("click",()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='customText') canvas.remove(o); }); canvas.requestRenderAll(); });
 
-    // Selection tools
-    document.getElementById("duplicate").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.clone(c=>{ c.set({ left:o.left+20, top:o.top+20 }); canvas.add(c).setActiveObject(c); canvas.requestRenderAll(); }); });
-    document.getElementById("delete").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o || o===backgroundRect) return; if(o===baseGroup) return; canvas.remove(o); canvas.requestRenderAll(); });
-    document.getElementById("opacity").addEventListener("input",(e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value)); canvas.requestRenderAll(); });
-    document.getElementById("blendMode").addEventListener("change",(e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.globalCompositeOperation = e.target.value==="normal" ? null : e.target.value; canvas.requestRenderAll(); });
-    document.getElementById("bringFront").addEventListener("click",()=>reorderOverlay('front'));
-    document.getElementById("sendBack").addEventListener("click",()=>reorderOverlay('back'));
-    document.getElementById("flipX").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle('flipX'); canvas.requestRenderAll(); });
-    document.getElementById("flipY").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle('flipY'); canvas.requestRenderAll(); });
-    document.getElementById("lock").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; lockObj(o,true); });
-    document.getElementById("unlockAll").addEventListener("click",()=>{ canvas.getObjects().forEach(o=>lockObj(o,false)); canvas.requestRenderAll(); });
-    document.getElementById("clearAllOverlays").addEventListener("click",()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='overlay') canvas.remove(o); }); canvas.requestRenderAll(); });
-
+  // Selection tools
+  document.getElementById("duplicate").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.clone(c=>{ c.set({ left:o.left+20, top:o.top+20 }); canvas.add(c).setActiveObject(c); canvas.requestRenderAll(); }); });
+  document.getElementById("delete").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o || o===backgroundRect) return; if(o===baseGroup) return; canvas.remove(o); canvas.requestRenderAll(); });
+  document.getElementById("opacity").addEventListener("input",(e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value)); canvas.requestRenderAll(); });
+  document.getElementById("blendMode").addEventListener("change",(e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.globalCompositeOperation = e.target.value==="normal" ? null : e.target.value; canvas.requestRenderAll(); });
+  document.getElementById("bringFront").addEventListener("click",()=>reorderOverlay('front'));
+  document.getElementById("sendBack").addEventListener("click",()=>reorderOverlay('back'));
+  document.getElementById("flipX").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle('flipX'); canvas.requestRenderAll(); });
+  document.getElementById("flipY").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle('flipY'); canvas.requestRenderAll(); });
+  document.getElementById("lock").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; lockObj(o,true); });
+  document.getElementById("unlockAll").addEventListener("click",()=>{ canvas.getObjects().forEach(o=>lockObj(o,false)); canvas.requestRenderAll(); });
+  document.getElementById("clearAllOverlays").addEventListener("click",()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='overlay') canvas.remove(o); }); canvas.requestRenderAll(); });
+}); // END: Token/Text/Selection listeners (DOMContentLoaded)  
     // Overlays panel & uploads
     document.getElementById("overlayUpload").addEventListener("change", async (e)=>{
       const files=Array.from(e.target.files||[]);
