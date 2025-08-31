@@ -4206,3 +4206,46 @@ function maybeRestoreAutosave() {
     };
   }
 })();
+
+/* RA_FORCE_WATERMARK_v3 — ensure the blue watermark from /assets/ is used */
+(function () {
+  // Point to the new blue watermark in assets (cache-busted)
+  const NEW_WM = '/assets/watermark.png?v=wm8';
+
+  // Swap any existing corner watermarks to NEW_WM
+  function swapWatermarks() {
+    const c = window.canvas;
+    if (!c || !c.getObjects) return;
+
+    const W = c.getWidth(), H = c.getHeight();
+    const isCorner = (o) => {
+      const ow = o.getScaledWidth(), oh = o.getScaledHeight();
+      const rightGap = W - (o.left + ow);
+      const bottomGap = H - (o.top + oh);
+      const nearTL = (o.left <= 16 && o.top <= 16);
+      const nearBR = (rightGap <= 16 && bottomGap <= 16);
+      return nearTL || nearBR;
+    };
+    const looksLikeWM = (o) =>
+      o && o.type === 'image' &&
+      o.selectable === false && o.evented === false &&
+      isCorner(o) && o.getScaledWidth() <= W * 0.35 && o.getScaledHeight() <= H * 0.35;
+
+    c.getObjects('image').forEach(o => {
+      if (!looksLikeWM(o)) return;
+      if (typeof o.setSrc === 'function') {
+        try { o.setSrc(NEW_WM, () => c.requestRenderAll()); } catch (_) {}
+      }
+    });
+  }
+
+  // Re-run a few times during boot so we catch first base load
+  let tries = 60;
+  const timer = setInterval(() => {
+    swapWatermarks();
+    if (--tries <= 0) clearInterval(timer);
+  }, 250);
+
+  // Also run on window load
+  window.addEventListener('load', () => setTimeout(swapWatermarks, 250));
+})();
