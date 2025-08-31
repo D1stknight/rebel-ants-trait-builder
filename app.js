@@ -3740,3 +3740,119 @@ function maybeRestoreAutosave() {
 
   attachHandlers();
 })();
+
+/* === RA_PUBLISHED_MONO_HANDLER_V2 — add-once (capture), scaled/centered, clear-all compatible === */
+(function(){
+  if (window.__RA_PUB_MONO) return; 
+  window.__RA_PUB_MONO = true;
+
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function'){
+          return v;
+        }
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function addViaFabricScaled(src, name){
+    const c = findCanvas(); 
+    if (!c || !window.fabric || !fabric.Image) return;
+    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin:'anonymous' };
+    fabric.Image.fromURL(src, img=>{
+      if (!img) return;
+
+      const cw = c.getWidth(), ch = c.getHeight();
+      const maxDim = Math.min(cw, ch) * 0.60;
+      const iw = img.width  || maxDim, ih = img.height || maxDim;
+      const scale = Math.min(1, maxDim / Math.max(iw, ih));
+
+      img.set({
+        originX:'center', originY:'center',
+        left:cw/2, top:ch/2,
+        selectable:true, evented:true, hasControls:true, hasBorders:true
+      });
+      if (isFinite(scale) && scale>0) img.scale(scale);
+
+      // Mark for our clear-all safety
+      img.raOverlay = true;
+
+      try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+      c.requestRenderAll();
+
+      // Keep any app bookkeeping in sync if present
+      if (Array.isArray(window.overlayList)) {
+        try { window.overlayList.push(img); } catch(e){}
+      }
+      if (typeof window.registerOverlayInstance === 'function') {
+        try { window.registerOverlayInstance(img, { name }); } catch(e){}
+      }
+
+      if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
+    }, opts);
+  }
+
+  // One-click guard (by src)
+  function dedupe(src){
+    const now = Date.now();
+    if (window.__raLastAddKey===src && now - (window.__raLastAddAt||0) < 800) return true;
+    window.__raLastAddKey = src; window.__raLastAddAt = now; return false;
+  }
+
+  // CAPTURE-phase handler: runs before any bubble handlers, then stops propagation.
+  function onTileClickCapture(ev){
+    const grid = document.getElementById('raPublishedGrid');
+    if (!grid || !grid.contains(ev.target)) return;
+
+    // Ignore the admin delete (×) button
+    if (ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
+
+    // Identify the tile and its image
+    const tile   = ev.target.closest('#raPublishedGrid > div'); if (!tile) return;
+    const imgEl  = tile.querySelector('img'); if (!imgEl) return;
+    const nameEl = tile.querySelector('div:nth-child(2)');
+    const src  = imgEl.getAttribute('src');
+    const name = nameEl ? (nameEl.textContent||'overlay').trim() : 'overlay';
+    if (!src) return;
+
+    // Only our path (scaled + centered)
+    if (!dedupe(src)) addViaFabricScaled(src, name);
+
+    // Kill other listeners (prevents native/bubble adds that caused duplicates/huge size)
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    ev.stopPropagation();
+  }
+
+  function attach(){
+    // Global capture so we run before tile/bubble handlers
+    if (!window.__RA_PUB_CAPTURE_BOUND){
+      window.__RA_PUB_CAPTURE_BOUND = true;
+      document.addEventListener('click', onTileClickCapture, { capture:true });
+    }
+
+    // Safety: make "Clear All Overlays" also remove items we added
+    const clearBtn = Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent||'').trim().toLowerCase()==='clear all overlays');
+    if (clearBtn && !clearBtn.__raBound2){
+      clearBtn.__raBound2 = true;
+      clearBtn.addEventListener('click', ()=>{
+        setTimeout(()=>{
+          const c = findCanvas(); if (!c) return;
+          const extras = c.getObjects().filter(o => o && o.raOverlay === true);
+          extras.forEach(o => c.remove(o));
+          c.requestRenderAll();
+          if (Array.isArray(window.overlayList)) {
+            window.overlayList = window.overlayList.filter(o => !(o && o.raOverlay));
+          }
+        }, 60);
+      });
+    }
+  }
+
+  attach();
+})();
