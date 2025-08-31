@@ -4141,3 +4141,68 @@ function maybeRestoreAutosave() {
     }
   }, 120);
 })();
+
+/* RA_SHIM_CANVAS_ON_v1 — ignore early .on() calls on the DOM canvas */
+(function () {
+  if (window.__RA_SHIM_CANVAS_ON_v1) return;
+  window.__RA_SHIM_CANVAS_ON_v1 = true;
+  try {
+    if (window.HTMLCanvasElement && !HTMLCanvasElement.prototype.on) {
+      // Do nothing for early bindings; Fabric will re-bind when ready.
+      HTMLCanvasElement.prototype.on = function () {};
+    }
+  } catch (_) {}
+})();
+
+/* RA_SAFE_AUTOSAVE_BIND_v2 — bind autosave only when Fabric canvas is real */
+(function () {
+  if (window.__RA_SAFE_AUTOSAVE_BIND_v2) return;
+  window.__RA_SAFE_AUTOSAVE_BIND_v2 = true;
+
+  function isFabricCanvas(x) {
+    return !!(x && x.upperCanvasEl && typeof x.on === 'function' && typeof x.add === 'function');
+  }
+  const saveFn  = window.saveAutosave        || function(){};
+  const maybeFn = window.maybeRestoreAutosave|| function(){};
+
+  function bindAutosave() {
+    const c = window.canvas;
+    if (!isFabricCanvas(c)) return false;
+    if (c.__raAutosaveWired) return true;
+
+    ['object:added', 'object:modified', 'object:removed'].forEach(evt => {
+      try { c.on(evt, saveFn); } catch (_){}
+    });
+    window.addEventListener('beforeunload', saveFn);
+    setTimeout(maybeFn, 800);
+    c.__raAutosaveWired = true;
+    return true;
+  }
+
+  // Try now, then retry for a short boot window.
+  if (!bindAutosave()) {
+    let tries = 40;
+    const t = setInterval(() => {
+      if (bindAutosave() || --tries <= 0) clearInterval(t);
+    }, 150);
+  }
+})();
+
+/* RA_WIRE_GUARD_v3 — call wire() only after Fabric is ready */
+(function () {
+  if (window.__RA_WIRE_GUARD_v3) return;
+  window.__RA_WIRE_GUARD_v3 = true;
+
+  function ready() {
+    const c = window.canvas;
+    return c && c.upperCanvasEl && typeof c.on === 'function';
+  }
+
+  const origWire = window.wire;
+  if (typeof origWire === 'function') {
+    window.wire = function guardedWire() {
+      if (!ready()) { setTimeout(() => { try { window.wire(); } catch(_){} }, 120); return; }
+      return origWire.apply(this, arguments);
+    };
+  }
+})();
