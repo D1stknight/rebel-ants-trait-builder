@@ -2945,28 +2945,29 @@ function maybeRestoreAutosave() {
   obs.observe(document.body, { childList:true, subtree:true });
 })();
 
-/* === RA_ADMIN_PACKS_V1 — creator-only overlay packs (load URL, build & export manifest) === */
-(function RA_ADMIN_PACKS_V1(){
-  // ---- basic helpers ----
-  const qs = sel => document.querySelector(sel);
-  const qsa = sel => Array.from(document.querySelectorAll(sel));
-  const getParam = (k) => new URLSearchParams(location.search).get(k);
+/* === RA_ADMIN_PERM_V2 — Admin Permanent Overlays (local PNGs, no auto-add) ===
+   - Only visible with ?admin=1
+   - Adds a small "Permanent Overlays" shelf in the Overlays card
+   - Drag/Choose PNGs -> appear as tiles (small thumbnails)
+   - Click a tile -> overlay is added to canvas (uses app hook if present; else Fabric fallback)
+   - Remove any tile (including the first) with the small × button
+   - Nothing is auto-added to canvas; clean + minimal; session-only
+*/
+(function RA_ADMIN_PERM_V2(){
   const isAdmin = /(\?|&)admin=1\b/.test(location.search);
 
-  // Where we remember your default pack on THIS device
-  const LS_PACK_URL = 'ra_pack_url_default';
+  // Where we keep this session's permanent overlay tiles (blob URLs + names)
+  window.raPermOverlays = window.raPermOverlays || [];
 
-  // OPTIONAL central pointer (if you host it later; safe if it 404s)
-  const CENTRAL_POINTER_URL = 'https://traits.rebelants.io/packs/pack-pointer.json';
-  // Expected shape: { "pack": "https://YOUR-HOST/packs/season1/manifest.json" }
-
-  // Will hold currently loaded pack items
-  window.raPackItems = window.raPackItems || [];
+  // Helpers
+  const qs  = s => document.querySelector(s);
+  const qsa = s => Array.from(document.querySelectorAll(s));
 
   function toast(msg){
-    let el = qs('#raPackToast'); if (!el){
+    let el = qs('#raPermToast');
+    if (!el){
       el = document.createElement('div');
-      el.id = 'raPackToast';
+      el.id = 'raPermToast';
       Object.assign(el.style, {
         position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
         background:'rgba(0,0,0,.76)', color:'#fff', padding:'6px 10px',
@@ -2974,214 +2975,127 @@ function maybeRestoreAutosave() {
       });
       document.body.appendChild(el);
     }
-    el.textContent = msg; setTimeout(()=>{ if (el.textContent===msg) el.textContent=''; }, 1400);
+    el.textContent = msg;
+    setTimeout(()=>{ if (el.textContent===msg) el.textContent=''; }, 1200);
   }
 
-  // Try to call your app’s existing overlay adder; else do a safe fallback.
-  function addOverlayURL(url, name){
-    if (typeof window.addOverlayToCanvas === 'function'){
-      return window.addOverlayToCanvas(url, name);
+  function addOverlayToCanvas(url, name){
+    // Prefer app's own hook if available
+    if (typeof window.addOverlayToCanvas === 'function') {
+      try { window.addOverlayToCanvas(url, name); return; } catch(e){}
     }
-    // fallback: add via Fabric directly (crossOrigin so Export works)
+    // Fallback: Fabric
     const c = window.canvas; if (!c || !window.fabric){ toast('Canvas not ready'); return; }
     fabric.Image.fromURL(url, img=>{
-      img.set({ left: c.getWidth()*0.5, top: c.getHeight()*0.5, originX:'center', originY:'center', crossOrigin:'anonymous' });
+      img.set({ left:c.getWidth()/2, top:c.getHeight()/2, originX:'center', originY:'center', crossOrigin:'anonymous' });
       c.add(img); c.setActiveObject(img); c.requestRenderAll();
     }, { crossOrigin:'anonymous' });
   }
 
-  // ---------- UI inject (admin-only) ----------
-  function installAdminUI(){
-    if (!isAdmin) return;                   // only you (with ?admin=1)
-    if (qs('#raAdminPacks')) return;        // already installed
-
+  function buildShelfUI(){
     // Find the Overlays card
     const overlaysH3 = qsa('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
     const card = overlaysH3 ? overlaysH3.parentNode : null;
-    if (!card) return setTimeout(installAdminUI, 300);
+    if (!card) return; // panel not ready yet
 
-    const wrap = document.createElement('div');
-    wrap.id = 'raAdminPacks';
-    wrap.className = 'card';
-    wrap.style.marginTop = '10px';
-    wrap.innerHTML = `
-      <h3>Admin — Overlay Pack</h3>
-      <div class="field two">
-        <label>Pack URL</label>
-        <input type="text" id="raPackUrl" placeholder="https://…/manifest.json"/>
-      </div>
-      <div class="row tight">
-        <button class="btn small" id="raPackLoad">Load pack</button>
-        <button class="btn small" id="raPackSetDefault">Set as default (this device)</button>
-        <button class="btn small ghost" id="raPackClear">Clear pack (session)</button>
-      </div>
+    // Insert shelf container once
+    if (!qs('#raPermShelf')){
+      const shelf = document.createElement('div');
+      shelf.id = 'raPermShelf';
+      shelf.className = 'card';
+      shelf.style.marginTop = '10px';
+      shelf.innerHTML = `
+        <h3 style="display:flex;align-items:center;gap:8px;">
+          Permanent Overlays
+          ${isAdmin ? '<span class="pill" style="font-size:11px;">admin</span>' : ''}
+        </h3>
+        ${isAdmin ? `
+          <div class="row tight" id="raPermAdminRow">
+            <label class="btn small">
+              Add PNGs
+              <input id="raPermFile" type="file" accept="image/png" multiple style="display:none">
+            </label>
+            <button class="btn small ghost" id="raPermClear">Clear all (session)</button>
+          </div>
+        ` : ''}
+        <div id="raPermGrid"
+             style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:220px;overflow:auto;margin-top:8px;">
+        </div>
+      `;
+      card.appendChild(shelf);
 
-      <div class="field two" style="margin-top:8px;">
-        <label>Build a pack (local files)</label>
-        <input type="file" id="raPackFiles" accept="image/png,image/webp,image/svg+xml" multiple/>
-      </div>
-      <div class="field two">
-        <label>Base URL (where you’ll host the images)</label>
-        <input type="text" id="raPackBase" placeholder="https://traits.rebelants.io/packs/season1/"/>
-      </div>
-      <div class="row tight">
-        <button class="btn small" id="raPackPreview">Add to grid (this session)</button>
-        <button class="btn small" id="raPackManifest">Generate manifest.json</button>
-        <button class="btn small" id="raPackCopy">Copy manifest to clipboard</button>
-        <a class="btn small" id="raPackDownload" download="manifest.json" style="display:none">Download manifest.json</a>
-      </div>
+      if (isAdmin){
+        qs('#raPermFile').addEventListener('change', onFilesChosen);
+        qs('#raPermClear').addEventListener('click', clearAllTiles);
+      }
+    }
 
-      <div style="margin-top:8px;">
-        <div class="pill">Pack overlays (permanent in grid for this session)</div>
-        <div id="raPackGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px;"></div>
-      </div>
-    `;
-    card.appendChild(wrap);
-
-    // Wire buttons
-    qs('#raPackLoad').addEventListener('click', onLoadPack);
-    qs('#raPackSetDefault').addEventListener('click', onSetDefault);
-    qs('#raPackClear').addEventListener('click', clearPack);
-    qs('#raPackPreview').addEventListener('click', previewLocalPack);
-    qs('#raPackManifest').addEventListener('click', generateManifest);
-    qs('#raPackCopy').addEventListener('click', copyManifest);
+    renderGrid();
   }
 
-  // ---------- pack load / render ----------
-  function renderPackGrid(){
-    const grid = qs('#raPackGrid'); if (!grid) return;
+  function renderGrid(){
+    const grid = qs('#raPermGrid'); if (!grid) return;
     grid.innerHTML = '';
-    raPackItems.forEach((it, idx)=>{
+    window.raPermOverlays.forEach((item, idx)=>{
       const cell = document.createElement('div');
       cell.className = 'thumb';
-      cell.style.cssText = 'border:1px solid #333;border-radius:8px;padding:6px;cursor:pointer;text-align:center;';
+      cell.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;cursor:pointer;text-align:center;background:#111;';
       cell.innerHTML = `
         <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+          <img src="${item.url}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
         </div>
-        <div style="font-size:11px;opacity:.8;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+        <div style="font-size:11px;opacity:.8;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+        ${isAdmin ? '<button data-i="'+idx+'" class="raPermDel" style="position:absolute;top:2px;right:4px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
       `;
-      cell.addEventListener('click', ()=> addOverlayURL(it.url, it.name));
+      // click-to-add overlay
+      cell.addEventListener('click', (e)=> {
+        if ((e.target && e.target.classList && e.target.classList.contains('raPermDel'))) return; // deletion handled separately
+        addOverlayToCanvas(item.url, item.name);
+      });
       grid.appendChild(cell);
     });
 
-    // Also try to add these into your main overlay grid if your app exposes a renderer
-    if (typeof window.renderOverlayGrid === 'function'){
-      try { window.renderOverlayGrid(); } catch(e){}
+    if (isAdmin){
+      // Wire delete buttons
+      qsa('.raPermDel').forEach(btn=>{
+        btn.addEventListener('click', (e)=>{
+          e.stopPropagation();
+          const i = +btn.dataset.i;
+          const it = window.raPermOverlays[i];
+          try { if (it && it._blobURL) URL.revokeObjectURL(it._blobURL); } catch(e){}
+          window.raPermOverlays.splice(i,1);
+          renderGrid();
+        });
+      });
     }
   }
 
-  async function onLoadPack(){
-    const url = (qs('#raPackUrl').value||'').trim();
-    if (!url){ toast('Enter a pack URL'); return; }
-    try{
-      const res = await fetch(url, { mode:'cors' });
-      if (!res.ok) throw new Error('HTTP '+res.status);
-      const json = await res.json();
-      // Accept both { items:[{name,url}]} and flat [ {name,url} ]
-      const items = Array.isArray(json) ? json : (json.items || []);
-      if (!items.length) { toast('No items in pack'); return; }
-      // Normalize
-      raPackItems = items.map(it=>{
-        if (json.base && it.path && !it.url) it.url = json.base.replace(/\/?$/,'/') + it.path.replace(/^\//,'');
-        return { name: it.name || it.title || '', url: it.url };
-      }).filter(it => !!it.url);
-      renderPackGrid();
-      toast('Pack loaded');
-    }catch(err){
-      console.error(err);
-      toast('Failed to load pack');
-    }
+  function niceName(file){
+    return file.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim();
   }
 
-  function onSetDefault(){
-    const url = (qs('#raPackUrl').value||'').trim();
-    if (!url){ toast('Enter a pack URL first'); return; }
-    try { localStorage.setItem(LS_PACK_URL, url); toast('Default saved on this device'); }
-    catch(e){ sessionStorage.setItem(LS_PACK_URL, url); toast('Saved for this session'); }
-  }
-
-  function clearPack(){
-    raPackItems = [];
-    renderPackGrid();
-    toast('Pack cleared (session)');
-  }
-
-  // ---------- build pack from local files ----------
-  function pickName(file){ return file.name.replace(/\.(png|webp|svg)$/i,'').replace(/[_-]+/g,' ').trim(); }
-
-  function previewLocalPack(){
-    const files = qs('#raPackFiles').files || [];
-    if (!files.length){ toast('Choose some images first'); return; }
-    raPackItems = Array.from(files).map(f => ({ name: pickName(f), url: URL.createObjectURL(f) }));
-    renderPackGrid();
-    toast('Added to grid (session only)');
-  }
-
-  function buildManifestJSON(){
-    const files = qs('#raPackFiles').files || [];
-    if (!files.length){ toast('Choose images first'); return null; }
-    const base = (qs('#raPackBase').value||'').trim();
-    const items = Array.from(files).map(f=>{
-      const name = pickName(f);
-      const filename = f.name;
-      const url = base ? (base.replace(/\/?$/,'/') + filename) : ('REPLACE_WITH_BASE_URL/' + filename);
-      return { name, url };
+  function onFilesChosen(evt){
+    const files = Array.from(evt.target.files || []);
+    if (!files.length){ toast('No PNGs selected'); return; }
+    files.forEach(f=>{
+      const url = URL.createObjectURL(f);
+      window.raPermOverlays.push({ name:niceName(f), url, _blobURL:url });
     });
-    return JSON.stringify({ name:'overlay-pack', version:1, items }, null, 2);
+    renderGrid();
+    toast('Added to shelf (session)');
+    evt.target.value = ''; // allow re-choosing same files later
   }
 
-  function generateManifest(){
-    const json = buildManifestJSON(); if (!json) return;
-    const a = qs('#raPackDownload');
-    const blob = new Blob([json], { type:'application/json' });
-    a.href = URL.createObjectURL(blob);
-    a.style.display = 'inline-block';
-    a.click();
-    toast('manifest.json downloaded');
+  function clearAllTiles(){
+    window.raPermOverlays.forEach(it=>{ try{ if (it._blobURL) URL.revokeObjectURL(it._blobURL); }catch(e){} });
+    window.raPermOverlays = [];
+    renderGrid();
+    toast('Shelf cleared (session)');
   }
 
-  async function copyManifest(){
-    const json = buildManifestJSON(); if (!json) return;
-    try { await navigator.clipboard.writeText(json); toast('Manifest copied'); }
-    catch(e){ toast('Clipboard blocked'); }
-  }
-
-  // ---------- auto-load default pack (optional) ----------
-  async function maybeLoadDefaultPack(){
-    // Query param wins: ?pack=https://.../manifest.json
-    const q = getParam('pack'); if (q){ qs('#raPackUrl') && (qs('#raPackUrl').value = q); try{ await onLoadPack(); }catch(e){} return; }
-
-    // Device-local default (set via Set as default)
-    const local = (localStorage.getItem(LS_PACK_URL) || sessionStorage.getItem(LS_PACK_URL) || '').trim();
-    if (local){
-      qs('#raPackUrl') && (qs('#raPackUrl').value = local);
-      try{ await onLoadPack(); }catch(e){}
-      return;
-    }
-
-    // Central pointer (safe if it 404s)
-    try{
-      const res = await fetch(CENTRAL_POINTER_URL, { mode:'cors' });
-      if (res.ok){
-        const obj = await res.json();
-        if (obj && obj.pack){
-          qs('#raPackUrl') && (qs('#raPackUrl').value = obj.pack);
-          try{ await onLoadPack(); }catch(e){}
-        }
-      }
-    }catch(e){ /* ignore */ }
-  }
-
-  // Install UI (admin only) and auto-load pack if any
-  function boot(){
-    installAdminUI();
-    // Load pack for everyone (admin or not) using pointer / local default / ?pack
-    maybeLoadDefaultPack();
-  }
-
-  // Wait for page UI
+  // Boot + keep trying until the Overlays card exists
+  function boot(){ buildShelfUI(); }
   boot();
-  const obs = new MutationObserver(()=> installAdminUI());
+  const obs = new MutationObserver(boot);
   obs.observe(document.body, { childList:true, subtree:true });
 })();
