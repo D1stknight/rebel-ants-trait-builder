@@ -3864,9 +3864,35 @@ function maybeRestoreAutosave() {
   })();
 })();
 
-/* RA_WM_OVERRIDE_PATH_V1 */
+/* RA_WM_OVERRIDE_PATH_V2 — force new watermark after app init (with fallback + cache-bust) */
 (function(){
-  if (window.raSetWatermarkLogo){
-    window.raSetWatermarkLogo('/watermark.png', { opacity:0.18, sizePct:0.16, corners:'both', margin:14 });
+  if (window.__RA_WM_OVERRIDE_V2) return; window.__RA_WM_OVERRIDE_V2 = true;
+
+  function applyWith(url){
+    // call your existing setter; keep your preferred sizing/opacity here
+    try {
+      if (typeof window.raSetWatermarkLogo === 'function') {
+        window.raSetWatermarkLogo(url, { opacity:0.18, sizePct:0.16, corners:'both', margin:14 });
+      }
+    } catch(e){}
   }
+
+  function trySwap(){
+    if (typeof window.raSetWatermarkLogo !== 'function') return; // not ready yet
+    // First try root (/watermark.png). If that fails, fall back to /assets/watermark.png.
+    var primary = '/watermark.png';
+    var fallback = '/assets/watermark.png';
+
+    var tester = new Image();
+    tester.onload  = function(){ applyWith(primary); };
+    tester.onerror = function(){ applyWith(fallback); };
+    tester.src = primary + '?v=' + Date.now(); // cache-bust
+    done = true;
+  }
+
+  var done = false;
+  var t = setInterval(function(){
+    if (!done && typeof window.raSetWatermarkLogo === 'function') { trySwap(); clearInterval(t); }
+  }, 200);
+  window.addEventListener('load', function(){ if (!done) trySwap(); });
 })();
