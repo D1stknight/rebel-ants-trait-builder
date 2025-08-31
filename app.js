@@ -3863,3 +3863,10 @@ function maybeRestoreAutosave() {
     if (!ensureSelectionTools()){ setTimeout(waitUI, 300); return; }
   })();
 })();
+
+/* RA_WM_OVERRIDE_PATH_V1 */
+(function(){
+  if (window.raSetWatermarkLogo){
+    window.raSetWatermarkLogo('/watermark.png', { opacity:0.18, sizePct:0.16, corners:'both', margin:14 });
+  }
+})();
