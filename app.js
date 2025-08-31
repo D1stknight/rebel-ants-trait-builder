@@ -4126,3 +4126,18 @@ function maybeRestoreAutosave() {
     window.MutationObserver = MO;
   }
 })();
+
+// FINAL BACK‑STOP: if something else calls wire before Fabric is ready, make it a no‑op until ready.
+(function(){
+  function haveFabric(){
+    const c = window.canvas;
+    return c && c.upperCanvasEl && typeof c.on === 'function' && typeof c.add === 'function';
+  }
+  const chk = setInterval(() => {
+    if (typeof window.wire === 'function' && !haveFabric()) {
+      const orig = window.wire;
+      window.wire = function(){ if (haveFabric()) try { return orig(); } catch(_){} };
+      clearInterval(chk);
+    }
+  }, 120);
+})();
