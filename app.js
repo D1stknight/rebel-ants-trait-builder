@@ -3820,3 +3820,204 @@ function maybeRestoreAutosave() {
   const mo = new MutationObserver(boot);
   mo.observe(document.body, { childList:true, subtree:true });
 })();
+
+/* === RA_PERM_REBUILD_V8 — single "Add Permanent PNGs" + reliable tiles that add to canvas ===
+   - Removes older duplicate admin bars/shelves and their clones.
+   - Shows ONE "Add Permanent PNGs" button (admin only) above the Overlays grid.
+   - Each click creates a fresh <input type=file> so the picker opens every time.
+   - Selected PNGs appear as tiles at the TOP of the existing Overlays grid (or a fallback shelf).
+   - Clicking a tile adds it to the canvas (centered, top). Admin sees × to remove tiles; users don’t.
+*/
+(function RA_PERM_REBUILD_V8(){
+  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+
+  // Session list of permanent items (blob URLs + names)
+  window.raPermOverlays = window.raPermOverlays || [];
+
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+
+  function killOldUI(){
+    // Old bars/shelves from previous patches
+    ['#raPermInlineRow','#raPermV7Bar','#raPermBarX','#raPermShelf','#raPermV7Shelf'].forEach(sel=>{
+      $$(sel).forEach(n=> n.remove());
+    });
+    // Old clones/tiles
+    ['.ra-perm-thumb','.ra-perm-clone','.ra-perm-v7','.ra-perm-x'].forEach(sel=>{
+      $$(sel).forEach(n=> n.remove());
+    });
+  }
+
+  function findOverlaysCard(){
+    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+    return h3 ? h3.parentNode : null;
+  }
+  function findMainGrid(){
+    const card = findOverlaysCard(); if (!card) return null;
+    // Heuristic: a div with lots of images/tiles
+    const divs = Array.from(card.querySelectorAll('div'));
+    let best=null, score=-1;
+    divs.forEach(d=>{
+      const imgs = d.querySelectorAll('img').length;
+      const tiles = [...d.children].filter(ch => ch.querySelector && ch.querySelector('img')).length;
+      const s = imgs + tiles*2;
+      if (s>score && (imgs+tiles)>=3){ best=d; score=s; }
+    });
+    return best;
+  }
+
+  // Create ONE admin bar with a real button; on click we create a fresh <input type=file>
+  function ensureAdminBar(){
+    if (!isAdmin) return;
+    if ($('#raPermAdminOne')) return;
+    const card = findOverlaysCard(); const grid = findMainGrid();
+    if (!card) return;
+    const bar = document.createElement('div');
+    bar.id = 'raPermAdminOne';
+    bar.className = 'row tight';
+    bar.style.margin = '6px 0';
+    bar.innerHTML = `<button id="raPermBtn" class="btn small">Add Permanent PNGs</button>`;
+    if (grid) card.insertBefore(bar, grid); else card.appendChild(bar);
+
+    $('#raPermBtn').addEventListener('click', ()=>{
+      // Fresh input each click so the dialog opens even with same file selection
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = 'image/png';
+      inp.multiple = true;
+      inp.style.display = 'none';
+      inp.addEventListener('change', e=>{
+        const files = Array.from(e.target.files||[]);
+        if (!files.length) { inp.remove(); return; }
+        files.forEach(f=>{
+          const url = URL.createObjectURL(f);
+          window.raPermOverlays.push({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim(), url, _blobURL: url });
+        });
+        inp.remove();              // dispose input so next click makes a new one
+        renderPerms();
+      }, { once:true });
+      document.body.appendChild(inp);
+      inp.click();
+    });
+  }
+
+  // Robust add to canvas
+  function withCanvas(fn, tries=0){
+    const c = window.canvas; if (c && c.upperCanvasEl) return fn(c);
+    if (tries>25) return; setTimeout(()=>withCanvas(fn, tries+1), 200);
+  }
+  function robustAdd(url, name){
+    withCanvas(c=>{
+      const before = c.getObjects().length;
+      const isBlob = /^blob:/i.test(url);
+      let usedHook = false;
+      if (!isBlob && typeof window.addOverlayToCanvas==='function'){
+        try { window.addOverlayToCanvas(url, name); usedHook = true; } catch(e){}
+      }
+      setTimeout(()=>{
+        const after = c.getObjects().length;
+        if (after>before){ c.requestRenderAll(); return; }
+        if (!window.fabric || !fabric.Image) return;
+        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
+        fabric.Image.fromURL(url, img=>{
+          img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+          try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+          c.requestRenderAll();
+          if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+        }, opts);
+      }, usedHook ? 200 : 0);
+    });
+  }
+
+  // Render permanents at TOP of the main grid; if no grid, show a small fallback shelf
+  function ensureShelf(){
+    if ($('#raPermShelfOne')) return;
+    const card = findOverlaysCard(); if (!card) return;
+    const shelf = document.createElement('div');
+    shelf.id = 'raPermShelfOne';
+    shelf.style.cssText = 'margin:6px 0;';
+    shelf.innerHTML = `
+      <div style="font-weight:600;opacity:.8">Permanent Overlays</div>
+      <div id="raPermShelfGridOne" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px;max-height:220px;overflow:auto;"></div>
+    `;
+    card.appendChild(shelf);
+  }
+
+  function renderPerms(){
+    const grid = findMainGrid();
+    const arr  = window.raPermOverlays || [];
+
+    // Clear previous clones
+    $$('.ra-perm-x').forEach(n=> n.remove());
+
+    if (grid){
+      arr.forEach((it, idx)=>{
+        const tile = document.createElement('div');
+        tile.className = 'ra-perm-x';
+        tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
+        tile.dataset.idx = String(idx);
+        tile.innerHTML = `
+          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+            <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+          </div>
+          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+          ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
+        `;
+        grid.insertBefore(tile, grid.firstChild);
+      });
+      // Hide fallback shelf if we used the main grid
+      const shelf = $('#raPermShelfOne'); if (shelf) shelf.style.display = 'none';
+    } else {
+      // Fallback shelf
+      ensureShelf();
+      const sgrid = $('#raPermShelfGridOne'); if (!sgrid) return;
+      sgrid.innerHTML = '';
+      arr.forEach((it, idx)=>{
+        const tile = document.createElement('div');
+        tile.className = 'ra-perm-x';
+        tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
+        tile.dataset.idx = String(idx);
+        tile.innerHTML = `
+          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+            <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+          </div>
+          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+          ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
+        `;
+        sgrid.appendChild(tile);
+      });
+    }
+  }
+
+  // Single capture handler (add or delete)
+  function onClickCapture(e){
+    const tile = e.target && e.target.closest && e.target.closest('.ra-perm-x');
+    if (!tile) return;
+    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
+    const del = e.target && e.target.closest('.perm-del');
+    const idx = parseInt(tile.dataset.idx||'-1',10);
+    if (del && isAdmin){
+      const arr = window.raPermOverlays || [];
+      if (idx>=0 && arr[idx]){
+        try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
+        arr.splice(idx,1);
+      }
+      tile.remove();
+      return false;
+    }
+    const img  = tile.querySelector('img');
+    const url  = img?.currentSrc || img?.src;
+    const name = (img?.alt||'').trim();
+    if (url) robustAdd(url, name);
+    return false;
+  }
+
+  function tick(){
+    killOldUI();
+    ensureAdminBar();
+    renderPerms();
+  }
+  tick();
+  document.addEventListener('click', onClickCapture, true);
+  new MutationObserver(tick).observe(document.body, { childList:true, subtree:true });
+})();
