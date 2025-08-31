@@ -376,32 +376,44 @@ function swapOldStampsInGroup(group) {
   group.setCoords();
   baseGroup = group;
 }
-  async function addOverlayToCanvas(dataUrl, isPermanent){
-    const img = await fabricFromURL(dataUrl);
-    img.set({ originX:'center', originY:'center' });
-    const size = Math.min(canvas.getWidth(), canvas.getHeight())*0.6;
-    const sc = Math.min(size/img.width, size/img.height, 1);
-    img.scale(sc);
+if (isPermanent) {
+  img._kind = 'overlay';
+  obj = img;
+} else {
+  // Group with tiny corner watermarks
+  const wmTL = await fabricFromURL(WM_SRC);
+  const wmBR = await fabricFromURL(WM_SRC);
+  const bw = img.width*sc, bh = img.height*sc;
+  const wmTargetW = Math.max(16, bw*0.08);
+  const margin    = Math.max(6,  bw*0.02);
 
-    let obj;
-    if(isPermanent){
-      img._kind='overlay';
-      obj = img;
-    } else {
-      // Group with tiny corner watermarks
-      const wmTL = await fabricFromURL(WM_SRC);
-      const wmBR = await fabricFromURL(WM_SRC);
-      const bw = img.width*sc, bh=img.height*sc;
-      const wmTargetW = Math.max(16, bw*0.08);
-      const margin = Math.max(6, bw*0.02);
-      const scaleTL = wmTargetW / wmTL.width; const scaleBR = wmTargetW / wmBR.width;
-      wmTL.scale(scaleTL); wmBR.scale(scaleBR);
-      wmTL.set({ originX:'center', originY:'center', left: -bw/2 + margin + wmTL.width*scaleTL/2, top: -bh/2 + margin + wmTL.height*scaleTL/2, selectable:false, evented:false });
-      wmBR.set({ originX:'center', originY:'center', left: +bw/2 - margin - wmBR.width*scaleBR/2, top: +bh/2 - margin - wmBR.height*scaleBR/2, selectable:false, evented:false });
-      const group = new fabric.Group([img, wmTL, wmBR], { originX:'center', originY:'center' });
-      group._kind='overlay';
-      obj = group;
-    }
+  const scaleTL = wmTargetW / wmTL.width;
+  const scaleBR = wmTargetW / wmBR.width;
+  wmTL.scale(scaleTL); wmBR.scale(scaleBR);
+
+  // Tag as watermarks (helps future swaps)
+  Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'TL' });
+  Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:'BR' });
+
+  wmTL.set({
+    originX:'center', originY:'center',
+    left: -bw/2 + margin + wmTL.width*scaleTL/2,
+    top:  -bh/2 + margin + wmTL.height*scaleTL/2
+  });
+  wmBR.set({
+    originX:'center', originY:'center',
+    left:  bw/2 - margin - wmBR.width*scaleBR/2,
+    top:   bh/2 - margin - wmBR.height*scaleBR/2
+  });
+
+  const group = new fabric.Group([img, wmTL, wmBR], { originX:'center', originY:'center' });
+  group._kind = 'overlay';
+
+  // 🔁 Deep‑swap any old (yellow) stamps inside this overlay group too
+  swapOldStampsInGroup(group);
+
+  obj = group;
+}    
     canvas.add(obj);
     obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
     canvas.setActiveObject(obj);
