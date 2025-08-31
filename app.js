@@ -4051,3 +4051,78 @@ function maybeRestoreAutosave() {
     window.MutationObserver.prototype = NativeMO.prototype;
   }
 })();
+
+/* RA_WIRE_SAFE_PATCH_v7 — stop "c.on is not a function" spam and wire only when ready */
+(function(){
+  if (window.__RA_WIRE_SAFE_PATCH_v7) return;
+  window.__RA_WIRE_SAFE_PATCH_v7 = true;
+
+  // Find the real Fabric canvas instance
+  function getFabricCanvas(){
+    const c = window.canvas;
+    if (c && c.upperCanvasEl && typeof c.on === 'function' && typeof c.add === 'function') return c;
+    // fall back: scan globals (works in our app)
+    for (const k in window){
+      try {
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.on === 'function' && typeof v.add === 'function') return v;
+      } catch(_) {}
+    }
+    return null;
+  }
+
+  // If a global wire() exists, wrap it so it only runs when Fabric is ready
+  (function wrapWire(){
+    if (typeof window.wire !== 'function') { setTimeout(wrapWire, 120); return; }
+    const orig = window.wire;
+    let wiredOnce = false;
+
+    window.wire = function(){
+      const fc = getFabricCanvas();
+      if (!fc) {
+        // Fabric not ready yet: try again shortly, but do NOT throw
+        setTimeout(() => { try { window.wire(); } catch(_){} }, 150);
+        return;
+      }
+      // normalize the global for any other code
+      window.canvas = fc;
+
+      if (wiredOnce) return; // avoid double‑wiring
+      try {
+        wiredOnce = true;
+        return orig.apply(this, arguments);
+      } catch (e) {
+        // swallow only the early "c.on is not a function" case, then retry once more
+        if (/\.on is not a function/.test(String(e))) {
+          wiredOnce = false;
+          setTimeout(() => { try { window.wire(); } catch(_){} }, 200);
+          return;
+        }
+        throw e;
+      }
+    };
+  })();
+
+  // Also guard MutationObserver callbacks so they don't wire too early
+  const NativeMO = window.MutationObserver;
+  if (NativeMO && !NativeMO.__raGuarded) {
+    const MO = function(cb){
+      const wrapped = function(list, obs){
+        try {
+          const fc = getFabricCanvas();
+          if (fc) window.canvas = fc;
+          if (!window.canvas || typeof window.canvas.on !== 'function') return; // too early, skip quietly
+          return cb && cb(list, obs);
+        } catch (e) {
+          if (/\.on is not a function/.test(String(e))) return; // ignore only this known failure
+          throw e;
+        }
+      };
+      const inst = new NativeMO(wrapped);
+      return inst;
+    };
+    MO.prototype = NativeMO.prototype;
+    MO.__raGuarded = true;
+    window.MutationObserver = MO;
+  }
+})();
