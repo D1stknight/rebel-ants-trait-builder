@@ -19,7 +19,7 @@
   document.addEventListener("DOMContentLoaded", ()=>{
     if(!window.fabric){ alert("fabric.js failed to load. Check internet or open via a local server."); return; }
     canvas=new fabric.Canvas("c",{ backgroundColor:"transparent", preserveObjectStacking:true, enableRetinaScaling:true, selectionBorderColor:'#22d3ee', selectionColor:'rgba(34,211,238,.08)'});
-    window.canvas = c;    
+    window.canvas = canvas;    
     initBackgroundRect("#0d0e13");
     setCanvasSize(parseInt(document.getElementById("canvasSize").value,10));
     setZoom(1);
