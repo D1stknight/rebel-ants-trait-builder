@@ -3572,3 +3572,251 @@ function maybeRestoreAutosave() {
   // Safety: re-render if UI reflows
   setInterval(renderPermsIntoMain, 1000);
 })();
+
+/* === RA_BG_NOFLASH_V4 — stop dark background rects before they render (no flicker) === */
+(function RA_BG_NOFLASH_V4(){
+  function parseRGBA(v){
+    if (!v) return null;
+    const s=(''+v).trim().toLowerCase();
+    if (s==='black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const h=s.slice(1), x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
+      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
+    return null;
+  }
+  function isDark(fill){
+    const c=parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a]=c; if (a<0.55) return false;
+    const lum=(0.299*r+0.587*g+0.114*b)/255;
+    return lum<0.25; // include very dark greys
+  }
+  function findCanvas(){
+    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[k]; if (v && v.upperCanvasEl) return v;
+      }
+    }
+    return null;
+  }
+  function install(c){
+    if (c._raNoFlashV4) return;
+    c._raNoFlashV4 = true;
+    let toRemove = [];
+    // Hide candidate rects BEFORE render so they never flash
+    c.on('before:render', ()=>{
+      toRemove.length = 0;
+      const cw=c.getWidth(), ch=c.getHeight();
+      (c.getObjects()||[]).forEach(o=>{
+        if (!o || o.type!=='rect' || o._isBase) return;
+        const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
+        const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
+        const huge = (w>=cw*0.8 || h>=ch*0.8);
+        if (huge && isDark(o.fill)){
+          try { c.backgroundColor = o.fill || c.backgroundColor || '#000'; } catch(e){}
+          o.visible = false;
+          toRemove.push(o);
+        }
+      });
+    });
+    // Remove them right after render, then re-render once (quickly)
+    c.on('after:render', ()=>{
+      if (!toRemove.length) return;
+      toRemove.forEach(o=>{ try{ c.remove(o);}catch(e){} });
+      toRemove.length = 0;
+      c.requestRenderAll();
+    });
+    // If something adds after size change, force a pass
+    c.on('object:added', ()=> setTimeout(()=>c.requestRenderAll(),0));
+  }
+  (function hook(){
+    const c = findCanvas();
+    if (c) install(c); else setTimeout(hook, 300);
+  })();
+})();
+
+/* === RA_PERM_INLINE_V7 — admin Add PNGs shows tiles & reliably adds to canvas (fallback shelf) === */
+(function RA_PERM_INLINE_V7(){
+  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
+  window.raPermOverlays = window.raPermOverlays || []; // session list
+
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+
+  function findOverlaysCard(){
+    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+    return h3 ? h3.parentNode : null;
+  }
+  function findMainGrid(){
+    const card = findOverlaysCard(); if (!card) return null;
+    const divs = Array.from(card.querySelectorAll('div'));
+    let best=null, score=-1;
+    divs.forEach(d=>{
+      const imgs = d.querySelectorAll('img').length;
+      const tiles = [...d.children].filter(ch => ch.querySelector && ch.querySelector('img')).length;
+      const s = imgs + tiles*2;
+      if (s>score && (imgs+tiles)>=3){ best=d; score=s; }
+    });
+    return best;
+  }
+
+  // Admin input row (always try to place above the main grid)
+  function ensureAdminRow(){
+    if (!isAdmin) return;
+    if ($('#raPermV7Bar')) return;
+    const card = findOverlaysCard(); const grid = findMainGrid();
+    if (!card) return;
+    const bar = document.createElement('div');
+    bar.id = 'raPermV7Bar';
+    bar.className = 'row tight';
+    bar.style.margin = '6px 0';
+    bar.innerHTML = `
+      <label class="btn small">
+        Add Permanent PNGs
+        <input id="raPermV7Input" type="file" accept="image/png" multiple style="display:none">
+      </label>
+    `;
+    if (grid) card.insertBefore(bar, grid); else card.appendChild(bar);
+    $('#raPermV7Input').addEventListener('change', onFilesChosen);
+  }
+
+  // Fallback shelf (if we can't detect the main grid)
+  function ensureShelf(){
+    if ($('#raPermV7Shelf')) return;
+    const card = findOverlaysCard(); if (!card) return;
+    const shelf = document.createElement('div');
+    shelf.id = 'raPermV7Shelf';
+    shelf.style.cssText = 'margin:6px 0;';
+    shelf.innerHTML = `
+      <div style="font-weight:600;opacity:.8">Permanent Overlays</div>
+      <div id="raPermV7ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px;max-height:220px;overflow:auto;"></div>
+    `;
+    card.appendChild(shelf);
+  }
+
+  function niceName(f){ return f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim(); }
+
+  function onFilesChosen(e){
+    const files = Array.from(e.target.files||[]);
+    if (!files.length) return;
+    files.forEach(f=>{
+      const url = URL.createObjectURL(f);
+      window.raPermOverlays.push({ name:niceName(f), url, _blobURL:url });
+    });
+    e.target.value = ''; // allow same files next time
+    renderTiles();
+  }
+
+  // Robust add to canvas (app hook first for remote, Fabric fallback incl. blob:)
+  function withCanvas(fn, tries=0){
+    const c = window.canvas; if (c && c.upperCanvasEl) return fn(c);
+    if (tries>25) return; setTimeout(()=>withCanvas(fn, tries+1), 200);
+  }
+  function robustAdd(url, name){
+    withCanvas(c=>{
+      const before = c.getObjects().length;
+      const isBlob = /^blob:/i.test(url);
+      let usedHook = false;
+
+      if (!isBlob && typeof window.addOverlayToCanvas==='function'){
+        try { window.addOverlayToCanvas(url, name); usedHook = true; } catch(e){}
+      }
+      setTimeout(()=>{
+        const after = c.getObjects().length;
+        if (after > before){ c.requestRenderAll(); return; }
+        if (!window.fabric || !fabric.Image) return;
+        const opts = isBlob ? {} : { crossOrigin:'anonymous' };
+        fabric.Image.fromURL(url, img=>{
+          img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+          try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
+          c.requestRenderAll();
+          if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
+        }, opts);
+      }, usedHook ? 200 : 0);
+    });
+  }
+
+  // Render: prefer main grid; otherwise fallback shelf
+  function renderTiles(){
+    const grid = findMainGrid();
+    const arr = window.raPermOverlays || [];
+
+    if (grid){
+      // Clear previous clones in main grid
+      grid.querySelectorAll('.ra-perm-v7').forEach(n=>n.remove());
+      arr.forEach((it, idx)=>{
+        const tile = document.createElement('div');
+        tile.className = 'ra-perm-v7';
+        tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
+        tile.dataset.idx = String(idx);
+        tile.innerHTML = `
+          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+            <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+          </div>
+          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+          ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
+        `;
+        grid.insertBefore(tile, grid.firstChild);
+      });
+      if (!isAdmin){ grid.querySelectorAll('.ra-perm-v7 .perm-del').forEach(b=> b.remove()); }
+      // Hide shelf if we rendered in the main grid
+      const shelf = $('#raPermV7Shelf'); if (shelf) shelf.style.display='none';
+    } else {
+      // Render in fallback shelf
+      ensureShelf();
+      const sgrid = $('#raPermV7ShelfGrid'); if (!sgrid) return;
+      sgrid.innerHTML = '';
+      arr.forEach((it, idx)=>{
+        const tile = document.createElement('div');
+        tile.className = 'ra-perm-v7';
+        tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;cursor:pointer;text-align:center;';
+        tile.dataset.idx = String(idx);
+        tile.innerHTML = `
+          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+            <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
+          </div>
+          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
+          ${isAdmin ? '<button class="perm-del" title="Remove" style="position:absolute;top:3px;right:5px;background:transparent;border:none;color:#ddd;font-size:16px;line-height:1;cursor:pointer;">×</button>' : ''}
+        `;
+        sgrid.appendChild(tile);
+      });
+    }
+  }
+
+  // One capture handler for add/remove on our tiles
+  function onClickCapture(e){
+    const tile = e.target && e.target.closest && e.target.closest('.ra-perm-v7');
+    if (!tile) return;
+    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
+    const del = e.target && e.target.closest('.perm-del');
+    const idx = parseInt(tile.dataset.idx||'-1',10);
+    if (del && isAdmin){
+      const arr = window.raPermOverlays||[];
+      if (idx>=0 && arr[idx]){
+        try{ if (arr[idx]._blobURL) URL.revokeObjectURL(arr[idx]._blobURL); }catch(e){}
+        arr.splice(idx,1);
+      }
+      tile.remove();
+      return false;
+    }
+    const img = tile.querySelector('img');
+    const url = img?.currentSrc || img?.src;
+    const name = (img?.alt||'').trim();
+    if (url) robustAdd(url, name);
+    return false;
+  }
+
+  function boot(){
+    ensureAdminRow();
+    renderTiles();
+  }
+  boot();
+  document.addEventListener('click', onClickCapture, true);
+  const mo = new MutationObserver(boot);
+  mo.observe(document.body, { childList:true, subtree:true });
+})();
