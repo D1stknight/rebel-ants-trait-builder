@@ -2067,3 +2067,671 @@ function maybeRestoreAutosave() {
   (function boot(){ hideLegacyUI(); insertRow(); })();
   document.addEventListener('ra:canvas-ready', ()=>{ hideLegacyUI(); insertRow(); });
 })();
+/* === RA_BASE_LOCK — auto-lock the base NFT image so it can't move === */
+(function RA_BASE_LOCK(){
+  let baseLocked = false;
+
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.add==='function' && typeof v.loadFromJSON==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function lockAsBase(img, c){
+    if (!img || img._isBase) return;
+    img._isBase = true;
+    img.selectable = false;
+    img.evented = false;
+    img.hasControls = false;
+    img.lockMovementX = img.lockMovementY = true;
+    img.hoverCursor = 'default';
+    try { c.sendToBack(img); } catch(e){}
+    c.discardActiveObject();
+    c.requestRenderAll();
+    baseLocked = true;
+  }
+
+  function isBaseCandidate(obj, c){
+    if (!obj || obj.type !== 'image') return false;
+    const imgs = c.getObjects('image');
+    if (imgs.length === 1) return true; // first image on canvas
+    const w = obj.width * obj.scaleX, h = obj.height * obj.scaleY;
+    const cw = c.getWidth(), ch = c.getHeight();
+    return (w >= cw * 0.9 && h >= ch * 0.9); // very large image ≈ base
+  }
+
+  function attach(){
+    const c = findCanvas(); if (!c){ setTimeout(attach, 300); return; }
+    // Lock the first suitable image that gets added
+    c.on('object:added', e=>{
+      const o = e.target || e; if (!o) return;
+      if (!baseLocked && isBaseCandidate(o, c)) lockAsBase(o, c);
+    });
+  }
+
+  function resetLockSoon(){
+    baseLocked = false;
+    setTimeout(()=>{
+      const c = findCanvas(); if (!c) return;
+      const imgs = c.getObjects('image');
+      if (imgs.length){
+        // choose the largest image as base if not already marked
+        const base = imgs.reduce((a,b)=>{
+          const sa=(a.width*a.scaleX)*(a.height*a.scaleY), sb=(b.width*b.scaleX)*(b.height*b.scaleY);
+          return sb>sa ? b : a;
+        });
+        lockAsBase(base, c);
+      }
+    }, 800);
+  }
+
+  function wireLoadAndClearButtons(){
+    const btns = Array.from(document.querySelectorAll('button'));
+    const byText = t => btns.find(b => (b.textContent||'').trim().toLowerCase() === t);
+    const clearBase   = byText('clear base');
+    const load        = byText('load');            // paste URL → Load
+    const loadByToken = byText('load by token');   // token loader
+    [clearBase, load, loadByToken].forEach(btn=>{
+      if (btn && !btn._raBL){
+        btn._raBL = true;
+        btn.addEventListener('click', ()=> resetLockSoon());
+      }
+    });
+  }
+
+  attach();
+  wireLoadAndClearButtons();
+  document.addEventListener('ra:canvas-ready', ()=>{ baseLocked=false; resetLockSoon(); });
+  const obs = new MutationObserver(()=> wireLoadAndClearButtons());
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
+
+/* ===== RA_BASE_LOCK_V2 — unbreakable base lock (works on load, add, restore) ===== */
+(function RA_BASE_LOCK_V2(){
+  let baseObj = null;      // the object we consider "base"
+  let lockedOnce = false;  // stops re-picking random large overlays later
+
+  // Find Fabric canvas (robust)
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas')
+            || document.querySelector('canvas.lower-canvas')
+            || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.loadFromJSON === 'function'
+            && typeof v.add === 'function'
+            && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function area(o){ return (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1); }
+
+  // Decide if an image is the "base" (very large compared to canvas, and it's early)
+  function isBaseCandidate(o, c){
+    if (!o || o.type !== 'image') return false;
+    const cw = c.getWidth(), ch = c.getHeight();
+    const a = area(o), ca = cw*ch;
+    // Must cover at least ~70% of canvas area OR be within 90% of width/height
+    const bigByArea = a >= ca*0.7;
+    const bigBySide = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) >= cw*0.9
+                   && (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) >= ch*0.9;
+    return bigByArea || bigBySide;
+  }
+
+  function lock(o, c){
+    if (!o || !c) return;
+    baseObj = o;
+    lockedOnce = true;
+    o._isBase = true;
+    o.selectable = false;
+    o.evented = false;
+    o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = true;
+    o.perPixelTargetFind = false;
+    o.hoverCursor = 'default';
+    try { c.sendToBack(o); } catch(e){}
+    // If base accidentally became active, deselect it
+    try { if (c.getActiveObject() === o) { c.discardActiveObject(); } } catch(e){}
+    c.requestRenderAll();
+  }
+
+  // Scan canvas for a base image and lock it
+  function scanAndLock(c){
+    if (!c) return;
+    // Prefer an already-marked base (e.g., after restore)
+    const marked = c.getObjects('image').find(img => img._isBase === true);
+    if (marked) { lock(marked, c); return; }
+    if (lockedOnce) return; // we already chose a base earlier
+
+    const imgs = c.getObjects('image');
+    if (!imgs.length) return;
+    // Sort by area (largest first)
+    imgs.sort((a,b)=> area(b)-area(a));
+    const candidate = imgs[0];
+    if (isBaseCandidate(candidate, c)) lock(candidate, c);
+  }
+
+  // Keep base unselectable even if something tries to select it
+  function guardSelection(c){
+    c.on('selection:created', e=>{
+      const o = c.getActiveObject();
+      if (o === baseObj) { c.discardActiveObject(); c.requestRenderAll(); }
+    });
+    c.on('selection:updated', e=>{
+      const o = c.getActiveObject();
+      if (o === baseObj) { c.discardActiveObject(); c.requestRenderAll(); }
+    });
+    c.on('mouse:down', e=>{
+      const t = e && e.target;
+      if (t === baseObj) {
+        c.discardActiveObject();
+        c.requestRenderAll();
+      }
+    });
+  }
+
+  // Wrap Fabric so we re-lock after JSON restores (checkpoints) too
+  function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
+      setTimeout(hookFabric, 200); return;
+    }
+    if (!fabric.Canvas.prototype._raBaseLocked){
+      const origInit = fabric.Canvas.prototype.initialize;
+      fabric.Canvas.prototype.initialize = function(...args){
+        const res = origInit.apply(this, args);
+        // expose canvas
+        window.canvas = this;
+        // lock on creation
+        setTimeout(()=>{ scanAndLock(this); guardSelection(this); }, 0);
+        return res;
+      };
+      // Re-lock after loadFromJSON (e.g., restoring checkpoints)
+      const origLoad = fabric.Canvas.prototype.loadFromJSON;
+      fabric.Canvas.prototype.loadFromJSON = function(json, cb, reviver){
+        const self = this;
+        return origLoad.call(this, json, function(){
+          try { scanAndLock(self); guardSelection(self); } catch(e){}
+          if (typeof cb === 'function') cb.apply(self, arguments);
+        }, reviver);
+      };
+      // When a big image is added, consider it for base (only if we haven't locked yet)
+      const origAdd = fabric.Canvas.prototype.add;
+      fabric.Canvas.prototype.add = function(...args){
+        const res = origAdd.apply(this, args);
+        try {
+          const last = args && args[0];
+          if (!lockedOnce && last && last.type === 'image' && isBaseCandidate(last, this)) {
+            lock(last, this);
+          } else {
+            // still scan, in case order is odd
+            scanAndLock(this);
+          }
+        } catch(e){}
+        return res;
+      };
+      fabric.Canvas.prototype._raBaseLocked = true;
+    }
+
+    // If canvas already exists, apply guards and scan now
+    setTimeout(()=>{ const c = findCanvas(); if (c){ window.canvas = c; scanAndLock(c); guardSelection(c);} }, 300);
+  }
+
+  // Also try periodically in case UI loads late
+  (function tick(){
+    const c = findCanvas();
+    if (c){ window.canvas = c; scanAndLock(c); guardSelection(c); }
+    setTimeout(tick, 800);
+  })();
+
+  hookFabric();
+})();
+
+/* ===== RA_BLOCKER_CLEAN + HARD_BASE_LOCK =====
+   - Removes any huge black rectangle that sits over the canvas.
+   - Re-locks the true base NFT (largest near-full-canvas image).
+   - Runs on load, on add, on restore; plus a "Fix canvas" button.
+================================================ */
+(function RA_BLOCKER_AND_BASE_LOCK(){
+  let baseObj = null; // the locked base image
+
+  // 1) Find Fabric canvas reliably
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') { window.canvas = v; return v; }
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && typeof v.toJSON === 'function'
+            && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    }catch(e){}
+    return null;
+  }
+
+  // 2) Helpers
+  function area(o){ return (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1); }
+  function scaledW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)); }
+  function scaledH(o){ return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)); }
+
+  function isBlackish(fill){
+    if (!fill) return false;
+    const s = (''+fill).trim().toLowerCase();
+    if (s === 'black' || s === '#000' || s === '#000000' || s === 'rgb(0,0,0)' || s === 'rgba(0,0,0,1)') return true;
+    // rgba(...) parser
+    const m = s.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\)/);
+    if (m){
+      const r=+m[1], g=+m[2], b=+m[3], a=(m[4]===undefined?1:+m[4]);
+      return (r<12 && g<12 && b<12 && a>=0.95);
+    }
+    return false;
+  }
+
+  function isHuge(o, c){
+    const cw = c.getWidth(), ch = c.getHeight();
+    const a = area(o), ca = cw*ch;
+    return a >= ca*0.6 || (scaledW(o) >= cw*0.9 && scaledH(o) >= ch*0.9);
+  }
+
+  function isBaseCandidate(o, c){
+    return o && o.type === 'image' && isHuge(o,c);
+  }
+
+  // 3) Lock an object as the unmovable base
+  function lockBase(o, c){
+    if (!o || !c) return;
+    baseObj = o;
+    o._isBase = true;
+    o.selectable = false;
+    o.evented = false;
+    o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = true;
+    o.perPixelTargetFind = false;
+    o.hoverCursor = 'default';
+    try { c.sendToBack(o); } catch(e){}
+    // Drop selection if base became active
+    try { if (c.getActiveObject() === o) c.discardActiveObject(); } catch(e){}
+  }
+
+  // 4) Remove any huge black rect that blocks the view
+  function scrubBlockers(c){
+    let removed = false;
+    const objs = c.getObjects();
+    for (let i=objs.length-1;i>=0;i--){
+      const o = objs[i];
+      if (o && o.type === 'rect' && isHuge(o,c) && isBlackish(o.fill) && !o._isBase){
+        try { c.remove(o); removed = true; } catch(e){ /* ignore */ }
+      }
+    }
+    if (removed) c.requestRenderAll();
+  }
+
+  // 5) Pick/lock base if needed (largest image)
+  function ensureBase(c){
+    if (baseObj && c.getObjects().includes(baseObj)) return;
+    const imgs = c.getObjects('image');
+    if (!imgs.length) return;
+    imgs.sort((a,b)=> area(b)-area(a));
+    const cand = imgs[0];
+    if (isBaseCandidate(cand, c)) lockBase(cand, c);
+    try { c.requestRenderAll(); } catch(e){}
+  }
+
+  // 6) Keep base unselectable even if something tries to select it
+  function guardSelection(c){
+    ['selection:created','selection:updated'].forEach(evt=>{
+      c.on(evt, ()=> {
+        const a = c.getActiveObject();
+        if (a === baseObj){ c.discardActiveObject(); c.requestRenderAll(); }
+      });
+    });
+    c.on('mouse:down', e=>{
+      if (e && e.target === baseObj){ c.discardActiveObject(); c.requestRenderAll(); }
+    });
+  }
+
+  // 7) Run cleanup + base lock now
+  function cleanAndLock(){
+    const c = findCanvas(); if (!c) return;
+    scrubBlockers(c);
+    ensureBase(c);
+    guardSelection(c);
+  }
+
+  // 8) Hook Fabric so we run after adds/restores
+  (function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
+      setTimeout(hookFabric, 200); return;
+    }
+    if (!fabric.Canvas.prototype._raCleanLock){
+      const origInit = fabric.Canvas.prototype.initialize;
+      fabric.Canvas.prototype.initialize = function(...args){
+        const res = origInit.apply(this, args);
+        window.canvas = this;
+        setTimeout(cleanAndLock, 0);
+        return res;
+      };
+      const origAdd = fabric.Canvas.prototype.add;
+      fabric.Canvas.prototype.add = function(...args){
+        const res = origAdd.apply(this, args);
+        setTimeout(cleanAndLock, 0);
+        return res;
+      };
+      const origLoad = fabric.Canvas.prototype.loadFromJSON;
+      fabric.Canvas.prototype.loadFromJSON = function(json, cb, reviver){
+        const self = this;
+        return origLoad.call(this, json, function(){
+          try { cleanAndLock(); } catch(e){}
+          if (typeof cb === 'function') cb.apply(self, arguments);
+        }, reviver);
+      };
+      fabric.Canvas.prototype._raCleanLock = true;
+    }
+    // If canvas already exists, run once shortly
+    setTimeout(cleanAndLock, 300);
+  })();
+
+  // 9) Add a small "Fix canvas" button in Canvas card (manual safety)
+  function insertFixButton(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+
+    // Put it next to your checkpoint row if present; otherwise just add a tiny row
+    const row = document.getElementById('raCkRow');
+    const place = row || holder;
+
+    if (!document.getElementById('raFixCanvas')){
+      const btn = document.createElement('button');
+      btn.id = 'raFixCanvas';
+      btn.className = 'btn small';
+      btn.style.marginLeft = '6px';
+      btn.textContent = 'Fix canvas';
+      btn.addEventListener('click', ()=> cleanAndLock());
+      (row ? row.appendChild(btn) : holder.appendChild(btn));
+    }
+  }
+
+  insertFixButton();
+  const obs = new MutationObserver(()=> insertFixButton());
+  obs.observe(document.body, { childList:true, subtree:true });
+
+  // 10) Keep trying briefly in case UI loads slow
+  (function tick(){ cleanAndLock(); setTimeout(tick, 800); })();
+})();
+
+/* ===== RA_KILL_BLACK_BOX_V3 — remove large dark blocker + keep base locked ===== */
+(function RA_KILL_BLACK_BOX_V3(){
+  let baseObj = null;
+
+  // --- helpers ---
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') { window.canvas = v; return v; }
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v === 'object'
+            && typeof v.add === 'function'
+            && typeof v.loadFromJSON === 'function'
+            && typeof v.toJSON === 'function'
+            && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    }catch(e){}
+    return null;
+  }
+  const area    = o => (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1);
+  const sW      = o => (o.getScaledWidth ? o.getScaledWidth()  : (o.width||0)*(o.scaleX||1));
+  const sH      = o => (o.getScaledHeight? o.getScaledHeight() : (o.height||0)*(o.scaleY||1));
+
+  function parseRGBA(val){
+    if (!val) return null;
+    const s = (''+val).trim().toLowerCase();
+    if (s === 'black') return [0,0,0,1];
+    if (s.startsWith('#')){
+      const hex = s.replace('#','');
+      const h = hex.length===3 ? hex.split('').map(x=>x+x).join('') : hex;
+      const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+      return [r,g,b,1];
+    }
+    const m = s.match(/rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s]+([0-9.]+))?\)/);
+    if (m) return [ +m[1], +m[2], +m[3], m[4]===undefined?1:+m[4] ];
+    return null;
+  }
+  function isDarkish(fill){
+    const c = parseRGBA(fill); if (!c) return false;
+    const [r,g,b,a] = c; if (a < 0.4) return false;
+    // perceived luminance
+    const lum = (0.299*r + 0.587*g + 0.114*b)/255;
+    return lum < 0.22; // allow very dark greys (not only pure black)
+  }
+  function isHuge(o,c){
+    const cw=c.getWidth(), ch=c.getHeight();
+    return (sW(o)>=cw*0.8 || sH(o)>=ch*0.8 || area(o) >= cw*ch*0.35);
+  }
+  function isBlocker(o,c){
+    return o && o.type==='rect' && isHuge(o,c) && isDarkish(o.fill) && !o._isBase;
+  }
+
+  function lockBase(o,c){
+    if (!o || !c) return;
+    baseObj = o;
+    o._isBase = true;
+    o.selectable = false;
+    o.evented = false;
+    o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = true;
+    o.perPixelTargetFind = false;
+    o.hoverCursor = 'default';
+    try { c.sendToBack(o); } catch(e){}
+    try { if (c.getActiveObject() === o) c.discardActiveObject(); } catch(e){}
+  }
+
+  function ensureBase(c){
+    if (baseObj && c.getObjects().includes(baseObj)) return;
+    const imgs = c.getObjects('image');
+    if (!imgs.length) return;
+    imgs.sort((a,b)=> area(b)-area(a));
+    lockBase(imgs[0], c);
+  }
+
+  function guardBaseSelection(c){
+    ['selection:created','selection:updated'].forEach(evt=>{
+      c.on(evt, ()=>{ if (c.getActiveObject()===baseObj){ c.discardActiveObject(); c.requestRenderAll(); }});
+    });
+    c.on('mouse:down', e=>{ if (e && e.target===baseObj){ c.discardActiveObject(); c.requestRenderAll(); }});
+  }
+
+  function nukeBlockers(c){
+    let removed = 0;
+    c.getObjects().forEach(o=>{
+      try{ if (isBlocker(o,c)) { c.remove(o); removed++; } }catch(e){}
+    });
+    if (removed) c.requestRenderAll();
+    return removed;
+  }
+
+  function fixCanvas(){
+    const c = findCanvas(); if (!c) return;
+    nukeBlockers(c);
+    ensureBase(c);
+    guardBaseSelection(c);
+    c.requestRenderAll();
+  }
+
+  // Hook Fabric so fix runs on add/restore too
+  (function hookFabric(){
+    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) { setTimeout(hookFabric, 200); return; }
+    if (fabric.Canvas.prototype._raKillBox) return;
+    const init = fabric.Canvas.prototype.initialize;
+    fabric.Canvas.prototype.initialize = function(...args){ const r=init.apply(this,args); window.canvas=this; setTimeout(fixCanvas,0); return r; };
+    const add  = fabric.Canvas.prototype.add;
+    fabric.Canvas.prototype.add = function(...args){ const r=add.apply(this,args); setTimeout(fixCanvas,0); return r; };
+    const load = fabric.Canvas.prototype.loadFromJSON;
+    fabric.Canvas.prototype.loadFromJSON = function(json, cb, rev){
+      const self=this;
+      return load.call(this,json,function(){
+        try{ fixCanvas(); }catch(e){}
+        if (typeof cb==='function') cb.apply(self, arguments);
+      }, rev);
+    };
+    fabric.Canvas.prototype._raKillBox = true;
+    setTimeout(fixCanvas, 300);
+  })();
+
+  // Add a small "Fix canvas" button next to your checkpoint row
+  function insertFixBtn(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
+    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+    const row = document.getElementById('raCkRow') || holder;
+    if (!document.getElementById('raFixCanvas')){
+      const b = document.createElement('button');
+      b.id = 'raFixCanvas';
+      b.className = 'btn small';
+      b.style.marginLeft = '6px';
+      b.textContent = 'Fix canvas';
+      b.addEventListener('click', fixCanvas);
+      (row ? row.appendChild(b) : holder.appendChild(b));
+    }
+  }
+  insertFixBtn();
+  const obs = new MutationObserver(()=> insertFixBtn());
+  obs.observe(document.body, { childList:true, subtree:true });
+
+  // Run a few times early to catch async image loads
+  let tries = 0; (function early(){ fixCanvas(); if (++tries<8) setTimeout(early, 600); })();
+})();
+
+/* === RA_OPEN_NEW_TAB_ONLY_V3 — single open via CLICK only; never hijack builder === */
+(function RA_OPEN_NEW_TAB_ONLY_V3(){
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
+      }
+    }catch(e){}
+    return null;
+  }
+
+  function getMultiplier(){
+    const txt = (document.querySelector('.export-quality')?.textContent
+                 || document.querySelector('#exportQuality')?.value
+                 || '').toLowerCase();
+    const m = (txt.match(/x\s*([1-8])/i)||[])[1];
+    return Math.max(1, parseInt(m||'1',10));
+  }
+
+  function isOpenNewTabEl(node){
+    const el = node && node.closest && node.closest('button,a');
+    if (!el) return null;
+    const t = (el.textContent||'').trim().toLowerCase();
+    return /open\s*in\s*new\s*tab/.test(t) ? el : null;
+  }
+
+  // Ensure the anchor itself can't navigate even if something else fires
+  function neutralizeLink(){
+    const el = Array.from(document.querySelectorAll('a,button'))
+      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
+    if (el && el.tagName === 'A'){
+      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
+      el.setAttribute('href','javascript:void(0)');
+      el.removeAttribute('target');
+    }
+  }
+
+  function openOnlyNewTab(){
+    const c = findCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
+    const win = window.open('', '_blank');         // popup‑safe: open synchronously on click
+    if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
+    win.document.title = 'Exporting…';
+    win.document.body.style.margin = '0';
+    win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult });
+      win.document.body.innerHTML = `<img src="${dataUrl}" style="display:block;max-width:100%;height:auto">`;
+    }catch(e){
+      win.close();
+      alert('Export failed (security/CORS). Try a different image or your hosted domain with CORS headers.');
+    }
+  }
+
+  // Handle ONLY the CLICK event (capture) and guard against accidental double‑fires
+  let lastOpenAt = 0;
+  function onClickCapture(e){
+    const el = isOpenNewTabEl(e.target);
+    if (!el) return;
+    const now = Date.now();
+    if (now - lastOpenAt < 400) {                 // guard: ignore rapid duplicates
+      e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false;
+    }
+    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
+    lastOpenAt = now;
+    openOnlyNewTab();
+    return false;
+  }
+
+  function wire(){
+    neutralizeLink(); // keep doing this in case UI re-renders
+  }
+  wire();
+
+  // IMPORTANT: Only listen to CLICK (not pointerdown/mousedown) to avoid duplicate opens
+  document.addEventListener('click', onClickCapture, true);
+
+  const obs = new MutationObserver(wire);
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
+
+/* === RA_HIDE_FIX_CANVAS_CSS — hide only the Fix canvas button; keep auto-clean === */
+(function(){
+  try{
+    const st = document.createElement('style');
+    st.id = 'raHideFixCanvasStyle';
+    st.textContent = '#raFixCanvas{display:none !important; visibility:hidden !important;}';
+    (document.head || document.documentElement).appendChild(st);
+  }catch(e){}
+})();
