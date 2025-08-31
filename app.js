@@ -144,27 +144,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-/* -------------------- Canvas controls -------------------- */
-document.getElementById("zoomIn").addEventListener("click",  () => setZoom(zoom * 1.1));
-document.getElementById("zoomOut").addEventListener("click", () => setZoom(zoom / 1.1));
-document.getElementById("zoomReset").addEventListener("click", () => {
-  setZoom(1);
-  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-});
-document.getElementById("canvasSize").addEventListener("change", (e) => {
-  setCanvasSize(parseInt(e.target.value, 10));
-});
-
-document.getElementById("clearBase").addEventListener("click", clearBaseOnly);
-
-document.getElementById("clearCanvas").addEventListener("click", () => {
-  const keep = [backgroundRect]; // keep the dark background rectangle only
-  canvas.getObjects().slice().forEach(o => { if (!keep.includes(o)) canvas.remove(o); });
-  idLabel = null;
-  baseGroup = null;
-  canvas.requestRenderAll();
-});
-
     // Token ID style live controls
     ['change','input'].forEach(ev=>{
       document.getElementById("idFormat").addEventListener(ev,()=>{ if(idLabel) { idLabel.text = formatTokenId(document.getElementById("tokenIdDisplay").value, document.getElementById("idFormat").value); canvas.requestRenderAll(); }});
