@@ -4250,19 +4250,20 @@ function maybeRestoreAutosave() {
   window.addEventListener('load', () => setTimeout(swapWatermarks, 250));
 })();
 
-/* ===== RA_FORCE_WATERMARK_v4 ===== */
+/* ===== RA_FORCE_WATERMARK_v5 (final) ===== */
 (function () {
-  // 1) Point to the new logo in /assets (cache-busted)
-  const NEW_WM = '/assets/watermark.png?v=wm9';
+  // Always use the file you uploaded under /assets
+  const NEW_WM = '/assets/watermark.png?v=wm10';
 
-  // Helper: log what watermark sources are currently in the canvas
+  // Expose quick helpers so you can verify in the console
+  window.__wmPatchAlive = true;
+  console.log('[WM] patch alive →', window.__wmPatchAlive);
+
+  // List everything the canvas is using that could be a watermark
   window.__whichWM = function () {
     const c = window.canvas;
-    if (!c) return console.log('No canvas yet.');
-    const W = c.getWidth(), H = c.getHeight();
-    const info = [];
-
-    // objects on canvas
+    if (!c) { console.log('No canvas yet. Load a token or image first.'); return []; }
+    const W = c.getWidth(), H = c.getHeight(), info = [];
     (c.getObjects ? c.getObjects('image') : []).forEach(o => {
       const ow = o.getScaledWidth?.() || 0, oh = o.getScaledHeight?.() || 0;
       const rightGap = Math.abs(W - (o.left + ow));
@@ -4270,33 +4271,26 @@ function maybeRestoreAutosave() {
       const nearTL = o.left <= 20 && o.top <= 20;
       const nearBR = rightGap <= 20 && bottomGap <= 20;
       const isCorner = (nearTL || nearBR) && ow <= W * 0.6 && oh <= H * 0.6;
-      const src = (o._element && (o._element.currentSrc || o._element.src)) || '(no _element src)';
-      info.push({type:'object', isCorner, left:o.left, top:o.top, w:ow, h:oh, src});
+      const src = (o._element && (o._element.currentSrc || o._element.src)) || '(no element src)';
+      info.push({ kind:'object', isCorner, left:o.left, top:o.top, w:ow, h:oh, src, _o:o });
     });
-
-    // overlay/background images
     ['overlayImage','backgroundImage'].forEach(k=>{
-      const cimg = c[k];
-      if (cimg && cimg.getElement) {
-        const el = cimg.getElement();
-        const src = el && (el.currentSrc || el.src);
-        if (src) info.push({type:k, src});
-      }
+      const img = c[k];
+      const el = img && img.getElement && img.getElement();
+      const src = el && (el.currentSrc || el.src);
+      if (src) info.push({ kind:k, src });
     });
-
-    console.table(info);
+    console.table(info.map(x => ({kind:x.kind, isCorner:x.isCorner, left:x.left, top:x.top, w:x.w, h:x.h, src:x.src})));
     return info;
   };
 
   function isCornerObj(o, W, H) {
     if (!o || !o.getScaledWidth) return false;
     const ow = o.getScaledWidth(), oh = o.getScaledHeight();
-    if (!ow || !oh) return false;
     const rightGap = Math.abs(W - (o.left + ow));
     const bottomGap = Math.abs(H - (o.top + oh));
     const nearTL = o.left <= 20 && o.top <= 20;
     const nearBR = rightGap <= 20 && bottomGap <= 20;
-    // small/medium image in a corner (avoid replacing the main base)
     return (nearTL || nearBR) && ow <= W * 0.6 && oh <= H * 0.6;
   }
 
@@ -4305,44 +4299,68 @@ function maybeRestoreAutosave() {
     if (!c || !c.getWidth) return;
     const W = c.getWidth(), H = c.getHeight();
 
-    // A) corner watermark objects
+    // A) Corner watermark objects
     (c.getObjects ? c.getObjects('image') : []).forEach(o => {
       if (!isCornerObj(o, W, H)) return;
       const el = o._element;
       const src = el && (el.currentSrc || el.src) || '';
-      if (src.includes('watermark') || src.startsWith('data:image')) {
+      const looksLikeWM = src.includes('watermark') || src.startsWith('data:image');
+      if (looksLikeWM) {
+        // Try swap; if anything refuses, hide old and we’ll overlay our new one
+        let swapped = false;
         if (typeof o.setSrc === 'function') {
-          try {
-            o.setSrc(NEW_WM, () => c.requestRenderAll());
-            o._wmSwapped = true;
-          } catch {}
+          try { o.setSrc(NEW_WM, () => c.requestRenderAll()); swapped = true; } catch {}
         } else if (el) {
-          try { el.src = NEW_WM; c.requestRenderAll(); } catch {}
+          try { el.src = NEW_WM; c.requestRenderAll(); swapped = true; } catch {}
         }
+        if (!swapped) { o.opacity = 0; o.selectable = false; o.evented = false; }
       }
     });
 
-    // B) Fabric overlay/background watermark forms (if used)
+    // B) Fabric overlay/background images
     ['overlayImage','backgroundImage'].forEach(k => {
       const img = c[k];
-      if (img && img.getElement) {
-        const el = img.getElement();
-        const src = el && (el.currentSrc || el.src) || '';
-        if (src.includes('watermark') || src.startsWith('data:image')) {
-          try { el.src = NEW_WM; c.requestRenderAll(); } catch {}
-        }
+      const el = img && img.getElement && img.getElement();
+      const src = el && (el.currentSrc || el.src) || '';
+      if (src && (src.includes('watermark') || src.startsWith('data:image'))) {
+        try { el.src = NEW_WM; c.requestRenderAll(); } catch {}
       }
     });
+
+    // C) Ensure our new WM exists (add if not present)
+    ensureOurWM(c);
+    c.requestRenderAll();
   }
 
-  // Try a few times during boot; then hook into canvas events
-  let attempts = 60;
-  const timer = setInterval(() => {
-    swapAllWatermarks();
-    if (--attempts <= 0) clearInterval(timer);
-  }, 250);
+  // Add our two corner watermarks if they’re missing
+  function ensureOurWM(c) {
+    const W = c.getWidth(), H = c.getHeight();
+    const haveTL = !!(c.getObjects('image').find(o => o.raWM && o.raPos === 'TL'));
+    const haveBR = !!(c.getObjects('image').find(o => o.raWM && o.raPos === 'BR'));
+    const size = Math.round(Math.min(W, H) * 0.16); // ~16% of canvas
 
-  // When canvas exists, attach listeners to catch late adds
+    function add(pos) {
+      // eslint-disable-next-line no-undef
+      fabric.Image.fromURL(NEW_WM, img => {
+        img.set({
+          left: pos === 'TL' ? 12 : (W - size - 12),
+          top:  pos === 'TL' ? 12 : (H - size - 12),
+          selectable: false, evented: false, hasControls:false, hasBorders:false
+        });
+        img.scaleToWidth(size); img.scaleToHeight(size);
+        img.raWM = true; img.raPos = pos;
+        c.add(img);
+        c.bringToFront(img);
+        c.requestRenderAll();
+      }, { crossOrigin: 'anonymous' });
+    }
+    if (!haveTL) add('TL');
+    if (!haveBR) add('BR');
+  }
+
+  // Re-run on changes and during boot
+  let attempts = 60;
+  const boot = setInterval(() => { swapAllWatermarks(); if (--attempts <= 0) clearInterval(boot); }, 250);
   const hook = setInterval(() => {
     const c = window.canvas;
     if (c && c.on) {
@@ -4353,7 +4371,6 @@ function maybeRestoreAutosave() {
     }
   }, 200);
 
-  // Also run once on page load
-  if (document.readyState === 'complete') swapAllWatermarks();
-  else window.addEventListener('load', () => setTimeout(swapAllWatermarks, 250));
+  // Expose manual force in console if you want to trigger it yourself
+  window.__forceWM = () => { swapAllWatermarks(); console.log('[WM] forced'); };
 })();
