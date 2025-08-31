@@ -3896,3 +3896,14 @@ function maybeRestoreAutosave() {
   }, 200);
   window.addEventListener('load', function(){ if (!done) trySwap(); });
 })();
+
+/* RA_WM_VERSION_BUMP */
+(function(){
+  function bump(){
+    if (typeof window.raSetWatermarkLogo === 'function') {
+      window.raSetWatermarkLogo('/assets/watermark.png?v=wm2', { opacity:0.18, sizePct:0.16, corners:'both', margin:14 });
+    }
+  }
+  if (document.readyState === 'complete') bump();
+  else window.addEventListener('load', bump);
+})();
