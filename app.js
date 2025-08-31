@@ -1,7 +1,20 @@
 (function(){
   const CONTRACT="0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
   const RESERVOIR="https://api.reservoir.tools/tokens/v7?media=true&tokens=";
-  const WM_SRC = window.__WM_IMG__; // base watermark image (png data uri)
+  (function(){
+  const CONTRACT  = "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+  const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
+
+  // Always use the new blue watermark in /assets (fallback to /watermark)
+  let WM_SRC = "/assets/watermark.png?v=wm10";
+  (function ensureWM(){
+    const img = new Image();
+    img.onload  = () => { /* /assets path works, keep WM_SRC as-is */ };
+    img.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback if /assets not found
+    img.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now(); // cache-bust
+  })();
+
+  // ...rest of your file continues here...
 
   // Fabric UI tuning
   fabric.Object.prototype.transparentCorners=false;
