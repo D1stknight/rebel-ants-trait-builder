@@ -1057,31 +1057,42 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === MOBILE INLINE CANVAS v7 — inline at top, collapse old host, enable touch-drag === */
+/* === MOBILE INLINE CANVAS v8 — move Fabric WRAPPER, enable touch-drag, no gap === */
 (function(){
-  if (window.__RA_MOBILE_INLINE_V7) return; window.__RA_MOBILE_INLINE_V7 = true;
+  if (window.__RA_MOBILE_INLINE_V8) return; window.__RA_MOBILE_INLINE_V8 = true;
 
-  // Remove any older mobile patches
-  ['raMobileFixedV4Style','raMobileV3','raStickyCanvasCSS','raMobileInlineCanvasRow']
-    .forEach(id=>{ const n=document.getElementById(id); if(n) try{ n.remove(); }catch(_){} });
+  // remove older attempts so they don't conflict
+  ['raMobileFixedV4Style','raMobileV3','raStickyCanvasCSS','raMobileInlineCanvasRow','raMobileInlineCanvasRowOld']
+    .forEach(id=>{ const n=document.getElementById(id); if (n) try{ n.remove(); }catch(_){} });
 
-  // --- Config ---
-  const MAX_MOBILE_WIDTH = 820;   // treat <= this as mobile
-  const VIEW_FRACTION    = 0.88;  // canvas width = 88% of viewport
-  const MIN_SIZE         = 320;
-  const MAX_SIZE         = 1200;
-  const TOP_MARGIN       = 12;
-  const BTM_MARGIN       = 14;
+  const MAX_MOBILE = 820;                 // treat <= this as mobile
+  const VIEW_FRAC  = 0.88;                // canvas width = 88% of viewport
+  const MIN_SZ = 320, MAX_SZ = 1200;
+  const TOP_M = 12, BTM_M = 14;
 
-  const isMobile = () => window.matchMedia(`(max-width:${MAX_MOBILE_WIDTH}px)`).matches;
-  const id = s => document.getElementById(s);
-  const getCanvasEl = () => id('c');
-  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+  const isMobile = () => window.matchMedia(`(max-width:${MAX_MOBILE}px)`).matches;
 
-  let enabled = false;
-  let row = null;                  // our inline host at the very top
+  function getFabricWrapper(){
+    const C = window.canvas;
+    if (C && C.wrapperEl) return C.wrapperEl;
+    if (C && C.upperCanvasEl && C.upperCanvasEl.parentNode) return C.upperCanvasEl.parentNode;
+    const up = document.querySelector('canvas.upper-canvas');
+    return up ? up.parentNode : null;
+  }
+
+  function getLowerCanvas(){
+    const C = window.canvas;
+    if (!C) return null;
+    // Fabric 5 exposes lowerCanvasEl; older builds use contextContainer.canvas
+    return C.lowerCanvasEl || (C.contextContainer && C.contextContainer.canvas) || null;
+  }
+
+  function id(s){ return document.getElementById(s); }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  let enabled = false, row = null;
   let homeParent = null, homeNext = null;
-  let collapsed = [];              // nodes we collapsed to remove the big gap
+  let collapsed = [];
 
   function ensureRow(){
     if (row) return row;
@@ -1090,71 +1101,17 @@
     Object.assign(row.style, {
       position:'relative',
       display:'flex', justifyContent:'center', alignItems:'flex-start',
-      width:'100%', margin:`${TOP_MARGIN}px auto ${BTM_MARGIN}px auto`,
-      padding:'0', background:'transparent', zIndex: 1
+      width:'100%', margin:`${TOP_M}px auto ${BTM_M}px auto`, padding:'0',
+      background:'transparent', zIndex: 1
     });
     document.body.insertBefore(row, document.body.firstChild);
     return row;
   }
 
-  function recenterBaseAndBackground(){
-    const c = window.canvas; if (!c || !c.getObjects) return;
-    const cx=c.getWidth()/2, cy=c.getHeight()/2;
-    c.getObjects().forEach(o=>{
-      if (o===window.backgroundRect){
-        o.set({ left:0, top:0, width:c.getWidth(), height:c.getHeight(), originX:'left', originY:'top' });
-        o.setCoords && o.setCoords();
-      }
-      if (o && (o._isBase===true || o===window.baseGroup)){
-        o.set({ left:cx, top:cy, originX:'center', originY:'center' });
-        o.setCoords && o.setCoords();
-      }
-    });
-    try{ c.calcOffset(); }catch(_){}
-    c.requestRenderAll();
-  }
-
-  function applyMobileSize(){
-    const el = getCanvasEl(), c = window.canvas; if (!el || !c) return;
-    const target = clamp(Math.round(window.innerWidth*VIEW_FRACTION), MIN_SIZE, MAX_SIZE);
-
-    // Reset pan/zoom, then size
-    try{ c.setViewportTransform([1,0,0,1,0,0]); }catch(_){}
-    if (typeof window.setCanvasSize==='function') {
-      window.setCanvasSize(target);
-      const sizeEl = id('canvasSize'); if (sizeEl) sizeEl.value = String(target);
-    } else {
-      c.setWidth(target); c.setHeight(target);
-    }
-
-    // Ensure the DOM canvas matches and accepts touch for dragging
-    el.style.width  = target+'px';
-    el.style.height = target+'px';
-    el.style.position = 'static';
-    el.style.zIndex   = 'auto';
-    el.style.touchAction = 'none';                  // *** key: let Fabric handle touch ***
-    el.style.webkitTouchCallout = 'none';
-    el.style.webkitUserSelect = 'none';
-    el.style.userSelect = 'none';
-    // Prevent page from scrolling while dragging inside the canvas
-    ['touchstart','touchmove','gesturestart','gesturechange','gestureend'].forEach(ev=>{
-      el.addEventListener(ev, e=>{ e.preventDefault(); }, { passive:false });
-    });
-
-    // Some Fabric builds expose upperCanvasEl; reinforce touchAction there too
-    try {
-      const u = window.canvas && window.canvas.upperCanvasEl;
-      if (u) { u.style.touchAction = 'none'; u.addEventListener('touchmove', e=>e.preventDefault(), {passive:false}); }
-    } catch(_) {}
-
-    recenterBaseAndBackground();
-  }
-
-  // Collapse the old canvas container(s) so there is NO big empty gap
   function collapseNode(n){
     if (!n || collapsed.includes(n)) return;
     collapsed.push(n);
-    n.__raOldInlineStyle = n.getAttribute('style');
+    n.__raOldStyle = n.getAttribute('style');
     Object.assign(n.style, {
       display:'none', visibility:'hidden', height:'0px', minHeight:'0px',
       padding:'0', margin:'0', border:'0', overflow:'hidden', pointerEvents:'none'
@@ -1163,23 +1120,22 @@
   function restoreCollapsed(){
     collapsed.forEach(n=>{
       if (!n) return;
-      if (n.__raOldInlineStyle==null) n.removeAttribute('style');
-      else n.setAttribute('style', n.__raOldInlineStyle);
-      delete n.__raOldInlineStyle;
+      if (n.__raOldStyle==null) n.removeAttribute('style');
+      else n.setAttribute('style', n.__raOldStyle);
+      delete n.__raOldStyle;
     });
     collapsed = [];
   }
 
   function collapseOldHostChain(start){
     if (!start) return;
-    // 1) collapse the original parent
-    collapseNode(start);
-
-    // 2) If its parent is just a wrapper without controls, collapse that too (kills the gap)
-    const p = start.parentNode;
+    // collapse original wrapper parent (stage cell)
+    const host = start.parentNode;
+    collapseNode(host || start);
+    // if there is a plain wrapper above without controls, collapse that too (removes gap)
+    const p = (host||start).parentNode;
     if (p && !p.querySelector('input,button,select,textarea') && !p.querySelector('#raMobileInlineCanvasRow')) {
       collapseNode(p);
-      // 3) Sometimes there is another wrapper above; collapse if it's also a bare stage shell
       const pp = p.parentNode;
       if (pp && !pp.querySelector('input,button,select,textarea') && !pp.querySelector('#raMobileInlineCanvasRow')) {
         collapseNode(pp);
@@ -1187,45 +1143,105 @@
     }
   }
 
-  function enableMobileInline(){
-    if (enabled) { applyMobileSize(); return; }
-    const el = getCanvasEl(); if (!el) { setTimeout(enableMobileInline,120); return; }
-
-    if (!homeParent) { homeParent = el.parentNode; homeNext = el.nextSibling; }
-    ensureRow().appendChild(el);      // move canvas to top
-    collapseOldHostChain(homeParent); // hide the old stage completely
-    enabled = true;
-    applyMobileSize();
+  function styleForTouch(el){
+    if (!el) return;
+    el.style.touchAction = 'none';         // let Fabric handle gestures
+    el.style.webkitUserSelect = 'none';
+    el.style.userSelect = 'none';
+    el.style.pointerEvents = 'auto';
   }
 
-  function disableMobileInline(){
+  function recalcOffset(){
+    const C = window.canvas; if (!C) return;
+    try { C.calcOffset(); } catch(_){}
+  }
+
+  function recenterBaseAndBackground(){
+    const C = window.canvas; if (!C) return;
+    const cx = C.getWidth()/2, cy = C.getHeight()/2;
+    C.getObjects().forEach(o=>{
+      if (o === window.backgroundRect){
+        o.set({ left:0, top:0, width:C.getWidth(), height:C.getHeight(), originX:'left', originY:'top' });
+        o.setCoords && o.setCoords();
+      } else if (o && (o._isBase===true || o===window.baseGroup)){
+        o.set({ left:cx, top:cy, originX:'center', originY:'center' });
+        o.setCoords && o.setCoords();
+      }
+    });
+    C.requestRenderAll();
+  }
+
+  function applySize(){
+    const C = window.canvas; const wrap = getFabricWrapper();
+    if (!C || !wrap) return;
+
+    const target = clamp(Math.round(window.innerWidth * VIEW_FRAC), MIN_SZ, MAX_SZ);
+
+    // Reset pan/zoom before resizing
+    try { C.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
+
+    if (typeof window.setCanvasSize === 'function') {
+      window.setCanvasSize(target);
+      const sizeEl = id('canvasSize'); if (sizeEl) sizeEl.value = String(target);
+    } else {
+      C.setWidth(target); C.setHeight(target);
+    }
+
+    // Keep DOM wrapper + both canvas layers in sync
+    wrap.style.width  = target+'px';
+    wrap.style.height = target+'px';
+    const up = C.upperCanvasEl, lo = getLowerCanvas();
+    if (up) { up.style.width = target+'px'; up.style.height = target+'px'; styleForTouch(up); }
+    if (lo) { lo.style.width = target+'px'; lo.style.height = target+'px'; styleForTouch(lo); }
+    styleForTouch(wrap);
+
+    recalcOffset();
+    recenterBaseAndBackground();
+  }
+
+  function enableMobile(){
+    if (enabled) { applySize(); return; }
+    const wrap = getFabricWrapper();
+    if (!wrap) { setTimeout(enableMobile, 120); return; }
+
+    if (!homeParent){ homeParent = wrap.parentNode; homeNext = wrap.nextSibling; }
+    ensureRow().appendChild(wrap);         // move the WHOLE Fabric wrapper (events + canvas)
+    collapseOldHostChain(wrap);
+
+    enabled = true;
+    applySize();
+  }
+
+  function disableMobile(){
     if (!enabled) return;
-    const el = getCanvasEl();
-    if (el && homeParent){
-      if (homeNext && homeNext.parentNode===homeParent) homeParent.insertBefore(el, homeNext);
-      else homeParent.appendChild(el);
+    const wrap = getFabricWrapper();
+    if (wrap && homeParent){
+      if (homeNext && homeNext.parentNode===homeParent) homeParent.insertBefore(wrap, homeNext);
+      else homeParent.appendChild(wrap);
     }
     restoreCollapsed();
-    if (row){ row.remove(); row=null; }
+    if (row) { row.remove(); row = null; }
     enabled = false;
 
-    // Back to desktop sizing
-    try{
+    // restore desktop size
+    try {
       const sizeEl = id('canvasSize');
-      if (sizeEl && typeof window.setCanvasSize==='function')
+      if (sizeEl && typeof window.setCanvasSize === 'function'){
         window.setCanvasSize(parseInt(sizeEl.value,10) || 700);
-    }catch(_){}
+      }
+    } catch(_){}
+    recalcOffset();
     recenterBaseAndBackground();
   }
 
   function apply(){
-    if (isMobile()) enableMobileInline(); else disableMobileInline();
+    if (isMobile()) enableMobile(); else disableMobile();
   }
 
   const kick = () => setTimeout(apply, 40);
   document.addEventListener('DOMContentLoaded', kick);
   if (document.readyState !== 'loading') kick();
   document.addEventListener('ra:canvas-ready', kick);
-  window.addEventListener('resize', kick, { passive:true });
-  window.addEventListener('orientationchange', ()=> setTimeout(kick, 140));
+  window.addEventListener('resize', ()=> setTimeout(apply, 40), { passive:true });
+  window.addEventListener('orientationchange', ()=> setTimeout(apply, 140));
 })();
