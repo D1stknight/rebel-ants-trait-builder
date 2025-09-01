@@ -728,24 +728,26 @@
 })();
 
 /* =========================
-   RA_CANVAS_RESIZE_SYNC_V7
-   - Scales ALL content when size changes (700/900/1024/1200 or size input)
-   - Centers everything and resets pan/zoom.
+   RA_CANVAS_RESIZE_SYNC_ONLY_V8
+   - Scales ALL content when canvas size changes (700/900/1024/1200 or size input)
+   - Re-centers everything and resets pan/zoom
+   - Does not touch Admin/Published overlays at all
    ========================= */
-(function RA_CANVAS_RESIZE_SYNC_V7(){
-  // Helper: get the Fabric canvas safely
+(function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
+  // Safe handle to the Fabric canvas
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
-  // Real scaler (replaces any old setCanvasSize logic)
+  // Main resizer: scale+recenter all objects to a new (square) size
   function resizeCanvasAndScale(newSize){
     const c = C(); if (!c) return;
-
     newSize = parseInt(newSize, 10);
     if (!newSize || !isFinite(newSize)) return;
 
     const oldW = c.getWidth(), oldH = c.getHeight();
-    if (!oldW || !oldH || (oldW === newSize && oldH === newSize)) {
-      // Still reset pan/zoom so it never looks like "zoom only"
+    if (!oldW || !oldH) return;
+
+    // No change? just normalize zoom/pan
+    if (oldW === newSize && oldH === newSize){
       try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
       try { c.requestRenderAll(); } catch(_) {}
       return;
@@ -755,7 +757,7 @@
     const oldCenter = new fabric.Point(oldW/2, oldH/2);
     const newCenter = new fabric.Point(newSize/2, newSize/2);
 
-    // Snapshot positions before we change canvas size
+    // Snapshot objects (exclude nothing here — base, overlays, text all follow)
     const objs = (c.getObjects() || []).slice();
     const info = objs.map(o => ({
       o,
@@ -764,11 +766,11 @@
       sy: o.scaleY || 1
     }));
 
-    // Apply new canvas size
+    // Resize canvas
     c.setWidth(newSize);
     c.setHeight(newSize);
 
-    // Keep a reference to any backgroundRect if your app uses it
+    // If your code exposes a backgroundRect globally, update it too (safe no-op otherwise)
     const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
     if (bgRect) {
       try {
@@ -777,20 +779,15 @@
       } catch(_) {}
     }
 
-    // Scale and re-center every object (except the bg rect)
+    // Scale & reposition everything relative to the canvas center
     info.forEach(({o, ctr, sx, sy}) => {
-      if (bgRect && o === bgRect) return;
-
-      // vector from old canvas center → object center
-      const vx = ctr.x - oldCenter.x;
-      const vy = ctr.y - oldCenter.y;
-
-      // new scaled center
-      const nx = newCenter.x + vx * s;
-      const ny = newCenter.y + vy * s;
-
-      // scale + reposition by origin center (handles rotation too)
+      // keep backgroundRect updated above; here we still scale if someone wants it scaled too
       try {
+        const vx = ctr.x - oldCenter.x;
+        const vy = ctr.y - oldCenter.y;
+        const nx = newCenter.x + vx * s;
+        const ny = newCenter.y + vy * s;
+
         o.set({ scaleX: sx * s, scaleY: sy * s });
         if (typeof o.setPositionByOrigin === 'function') {
           o.setPositionByOrigin(new fabric.Point(nx, ny), 'center', 'center');
@@ -801,23 +798,18 @@
       } catch(_) {}
     });
 
-    // Reset viewport pan/zoom (avoid “zoomed” look after size change)
+    // Reset viewport pan/zoom so it never looks like “zoom only”
     try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
-
-    // Update any zoom label if present
-    try {
-      const zEl = document.getElementById('zoomVal'); 
-      if (zEl) zEl.textContent = '100%';
-    } catch(_) {}
+    const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
 
     try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Make it available to the app / old callers
+  // Expose/override for any existing callers
   window.raResizeCanvasAndScale = resizeCanvasAndScale;
-  window.setCanvasSize = resizeCanvasAndScale; // override old setter reliably
+  window.setCanvasSize = resizeCanvasAndScale;
 
-  // Wire the **size input**
+  // Wire the size input (left panel)
   function wireSizeInput(){
     const el = document.getElementById('canvasSize');
     if (el && !el.__raBound) {
@@ -826,10 +818,10 @@
     }
   }
 
-  // Intercept the **700 / 900 / 1024 / 1200** quick buttons (capture phase)
+  // Intercept the quick size buttons (700 / 900 / 1024 / 1200)
   function wireQuickButtons(){
-    if (document.__raSizeCapture) return;
-    document.__raSizeCapture = true;
+    if (document.__raSizeCaptureOnly) return;
+    document.__raSizeCaptureOnly = true;
     document.addEventListener('click', function(ev){
       const btn = ev.target && ev.target.closest && ev.target.closest('button');
       if (!btn) return;
@@ -841,195 +833,7 @@
     }, true);
   }
 
-  // Start
-  function boot(){
-    wireSizeInput();
-    wireQuickButtons();
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
-  }
-})();
-
-
-/* =========================
-   RA_PUBLISHED_SHELF_V3
-   - Renders "Published Overlays" once (no duplicate heading)
-   - Adds delete (×) only for admin (?admin=1)
-   - Click tile → add to canvas (scaled & centered)
-   - Exposes window.raPublishToOverlaysShelf(name, dataURL)
-   ========================= */
-(function RA_PUBLISHED_SHELF_V3(){
-  const isAdmin = /(\?|&)admin=1\b/i.test(location.search);
-  window.raPublishedOverlays = window.raPublishedOverlays || []; // [{name, src}]
-
-  // Find the Overlays card and its existing "Published Overlays" heading
-  function findOverlaysCard(){
-    const h3s = Array.from(document.querySelectorAll('h3,h2'));
-    const overlaysH = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'overlays');
-    return overlaysH ? overlaysH.parentElement : null;
-  }
-  function findPublishedHeading(container){
-    if (!container) return null;
-    const all = Array.from(container.querySelectorAll('*'));
-    return all.find(n => (/^published overlays$/i).test((n.textContent||'').trim()));
-  }
-
-  // Add (or get) the grid container right under the existing heading
-  function ensureGrid(){
-    const card = findOverlaysCard(); if (!card) return null;
-
-    // If our old shelf wrapper ever existed, remove it (prevents duplicate headings)
-    const oldShelf = document.getElementById('raPublishedShelf');
-    if (oldShelf) oldShelf.remove();
-
-    const heading = findPublishedHeading(card);
-    if (!heading) return null;
-
-    let grid = document.getElementById('raPublishedGrid');
-    if (!grid) {
-      grid = document.createElement('div');
-      grid.id = 'raPublishedGrid';
-      grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;margin-top:6px;';
-      heading.insertAdjacentElement('afterend', grid);
-    }
-    return grid;
-  }
-
-  // Add to Fabric canvas nicely scaled & centered
-  function addToCanvas(src, name){
-    const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-    if (!c || !window.fabric || !fabric.Image) return;
-
-    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin: 'anonymous' };
-    fabric.Image.fromURL(src, img => {
-      if (!img) return;
-
-      const cw = c.getWidth(), ch = c.getHeight();
-      const maxDim = Math.min(cw, ch) * 0.60;
-      const iw = img.width || maxDim, ih = img.height || maxDim;
-      const scale = Math.min(1, maxDim / Math.max(iw, ih));
-
-      img.set({
-        originX: 'center', originY: 'center',
-        left: cw/2, top: ch/2,
-        selectable: true, evented: true
-      });
-      if (isFinite(scale) && scale > 0) img.scale(scale);
-
-      img._kind = 'overlay'; // keep same tag used elsewhere
-      c.add(img); c.bringToFront(img); c.setActiveObject(img);
-      c.requestRenderAll();
-
-      if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
-    }, opts);
-  }
-
-  // Render tiles
-  function render(){
-    const grid = ensureGrid(); if (!grid) return;
-
-    grid.innerHTML = '';
-    (window.raPublishedOverlays||[]).forEach((item, idx) => {
-      const tile = document.createElement('div');
-      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-
-      const img = document.createElement('img');
-      img.src = item.src; img.alt = item.name || '';
-      img.style.cssText = 'max-width:100%;max-height:80px;';
-      const wrap = document.createElement('div');
-      wrap.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
-      wrap.appendChild(img);
-
-      const cap = document.createElement('div');
-      cap.textContent = item.name || '';
-      cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-
-      tile.appendChild(wrap);
-      tile.appendChild(cap);
-
-      if (isAdmin) {
-        const del = document.createElement('button');
-        del.textContent = '×';
-        del.title = 'Remove';
-        del.style.cssText = 'position:absolute;top:3px;right:5px;background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:2px 6px;cursor:pointer';
-        del.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          window.raPublishedOverlays.splice(idx, 1);
-          render();
-        });
-        tile.appendChild(del);
-      }
-
-      tile.addEventListener('click', () => addToCanvas(item.src, item.name));
-      grid.appendChild(tile);
-    });
-  }
-
-  // Public API for Admin dock
-  window.raPublishToOverlaysShelf = async function(name, dataURLorHTTP){
-    try {
-      // Prevent duplicates by src
-      const exists = (window.raPublishedOverlays||[]).some(it => it.src === dataURLorHTTP);
-      if (!exists) {
-        window.raPublishedOverlays.push({ name: name || 'overlay', src: dataURLorHTTP });
-      }
-      render();
-    } catch(_) {}
-  };
-
-  // Keep shelf alive even if the right panel re-renders
-  function boot(){ render(); }
+  // Boot
+  function boot(){ wireSizeInput(); wireQuickButtons(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
-  const mo = new MutationObserver(render);
-  mo.observe(document.body, { childList: true, subtree: true });
-})();
-
-
-/* =========================
-   RA_ADMIN_PUBLISH_BRIDGE_V3
-   - Makes the Admin dock "Publish" button feed the Published Overlays shelf.
-   - Works even if the dock uses blob: URLs (converts to data: URL).
-   ========================= */
-(function RA_ADMIN_PUBLISH_BRIDGE_V3(){
-  function toDataURLFromSrc(src){
-    return fetch(src).then(r => r.blob()).then(blob => new Promise((res,rej)=>{
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result);
-      fr.onerror = rej;
-      fr.readAsDataURL(blob);
-    }));
-  }
-
-  // Capture clicks in the Admin dock
-  document.addEventListener('click', async (ev) => {
-    const btn = ev.target && ev.target.closest && ev.target.closest('#raAdminDock button');
-    if (!btn) return;
-
-    const label = (btn.textContent||'').trim().toLowerCase();
-    if (label !== 'publish') return;
-
-    ev.preventDefault(); ev.stopImmediatePropagation(); ev.stopPropagation();
-
-    // Find the tile where Publish was clicked
-    const tile = btn.closest('div'); // the small card in the dock
-    if (!tile) return;
-    const img = tile.querySelector('img');
-    const nameEl = tile.querySelector('div[style*="font-size:11px"]');
-    const src = img && img.getAttribute('src');
-    const name = nameEl ? (nameEl.textContent||'overlay').trim() : 'overlay';
-    if (!src) return;
-
-    try {
-      const dataURL = /^data:/i.test(src) ? src : await toDataURLFromSrc(src);
-      if (typeof window.raPublishToOverlaysShelf === 'function') {
-        await window.raPublishToOverlaysShelf(name, dataURL);
-      }
-      // Small “Published” message in the dock
-      const msg = document.getElementById('raDockMsg');
-      if (msg) { msg.textContent = `Published: ${name}`; setTimeout(()=>{ msg.textContent = ''; }, 1000); }
-    } catch(_) {}
-  }, true);
 })();
