@@ -1057,26 +1057,17 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === MOBILE INLINE CANVAS v6 — inline at top, scrolls with page, hides old host === */
+/* === MOBILE INLINE CANVAS v7 — inline at top, collapse old host, enable touch-drag === */
 (function(){
-  if (window.__RA_MOBILE_INLINE_V6) return; window.__RA_MOBILE_INLINE_V6 = true;
+  if (window.__RA_MOBILE_INLINE_V7) return; window.__RA_MOBILE_INLINE_V7 = true;
 
-  // Remove styles/hosts from older attempts if present
-  ['raMobileFixedV4Style','raMobileV3','raStickyCanvasCSS'].forEach(id=>{
-    try{ const n=document.getElementById(id); if(n) n.remove(); }catch(_){}
-  });
-  (function removeOldFixedHosts(){
-    try{
-      const host = document.getElementById('raFixedCanvasHost');
-      const spacer = document.getElementById('raFixedCanvasSpacer');
-      if (host && host.firstChild) document.body.appendChild(host.firstChild);
-      if (host) host.remove(); if (spacer) spacer.remove();
-    }catch(_){}
-  })();
+  // Remove any older mobile patches
+  ['raMobileFixedV4Style','raMobileV3','raStickyCanvasCSS','raMobileInlineCanvasRow']
+    .forEach(id=>{ const n=document.getElementById(id); if(n) try{ n.remove(); }catch(_){} });
 
   // --- Config ---
-  const MAX_MOBILE_WIDTH = 820;   // treat ≤ this as mobile
-  const VIEW_FRACTION    = 0.88;  // canvas width = 88% of viewport width
+  const MAX_MOBILE_WIDTH = 820;   // treat <= this as mobile
+  const VIEW_FRACTION    = 0.88;  // canvas width = 88% of viewport
   const MIN_SIZE         = 320;
   const MAX_SIZE         = 1200;
   const TOP_MARGIN       = 12;
@@ -1088,21 +1079,20 @@
   const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 
   let enabled = false;
-  let row = null;                      // our inline host at the very top
+  let row = null;                  // our inline host at the very top
   let homeParent = null, homeNext = null;
-  let savedHostStyle = null, savedHostParentStyle = null;
+  let collapsed = [];              // nodes we collapsed to remove the big gap
 
   function ensureRow(){
     if (row) return row;
     row = document.createElement('div');
     row.id = 'raMobileInlineCanvasRow';
     Object.assign(row.style, {
-      position:'relative', zIndex:1,
+      position:'relative',
       display:'flex', justifyContent:'center', alignItems:'flex-start',
       width:'100%', margin:`${TOP_MARGIN}px auto ${BTM_MARGIN}px auto`,
-      padding:'0', background:'transparent'
+      padding:'0', background:'transparent', zIndex: 1
     });
-    // place at the very top of the document content
     document.body.insertBefore(row, document.body.firstChild);
     return row;
   }
@@ -1120,6 +1110,7 @@
         o.setCoords && o.setCoords();
       }
     });
+    try{ c.calcOffset(); }catch(_){}
     c.requestRenderAll();
   }
 
@@ -1127,50 +1118,73 @@
     const el = getCanvasEl(), c = window.canvas; if (!el || !c) return;
     const target = clamp(Math.round(window.innerWidth*VIEW_FRACTION), MIN_SIZE, MAX_SIZE);
 
-    // Reset pan/zoom drift
+    // Reset pan/zoom, then size
     try{ c.setViewportTransform([1,0,0,1,0,0]); }catch(_){}
-
     if (typeof window.setCanvasSize==='function') {
       window.setCanvasSize(target);
       const sizeEl = id('canvasSize'); if (sizeEl) sizeEl.value = String(target);
     } else {
       c.setWidth(target); c.setHeight(target);
     }
+
+    // Ensure the DOM canvas matches and accepts touch for dragging
     el.style.width  = target+'px';
     el.style.height = target+'px';
     el.style.position = 'static';
     el.style.zIndex   = 'auto';
+    el.style.touchAction = 'none';                  // *** key: let Fabric handle touch ***
+    el.style.webkitTouchCallout = 'none';
+    el.style.webkitUserSelect = 'none';
+    el.style.userSelect = 'none';
+    // Prevent page from scrolling while dragging inside the canvas
+    ['touchstart','touchmove','gesturestart','gesturechange','gestureend'].forEach(ev=>{
+      el.addEventListener(ev, e=>{ e.preventDefault(); }, { passive:false });
+    });
+
+    // Some Fabric builds expose upperCanvasEl; reinforce touchAction there too
+    try {
+      const u = window.canvas && window.canvas.upperCanvasEl;
+      if (u) { u.style.touchAction = 'none'; u.addEventListener('touchmove', e=>e.preventDefault(), {passive:false}); }
+    } catch(_) {}
 
     recenterBaseAndBackground();
   }
 
-  function collapseOldHost(){
-    // Hide/collapse the *original* canvas host so we don't see a giant empty checkerboard
-    if (!homeParent) return;
-
-    if (savedHostStyle === null) savedHostStyle = homeParent.getAttribute('style');
-    homeParent.style.display = 'none';
-
-    // Some builds paint the checkerboard on the parent wrapper; collapse that too if needed
-    const p = homeParent.parentNode;
-    if (p && !p.querySelector('#c')) {
-      if (savedHostParentStyle === null) savedHostParentStyle = p.getAttribute('style');
-      // Only collapse if that wrapper doesn’t contain inputs/buttons (i.e., it’s just a stage)
-      const hasControls = p.querySelector('input,button,select,textarea');
-      if (!hasControls) {
-        p.style.minHeight='0'; p.style.height='0'; p.style.padding='0'; p.style.border='0';
-      }
-    }
+  // Collapse the old canvas container(s) so there is NO big empty gap
+  function collapseNode(n){
+    if (!n || collapsed.includes(n)) return;
+    collapsed.push(n);
+    n.__raOldInlineStyle = n.getAttribute('style');
+    Object.assign(n.style, {
+      display:'none', visibility:'hidden', height:'0px', minHeight:'0px',
+      padding:'0', margin:'0', border:'0', overflow:'hidden', pointerEvents:'none'
+    });
+  }
+  function restoreCollapsed(){
+    collapsed.forEach(n=>{
+      if (!n) return;
+      if (n.__raOldInlineStyle==null) n.removeAttribute('style');
+      else n.setAttribute('style', n.__raOldInlineStyle);
+      delete n.__raOldInlineStyle;
+    });
+    collapsed = [];
   }
 
-  function restoreOldHost(){
-    if (!homeParent) return;
-    // Restore original styles exactly (even if empty/null)
-    if (savedHostStyle===null) homeParent.style.removeProperty('display');
-    else homeParent.setAttribute('style', savedHostStyle);
-    const p = homeParent.parentNode;
-    if (p && savedHostParentStyle!==null) p.setAttribute('style', savedHostParentStyle);
-    savedHostStyle = null; savedHostParentStyle = null;
+  function collapseOldHostChain(start){
+    if (!start) return;
+    // 1) collapse the original parent
+    collapseNode(start);
+
+    // 2) If its parent is just a wrapper without controls, collapse that too (kills the gap)
+    const p = start.parentNode;
+    if (p && !p.querySelector('input,button,select,textarea') && !p.querySelector('#raMobileInlineCanvasRow')) {
+      collapseNode(p);
+      // 3) Sometimes there is another wrapper above; collapse if it's also a bare stage shell
+      const pp = p.parentNode;
+      if (pp && !pp.querySelector('input,button,select,textarea') && !pp.querySelector('#raMobileInlineCanvasRow')) {
+        collapseNode(pp);
+      }
+    }
   }
 
   function enableMobileInline(){
@@ -1178,9 +1192,8 @@
     const el = getCanvasEl(); if (!el) { setTimeout(enableMobileInline,120); return; }
 
     if (!homeParent) { homeParent = el.parentNode; homeNext = el.nextSibling; }
-
-    ensureRow().appendChild(el);   // move canvas to inline row at top
-    collapseOldHost();             // hide empty old stage
+    ensureRow().appendChild(el);      // move canvas to top
+    collapseOldHostChain(homeParent); // hide the old stage completely
     enabled = true;
     applyMobileSize();
   }
@@ -1192,11 +1205,11 @@
       if (homeNext && homeNext.parentNode===homeParent) homeParent.insertBefore(el, homeNext);
       else homeParent.appendChild(el);
     }
-    restoreOldHost();
+    restoreCollapsed();
     if (row){ row.remove(); row=null; }
     enabled = false;
 
-    // Back to desktop size
+    // Back to desktop sizing
     try{
       const sizeEl = id('canvasSize');
       if (sizeEl && typeof window.setCanvasSize==='function')
