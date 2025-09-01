@@ -915,21 +915,20 @@
 })();
 
 /* ==========================================================
-   RA_OPEN_NEW_TAB_FIX_V2
-   - Intercepts the "Open in New Tab" control
-   - Opens a NEW TAB (popup‑safe) and renders the PNG there
-   - Never navigates the builder tab
-   Paste at the very bottom of app.js.
+   RA_OPEN_NEW_TAB_VIEWER_V1
+   - Opens export in a NEW TAB
+   - Fits image to the browser window (no more giant render)
+   - Click image to toggle: Fit ↔ Actual size (100%)
+   Paste at the very bottom of app.js (replace any prior open-new-tab patch).
    ========================================================== */
-(function RA_OPEN_NEW_TAB_FIX_V2(){
-  // --- Find the real Fabric canvas ---
+(function RA_OPEN_NEW_TAB_VIEWER_V1(){
+  // Find Fabric canvas safely
   function findCanvas(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
     if (el){
       for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[k];
-        if (v && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
+        const v = el[k]; if (v && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
       }
     }
     try{
@@ -941,25 +940,18 @@
     return null;
   }
 
-  // --- Read export multiplier (HQ ×2 etc.) with fallbacks ---
+  // Read export multiplier (HQ ×2 etc.)
   function getMultiplier(){
-    // 1) explicit input/select
     const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
-    if (el) {
+    if (el){
       const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
       if (v && v >= 1 && v <= 8) return v;
     }
-    // 2) look for "x2" or "×2" text somewhere near Export
-    const exportCard = Array.from(document.querySelectorAll('h3, .export-quality, .export'))
-      .find(n => /export/i.test(n.textContent||''));
-    if (exportCard) {
-      const m = (exportCard.parentElement?.textContent||'').match(/[x×]\s*([1-8])/i);
-      if (m) return parseInt(m[1],10);
-    }
-    return 2; // sane default
+    // fallback default
+    return 2;
   }
 
-  // --- Identify the UI control (button or link) by its label ---
+  // Pick the "Open in New Tab" control by label
   function isOpenNewTabEl(node){
     const el = node && node.closest && node.closest('button,a');
     if (!el) return null;
@@ -967,86 +959,100 @@
     return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
   }
 
-  // --- Keep the native link from navigating the current tab ---
+  // Prevent native link from navigating current tab
   function neutralizeLinkHref(){
     const el = Array.from(document.querySelectorAll('a,button'))
       .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
-    if (!el) return;
-
-    if (el.tagName === 'A') {
-      // Preserve href but stop default navigation
+    if (el && el.tagName === 'A'){
       if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
-      el.setAttribute('href', 'javascript:void(0)');
-      el.removeAttribute('target');   // our handler will open _blank safely
+      el.setAttribute('href','javascript:void(0)');
+      el.removeAttribute('target');
       el.setAttribute('rel','noopener');
     }
   }
 
-  // --- Do the actual new-tab export (popup-safe because from user click) ---
-  function openOnlyNewTab(){
+  // New‑tab viewer that fits the image to the viewport
+  function openNewTabViewer(){
     const c = findCanvas();
     if (!c){ alert('Canvas not ready'); return; }
 
-    // Open the tab synchronously before any heavy work to avoid popup blockers
+    // Open the tab synchronously (popup‑safe)
     const win = window.open('', '_blank');
     if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
-
-    // Minimal doc while we render
-    win.document.title = 'Exporting…';
-    win.document.body.style.margin = '0';
-    win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
+    win.document.title = 'Export';
+    win.document.head.innerHTML = `
+      <meta charset="utf-8">
+      <title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img#raImg{
+          display:block;
+          max-width:calc(100vw - 32px);
+          max-height:calc(100vh - 32px);
+          width:auto;height:auto;
+          box-shadow:0 8px 24px rgba(0,0,0,.5);
+          border-radius:8px;
+          image-rendering:auto;
+        }
+        .hud{
+          position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+          color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none
+        }
+      </style>
+    `;
+    win.document.body.innerHTML = `
+      <div class="viewer"><img id="raImg" alt="export"/></div>
+      <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+    `;
 
     try{
       const mult = getMultiplier();
       const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
-
-      // Render the PNG in the new tab
-      win.document.body.innerHTML = '';
-      const img = win.document.createElement('img');
+      const img = win.document.getElementById('raImg');
       img.src = dataUrl;
-      img.style.display = 'block';
-      img.style.maxWidth = '100%';
-      img.style.height = 'auto';
-      win.document.body.appendChild(img);
-      win.document.title = 'Export';
+
+      // Fit ↔ Actual size toggle
+      let fit = true;
+      function applyFit(){
+        if (fit){
+          img.style.maxWidth  = 'calc(100vw - 32px)';
+          img.style.maxHeight = 'calc(100vh - 32px)';
+          img.style.width = 'auto';
+          img.style.height = 'auto';
+        } else {
+          img.style.maxWidth  = 'none';
+          img.style.maxHeight = 'none';
+          img.style.width = 'auto';  // natural size
+          img.style.height = 'auto';
+        }
+      }
+      img.addEventListener('click', ()=>{ fit = !fit; applyFit(); });
+      applyFit();
     }catch(e){
-      // CORS or security failure
-      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Export failed (CORS/security). Try a different image or load from a CORS‑enabled host.</div>';
+      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Try a different image or use a CORS‑enabled host.</div>';
     }
   }
 
-  // --- Handle only the CLICK (capture) to prevent default navigation ---
-  let lastOpenAt = 0;
+  // Capture click → always open in new tab viewer
+  let lastAt = 0;
   function onClickCapture(e){
     const el = isOpenNewTabEl(e.target);
     if (!el) return;
-
-    // Debounce double fires
     const now = Date.now();
-    if (now - lastOpenAt < 400) {
-      e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false;
-    }
-    lastOpenAt = now;
+    if (now - lastAt < 400){ e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false; }
+    lastAt = now;
 
-    // Stop the original link/button behavior and do our own thing
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    e.stopPropagation();
-
-    openOnlyNewTab();
+    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
+    openNewTabViewer();
     return false;
   }
 
-  function wire(){
-    neutralizeLinkHref();
-  }
+  function wire(){ neutralizeLinkHref(); }
 
-  // Initial wire + keep re‑wiring if the Export card re-renders
   wire();
   document.addEventListener('click', onClickCapture, true);
-  const mo = new MutationObserver(wire);
-  mo.observe(document.body, { childList:true, subtree:true });
-
-  // If Fabric announces readiness, keep the global normalized
+  new MutationObserver(wire).observe(document.body, { childList:true, subtree:true });
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
