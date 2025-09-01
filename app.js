@@ -1057,87 +1057,108 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === RA_MOBILE_RESPONSIVE_V1 — fix mobile view (fit to screen, disable center-lock) === */
-(function RA_MOBILE_RESPONSIVE_V1(){
-  // 1) Small CSS nudge: on mobile, don't keep the fixed/sticky center wrap;
-  //    let it flow and size the canvas visually to the viewport width.
-  try {
-    const css = document.createElement('style');
-    css.id = 'raMobileResponsiveCSS';
-    css.textContent = `
-      @media (max-width: 900px){
-        /* If the center-lock wrapper exists, disable its fixed centering on mobile */
-        #raCenterWrap{
-          position: static !important;
-          top: auto !important;
-          left: auto !important;
-          transform: none !important;
-          width: 100% !important;
-          margin: 12px auto !important;
-        }
-        /* Make the visible canvas shrink to the screen width */
-        #raCenterWrap canvas,
-        canvas#c{
-          width: 92vw !important;
-          height: auto !important;
-          max-width: 100% !important;
-          display: block !important;
-          margin: 0 auto !important;
-        }
-        html, body { overflow-x: hidden; }
+/* === RA_MOBILE_FLOW_V2 — disable fixed centering on mobile & fit canvas === */
+(function RA_MOBILE_FLOW_V2(){
+  function isSmall(){ return window.matchMedia('(max-width: 900px)').matches; }
+
+  function getWrap(){
+    // Your center-lock patch creates #raCenterWrap around the <canvas>
+    // If not present, try to find the parent of canvas #c and use that.
+    var wrap = document.getElementById('raCenterWrap');
+    if (wrap) return wrap;
+    var c = document.getElementById('c');
+    return c && c.parentElement ? c.parentElement : null;
+  }
+
+  function fitCanvas(){
+    var wrap = getWrap();
+    var c = window.canvas;
+    if (!wrap || !c || typeof c.getWidth !== 'function'){ setTimeout(fitCanvas, 200); return; }
+
+    if (isSmall()){
+      // Put the wrapper back into normal flow so it doesn't cover the UI
+      Object.assign(wrap.style, {
+        position: 'static',
+        top: 'auto', left: 'auto',
+        transform: 'none',
+        width: '100%',
+        maxWidth: '100%',
+        margin: '12px auto',
+        zIndex: '0'
+      });
+
+      // Make the visible <canvas> element responsive
+      var domCanvas = wrap.querySelector('canvas') || document.getElementById('c');
+      if (domCanvas){
+        Object.assign(domCanvas.style, {
+          width: '92vw',
+          height: 'auto',
+          maxWidth: '100%',
+          display: 'block',
+          margin: '0 auto'
+        });
       }
-    `;
-    (document.head || document.documentElement).appendChild(css);
-  } catch(_) {}
 
-  // 2) JS fit: on phones/tablets, auto-zoom the Fabric canvas so what you see
-  //    actually fits the screen (no giant black box). On desktop, restore 1:1.
-  function isMobile(){ return window.matchMedia('(max-width: 900px)').matches; }
-  function getCanvas(){
-    const c = window.canvas;
-    return c && typeof c.getWidth === 'function' ? c : null;
-  }
-  function updateZoomLabel(scale){
-    const z = document.getElementById('zoomVal');
-    if (z) z.textContent = Math.round(scale*100) + '%';
-  }
+      // Fit the Fabric viewport to the screen (no black box)
+      var vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
+      var vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight;
+      var targetW = Math.max(260, vw * 0.92);
+      var targetH = Math.max(260, vh * 0.78);
 
-  function fitToViewport(){
-    const c = getCanvas();
-    if (!c){ setTimeout(fitToViewport, 200); return; }
+      var scaleX = targetW / c.getWidth();
+      var scaleY = targetH / c.getHeight();
+      var scale  = Math.max(0.25, Math.min(3, Math.min(scaleX, scaleY)));
 
-    if (isMobile()){
-      // Fit the *entire canvas* into the visible viewport area
-      const vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
-      const vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight;
-
-      // Target: use ~92% of width, and up to ~80% of height
-      const targetW = Math.max(240, vw * 0.92);
-      const targetH = Math.max(240, vh * 0.80);
-
-      const scaleX = targetW / c.getWidth();
-      const scaleY = targetH / c.getHeight();
-      const scale  = Math.max(0.25, Math.min(3, Math.min(scaleX, scaleY)));
-
-      // Reset pan + apply zoom (center is handled by CSS centering)
-      c.setViewportTransform([scale, 0, 0, scale, 0, 0]);
+      c.setViewportTransform([scale,0,0,scale,0,0]);
       c.requestRenderAll();
-      updateZoomLabel(scale);
+
+      // Prevent horizontal scroll bleed
+      document.documentElement.style.overflowX = 'hidden';
+      document.body.style.overflowX = 'hidden';
     } else {
-      // Desktop: keep your normal 1:1 canvas zoom; center-lock patch handles centering
+      // Desktop → keep your original centered/fixed behavior
+      Object.assign(wrap.style, {
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%,-50%)',
+        zIndex: '10'
+      });
+
+      var domCanvas = wrap.querySelector('canvas') || document.getElementById('c');
+      if (domCanvas){
+        // Remove mobile sizing so CSS from desktop theme applies
+        ['width','height','maxWidth','display','margin'].forEach(k=> domCanvas.style[k]='');
+      }
+
       c.setViewportTransform([1,0,0,1,0,0]);
       c.requestRenderAll();
-      updateZoomLabel(1);
+      document.documentElement.style.overflowX = '';
+      document.body.style.overflowX = '';
     }
   }
 
-  // Re-fit on orientation / resize, and when Fabric is ready
-  window.addEventListener('resize',          () => setTimeout(fitToViewport, 60));
-  window.addEventListener('orientationchange', () => setTimeout(fitToViewport, 180));
+  // Make sure it also works if CSS loads late
+  try{
+    var css = document.createElement('style');
+    css.textContent = `
+      @media (max-width: 900px){
+        /* Safety: if the wrapper still has fixed, force normal flow */
+        #raCenterWrap{ position: static !important; transform: none !important; left:auto !important; top:auto !important; z-index:0 !important; width:100% !important; max-width:100% !important; }
+        #raCenterWrap canvas, canvas#c{ width:92vw !important; height:auto !important; max-width:100% !important; display:block !important; margin:0 auto !important; }
+        html, body{ overflow-x:hidden; }
+      }
+    `;
+    (document.head || document.documentElement).appendChild(css);
+  }catch(_){}
+
+  // Run now and on resize/orientation
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fitToViewport);
+    document.addEventListener('DOMContentLoaded', fitCanvas);
   } else {
-    fitToViewport();
+    fitCanvas();
   }
-  document.addEventListener('ra:canvas-ready', fitToViewport);
+  window.addEventListener('resize', () => setTimeout(fitCanvas, 60));
+  window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 160));
+  document.addEventListener('ra:canvas-ready', fitCanvas);
 })();
