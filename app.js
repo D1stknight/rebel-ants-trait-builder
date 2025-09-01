@@ -1,357 +1,68 @@
 (function(){
-  const CONTRACT="0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
-  const RESERVOIR="https://api.reservoir.tools/tokens/v7?media=true&tokens=";
-  const WM_SRC = window.__WM_IMG__; // base watermark image (png data uri)
+  // ===============================
+  //  CONFIG
+  // ===============================
+  const CONTRACT  = "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+  const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
-  // Fabric UI tuning
-  fabric.Object.prototype.transparentCorners=false;
-  fabric.Object.prototype.cornerStyle='circle';
-  fabric.Object.prototype.cornerColor='#22d3ee';
-  fabric.Object.prototype.cornerStrokeColor='#0b0c10';
-  fabric.Object.prototype.cornerSize=9; // smaller handles
-  fabric.Object.prototype.borderColor='#22d3ee';
-  fabric.Object.prototype.borderScaleFactor=1.2;
-  fabric.Object.prototype.rotatingPointOffset=20;
+  // ---- Watermark (single source, easy to change) ----
+  // Edit the string below to the EXACT watermark image you want.
+  // You can also override at runtime with ?wm=https://.../your.png
+  let WM_SRC = new URLSearchParams(location.search).get('wm')
+            || "/assets/watermark.png?v=wm10"; // <--- CHANGE THIS PATH IF NEEDED
 
+  (function checkWatermark(){
+    const test = new Image();
+    test.crossOrigin = "anonymous";
+    test.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback
+    test.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now();
+  })();
+
+  // ===============================
+  //  FABRIC DEFAULTS
+  // ===============================
+  if (window.fabric) {
+    fabric.Object.prototype.transparentCorners = false;
+    fabric.Object.prototype.cornerStyle = "circle";
+    fabric.Object.prototype.cornerColor = "#22d3ee";
+    fabric.Object.prototype.cornerStrokeColor = "#0b0c10";
+    fabric.Object.prototype.cornerSize = 9;
+    fabric.Object.prototype.borderColor = "#22d3ee";
+    fabric.Object.prototype.borderScaleFactor = 1.2;
+    fabric.Object.prototype.rotatingPointOffset = 20;
+  }
+
+  // ===============================
+  //  STATE
+  // ===============================
   let canvas, backgroundRect=null, overlayList=[], idLabel=null, baseGroup=null;
   let zoom=1;
 
-  document.addEventListener("DOMContentLoaded", ()=>{
-    if(!window.fabric){ alert("fabric.js failed to load. Check internet or open via a local server."); return; }
-    canvas=new fabric.Canvas("c",{ backgroundColor:"transparent", preserveObjectStacking:true, enableRetinaScaling:true, selectionBorderColor:'#22d3ee', selectionColor:'rgba(34,211,238,.08)'});
-    window.canvas = c;    
-    initBackgroundRect("#0d0e13");
-    setCanvasSize(parseInt(document.getElementById("canvasSize").value,10));
-    setZoom(1);
+  // ===============================
+  //  HELPERS
+  // ===============================
+  function $(id){ return document.getElementById(id); }
+  function safeAddListener(id, ev, fn){ const el=$(id); if (el) el.addEventListener(ev, fn); }
 
-    // Permanents
-    overlayList=(window.__EMBED_OVERLAYS__||[]).map(m=>({name:m.name, src:m.src, perm:true}));
-    renderOverlayGrid();
-
-    // Upload base
-    document.getElementById("baseUpload").addEventListener("change", async (e)=>{
-      const f=e.target.files?.[0]; if(!f) return;
-      const data=await fileToDataURL(f);
-      await loadBaseImage(data,false); // non-RA => add watermarks
-    });
-    document.getElementById("clearUpload").addEventListener("click", ()=>{
-      document.getElementById("baseUpload").value="";
-      clearBaseOnly();
-    });
-
-    // Paste URL
-    document.getElementById("loadUrl").addEventListener("click", async ()=>{
-      const url=document.getElementById("baseUrl").value.trim(); if(!url) return;
-      const data=await fetchAsDataURL(url);
-      await loadBaseImage(data,false);
-    });
-
-    // Token loader (v21d flow)
-    document.getElementById("loadToken").addEventListener("click", async ()=>{
-      const id=(document.getElementById("tokenIdInput").value||"").trim();
-      const status=document.getElementById("tokenStatus");
-      if(!id){ status.textContent="Enter a token ID."; return; }
-      status.textContent="Fetching token…";
-      try{
-        const imgUrl=await fetchImageByTokenId(CONTRACT,id);
-        if(!imgUrl){ status.textContent="No image URL found."; return; }
-        status.textContent="Downloading image…";
-        const data=await fetchAsDataURL(imgUrl);
-        await loadBaseImage(data,true); // RA => no watermark
-        addOrUpdateTokenLabel(id); // auto ID label
-        status.textContent="Loaded 👍";
-      }catch(e){ status.textContent="Failed to load token image."; }
-    });
-
-    // Canvas controls
-    document.getElementById("zoomIn").addEventListener("click",()=>setZoom(zoom*1.1));
-    document.getElementById("zoomOut").addEventListener("click",()=>setZoom(zoom/1.1));
-    document.getElementById("zoomReset").addEventListener("click",()=>{ setZoom(1); canvas.setViewportTransform([1,0,0,1,0,0]); });
-    document.getElementById("canvasSize").addEventListener("change",(e)=>setCanvasSize(parseInt(e.target.value,10)));
-    document.getElementById("clearBase").addEventListener("click",clearBaseOnly);
-    document.getElementById("clearCanvas").addEventListener("click",()=>{
-      const keep=[backgroundRect];
-      canvas.getObjects().slice().forEach(o=>{ if(!keep.includes(o)) canvas.remove(o); });
-      idLabel=null; baseGroup=null; canvas.requestRenderAll();
-    });
-
-    // Token ID style live controls
-    ['change','input'].forEach(ev=>{
-      document.getElementById("idFormat").addEventListener(ev,()=>{ if(idLabel) { idLabel.text = formatTokenId(document.getElementById("tokenIdDisplay").value, document.getElementById("idFormat").value); canvas.requestRenderAll(); }});
-      document.getElementById("idSize").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('fontSize', parseInt(document.getElementById("idSize").value,10)||52); canvas.requestRenderAll(); }});
-      document.getElementById("idColor").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('fill', document.getElementById("idColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("idStrokeColor").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('stroke', document.getElementById("idStrokeColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("idStrokeWidth").addEventListener(ev,()=>{ if(idLabel){ idLabel.set('strokeWidth', parseInt(document.getElementById("idStrokeWidth").value,10)||0); canvas.requestRenderAll(); }});
-    });
-    document.getElementById("deleteTokenId").addEventListener("click",()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
-
-    // Custom text
-    document.getElementById("addCustomText").addEventListener("click",()=>{
-      const val=(document.getElementById("customText").value||"").trim(); if(!val) return;
-      const txt=new fabric.Textbox(val,{ left:canvas.getWidth()/2, top:canvas.getHeight()/2, originX:"center", originY:"center",
-        width: Math.floor(canvas.getWidth()*0.8), textAlign:"left",
-        fontFamily: document.getElementById("fontFamily").value,
-        fontSize: parseInt(document.getElementById("fontSize").value,10)||48,
-        fill: document.getElementById("fontColor").value,
-        stroke: document.getElementById("strokeColor").value,
-        strokeWidth: parseInt(document.getElementById("strokeWidth").value,10)||0,
-        editable:true
-      });
-      txt._kind='customText';
-      canvas.add(txt).setActiveObject(txt); bringInterfaceToFront(); canvas.requestRenderAll();
-    });
-    ['change','input'].forEach(ev=>{
-      document.getElementById("fontFamily").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', document.getElementById("fontFamily").value); canvas.requestRenderAll(); }});
-      document.getElementById("fontSize").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt(document.getElementById("fontSize").value,10)||48); canvas.requestRenderAll(); }});
-      document.getElementById("fontColor").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fill', document.getElementById("fontColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("strokeColor").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('stroke', document.getElementById("strokeColor").value); canvas.requestRenderAll(); }});
-      document.getElementById("strokeWidth").addEventListener(ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('strokeWidth', parseInt(document.getElementById("strokeWidth").value,10)||0); canvas.requestRenderAll(); }});
-    });
-    document.getElementById("delSelectedText").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }});
-    document.getElementById("delAllText").addEventListener("click",()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='customText') canvas.remove(o); }); canvas.requestRenderAll(); });
-
-    // Selection tools
-    document.getElementById("duplicate").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.clone(c=>{ c.set({ left:o.left+20, top:o.top+20 }); canvas.add(c).setActiveObject(c); canvas.requestRenderAll(); }); });
-    document.getElementById("delete").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o || o===backgroundRect) return; if(o===baseGroup) return; canvas.remove(o); canvas.requestRenderAll(); });
-    document.getElementById("opacity").addEventListener("input",(e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value)); canvas.requestRenderAll(); });
-    document.getElementById("blendMode").addEventListener("change",(e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.globalCompositeOperation = e.target.value==="normal" ? null : e.target.value; canvas.requestRenderAll(); });
-    document.getElementById("bringFront").addEventListener("click",()=>reorderOverlay('front'));
-    document.getElementById("sendBack").addEventListener("click",()=>reorderOverlay('back'));
-    document.getElementById("flipX").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle('flipX'); canvas.requestRenderAll(); });
-    document.getElementById("flipY").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle('flipY'); canvas.requestRenderAll(); });
-    document.getElementById("lock").addEventListener("click",()=>{ const o=canvas.getActiveObject(); if(!o) return; lockObj(o,true); });
-    document.getElementById("unlockAll").addEventListener("click",()=>{ canvas.getObjects().forEach(o=>lockObj(o,false)); canvas.requestRenderAll(); });
-    document.getElementById("clearAllOverlays").addEventListener("click",()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='overlay') canvas.remove(o); }); canvas.requestRenderAll(); });
-
-    // Overlays panel & uploads
-    document.getElementById("overlayUpload").addEventListener("change", async (e)=>{
-      const files=Array.from(e.target.files||[]);
-      for(const f of files){
-        const data=await fileToDataURL(f);
-        overlayList.unshift({name:f.name, src:data, perm:false});
-        await addOverlayToCanvas(data,false); // auto place on canvas
-      }
-      renderOverlayGrid(); e.target.value="";
-    });
-
-    document.getElementById("clearOverlayGrid").addEventListener("click",()=>{
-      overlayList=overlayList.filter(o=>o.perm); renderOverlayGrid();
-    });
-  });
-
-  // ---------- Core helpers ----------
-  function initBackgroundRect(fill){
-    backgroundRect=new fabric.Rect({ left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(), fill:fill, selectable:false, evented:false, hasControls:false });
-    canvas.add(backgroundRect); canvas.sendToBack(backgroundRect);
-  }
-  function setCanvasSize(size){
-    const prevW=canvas.getWidth()||size, prevH=canvas.getHeight()||size;
-    const sx=size/prevW, sy=size/prevH;
-    canvas.setWidth(size); canvas.setHeight(size);
-    if(backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
-    canvas.getObjects().forEach(o=>{ if(o===backgroundRect) return; o.scaleX*=sx; o.scaleY*=sy; o.left*=sx; o.top*=sy; o.setCoords(); });
-    canvas.setViewportTransform([1,0,0,1,0,0]); canvas.requestRenderAll();
-  }
-  function setZoom(v){ zoom=Math.max(0.2,Math.min(4,v)); canvas.setZoom(zoom); const zv=document.getElementById("zoomVal"); if(zv) zv.textContent=Math.round(zoom*100)+'%'; canvas.requestRenderAll(); }
-  function lockObj(o,val){ o.set({ selectable:!val, evented:!val, hasControls:!val, lockMovementX:val, lockMovementY:val, lockScalingX:val, lockScalingY:val, lockRotation:val }); }
-  function bringInterfaceToFront(){ if(idLabel) canvas.bringToFront(idLabel); }
-
-  function clearBaseOnly(){
-    canvas.getObjects().slice().forEach(o=>{ if(o._isBase) canvas.remove(o); });
-    baseGroup=null; canvas.requestRenderAll();
-  }
-
-  async function loadBaseImage(dataUrl, isRebel){
-    // remove old base
-    clearBaseOnly();
-
-    // create base image
-    const img = await fabricFromURL(dataUrl);
-    img.set({ originX:'center', originY:'center' });
-
-    // scale to fit (no upscaling >1)
-    const cw=canvas.getWidth(), ch=canvas.getHeight();
-    const sc=Math.min(cw/img.width, ch/img.height, 1);
-    img.scale(sc);
-
-    if(isRebel){
-      img._isBase=true;
-      canvas.add(img);
-      img.set({ left:cw/2, top:ch/2 }); img.setCoords();
-      baseGroup = img;
-    }else{
-      // add two corner watermarks grouped with base
-      const wmTL = await fabricFromURL(WM_SRC);
-      const wmBR = await fabricFromURL(WM_SRC);
-      const bw = img.width*sc, bh=img.height*sc;
-      const wmTargetW = bw*0.15; const margin = Math.max(8, bw*0.02);
-      const scaleTL = wmTargetW / wmTL.width; const scaleBR = wmTargetW / wmBR.width;
-      wmTL.scale(scaleTL); wmBR.scale(scaleBR);
-      // place relative to center-origin image
-      wmTL.set({ originX:'center', originY:'center', left: -bw/2 + margin + wmTL.width*scaleTL/2, top: -bh/2 + margin + wmTL.height*scaleTL/2, selectable:false, evented:false });
-      wmBR.set({ originX:'center', originY:'center', left: +bw/2 - margin - wmBR.width*scaleBR/2, top: +bh/2 - margin - wmBR.height*scaleBR/2, selectable:false, evented:false });
-
-      const group = new fabric.Group([img, wmTL, wmBR], { left:cw/2, top:ch/2, originX:'center', originY:'center' });
-      group._isBase=true;
-      canvas.add(group); group.setCoords();
-      baseGroup = group;
-    }
-
-    // keep base behind overlays; keep interface on top
-    if(backgroundRect){ canvas.sendToBack(backgroundRect); }
-    if(baseGroup){ canvas.sendToBack(baseGroup); canvas.bringForward(baseGroup); }
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-  }
-
-  async function addOverlayToCanvas(dataUrl, isPermanent){
-    const img = await fabricFromURL(dataUrl);
-    img.set({ originX:'center', originY:'center' });
-    const size = Math.min(canvas.getWidth(), canvas.getHeight())*0.6;
-    const sc = Math.min(size/img.width, size/img.height, 1);
-    img.scale(sc);
-
-    let obj;
-    if(isPermanent){
-      img._kind='overlay';
-      obj = img;
-    } else {
-      // Group with tiny corner watermarks
-      const wmTL = await fabricFromURL(WM_SRC);
-      const wmBR = await fabricFromURL(WM_SRC);
-      const bw = img.width*sc, bh=img.height*sc;
-      const wmTargetW = Math.max(16, bw*0.08);
-      const margin = Math.max(6, bw*0.02);
-      const scaleTL = wmTargetW / wmTL.width; const scaleBR = wmTargetW / wmBR.width;
-      wmTL.scale(scaleTL); wmBR.scale(scaleBR);
-      wmTL.set({ originX:'center', originY:'center', left: -bw/2 + margin + wmTL.width*scaleTL/2, top: -bh/2 + margin + wmTL.height*scaleTL/2, selectable:false, evented:false });
-      wmBR.set({ originX:'center', originY:'center', left: +bw/2 - margin - wmBR.width*scaleBR/2, top: +bh/2 - margin - wmBR.height*scaleBR/2, selectable:false, evented:false });
-      const group = new fabric.Group([img, wmTL, wmBR], { originX:'center', originY:'center' });
-      group._kind='overlay';
-      obj = group;
-    }
-    canvas.add(obj);
-    obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
-    canvas.setActiveObject(obj);
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-    return obj;
-  }
-
-  // Reorder within overlay band only
-  function reorderOverlay(dir){
-    const o=canvas.getActiveObject(); if(!o || o._kind!=='overlay') return;
-    const objs=canvas.getObjects();
-    const baseIndex = objs.findIndex(x=>x._isBase);
-    // overlay band are objects with _kind='overlay'
-    const overlays = objs.filter(x=>x._kind==='overlay');
-    if(overlays.length<=1) return;
-    const currentIndex = overlays.indexOf(o);
-    if(dir==='front' && currentIndex < overlays.length-1){
-      // move after the last overlay in canvas stacking
-      const overlayCanvasIndices = overlays.map(x=>objs.indexOf(x)).sort((a,b)=>a-b);
-      const topOverlayCanvasIndex = overlayCanvasIndices[overlayCanvasIndices.length-1];
-      canvas.moveTo(o, topOverlayCanvasIndex+1);
-    }else if(dir==='back' && currentIndex>0){
-      const overlayCanvasIndices = overlays.map(x=>objs.indexOf(x)).sort((a,b)=>a-b);
-      const bottomOverlayCanvasIndex = overlayCanvasIndices[0];
-      canvas.moveTo(o, bottomOverlayCanvasIndex);
-      // ensure not below base
-      const idx = objs.indexOf(o);
-      const bidx = objs.findIndex(x=>x._isBase);
-      if(bidx>=0 && idx<=bidx){ canvas.moveTo(o, bidx+1); }
-    }
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-  }
-
-  // Overlay grid render (permanents clickable)
-  function renderOverlayGrid(){
-    const grid=document.getElementById("overlayGrid"); grid.innerHTML="";
-    overlayList.forEach((item, idx)=>{
-      const tile=document.createElement("div"); tile.className="tile"+(item.perm?" perm":"");
-      const img=document.createElement("img"); img.src=item.src; img.alt=item.name; img.title=item.name+(item.perm?" (permanent)":"");
-      img.addEventListener("click", async ()=>{ await addOverlayToCanvas(item.src, item.perm); });
-      if(!item.perm){
-        const x=document.createElement("div"); x.className="x"; x.textContent="🗑"; x.addEventListener("click",(e)=>{ e.stopPropagation(); overlayList.splice(idx,1); renderOverlayGrid(); });
-        tile.appendChild(x);
-      }
-      tile.appendChild(img);
-      const cap=document.createElement("div"); cap.style.fontSize="11px"; cap.style.color="#9ca3af"; cap.style.marginTop="4px"; cap.textContent=item.name; tile.appendChild(cap);
-      grid.appendChild(tile);
+  async function fileToDataURL(file){
+    return await new Promise((res,rej)=>{
+      const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
     });
   }
-
-  // Token ID label helpers
-  function addOrUpdateTokenLabel(id){
-    const display = document.getElementById("tokenIdDisplay");
-    display.value = "#"+id;
-    const text = formatTokenId(display.value, document.getElementById("idFormat").value);
-    if(!idLabel){
-      idLabel = new fabric.Textbox(text, {
-        left: canvas.getWidth()/2, top: 40, originX:'center', originY:'top',
-        width: Math.floor(canvas.getWidth()*0.8), textAlign:'center',
-        fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-        fontSize: parseInt(document.getElementById("idSize").value,10)||52,
-        fill: document.getElementById("idColor").value,
-        stroke: document.getElementById("idStrokeColor").value,
-        strokeWidth: parseInt(document.getElementById("idStrokeWidth").value,10)||0,
-        editable:false
-      });
-      idLabel._kind='tokenId';
-      canvas.add(idLabel);
-    }else{
-      idLabel.text = text;
-    }
-    bringInterfaceToFront();
-    idLabel.setCoords();
-    canvas.requestRenderAll();
+  async function fetchAsDataURL(url){
+    const r=await fetch(url,{mode:"cors"});
+    if(!r.ok) throw new Error("Fetch failed");
+    const b=await r.blob();
+    return await new Promise((res)=>{
+      const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b);
+    });
   }
-  function formatTokenId(displayVal, fmt){
-    // displayVal is like "#1234" maybe; extract numeric
-    let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
-    if(Number.isNaN(num)) return displayVal;
-    switch(fmt){
-      case "roman": return toRoman(num);
-      case "hex": return "0x"+num.toString(16).toUpperCase();
-      case "binary": return "0b"+num.toString(2);
-      case "leading": return "#"+String(num).padStart(4,'0');
-      default: return "#"+num;
-    }
+  function normalize(u){
+    if(!u) return null;
+    if(u.startsWith("ipfs://")) return "https://cloudflare-ipfs.com/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
+    if(u.startsWith("ar://"))   return "https://arweave.net/"+u.replace("ar://","");
+    return u;
   }
-  function toRoman(num){
-    if (num<=0) return String(num);
-    const map=[['M',1000],['CM',900],['D',500],['CD',400],['C',100],['XC',90],['L',50],['XL',40],['X',10],['IX',9],['V',5],['IV',4],['I',1]];
-    let out=''; for(const [sym,val] of map){ while(num>=val){ out+=sym; num-=val; } } return out;
-  }
-
-  // Export buttons (same as v23i)
-  document.addEventListener("DOMContentLoaded", ()=>{
-    document.getElementById("exportPng").addEventListener("click", ()=> doExport(false));
-    document.getElementById("openNewTab").addEventListener("click", ()=> doExport(true));
-  });
-  function doExport(openTab){
-    const mult=parseInt(document.getElementById("exportMultiplier").value,10)||2;
-    let dataURL;
-    try{
-      dataURL=canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
-    }catch(e){ alert("Export blocked."); return; }
-    document.getElementById("exportPreview").src=dataURL;
-    const a=document.createElement("a"); a.href=dataURL; a.download="rebel-ant-overlay.png";
-    document.getElementById("manualLink").href=dataURL; document.getElementById("manualLink").textContent="Open last export (manual save)";
-    if(openTab){
-      // open blob for reliability
-      fetch(dataURL).then(r=>r.blob()).then(blob=>{
-        const url=URL.createObjectURL(blob);
-        const w=window.open(url, "_blank", "noopener");
-        if(!w){ window.location.href=url; }
-      });
-    }else{
-      document.body.appendChild(a); a.click(); a.remove();
-    }
-  }
-
-  // ------- Fetch helpers -------
   async function fetchImageByTokenId(contract, tokenId){
     const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
     const r = await fetch(u,{headers:{'accept':'application/json'}, cache:'no-store'});
@@ -366,3295 +77,982 @@
     ].filter(Boolean).map(normalize);
     return candidates[0] || null;
   }
-  function normalize(u){
-    if(!u) return null;
-    if(u.startsWith('ipfs://')) return 'https://cloudflare-ipfs.com/ipfs/'+u.replace('ipfs://','').replace(/^ipfs\//,'');
-    if(u.startsWith('ar://')) return 'https://arweave.net/'+u.replace('ar://','');
-    return u;
-  }
-  async function fileToDataURL(file){ return await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(file); }); }
-  async function fetchAsDataURL(url){ const r=await fetch(url,{mode:'cors'}); if(!r.ok) throw new Error("Fetch failed"); const b=await r.blob(); return await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); }); }
-  async function fabricFromURL(url){ return await new Promise((res)=> fabric.Image.fromURL(url, img=>res(img), { crossOrigin:'anonymous' })); }
-
-})();
-
-// ===== AUTOSAVE (simple & safe) =====
-const AUTOSAVE_KEY = 'ra_autosave_v1';
-
-// Save current canvas to the browser
-function saveAutosave() {
-  try {
-    if (!window.canvas) return;
-    const json = canvas.toJSON(['_isWatermark','_isOverlayWM']); // keep our flags
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(json));
-  } catch(e) { /* ignore */ }
-}
-
-// Ask to restore the last session
-function maybeRestoreAutosave() {
-  try {
-    const raw = localStorage.getItem(AUTOSAVE_KEY);
-    if (!raw) return;
-    if (!confirm('Restore your last session?')) return;
-    const json = JSON.parse(raw);
-    canvas.loadFromJSON(json, () => {
-      canvas.renderAll();
-      // Re-hide watermarks if needed (Pro, etc.)
-      if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-    });
-  } catch(e) { /* ignore */ }
-}
-
-// Start autosave when the canvas actually exists
-(function startAutosaveWhenReady(){
-  const timer = setInterval(()=>{
-    if (!window.canvas) return;
-    ['object:added','object:modified','object:removed'].forEach(evt=>{
-      canvas.on(evt, saveAutosave);
-    });
-    window.addEventListener('beforeunload', saveAutosave);
-    // Ask once per load if there is something to restore
-    setTimeout(maybeRestoreAutosave, 800);
-    clearInterval(timer);
-  }, 250);
-})();
-
-// Insert a "Restore last session" button next to "Clear All" (no HTML edit needed)
-(function insertRestoreButton(){
-  function tryInsert() {
-    // If it's already there, do nothing
-    if (document.getElementById('restoreBtn')) return;
-
-    // Find the existing "Clear All" button on the page
-    const btns = Array.from(document.querySelectorAll('button'));
-    const clearAllBtn = btns.find(b => b.textContent && b.textContent.trim().toLowerCase() === 'clear all');
-    if (!clearAllBtn) return; // page not ready yet
-
-    // Make our Restore button
-    const rb = document.createElement('button');
-    rb.id = 'restoreBtn';
-    rb.className = 'btn small';
-    rb.textContent = 'Restore last session';
-
-    // Place it right after "Clear All"
-    clearAllBtn.insertAdjacentElement('afterend', rb);
-
-    // When clicked, ask to restore the saved canvas
-    rb.addEventListener('click', () => {
-      if (typeof maybeRestoreAutosave === 'function') maybeRestoreAutosave();
+  async function fabricFromURL(url){
+    return await new Promise((res)=>{
+      const opts = /^data:|^blob:/i.test(url) ? {} : { crossOrigin:"anonymous" };
+      fabric.Image.fromURL(url, img=>res(img), opts);
     });
   }
 
-  // Try once the page is ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', tryInsert);
-  } else {
-    tryInsert();
-  }
-})();
-
-/* ========= AUTOSAVE + RESTORE BUTTON (self-contained) ========= */
-(function autosaveBundle(){
-  const AUTOSAVE_KEY = 'ra_autosave_v1';
-
-  // Save the whole canvas (keeps our watermark flags)
-  function saveNow() {
-    try {
-      if (!window.canvas) return;
-      const json = canvas.toJSON(['_isWatermark','_isOverlayWM']);
-      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(json));
-      showSavedBadge();
-    } catch (e) { /* ignore */ }
+  function bringInterfaceToFront(){
+    if (idLabel) canvas.bringToFront(idLabel);
   }
 
-  // Restore from local storage (optionally ask first)
-  function restoreNow(ask = false) {
-    try {
-      const raw = localStorage.getItem(AUTOSAVE_KEY);
-      if (!raw) { alert('Nothing to restore yet. Make a change first.'); return; }
-      if (ask && !confirm('Restore your last session?')) return;
+  function initBackgroundRect(fill){
+    backgroundRect = new fabric.Rect({
+      left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(),
+      fill:fill, selectable:false, evented:false, hasControls:false
+    });
+    backgroundRect._isBgRect = true;
+    canvas.add(backgroundRect);
+    canvas.sendToBack(backgroundRect);
+  }
 
-      // Ensure images load with CORS
-      if (window.fabric && fabric.Image && !fabric.Image._patchedForCORS) {
-        const origFromObject = fabric.Image.fromObject;
-        fabric.Image.fromObject = function(obj, cb){
-          obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
-          return origFromObject.call(this, obj, cb);
-        };
-        fabric.Image._patchedForCORS = true;
+  function setCanvasSize(size){
+    const prevW=canvas.getWidth()||size, prevH=canvas.getHeight()||size;
+    const sx=size/prevW, sy=size/prevH;
+    canvas.setWidth(size); canvas.setHeight(size);
+    if(backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
+    canvas.getObjects().forEach(o=>{
+      if (o===backgroundRect) return;
+      o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
+    });
+    canvas.setViewportTransform([1,0,0,1,0,0]);
+    canvas.requestRenderAll();
+  }
+
+  function setZoom(v){
+    zoom=Math.max(0.25,Math.min(6,v));
+    canvas.setZoom(zoom);
+    const zv=$("zoomVal"); if(zv) zv.textContent=Math.round(zoom*100)+"%";
+    canvas.requestRenderAll();
+  }
+
+  function lockBaseObject(o){
+    if (!o) return;
+    o._isBase = true;
+    o.selectable = false;
+    o.evented = false;
+    o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = true;
+    try { canvas.sendToBack(o); } catch(_){}
+  }
+
+  function clearBaseOnly(){
+    canvas.getObjects().slice().forEach(o=>{ if(o._isBase) canvas.remove(o); });
+    baseGroup=null; canvas.requestRenderAll();
+  }
+
+  // Place two corner stamps into a center-origin group
+  async function makeStampedGroup(img, bw, bh, wmWidthRatio){
+    const wmTL = await fabricFromURL(WM_SRC);
+    const wmBR = await fabricFromURL(WM_SRC);
+    const wmTargetW = Math.max(16, bw * wmWidthRatio);
+    const margin    = Math.max(6,  bw * 0.02);
+
+    const scaleTL = wmTargetW / wmTL.width;
+    const scaleBR = wmTargetW / wmBR.width;
+    wmTL.scale(scaleTL); wmBR.scale(scaleBR);
+
+    Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:"TL" });
+    Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:"BR" });
+
+    wmTL.set({
+      originX:"center", originY:"center",
+      left: -bw/2 + margin + wmTL.width*scaleTL/2,
+      top:  -bh/2 + margin + wmTL.height*scaleTL/2
+    });
+    wmBR.set({
+      originX:"center", originY:"center",
+      left:  bw/2 - margin - wmBR.width*scaleBR/2,
+      top:   bh/2 - margin - wmBR.height*scaleBR/2
+    });
+
+    const group = new fabric.Group([img, wmTL, wmBR], { originX:"center", originY:"center" });
+    return group;
+  }
+
+  async function loadBaseImage(dataUrl, isToken){
+    clearBaseOnly();
+    const img = await fabricFromURL(dataUrl);
+    img.set({ originX:"center", originY:"center" });
+
+    // fit to canvas (no upscaling)
+    const cw=canvas.getWidth(), ch=canvas.getHeight();
+    const sc=Math.min(cw/img.width, ch/img.height, 1);
+    img.scale(sc);
+
+    const bw = img.width*sc, bh = img.height*sc;
+
+    let obj;
+    if (isToken) {
+      // Token = RA (real asset) => NO watermarks
+      img._isBase = true;
+      lockBaseObject(img);
+      img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+      obj = img;
+    } else {
+      // Non-token => add corner stamps
+      const group = await makeStampedGroup(img, bw, bh, 0.15);
+      group._isBase = true;
+      lockBaseObject(group);
+      group.set({ left:cw/2, top:ch/2 }); group.setCoords();
+      obj = group;
+    }
+
+    canvas.add(obj);
+    baseGroup = obj;
+    bringInterfaceToFront();
+    canvas.requestRenderAll();
+  }
+
+  // Add overlay (with small corner stamps unless permanent)
+  async function addOverlayToCanvas(src, isPermanent){
+    const img = await fabricFromURL(src);
+    img.set({ originX:"center", originY:"center" });
+
+    // initial scale ~ 60% of canvas' smaller side
+    const cw=canvas.getWidth(), ch=canvas.getHeight();
+    const maxDim = Math.min(cw, ch) * 0.60;
+    const iw = img.width||maxDim, ih = img.height||maxDim;
+    const sc = Math.min(1, maxDim / Math.max(iw, ih));
+    if (isFinite(sc) && sc>0) img.scale(sc);
+
+    let obj;
+    if (isPermanent) {
+      img._kind = "overlay";
+      obj = img;
+    } else {
+      const group = await makeStampedGroup(img, (img.width||maxDim)*sc, (img.height||maxDim)*sc, 0.08);
+      group._kind = "overlay";
+      obj = group;
+    }
+
+    canvas.add(obj);
+    obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
+    canvas.setActiveObject(obj);
+    bringInterfaceToFront();
+    canvas.requestRenderAll();
+    return obj;
+  }
+
+  function renderOverlayGrid(){
+    const grid = $("overlayGrid"); if (!grid) return;
+    grid.innerHTML="";
+    overlayList.forEach((item, idx)=>{
+      const tile=document.createElement("div");
+      tile.className = "tile" + (item.perm ? " perm" : "");
+      tile.style.cursor = "pointer";
+
+      const img=document.createElement("img");
+      img.src=item.src; img.alt=item.name||""; img.title=item.name||(item.perm?"":"");
+      img.style.maxWidth="100%"; img.style.display="block";
+      img.addEventListener("click", async ()=>{ await addOverlayToCanvas(item.src, item.perm); });
+
+      tile.appendChild(img);
+
+      const cap=document.createElement("div");
+      cap.style.fontSize="11px"; cap.style.color="#9ca3af"; cap.style.marginTop="4px";
+      cap.textContent=item.name||"overlay";
+      tile.appendChild(cap);
+
+      if (!item.perm){
+        const x=document.createElement("div");
+        x.textContent="×"; x.title="Remove";
+        x.style.cssText="position:absolute;top:4px;right:6px;cursor:pointer;color:#bbb";
+        x.addEventListener("click",(e)=>{ e.stopPropagation(); overlayList.splice(idx,1); renderOverlayGrid(); });
+        tile.style.position="relative";
+        tile.appendChild(x);
       }
-
-      const json = JSON.parse(raw);
-      canvas.loadFromJSON(json, () => {
-        canvas.renderAll();
-        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-      });
-    } catch (e) {
-      alert('Could not restore this session.');
-    }
-  }
-
-  // Little "Saved just now" indicator so you know it ran
-  function showSavedBadge(){
-    let el = document.getElementById('saveStatus');
-    if (!el) {
-      const exportHeader = Array.from(document.querySelectorAll('h3'))
-        .find(h => h.textContent && h.textContent.trim().toLowerCase() === 'export');
-      el = document.createElement('div');
-      el.id = 'saveStatus';
-      el.style.opacity = '0.7';
-      el.style.fontSize = '12px';
-      el.style.margin = '6px 0';
-      if (exportHeader && exportHeader.parentNode) {
-        exportHeader.parentNode.insertBefore(el, exportHeader.nextSibling);
-      } else {
-        document.body.appendChild(el);
-      }
-    }
-    el.textContent = 'Saved just now';
-    setTimeout(() => { if (el) el.textContent = ''; }, 1500);
-  }
-
-  // Add a "Restore last session" button right after "Clear All"
-  function insertRestoreButton(){
-    if (document.getElementById('restoreBtn')) return;
-    const btns = Array.from(document.querySelectorAll('button'));
-    const clearAllBtn = btns.find(b => (b.textContent||'').trim().toLowerCase() === 'clear all');
-    if (!clearAllBtn) return; // panel not in the DOM yet
-
-    const rb = document.createElement('button');
-    rb.id = 'restoreBtn';
-    rb.className = 'btn small';
-    rb.textContent = 'Restore last session';
-    rb.addEventListener('click', () => restoreNow(false));
-    clearAllBtn.insertAdjacentElement('afterend', rb);
-  }
-
-  // Start once the canvas actually exists
-  function startWhenReady(){
-    if (!window.canvas) { setTimeout(startWhenReady, 250); return; }
-
-    // Save on common actions
-    ['object:added','object:modified','object:removed'].forEach(evt => {
-      canvas.on(evt, saveNow);
+      grid.appendChild(tile);
     });
-    window.addEventListener('beforeunload', saveNow);
-
-    // Add the button and ask once to restore (if there is data)
-    insertRestoreButton();
-    setTimeout(() => {
-      if (localStorage.getItem(AUTOSAVE_KEY)) restoreNow(true);
-    }, 800);
   }
 
-  // Try inserting the button as soon as the page is ready too
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', insertRestoreButton);
-  } else {
-    insertRestoreButton();
-  }
+  function reorderOverlay(dir){
+    const o=canvas.getActiveObject(); if(!o || o._kind!=="overlay") return;
+    const objs=canvas.getObjects();
+    const overlays = objs.filter(x=>x._kind==="overlay");
+    if(overlays.length<=1) return;
 
-  startWhenReady();
-})();
+    const overlayIndices = overlays.map(x=>objs.indexOf(x)).sort((a,b)=>a-b);
+    const topIdx    = overlayIndices[overlayIndices.length-1];
+    const bottomIdx = overlayIndices[0];
 
-/* ========= AUTOSAVE v2 (robust) ========= */
-(function autosaveV2(){
-  const KEY = 'ra_autosave_v1';
-  let attached = false;
-  let C = null; // canvas instance, once found
-
-  // Find the Fabric canvas instance, even if it's not window.canvas
-  function findCanvas(){
-    if (C && C.getObjects) return C;
-    if (window.canvas && typeof window.canvas.getObjects === 'function') { C = window.canvas; return C; }
-    try {
-      // scan window for an object that looks like a Fabric canvas
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-            && typeof v.add === 'function'
-            && typeof v.toJSON === 'function'
-            && typeof v.loadFromJSON === 'function'
-            && v.upperCanvasEl) {
-          C = v; return C;
-        }
-      }
-    } catch(e){}
-    return null;
-  }
-
-  // Storage fallback: try localStorage, else use sessionStorage
-  function getStore(){
-    try { localStorage.setItem('__ra_test__','1'); localStorage.removeItem('__ra_test__'); return localStorage; }
-    catch(e){ return sessionStorage; }
-  }
-
-  function showSavedBadge(){
-    let el = document.getElementById('saveStatus');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'saveStatus';
-      el.style.opacity = '0.7';
-      el.style.fontSize = '12px';
-      el.style.margin = '6px 0';
-      // Try to put it in the Canvas card; otherwise add near the Export card; otherwise body
-      const h3s = Array.from(document.querySelectorAll('h3'));
-      const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-      const exportH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'export');
-      if (canvasH3 && canvasH3.parentNode) canvasH3.parentNode.appendChild(el);
-      else if (exportH3 && exportH3.parentNode) exportH3.parentNode.appendChild(el);
-      else document.body.appendChild(el);
+    if (dir==="front"){
+      canvas.moveTo(o, topIdx+1);
+    } else if (dir==="back"){
+      canvas.moveTo(o, bottomIdx);
+      const baseIdx = objs.findIndex(x=>x._isBase);
+      const idx = objs.indexOf(o);
+      if (baseIdx>=0 && idx<=baseIdx){ canvas.moveTo(o, baseIdx+1); }
     }
-    el.textContent = 'Saved just now';
-    setTimeout(()=>{ if (el) el.textContent = ''; }, 1200);
+    bringInterfaceToFront();
+    canvas.requestRenderAll();
   }
 
-  function saveNow(){
-    const c = findCanvas(); if (!c) return;
-    try {
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      getStore().setItem(KEY, JSON.stringify(json));
-      showSavedBadge();
-    } catch(e){}
-  }
+  function addOrUpdateTokenLabel(id){
+    const display = $("tokenIdDisplay");
+    if (display) display.value = "#"+id;
 
-  function patchImageCORS(){
-    if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
-      const orig = fabric.Image.fromObject;
-      fabric.Image.fromObject = function(obj, cb){
-        obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
-        return orig.call(this, obj, cb);
-      };
-      fabric.Image._raPatched = true;
-    }
-  }
+    const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
+    const text = formatTokenId("#"+id, fmt);
 
-  function restoreNow(ask){
-    const c = findCanvas();
-    if (!c) { alert('Canvas not ready yet. Try again in a moment.'); return; }
-
-    const raw = getStore().getItem(KEY);
-    if (!raw) { alert('Nothing to restore yet. Make a change first.'); return; }
-    if (ask && !confirm('Restore your last session?')) return;
-
-    try {
-      patchImageCORS();
-      const json = JSON.parse(raw);
-      c.loadFromJSON(json, ()=> {
-        c.renderAll();
-        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-      });
-    } catch(e) {
-      alert('Could not restore this session.');
-    }
-  }
-
-  function insertRestoreButton(){
-    if (document.getElementById('restoreBtn')) return;
-    // Prefer to put it in the Canvas card
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const container = (canvasH3 && canvasH3.parentNode) ? canvasH3.parentNode : document.body;
-
-    // Also try to find the "Clear All" button to place ours right after it
-    const btns = Array.from(document.querySelectorAll('button'));
-    const clearAllBtn = btns.find(b => (b.textContent||'').replace(/\s+/g,' ').trim().toLowerCase() === 'clear all');
-
-    const rb = document.createElement('button');
-    rb.id = 'restoreBtn';
-    rb.className = 'btn small';
-    rb.textContent = 'Restore last session';
-    rb.addEventListener('click', ()=> restoreNow(false));
-
-    if (clearAllBtn) clearAllBtn.insertAdjacentElement('afterend', rb);
-    else container.appendChild(rb);
-  }
-
-  function attachOnce(){
-    if (attached) return;
-    const c = findCanvas(); if (!c) return;
-
-    attached = true;
-    ['object:added','object:modified','object:removed','selection:updated','mouse:up'].forEach(evt=>{
-      c.on(evt, saveNow);
-    });
-    window.addEventListener('beforeunload', saveNow);
-
-    insertRestoreButton();
-
-    // Ask once shortly after load
-    setTimeout(()=>{ if (getStore().getItem(KEY)) restoreNow(true); }, 800);
-  }
-
-  // Keep trying until the canvas exists, then attach
-  const poll = setInterval(()=>{
-    insertRestoreButton();
-    attachOnce();
-    if (attached) clearInterval(poll);
-  }, 250);
-})();
-/* ========= AUTOSAVE v3 (self-contained, with UI + status) ========= */
-(function autosaveV3(){
-  const KEY = 'ra_autosave_v1';
-  let attached = false;
-  let C = null; // canvas instance once found
-
-  // Try several ways to find the Fabric canvas
-  function getCanvas(){
-    // 1) Same-file variable (many builds use this)
-    try { if (typeof canvas !== 'undefined' && canvas && typeof canvas.getObjects === 'function') return canvas; } catch(e){}
-    // 2) Global
-    if (window.canvas && typeof window.canvas.getObjects === 'function') return window.canvas;
-    // 3) Scan window for a Fabric canvas-like object
-    try {
-      for (const k in window) {
-        const v = window[k];
-        if (v && typeof v === 'object'
-            && typeof v.add === 'function'
-            && typeof v.toJSON === 'function'
-            && typeof v.loadFromJSON === 'function'
-            && v.upperCanvasEl) return v;
-      }
-    } catch(e){}
-    // 4) Last resort: first <canvas> element’s Fabric instance (some builds attach a backref)
-    const el = document.querySelector('canvas');
-    if (el && el.fabric && typeof el.fabric.toJSON === 'function') return el.fabric;
-    return null;
-  }
-
-  // Storage helper (falls back if localStorage is blocked)
-  function store(){ try{ localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }catch(e){ return sessionStorage; } }
-
-  // Small status chip (bottom-right) so you know autosave fired
-  function status(msg){
-    let tag = document.getElementById('raDebug');
-    if (!tag) {
-      tag = document.createElement('div');
-      tag.id = 'raDebug';
-      tag.style.position='fixed'; tag.style.bottom='8px'; tag.style.right='8px';
-      tag.style.background='rgba(0,0,0,.6)'; tag.style.color='#fff';
-      tag.style.padding='6px 8px'; tag.style.borderRadius='6px';
-      tag.style.fontSize='12px'; tag.style.zIndex='99999'; tag.style.pointerEvents='none';
-      document.body.appendChild(tag);
-    }
-    tag.textContent = msg;
-  }
-
-  function saveNow(){
-    C = C || getCanvas(); if (!C) { status('autosave: no canvas'); return; }
-    try {
-      const json = C.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(KEY, JSON.stringify(json));
-      status('Saved just now');
-      setTimeout(()=>status('Ready'), 1200);
-    } catch(e){ status('save error'); }
-  }
-
-  function restoreNow(){
-    C = C || getCanvas(); if (!C) { alert('Canvas not ready yet'); return; }
-    const raw = store().getItem(KEY);
-    if (!raw) { alert('Nothing saved yet'); return; }
-    try {
-      // Make sure images load cross-origin when restoring
-      if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
-        const orig = fabric.Image.fromObject;
-        fabric.Image.fromObject = function(obj, cb){
-          obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
-          return orig.call(this, obj, cb);
-        };
-        fabric.Image._raPatched = true;
-      }
-      const json = JSON.parse(raw);
-      C.loadFromJSON(json, ()=>{
-        C.renderAll();
-        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-        status('Restored');
-        setTimeout(()=>status('Ready'), 1200);
-      });
-    } catch(e){ alert('Could not restore this session.'); }
-  }
-
-  // Add **three** buttons into the Canvas card so you can drive it
-  function insertButtons(){
-    if (document.getElementById('restoreBtn')) return;
-    const h3s = [...document.querySelectorAll('h3')];
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-
-    const row = document.createElement('div'); row.style.marginTop='6px';
-    const rb = document.createElement('button'); rb.id='restoreBtn'; rb.className='btn small'; rb.textContent='Restore last session';
-    const sb = document.createElement('button'); sb.id='saveNowBtn'; sb.className='btn small'; sb.style.marginLeft='6px'; sb.textContent='Save now';
-    const cb = document.createElement('button'); cb.id='clearSavedBtn'; cb.className='btn small danger'; cb.style.marginLeft='6px'; cb.textContent='Clear saved';
-
-    row.appendChild(rb); row.appendChild(sb); row.appendChild(cb);
-    holder.appendChild(row);
-
-    rb.addEventListener('click', restoreNow);
-    sb.addEventListener('click', saveNow);
-    cb.addEventListener('click', ()=>{ store().removeItem(KEY); status('Saved session cleared'); });
-  }
-
-  function attach(){
-    C = C || getCanvas(); if (!C) return;
-    if (attached) return; attached = true;
-    ['object:added','object:modified','object:removed','mouse:up'].forEach(evt=>{
-      try { C.on(evt, saveNow); } catch(e){}
-    });
-    window.addEventListener('beforeunload', saveNow);
-    status('Ready');
-  }
-
-  // Keep trying until everything is ready
-  (function tick(){
-    insertButtons();
-    attach();
-    setTimeout(tick, 400);
-  })();
-})();
-/* ========= AUTOSAVE v4 — hooks Fabric when the canvas is created ========= */
-(function autosaveV4(){
-  const KEY = 'ra_autosave_v1';
-  let wired = false;          // have we attached listeners yet?
-  let C = null;               // canvas instance once found
-
-  // Safe storage (falls back if localStorage is blocked)
-  function store(){
-    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
-    catch(e){ return sessionStorage; }
-  }
-
-  // Tiny status chip (bottom-right) so you know it worked
-  function show(msg){
-    let chip = document.getElementById('raDebug');
-    if (!chip) {
-      chip = document.createElement('div');
-      chip.id = 'raDebug';
-      Object.assign(chip.style, {
-        position:'fixed', bottom:'8px', right:'8px', zIndex:'99999',
-        background:'rgba(0,0,0,.6)', color:'#fff', padding:'6px 8px',
-        borderRadius:'6px', fontSize:'12px', pointerEvents:'none'
-      });
-      document.body.appendChild(chip);
-    }
-    chip.textContent = msg;
-    setTimeout(()=>{ if (chip.textContent === msg) chip.textContent = ''; }, 1200);
-  }
-
-  // Add 3 buttons in the Canvas card so you can drive it
-  function addButtons(){
-    if (document.getElementById('raAutoRow')) return;
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-
-    const row = document.createElement('div');
-    row.id = 'raAutoRow';
-    row.style.marginTop = '6px';
-
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'btn small'; saveBtn.textContent = 'Save now';
-
-    const restoreBtn = document.createElement('button');
-    restoreBtn.className = 'btn small'; restoreBtn.style.marginLeft='6px';
-    restoreBtn.textContent = 'Restore last session';
-
-    const clearBtn = document.createElement('button');
-    clearBtn.className = 'btn small danger'; clearBtn.style.marginLeft='6px';
-    clearBtn.textContent = 'Clear saved';
-
-    row.append(saveBtn, restoreBtn, clearBtn);
-    holder.appendChild(row);
-
-    saveBtn.addEventListener('click', saveNow);
-    restoreBtn.addEventListener('click', () => restoreNow(false));
-    clearBtn.addEventListener('click', () => { store().removeItem(KEY); show('Saved session cleared'); });
-  }
-
-  // Ensure restored images load (CORS)
-  function patchImageCORS(){
-    if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
-      const orig = fabric.Image.fromObject;
-      fabric.Image.fromObject = function(obj, cb){
-        obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
-        return orig.call(this, obj, cb);
-      };
-      fabric.Image._raPatched = true;
-    }
-  }
-
-  function saveNow(){
-    if (!C) return;
-    try {
-      const json = C.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(KEY, JSON.stringify(json));
-      show('Saved just now');
-    } catch(e){ show('Save error'); }
-  }
-
-  function restoreNow(ask){
-    const raw = store().getItem(KEY);
-    if (!raw) { alert('Nothing saved yet'); return; }
-    if (ask && !confirm('Restore your last session?')) return;
-    try {
-      patchImageCORS();
-      const json = JSON.parse(raw);
-      C.loadFromJSON(json, () => {
-        C.renderAll();
-        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-        show('Restored');
-      });
-    } catch(e){ alert('Could not restore this session.'); }
-  }
-
-  // Attach listeners once we have the canvas
-  function wireOnce(){
-    if (wired || !C) return;
-    wired = true;
-    ['object:added','object:modified','object:removed','mouse:up'].forEach(evt=>{
-      try { C.on(evt, saveNow); } catch(e){}
-    });
-    window.addEventListener('beforeunload', saveNow);
-    addButtons();
-    setTimeout(() => { if (store().getItem(KEY)) restoreNow(true); }, 600);
-    show('Ready');
-  }
-
-  // MAIN HOOK: intercept Fabric canvas creation so we always catch it
-  function hookFabric(){
-    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
-      setTimeout(hookFabric, 200); return;
-    }
-    const origInit = fabric.Canvas.prototype.initialize;
-    fabric.Canvas.prototype.initialize = function(...args){
-      const result = origInit.apply(this, args);
-      try {
-        C = this;              // we now have the canvas instance
-        window.canvas = this;  // also expose it (handy for other tools)
-        wireOnce();            // turn on autosave/restore
-      } catch(e){}
-      return result;
+    const style = {
+      fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      fontSize: parseInt(($("idSize")||{}).value||"52",10),
+      fill: ($("idColor")||{}).value || "#ffffff",
+      stroke: ($("idStrokeColor")||{}).value || "transparent",
+      strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
     };
 
-    // If the canvas already existed before our hook, try to find it
-    setTimeout(() => {
-      if (!C) {
-        try {
-          for (const k in window) {
-            const v = window[k];
-            if (v && typeof v.getObjects === 'function' && v.upperCanvasEl) { C = v; break; }
-          }
-        } catch(e){}
-        if (C) { window.canvas = C; wireOnce(); }
-      }
-    }, 300);
-  }
-
-  // Keep nudging the UI (buttons) in case the Canvas card renders late
-  (function ping(){
-    addButtons();
-    setTimeout(ping, 400);
-  })();
-
-  hookFabric();
-})();
-/* Cancel the "Restore your last session?" pop-up once per load */
-(function cancelAutoRestorePromptOnce(){
-  const originalConfirm = window.confirm;
-  window.confirm = function (msg) {
-    if (typeof msg === 'string' && msg.toLowerCase().includes('restore your last session')) {
-      // Cancel this one prompt and immediately restore the normal confirm
-      window.confirm = originalConfirm;
-      return false;
-    }
-    return originalConfirm(msg);
-  };
-  // Safety: after 3s, always restore the original confirm anyway
-  setTimeout(() => { window.confirm = originalConfirm; }, 3000);
-})();
-/* ===== Manual Checkpoints (independent of autosave) + relabel autosave button ===== */
-(function raCheckpoints(){
-  const CK = 'ra_checkpoint_v1';
-
-  function getCanvas(){
-    return (window.canvas && typeof window.canvas.loadFromJSON === 'function') ? window.canvas : null;
-  }
-
-  function toast(msg){
-    let el = document.getElementById('raCkToast');
-    if(!el){
-      el = document.createElement('div');
-      el.id = 'raCkToast';
-      Object.assign(el.style,{
-        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
-        background:'rgba(0,0,0,.7)', color:'#fff', padding:'6px 10px',
-        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
+    if(!idLabel){
+      idLabel = new fabric.Textbox(text, {
+        left: canvas.getWidth()/2, top: 40, originX:"center", originY:"top",
+        width: Math.floor(canvas.getWidth()*0.8), textAlign:"center",
+        editable:false, ...style
       });
-      document.body.appendChild(el);
+      idLabel._kind='tokenId';
+      canvas.add(idLabel);
+    }else{
+      idLabel.text = text;
+      idLabel.set(style);
     }
-    el.textContent = msg;
-    setTimeout(()=>{ if(el.textContent===msg) el.textContent=''; }, 1200);
+    bringInterfaceToFront();
+    idLabel.setCoords();
+    canvas.requestRenderAll();
   }
 
-  function saveCheckpoint(){
-    const c = getCanvas(); if(!c){ alert('Canvas not ready yet'); return; }
-    try{
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      localStorage.setItem(CK, JSON.stringify(json));
-      toast('Checkpoint saved');
-    }catch(e){ alert('Could not save checkpoint'); }
-  }
-
-  function restoreCheckpoint(){
-    const c = getCanvas(); if(!c){ alert('Canvas not ready yet'); return; }
-    const raw = localStorage.getItem(CK);
-    if(!raw){ alert('No checkpoint yet'); return; }
-    try{
-      const json = JSON.parse(raw);
-      c.loadFromJSON(json, ()=>{
-        c.renderAll();
-        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-        toast('Checkpoint restored');
-      });
-    }catch(e){ alert('Could not restore checkpoint'); }
-  }
-
-  // Put 2 new buttons next to the autosave row
-  function insertCheckpointButtons(){
-    const row = document.getElementById('raAutoRow');
-    if(!row){ setTimeout(insertCheckpointButtons, 400); return; }
-    if(document.getElementById('saveCkBtn')) return;
-
-    const saveCk = document.createElement('button');
-    saveCk.id = 'saveCkBtn';
-    saveCk.className = 'btn small';
-    saveCk.style.marginLeft = '6px';
-    saveCk.textContent = 'Save checkpoint';
-
-    const restoreCk = document.createElement('button');
-    restoreCk.id = 'restoreCkBtn';
-    restoreCk.className = 'btn small';
-    restoreCk.style.marginLeft = '6px';
-    restoreCk.textContent = 'Restore checkpoint';
-
-    row.append(saveCk, restoreCk);
-    saveCk.addEventListener('click', saveCheckpoint);
-    restoreCk.addEventListener('click', restoreCheckpoint);
-  }
-
-  // Rename the old autosave restore button so it’s clear what it does
-  function relabelAutosaveButton(){
-    const rb = document.getElementById('restoreBtn'); // created by the autosave block
-    if (rb && rb.textContent.trim().toLowerCase() === 'restore last session') {
-      rb.textContent = 'Restore autosave';
+  function formatTokenId(displayVal, fmt){
+    let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
+    if(Number.isNaN(num)) return String(displayVal);
+    switch(fmt){
+      case "roman":  return toRoman(num);
+      case "hex":    return "0x"+num.toString(16).toUpperCase();
+      case "binary": return "0b"+num.toString(2);
+      case "leading":return "#"+String(num).padStart(4,'0');
+      default:       return "#"+num;
     }
   }
-
-  insertCheckpointButtons();
-  relabelAutosaveButton();
-  // Keep nudging in case the UI renders late
-  (function nudge(){
-    insertCheckpointButtons();
-    relabelAutosaveButton();
-    setTimeout(nudge, 600);
-  })();
-})();
-/* ===== RA PATCH — Manual Save + Checkpoints + Optional Timed Autosave =====
-   - Kills old autosave-on-every-move by removing Fabric event listeners.
-   - Adds a clean control row in the Canvas card:
-       [Save now] [Clear saved] [Save checkpoint] [Restore checkpoint] [Autosave: Off/On (5m)]
-   - Hides any old "Restore last session / Restore autosave" button.
-   - Autosave is OFF by default. Turn it ON with the toggle. Edit MINUTES below if you want 3m.
-============================================================================ */
-
-(function RA_PATCH_MANUAL_SAVE(){
-  // --- Config ---
-  const AUTOSAVE_MINUTES = 5;      // change to 3 if you prefer every 3 minutes
-  const AUTOSAVE_KEY     = 'ra_autosave_v1';
-  const CHECKPOINT_KEY   = 'ra_checkpoint_v1';
-  const AUTOSAVE_FLAG    = 'ra_autosave_enabled_v1'; // remembers your toggle choice
-
-  // --- Storage helper (falls back if localStorage is blocked) ---
-  function store(){
-    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
-    catch(e){ return sessionStorage; }
+  function toRoman(num){
+    if (num<=0) return String(num);
+    const map=[['M',1000],['CM',900],['D',500],['CD',400],['C',100],['XC',90],['L',50],['XL',40],['X',10],['IX',9],['V',5],['IV',4],['I',1]];
+    let out=''; for(const [sym,val] of map){ while(num>=val){ out+=sym; num-=val; } } return out;
   }
 
-  // --- Find Fabric canvas robustly ---
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    try {
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-          && typeof v.add === 'function'
-          && typeof v.loadFromJSON === 'function'
-          && typeof v.toJSON === 'function'
-          && v.upperCanvasEl) return v;
-      }
-    } catch(e){}
-    const el = document.querySelector('canvas');
-    if (el && el.fabric && typeof el.fabric.loadFromJSON === 'function') return el.fabric;
-    return null;
-  }
+  // ===============================
+  //  DOM READY
+  // ===============================
+  document.addEventListener("DOMContentLoaded", () => {
+    if(!window.fabric){ alert("fabric.js failed to load. Open via a local server or check internet."); return; }
 
-  // --- Small status chip so you know it worked ---
-  function toast(msg){
-    let chip = document.getElementById('raToast');
-    if (!chip){
-      chip = document.createElement('div');
-      chip.id = 'raToast';
-      Object.assign(chip.style, {
-        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
-        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
-        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
-      });
-      document.body.appendChild(chip);
-    }
-    chip.textContent = msg;
-    setTimeout(()=>{ if (chip.textContent === msg) chip.textContent = ''; }, 1200);
-  }
-
-  // --- Hide old autosave UI (if it exists) ---
-  function hideOldAutosaveUI(){
-    const oldA = document.getElementById('restoreBtn');      // our earlier injected button
-    if (oldA) oldA.style.display = 'none';
-    const legacy = Array.from(document.querySelectorAll('button'))
-      .find(b => (b.textContent||'').trim().toLowerCase() === 'restore last session'
-              || (b.textContent||'').trim().toLowerCase() === 'restore autosave');
-    if (legacy) legacy.style.display = 'none';
-    const oldRow = document.getElementById('raAutoRow');      // earlier row container
-    if (oldRow) oldRow.remove();
-  }
-
-  // --- Remove old autosave event hooks (stop "save on every move") ---
-  function silenceOldAutosave(){
-    const c = findCanvas(); if (!c) return;
-    ['object:added','object:modified','object:removed','mouse:up','selection:updated']
-      .forEach(evt => { try { c.off(evt); } catch(e){} });
-    // keep any export/watermark listeners your app uses; we only remove common autosave events
-  }
-
-  // --- Manual save / clear (uses the same AUTOSAVE_KEY for compatibility) ---
-  function manualSave(){
-    const c = findCanvas(); if (!c){ toast('Canvas not ready'); return; }
-    try{
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(AUTOSAVE_KEY, JSON.stringify(json));
-      toast('Saved just now');
-    }catch(e){ toast('Save error'); }
-  }
-  function manualClear(){
-    store().removeItem(AUTOSAVE_KEY);
-    toast('Saved session cleared');
-  }
-
-  // --- Checkpoints (manual, independent of autosave) ---
-  function saveCheckpoint(){
-    const c = findCanvas(); if (!c){ setTimeout(saveCheckpoint, 300); return; }
-    try{
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(CHECKPOINT_KEY, JSON.stringify(json));
-      toast('Checkpoint saved');
-    }catch(e){ toast('Checkpoint save error'); }
-  }
-  function restoreCheckpoint(){
-    const c = findCanvas(); if (!c){ setTimeout(restoreCheckpoint, 300); return; }
-    const raw = store().getItem(CHECKPOINT_KEY);
-    if (!raw){ toast('No checkpoint'); return; }
-    try{
-      const json = JSON.parse(raw);
-      c.loadFromJSON(json, ()=>{
-        c.renderAll();
-        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-        toast('Checkpoint restored');
-      });
-    }catch(e){ toast('Checkpoint restore error'); }
-  }
-
-  // --- Optional timed autosave (OFF by default; toggle to enable) ---
-  let timer = null;
-  function autosaveEnabled(){ return store().getItem(AUTOSAVE_FLAG) === '1'; }
-  function setAutosaveEnabled(on){
-    if (on){ store().setItem(AUTOSAVE_FLAG,'1'); startTimer(); }
-    else   { store().removeItem(AUTOSAVE_FLAG); stopTimer(); }
-    updateToggleLabel();
-  }
-  function startTimer(){
-    stopTimer();
-    if (!autosaveEnabled()) return;
-    timer = setInterval(()=>{ manualSave(); }, AUTOSAVE_MINUTES*60*1000);
-  }
-  function stopTimer(){ if (timer){ clearInterval(timer); timer = null; } }
-  function toggleAutosave(){ setAutosaveEnabled(!autosaveEnabled()); }
-
-  // --- UI row in the Canvas card ---
-  function insertControls(){
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-
-    // ensure only one row
-    let row = document.getElementById('raCtrlRow');
-    if (row) return;
-
-    row = document.createElement('div');
-    row.id = 'raCtrlRow';
-    row.style.marginTop = '6px';
-
-    const bSave = document.createElement('button');
-    bSave.id='raSaveNow'; bSave.className='btn small'; bSave.textContent='Save now';
-
-    const bClear = document.createElement('button');
-    bClear.id='raClearSaved'; bClear.className='btn small danger'; bClear.style.marginLeft='6px'; bClear.textContent='Clear saved';
-
-    const bSCk = document.createElement('button');
-    bSCk.id='raSaveCk'; bSCk.className='btn small'; bSCk.style.marginLeft='6px'; bSCk.textContent='Save checkpoint';
-
-    const bRCk = document.createElement('button');
-    bRCk.id='raRestoreCk'; bRCk.className='btn small'; bRCk.style.marginLeft='6px'; bRCk.textContent='Restore checkpoint';
-
-    const bAuto = document.createElement('button');
-    bAuto.id='raAutoToggle'; bAuto.className='btn small'; bAuto.style.marginLeft='6px'; bAuto.textContent='Autosave: Off';
-
-    row.append(bSave, bClear, bSCk, bRCk, bAuto);
-    holder.appendChild(row);
-
-    bSave.addEventListener('click', manualSave);
-    bClear.addEventListener('click', manualClear);
-    bSCk.addEventListener('click', saveCheckpoint);
-    bRCk.addEventListener('click', restoreCheckpoint);
-    bAuto.addEventListener('click', toggleAutosave);
-
-    updateToggleLabel();
-  }
-
-  function updateToggleLabel(){
-    const btn = document.getElementById('raAutoToggle');
-    if (!btn) return;
-    btn.textContent = autosaveEnabled() ? `Autosave: On (${AUTOSAVE_MINUTES}m)` : 'Autosave: Off';
-  }
-
-  // --- Keep things tidy and working even if UI loads late ---
-  function tick(){
-    hideOldAutosaveUI();
-    insertControls();
-    // set window.canvas for other tools if we can
-    const c = findCanvas(); if (c && !window.canvas) window.canvas = c;
-    // disable old move-based autosave
-    silenceOldAutosave();
-    // manage the timer according to your toggle
-    if (autosaveEnabled() && !timer) startTimer();
-    setTimeout(tick, 500);
-  }
-  tick();
-})();
-/* ===== RA PATCH — De‑flicker: hide legacy autosave UI permanently ===== */
-(function RA_PATCH_DEFLICKER(){
-  // 1) Add CSS that hides the legacy autosave row & button if they exist
-  try {
-    const css = document.createElement('style');
-    css.id = 'raDeflickerCSS';
-    css.textContent = `
-      #raAutoRow { display:none !important; visibility:hidden !important; height:0 !important; overflow:hidden !important; }
-      #restoreBtn { display:none !important; }
-    `;
-    document.head && document.head.appendChild(css);
-  } catch(e){}
-
-  // 2) Function that hides any legacy controls the moment they appear
-  function hideLegacy(){
-    // Hide the old row (inserted by older autosave code)
-    const row = document.getElementById('raAutoRow');
-    if (row) { row.style.display='none'; row.style.visibility='hidden'; row.style.height='0'; row.style.overflow='hidden'; }
-
-    // Hide any old restore button by id
-    const rb = document.getElementById('restoreBtn');
-    if (rb) rb.style.display='none';
-
-    // Hide any restore button by label (covers "Restore last session" / "Restore autosave")
-    const btns = Array.from(document.querySelectorAll('button'));
-    btns.forEach(b=>{
-      const t = (b.textContent||'').trim().toLowerCase();
-      if (t === 'restore last session' || t === 'restore autosave') {
-        b.style.display = 'none';
-      }
+    // Create Fabric canvas
+    canvas=new fabric.Canvas("c", {
+      backgroundColor:"transparent",
+      preserveObjectStacking:true,
+      enableRetinaScaling:true,
+      selectionBorderColor:'#22d3ee',
+      selectionColor:'rgba(34,211,238,.08)'
     });
-  }
+    window.canvas = canvas;
 
-  // 3) Run once now, then watch the page and re‑hide if the legacy row reappears
-  hideLegacy();
-  const obs = new MutationObserver(hideLegacy);
-  obs.observe(document.body, { childList: true, subtree: true });
+    // Background and initial size
+    initBackgroundRect("#0d0e13");
+    const sizeEl = $("canvasSize");
+    if (sizeEl) sizeEl.value = "700";
+    setCanvasSize(parseInt(sizeEl?sizeEl.value:"700",10));
+    setZoom(1);
 
-  // 4) Keep our manual controls stable:
-  //    - ensure our own control row exists (created by the earlier manual-save patch)
-  //    - never remove it; just keep legacy hidden
-})();
-/* ===== RA RESET — Manual Save + Checkpoints + Kill Legacy Autosave/Flicker =====
-   - Removes old "save on every move" listeners and hides old UI (incl. Restore autosave).
-   - Leaves a single stable row in Canvas: [Save now] [Clear saved] [Save checkpoint] [Restore checkpoint] [Autosave: Off]
-   - Timed autosave is OFF by default; toggle to ON saves every 5 minutes (edit minutes below).
-=============================================================================== */
-(function RA_RESET_PATCH(){
-  // --- Config ---
-  const AUTOSAVE_MINUTES = 5;                    // change to 3 if you prefer
-  const AUTOSAVE_KEY   = 'ra_autosave_v1';
-  const CHECKPOINT_KEY = 'ra_checkpoint_v1';
-  const AUTOSAVE_FLAG  = 'ra_autosave_enabled_v1'; // remembers toggle
+    // Permanents → embed to the grid
+    overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name:m.name, src:m.src, perm:true }));
+    renderOverlayGrid();
 
-  // --- Storage helper (fallback if localStorage blocked) ---
-  function store(){
-    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
-    catch(e){ return sessionStorage; }
-  }
-
-  // --- Robust canvas finder ---
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    try {
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-          && typeof v.add === 'function'
-          && typeof v.toJSON === 'function'
-          && typeof v.loadFromJSON === 'function'
-          && v.upperCanvasEl) return v;
-      }
-    } catch(e){}
-    const el = document.querySelector('canvas');
-    if (el && el.fabric && typeof el.fabric.loadFromJSON === 'function') return el.fabric;
-    return null;
-  }
-
-  // --- Tiny status chip (center bottom) ---
-  function toast(msg){
-    let chip = document.getElementById('raToast');
-    if (!chip){
-      chip = document.createElement('div');
-      chip.id = 'raToast';
-      Object.assign(chip.style, {
-        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
-        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
-        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
-      });
-      document.body.appendChild(chip);
-    }
-    chip.textContent = msg;
-    setTimeout(()=>{ if (chip.textContent === msg) chip.textContent = ''; }, 1200);
-  }
-
-  // --- Hide legacy autosave UI & debug chips (and stop flicker) ---
-  (function injectHideCSS(){
-    const css = document.createElement('style');
-    css.textContent = `
-      #raAutoRow, #restoreBtn, #raDebug, #saveStatus, #raCtrlRow { display:none !important; visibility:hidden !important; height:0 !important; overflow:hidden !important; }
-      /* prevent layout jump while legacy rows are hidden */
-      #raAutoRow * { display:none !important; }
-    `;
-    (document.head||document.documentElement).appendChild(css);
-  })();
-
-  function hideLegacy(){
-    const ids = ['raAutoRow','restoreBtn','raDebug','saveStatus','raCtrlRow'];
-    ids.forEach(id=>{
-      const el = document.getElementById(id);
-      if (el){ el.style.display='none'; el.style.visibility='hidden'; el.style.height='0'; el.style.overflow='hidden'; }
+    // -------- Base image: local upload
+    safeAddListener("baseUpload","change", async (e)=>{
+      const f=e.target.files && e.target.files[0];
+      if (!f) return;
+      const data = await fileToDataURL(f);
+      await loadBaseImage(data, false); // non‑token => watermark
     });
-    // hide by label (covers "Restore last session" / "Restore autosave")
-    Array.from(document.querySelectorAll('button')).forEach(b=>{
-      const t = (b.textContent||'').trim().toLowerCase();
-      if (t === 'restore last session' || t === 'restore autosave') b.style.display = 'none';
+    safeAddListener("clearUpload","click", ()=>{
+      const inp=$("baseUpload"); if (inp) inp.value="";
+      clearBaseOnly();
     });
-  }
 
-  // --- Remove old event listeners (stop "save on every move") ---
-  function silenceOldAutosave(){
-    const c = findCanvas(); if (!c) return;
-    ['object:added','object:modified','object:removed','mouse:up','selection:updated']
-      .forEach(evt => { try { c.off(evt); } catch(e){} });
-  }
-
-  // --- Manual save / clear (uses AUTOSAVE_KEY for manual snapshot) ---
-  function manualSave(){
-    const c = findCanvas(); if (!c){ toast('Canvas not ready'); return; }
-    try{
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(AUTOSAVE_KEY, JSON.stringify(json));
-      toast('Saved just now');
-    }catch(e){ toast('Save error'); }
-  }
-  function manualClear(){
-    store().removeItem(AUTOSAVE_KEY);
-    toast('Saved session cleared');
-  }
-
-  // --- Checkpoints (manual, independent of the manual snapshot above) ---
-  function saveCheckpoint(){
-    const c = findCanvas(); if (!c){ setTimeout(saveCheckpoint, 300); return; }
-    try{
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(CHECKPOINT_KEY, JSON.stringify(json));
-      toast('Checkpoint saved');
-    }catch(e){ toast('Checkpoint save error'); }
-  }
-  function restoreCheckpoint(){
-    const c = findCanvas(); if (!c){ setTimeout(restoreCheckpoint, 300); return; }
-    const raw = store().getItem(CHECKPOINT_KEY);
-    if (!raw){ toast('No checkpoint'); return; }
-    try{
-      const json = JSON.parse(raw);
-      c.loadFromJSON(json, ()=>{
-        c.renderAll();
-        if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-        toast('Checkpoint restored');
-      });
-    }catch(e){ toast('Checkpoint restore error'); }
-  }
-
-  // --- Optional timed autosave (OFF by default; toggle to enable) ---
-  let timer = null;
-  function autosaveEnabled(){ return store().getItem(AUTOSAVE_FLAG) === '1'; }
-  function updateToggleLabel(){
-    const b = document.getElementById('raAutoToggle');
-    if (b) b.textContent = autosaveEnabled() ? `Autosave: On (${AUTOSAVE_MINUTES}m)` : 'Autosave: Off';
-  }
-  function startTimer(){ stopTimer(); if (!autosaveEnabled()) return; timer = setInterval(()=>manualSave(), AUTOSAVE_MINUTES*60*1000); }
-  function stopTimer(){ if (timer){ clearInterval(timer); timer = null; } }
-  function toggleAutosave(){ if (autosaveEnabled()) store().removeItem(AUTOSAVE_FLAG); else store().setItem(AUTOSAVE_FLAG,'1'); updateToggleLabel(); startTimer(); }
-
-  // --- Single, stable control row in the Canvas card ---
-  function insertControls(){
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-
-    let row = document.getElementById('raCtrlRowUnified');
-    if (!row){
-      row = document.createElement('div');
-      row.id = 'raCtrlRowUnified';
-      row.style.marginTop = '6px';
-
-      function btn(id, label, danger){
-        const b = document.createElement('button');
-        b.id = id; b.className = 'btn small' + (danger ? ' danger' : '');
-        b.style.marginRight = '6px'; b.textContent = label; return b;
-      }
-
-      const bSave  = btn('raSaveNow','Save now');
-      const bClear = btn('raClearSaved','Clear saved', true);
-      const bSCk   = btn('raSaveCk','Save checkpoint');
-      const bRCk   = btn('raRestoreCk','Restore checkpoint');
-      const bAuto  = btn('raAutoToggle','Autosave: Off');
-
-      bSave.addEventListener('click', manualSave);
-      bClear.addEventListener('click', manualClear);
-      bSCk.addEventListener('click', saveCheckpoint);
-      bRCk.addEventListener('click', restoreCheckpoint);
-      bAuto.addEventListener('click', toggleAutosave);
-
-      row.append(bSave, bClear, bSCk, bRCk, bAuto);
-      holder.appendChild(row);
-      updateToggleLabel();
-    }
-  }
-
-  // --- Cancel any old "Restore your last session?" confirm on load ---
-  (function cancelRestorePromptOnce(){
-    const orig = window.confirm;
-    window.confirm = function(msg){
-      if ((''+msg).toLowerCase().includes('restore your last session')) return false;
-      return orig(msg);
-    };
-    setTimeout(()=>{ window.confirm = orig; }, 2000);
-  })();
-
-  // --- Keep things stable even if the page re-renders parts of the UI ---
-  const obs = new MutationObserver(()=>{
-    hideLegacy();
-    insertControls();
-  });
-  obs.observe(document.body, { childList: true, subtree: true });
-
-  // --- Main tick: make sure legacy is silenced and our row exists ---
-  (function tick(){
-    const c = findCanvas();
-    if (c && !window.canvas) window.canvas = c; // expose for other tools
-    silenceOldAutosave();
-    hideLegacy();
-    insertControls();
-    if (autosaveEnabled()) startTimer();
-    setTimeout(tick, 500);
-  })();
-})();
-/* ========= RA FINAL PATCH — reliable canvas + clean controls (no move-autosave) ========= */
-(function RA_FINAL_PATCH(){
-  // ----- Config -----
-  const AUTOSAVE_MINUTES = 5; // timed autosave interval if you toggle it on
-  const SNAP_KEY   = 'ra_autosave_v1';      // manual snapshot ("Save now")
-  const CKPT_KEY   = 'ra_checkpoint_v1';    // manual checkpoint
-  const FLAG_KEY   = 'ra_autosave_enabled_v1'; // remembers toggle
-
-  // ----- Small toast so you know actions worked -----
-  function toast(msg){
-    let el = document.getElementById('raToast');
-    if(!el){
-      el = document.createElement('div');
-      Object.assign(el.style,{
-        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
-        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
-        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
-      });
-      el.id = 'raToast';
-      document.body.appendChild(el);
-    }
-    el.textContent = msg;
-    setTimeout(()=>{ if(el.textContent===msg) el.textContent=''; }, 1200);
-  }
-
-  // ----- Safe storage -----
-  function store(){
-    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
-    catch(e){ return sessionStorage; }
-  }
-
-  // ----- Robust canvas finder -----
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    try {
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-            && typeof v.add === 'function'
-            && typeof v.toJSON === 'function'
-            && typeof v.loadFromJSON === 'function'
-            && v.upperCanvasEl) return v;
-      }
-    } catch(e){}
-    const el = document.querySelector('canvas');
-    if (el && el.fabric && typeof el.fabric.loadFromJSON === 'function') return el.fabric;
-    return null;
-  }
-
-  // ----- Hook Fabric once: as soon as a canvas is created, expose it -----
-  (function hookFabric(){
-    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
-      setTimeout(hookFabric, 200); return;
-    }
-    if (fabric.Canvas.prototype._raHooked) return;
-    const orig = fabric.Canvas.prototype.initialize;
-    fabric.Canvas.prototype.initialize = function(...args){
-      const res = orig.apply(this, args);
-      window.canvas = this; // expose for our tools
-      document.dispatchEvent(new CustomEvent('ra:canvas-ready',{detail:this}));
-      return res;
-    };
-    fabric.Canvas.prototype._raHooked = true;
-
-    // If canvas already existed before hook, try to grab it
-    setTimeout(()=>{ const c = findCanvas(); if (c) { window.canvas = c; document.dispatchEvent(new CustomEvent('ra:canvas-ready',{detail:c})); } }, 300);
-  })();
-
-  // ----- Kill legacy autosave + UI (stop flicker & duplicates) -----
-  (function hideLegacy(){
-    const css = document.createElement('style');
-    css.textContent = `
-      #raAutoRow, #restoreBtn, #raDebug, #saveStatus { display:none !important; visibility:hidden !important; height:0 !important; overflow:hidden !important; }
-      #raAutoRow * { display:none !important; }
-    `;
-    (document.head||document.documentElement).appendChild(css);
-
-    const kill = ()=> {
-      const c = findCanvas();
-      if (c) {
-        ['object:added','object:modified','object:removed','mouse:up','selection:updated'].forEach(evt=>{
-          try { c.off(evt); } catch(e){}
-        });
-      }
-      // hide any stray legacy buttons by label
-      Array.from(document.querySelectorAll('button')).forEach(b=>{
-        const t = (b.textContent||'').trim().toLowerCase();
-        if (t === 'restore last session' || t === 'restore autosave') b.style.display = 'none';
-      });
-    };
-    kill();
-    const obs = new MutationObserver(kill);
-    obs.observe(document.body, { childList:true, subtree:true });
-  })();
-
-  // ----- Helper: run when canvas is really there (retry up to 10x) -----
-  function withCanvas(fn, tries=0){
-    const c = findCanvas();
-    if (c) { if(!window.canvas) window.canvas = c; return fn(c); }
-    if (tries >= 10) { toast('Canvas not ready'); return; }
-    setTimeout(()=>withCanvas(fn, tries+1), 200);
-  }
-
-  // ----- Snapshot (manual "Save now") & Clear -----
-  function saveSnapshot(){ withCanvas(c=>{
-    try {
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(SNAP_KEY, JSON.stringify(json));
-      toast('Saved just now');
-    } catch(e){ toast('Save error'); }
-  });}
-  function clearSnapshot(){ store().removeItem(SNAP_KEY); toast('Saved session cleared'); }
-
-  // ----- Checkpoints (manual) -----
-  function saveCheckpoint(){ withCanvas(c=>{
-    try {
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(CKPT_KEY, JSON.stringify(json));
-      toast('Checkpoint saved');
-    } catch(e){ toast('Checkpoint save error'); }
-  });}
-  function restoreCheckpoint(){
-    const raw = store().getItem(CKPT_KEY);
-    if (!raw) { toast('No checkpoint'); return; }
-    withCanvas(c=>{
-      try {
-        // ensure images load okay when restoring
-        if (window.fabric && fabric.Image && !fabric.Image._raPatched) {
-          const orig = fabric.Image.fromObject;
-          fabric.Image.fromObject = function(obj, cb){
-            obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
-            return orig.call(this, obj, cb);
-          };
-          fabric.Image._raPatched = true;
-        }
-        const json = JSON.parse(raw);
-        c.loadFromJSON(json, ()=>{
-          c.renderAll();
-          if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-          toast('Checkpoint restored');
-        });
-      } catch(e){ toast('Checkpoint restore error'); }
+    // -------- Base image: paste URL
+    safeAddListener("loadUrl","click", async ()=>{
+      const url = ($("baseUrl") && $("baseUrl").value || "").trim();
+      if (!url) return;
+      const data = await fetchAsDataURL(url);
+      await loadBaseImage(data, false);
     });
-  }
 
-  // ----- Optional timed autosave (OFF by default) -----
-  let timer = null;
-  function autosaveEnabled(){ return store().getItem(FLAG_KEY) === '1'; }
-  function setAutosave(on){
-    if (on) store().setItem(FLAG_KEY,'1'); else store().removeItem(FLAG_KEY);
-    updateToggle(); restartTimer();
-  }
-  function restartTimer(){
-    if (timer) { clearInterval(timer); timer = null; }
-    if (!autosaveEnabled()) return;
-    timer = setInterval(saveSnapshot, AUTOSAVE_MINUTES*60*1000);
-  }
+    // -------- Base image: load by token ID (Reservoir)
+    safeAddListener("loadToken","click", async ()=>{
+      const id = ($("tokenIdInput") && $("tokenIdInput").value || "").trim();
+      const status = $("tokenStatus");
+      if (!id){ if(status) status.textContent="Enter a token ID."; return; }
 
-  // ----- Clean control row (one line, centered with your styles) -----
-  function insertControls(){
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-
-    let row = document.getElementById('raCtrlRowUnified');
-    if (!row){
-      row = document.createElement('div');
-      row.id = 'raCtrlRowUnified';
-      row.className = 'row tight';           // uses your layout class → one line
-      row.style.marginTop = '6px';
-
-      function Btn(id,label,cls){
-        const b = document.createElement('button');
-        b.id = id; b.className = 'btn small' + (cls?' '+cls:''); b.textContent = label;
-        return b;
-      }
-
-      const bSave  = Btn('raSaveNow','Save now');
-      const bClear = Btn('raClearSaved','Clear saved','danger');
-      const bSCk   = Btn('raSaveCk','Save checkpoint');
-      const bRCk   = Btn('raRestoreCk','Restore checkpoint');
-      const bAuto  = Btn('raAutoToggle','Autosave: Off');
-
-      bSave.addEventListener('click', saveSnapshot);
-      bClear.addEventListener('click', clearSnapshot);
-      bSCk.addEventListener('click', saveCheckpoint);
-      bRCk.addEventListener('click', restoreCheckpoint);
-      bAuto.addEventListener('click', ()=> setAutosave(!autosaveEnabled()));
-
-      row.append(bSave, bClear, bSCk, bRCk, bAuto);
-      holder.appendChild(row);
-      updateToggle();
-    }
-  }
-
-  function updateToggle(){
-    const b = document.getElementById('raAutoToggle');
-    if (!b) return;
-    b.textContent = autosaveEnabled() ? `Autosave: On (${AUTOSAVE_MINUTES}m)` : 'Autosave: Off';
-  }
-
-  // ----- Keep things stable even if the UI re-renders -----
-  const obs = new MutationObserver(()=> insertControls());
-  obs.observe(document.body, { childList:true, subtree:true });
-
-  // Insert controls ASAP; keep toggle label current; keep timer in sync
-  function init(){
-    insertControls();
-    updateToggle();
-    restartTimer();
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
-  document.addEventListener('ra:canvas-ready', ()=> { updateToggle(); }); // when Fabric fires
-})();
-/* ===== RA SUPER-RESET — Checkpoints only (no autosave, no "Save now") =====
-   - Hides/removes legacy autosave UI and per-move saves.
-   - Hooks Fabric so we always get the real canvas.
-   - Adds ONE clean row in the Canvas card: [Save checkpoint] [Restore checkpoint]
-   - Saves as Fabric JSON, so layers remain editable after restore.
-============================================================================ */
-(function RA_SUPER_RESET(){
-  const CKPT_KEY = 'ra_checkpoint_v1';
-
-  // Toast (bottom center) so you know actions worked
-  function toast(msg){
-    let el = document.getElementById('raToast2');
-    if(!el){
-      el = document.createElement('div');
-      el.id = 'raToast2';
-      Object.assign(el.style,{
-        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
-        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
-        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
-      });
-      document.body.appendChild(el);
-    }
-    el.textContent = msg;
-    setTimeout(()=>{ if(el.textContent===msg) el.textContent=''; }, 1200);
-  }
-
-  // Safe storage (fallback if localStorage is blocked)
-  function store(){
-    try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }
-    catch(e){ return sessionStorage; }
-  }
-
-  // Robust canvas finder (many fallbacks)
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-
-    // Try DOM → possible backrefs
-    const tryDom = (sel) => {
-      const el = document.querySelector(sel);
-      if (!el) return null;
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
-        const v = el[key];
-        if (v && typeof v.loadFromJSON === 'function') return v;
-      }
-      if (el.parentElement){
-        for (const key of ['fabric','__canvas','canvas','fabricCanvas']) {
-          const v = el.parentElement[key];
-          if (v && typeof v.loadFromJSON === 'function') return v;
-        }
-      }
-      return null;
-    };
-    let c = tryDom('canvas.upper-canvas') || tryDom('canvas.lower-canvas') || tryDom('canvas');
-    if (c) { window.canvas = c; return c; }
-
-    // Scan globals for a Fabric canvas-like object
-    try {
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-            && typeof v.add === 'function'
-            && typeof v.toJSON === 'function'
-            && typeof v.loadFromJSON === 'function'
-            && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    } catch(e){}
-
-    return null;
-  }
-
-  // Hook Fabric so we catch the canvas the moment it’s created
-  (function hookFabric(){
-    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
-      setTimeout(hookFabric, 200); return;
-    }
-    if (fabric.Canvas.prototype._raHookedSuper) return;
-    const orig = fabric.Canvas.prototype.initialize;
-    fabric.Canvas.prototype.initialize = function(...args){
-      const res = orig.apply(this, args);
-      window.canvas = this;                       // expose for tools
-      document.dispatchEvent(new Event('ra:canvas-ready'));
-      return res;
-    };
-    fabric.Canvas.prototype._raHookedSuper = true;
-
-    // If the canvas already exists, try to grab it soon after
-    setTimeout(()=>{ const c = findCanvas(); if (c) { window.canvas = c; document.dispatchEvent(new Event('ra:canvas-ready')); } }, 300);
-  })();
-
-  // Remove old per-move autosave listeners and hide legacy buttons (stop flicker/duplicates)
-  function silenceLegacy(){
-    // Hide legacy rows/buttons by id or label
-    ['raAutoRow','restoreBtn','raDebug','saveStatus','raCtrlRowUnified','raCtrlRow','raCkRowOld'].forEach(id=>{
-      const el = document.getElementById(id); if (el) el.style.display='none';
-    });
-    Array.from(document.querySelectorAll('button')).forEach(b=>{
-      const t = (b.textContent||'').trim().toLowerCase();
-      if (t==='restore last session' || t==='restore autosave' || t==='save now' || t==='clear saved' || t.startsWith('autosave')) {
-        b.style.display='none';
-      }
-    });
-    // Detach common autosave move listeners
-    const c = findCanvas();
-    if (c){
-      ['object:added','object:modified','object:removed','mouse:up','selection:updated'].forEach(evt=>{ try{ c.off(evt); }catch(e){} });
-    }
-  }
-
-  // Retry helper that waits for canvas without throwing "not ready"
-  function withCanvas(fn, tries=0){
-    const c = findCanvas();
-    if (c) return fn(c);
-    if (tries > 25) { toast('Canvas not ready'); return; }   // ~5s total wait
-    setTimeout(()=>withCanvas(fn, tries+1), 200);
-  }
-
-  // --- Checkpoints only ---
-  function saveCheckpoint(){ withCanvas(c=>{
-    try{
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(CKPT_KEY, JSON.stringify(json));
-      toast('Checkpoint saved');
-    }catch(e){ toast('Checkpoint save error'); }
-  });}
-
-  function restoreCheckpoint(){
-    const raw = store().getItem(CKPT_KEY);
-    if (!raw) { toast('No checkpoint'); return; }
-    withCanvas(c=>{
+      if(status) status.textContent="Fetching token…";
       try{
-        // Ensure images restore with CORS ok
-        if (window.fabric && fabric.Image && !fabric.Image._raPatchedX){
-          const orig = fabric.Image.fromObject;
-          fabric.Image.fromObject = function(obj, cb){
-            obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
-            return orig.call(this, obj, cb);
-          };
-          fabric.Image._raPatchedX = true;
-        }
-        const json = JSON.parse(raw);
-        c.loadFromJSON(json, ()=>{
-          c.renderAll();
-          if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-          toast('Checkpoint restored');
-        });
-      }catch(e){ toast('Checkpoint restore error'); }
+        const imgUrl = await fetchImageByTokenId(CONTRACT, id);
+        if (!imgUrl){ if(status) status.textContent="No image URL found."; return; }
+        if(status) status.textContent="Downloading image…";
+        const data = await fetchAsDataURL(imgUrl);
+        await loadBaseImage(data, true);   // token ⇒ NO watermark
+        addOrUpdateTokenLabel(id);
+        if(status) status.textContent="Loaded 👍";
+      }catch(_){
+        if(status) status.textContent="Failed to load token image.";
+      }
     });
-  }
 
-  // Insert one clean row in the Canvas card (aligned, no stacking)
-  function insertRow(){
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
+    // -------- Canvas controls
+    safeAddListener("zoomIn","click",  ()=> setZoom(zoom*1.1));
+    safeAddListener("zoomOut","click", ()=> setZoom(zoom/1.1));
+    safeAddListener("zoomReset","click", ()=>{
+      setZoom(1);
+      canvas.setViewportTransform([1,0,0,1,0,0]);
+    });
+    safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
+    safeAddListener("clearBase","click", clearBaseOnly);
+    safeAddListener("clearCanvas","click", ()=>{
+      const keep=[backgroundRect];
+      canvas.getObjects().slice().forEach(o=>{ if(!keep.includes(o)) canvas.remove(o); });
+      idLabel=null; baseGroup=null; canvas.requestRenderAll();
+    });
 
-    let row = document.getElementById('raCkRow');
-    if (row) return;
+    // -------- Token ID style live controls (if present)
+    ["change","input"].forEach(ev=>{
+      safeAddListener("idFormat", ev, ()=>{ if(idLabel){ idLabel.text = formatTokenId(($("tokenIdDisplay")||{}).value||"", $("idFormat").value); canvas.requestRenderAll(); }});
+      safeAddListener("idSize", ev, ()=>{ if(idLabel){ idLabel.set('fontSize', parseInt(($("idSize")||{}).value||"52",10)); canvas.requestRenderAll(); }});
+      safeAddListener("idColor", ev, ()=>{ if(idLabel){ idLabel.set('fill', ($("idColor")||{}).value||"#fff"); canvas.requestRenderAll(); }});
+      safeAddListener("idStrokeColor", ev, ()=>{ if(idLabel){ idLabel.set('stroke', ($("idStrokeColor")||{}).value||"transparent"); canvas.requestRenderAll(); }});
+      safeAddListener("idStrokeWidth", ev, ()=>{ if(idLabel){ idLabel.set('strokeWidth', parseInt(($("idStrokeWidth")||{}).value||"0",10)); canvas.requestRenderAll(); }});
+    });
+    safeAddListener("deleteTokenId","click", ()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
 
-    row = document.createElement('div');
-    row.id = 'raCkRow';
-    row.className = 'row tight';
-    // Ensure single row & proper spacing regardless of theme css
-    Object.assign(row.style, { display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'6px' });
-
-    const mkBtn = (label) => { const b = document.createElement('button'); b.className='btn small'; b.textContent=label; return b; };
-
-    const bSave = mkBtn('Save checkpoint');
-    const bRestore = mkBtn('Restore checkpoint');
-
-    bSave.addEventListener('click', saveCheckpoint);
-    bRestore.addEventListener('click', restoreCheckpoint);
-
-    row.append(bSave, bRestore);
-    holder.appendChild(row);
-  }
-
-  // Keep things stable even if UI re-renders
-  const obs = new MutationObserver(()=>{
-    silenceLegacy();
-    insertRow();
-  });
-  obs.observe(document.body, { childList:true, subtree:true });
-
-  // Initial run
-  (function boot(){
-    silenceLegacy();
-    insertRow();
-  })();
-
-  // Also react when Fabric signals it's ready
-  document.addEventListener('ra:canvas-ready', ()=> {
-    silenceLegacy();
-    insertRow();
-  });
-})();
-/* ===== RA MINIMAL CHECKPOINTS — reliable canvas + two buttons only ===== */
-(function RA_MIN_CKPTS(){
-  const CKPT_KEY = 'ra_checkpoint_v1';
-
-  // Small toast so you know actions worked
-  function toast(msg){
-    let el = document.getElementById('raToast2');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'raToast2';
-      Object.assign(el.style, {
-        position:'fixed', left:'50%', bottom:'16px', transform:'translateX(-50%)',
-        background:'rgba(0,0,0,.72)', color:'#fff', padding:'6px 10px',
-        borderRadius:'6px', fontSize:'12px', zIndex:'99999', pointerEvents:'none'
+    // -------- Custom text (optional UI)
+    safeAddListener("addCustomText","click", ()=>{
+      const val = (($("customText")||{}).value||"").trim(); if (!val) return;
+      const txt = new fabric.Textbox(val,{
+        left:canvas.getWidth()/2, top:canvas.getHeight()/2, originX:"center", originY:"center",
+        width: Math.floor(canvas.getWidth()*0.8), textAlign:"left",
+        fontFamily: ($("fontFamily")||{}).value || "Arial, sans-serif",
+        fontSize: parseInt(($("fontSize")||{}).value||"48",10),
+        fill: ($("fontColor")||{}).value || "#ffffff",
+        stroke: ($("strokeColor")||{}).value || "transparent",
+        strokeWidth: parseInt(($("strokeWidth")||{}).value||"0",10),
+        editable:true
       });
-      document.body.appendChild(el);
-    }
-    el.textContent = msg;
-    setTimeout(()=>{ if (el.textContent === msg) el.textContent = ''; }, 1200);
-  }
+      txt._kind='customText';
+      canvas.add(txt).setActiveObject(txt);
+      bringInterfaceToFront(); canvas.requestRenderAll();
+    });
+    ["change","input"].forEach(ev=>{
+      safeAddListener("fontFamily", ev, ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', $("fontFamily").value); canvas.requestRenderAll(); }});
+      safeAddListener("fontSize", ev,   ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt($("fontSize").value||"48",10)); canvas.requestRenderAll(); }});
+      safeAddListener("fontColor", ev,  ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fill', $("fontColor").value); canvas.requestRenderAll(); }});
+      safeAddListener("strokeColor", ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('stroke', $("strokeColor").value); canvas.requestRenderAll(); }});
+      safeAddListener("strokeWidth", ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('strokeWidth', parseInt($("strokeWidth").value||"0",10)); canvas.requestRenderAll(); }});
+    });
+    safeAddListener("delSelectedText","click", ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }});
+    safeAddListener("delAllText","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='customText') canvas.remove(o); }); canvas.requestRenderAll(); });
 
-  // Safe storage (fallback if localStorage blocked)
-  function store(){
-    try { localStorage.setItem('__ra_t__','1'); localStorage.removeItem('__ra_t__'); return localStorage; }
-    catch(e){ return sessionStorage; }
-  }
+    // -------- Selection tools
+    safeAddListener("duplicate","click", ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.clone(c=>{ c.set({ left:(o.left||0)+20, top:(o.top||0)+20 }); canvas.add(c).setActiveObject(c); canvas.requestRenderAll(); }); });
+    safeAddListener("delete","click", ()=>{ const o=canvas.getActiveObject(); if(!o || o===backgroundRect || o._isBase) return; canvas.remove(o); canvas.requestRenderAll(); });
+    safeAddListener("opacity","input", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value||"1")); canvas.requestRenderAll(); });
+    safeAddListener("blendMode","change", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.globalCompositeOperation = e.target.value==="normal" ? null : e.target.value; canvas.requestRenderAll(); });
+    safeAddListener("bringFront","click", ()=> reorderOverlay('front'));
+    safeAddListener("sendBack","click",  ()=> reorderOverlay('back'));
+    safeAddListener("flipX","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipX'); canvas.requestRenderAll(); });
+    safeAddListener("flipY","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipY'); canvas.requestRenderAll(); });
+    safeAddListener("lock","click",      ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.set({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true, lockScalingX:true, lockScalingY:true, lockRotation:true }); canvas.requestRenderAll(); });
+    safeAddListener("unlockAll","click", ()=>{ canvas.getObjects().forEach(o=>{ if(!o._isBase){ o.set({ selectable:true, evented:true, hasControls:true, lockMovementX:false, lockMovementY:false, lockScalingX:false, lockScalingY:false, lockRotation:false }); }}); canvas.requestRenderAll(); });
+    safeAddListener("clearAllOverlays","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='overlay') canvas.remove(o); }); canvas.requestRenderAll(); });
 
-  // Find Fabric canvas (robust)
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    // Try DOM backrefs
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el) {
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
-        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') { window.canvas = v; return v; }
+    // -------- Overlays panel & uploads
+    safeAddListener("overlayUpload","change", async (e)=>{
+      const files=Array.from(e.target.files||[]);
+      for(const f of files){
+        const data=await fileToDataURL(f);
+        overlayList.unshift({name:f.name, src:data, perm:false});
+        await addOverlayToCanvas(data,false);
       }
-    }
-    // Scan window for a Fabric-like canvas
-    try {
-      for (const k in window) {
-        const v = window[k];
-        if (v && typeof v === 'object'
-          && typeof v.add === 'function'
-          && typeof v.toJSON === 'function'
-          && typeof v.loadFromJSON === 'function'
-          && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    } catch(e){}
-    return null;
-  }
+      renderOverlayGrid(); e.target.value="";
+    });
+    safeAddListener("clearOverlayGrid","click", ()=>{
+      overlayList = overlayList.filter(o=>o.perm); renderOverlayGrid();
+    });
 
-  // *** CRITICAL: capture the canvas even if created earlier ***
-  (function hookFabricLate(){
-    function hook() {
-      if (!window.fabric || !fabric.Canvas) { setTimeout(hook, 200); return; }
-      if (fabric.Canvas.prototype._raHookedMin) return;
-      // When anything is added OR background is set, we grab the instance.
-      const origAdd = fabric.Canvas.prototype.add;
-      fabric.Canvas.prototype.add = function(...args){
-        window.canvas = this;
-        document.dispatchEvent(new Event('ra:canvas-ready'));
-        return origAdd.apply(this, args);
-      };
-      const origBG = fabric.Canvas.prototype.setBackgroundImage;
-      fabric.Canvas.prototype.setBackgroundImage = function(...args){
-        window.canvas = this;
-        document.dispatchEvent(new Event('ra:canvas-ready'));
-        return origBG.apply(this, args);
-      };
-      fabric.Canvas.prototype._raHookedMin = true;
+    // -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
+    document.addEventListener("keydown", (e)=>{
+      const tag = (e.target && e.target.tagName || "").toLowerCase();
+      if (e.target && (e.target.isContentEditable || tag==="input" || tag==="textarea" || tag==="select")) return;
 
-      // If a canvas already exists, try to find it shortly
-      setTimeout(()=>{ const c = findCanvas(); if (c) { window.canvas = c; document.dispatchEvent(new Event('ra:canvas-ready')); } }, 300);
-    }
-    hook();
-  })();
+      const o = canvas.getActiveObject();
 
-  // Retry helper so buttons don’t show "not ready" if you click fast
-  function withCanvas(fn, tries=0){
-    const c = findCanvas();
-    if (c) return fn(c);
-    if (tries > 25) { toast('Canvas not ready'); return; } // waits up to ~5s total
-    setTimeout(()=>withCanvas(fn, tries+1), 200);
-  }
-
-  // Save / Restore checkpoint (Fabric JSON so layers remain editable)
-  function saveCheckpoint(){ withCanvas(c=>{
-    try {
-      const json = c.toJSON(['_isWatermark','_isOverlayWM']);
-      store().setItem(CKPT_KEY, JSON.stringify(json));
-      toast('Checkpoint saved');
-    } catch(e){ toast('Checkpoint save error'); }
-  });}
-
-  function restoreCheckpoint(){
-    const raw = store().getItem(CKPT_KEY);
-    if (!raw) { toast('No checkpoint'); return; }
-    withCanvas(c=>{
-      try {
-        // Ensure restored images load cross‑origin
-        if (window.fabric && fabric.Image && !fabric.Image._raPatched2) {
-          const orig = fabric.Image.fromObject;
-          fabric.Image.fromObject = function(obj, cb){
-            obj = obj || {}; obj.crossOrigin = obj.crossOrigin || 'anonymous';
-            return orig.call(this, obj, cb);
-          };
-          fabric.Image._raPatched2 = true;
+      // Delete selection
+      if (o && (e.key==="Delete" || e.key==="Backspace")){
+        if (!o._isBase && o!==backgroundRect){
+          canvas.remove(o); canvas.requestRenderAll();
         }
-        const json = JSON.parse(raw);
-        c.loadFromJSON(json, ()=>{
-          c.renderAll();
-          if (typeof refreshWatermarkGate === 'function') refreshWatermarkGate();
-          toast('Checkpoint restored');
-        });
-      } catch(e){ toast('Checkpoint restore error'); }
-    });
-  }
-
-  // Hide ALL legacy autosave / save-now UI to avoid duplicates/flicker
-  function hideLegacyUI(){
-    const byId = ['raAutoRow','restoreBtn','raDebug','saveStatus','raCtrlRowUnified','raCtrlRow','raCkRowOld'];
-    byId.forEach(id => { const el = document.getElementById(id); if (el) el.style.display='none'; });
-    Array.from(document.querySelectorAll('button')).forEach(b=>{
-      const t = (b.textContent||'').trim().toLowerCase();
-      if (t==='restore last session' || t==='restore autosave' || t==='save now' || t==='clear saved' || t.startsWith('autosave')) {
-        b.style.display='none';
+        e.preventDefault(); return;
+      }
+      // Duplicate
+      if (o && ( (e.metaKey && e.key.toLowerCase()==="d") || (e.ctrlKey && e.key.toLowerCase()==="d") )){
+        try { o.clone(cl=>{ cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 }); canvas.add(cl); canvas.setActiveObject(cl); canvas.requestRenderAll(); }); } catch(_){}
+        e.preventDefault(); return;
+      }
+      // Nudge
+      const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
+      if (o && arrows.includes(e.key)){
+        const step = e.shiftKey ? 10 : 1;
+        if (e.key==="ArrowLeft")  o.left -= step;
+        if (e.key==="ArrowRight") o.left += step;
+        if (e.key==="ArrowUp")    o.top  -= step;
+        if (e.key==="ArrowDown")  o.top  += step;
+        o.setCoords(); canvas.requestRenderAll();
+        e.preventDefault();
       }
     });
-    // Detach move‑based autosave, if any
-    const c = findCanvas();
-    if (c){
-      ['object:added','object:modified','object:removed','mouse:up','selection:updated'].forEach(evt=>{ try{ c.off(evt); }catch(e){} });
-    }
-  }
 
-  // Insert ONE clean, aligned row: [Save checkpoint] [Restore checkpoint]
-  function insertRow(){
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-
-    let row = document.getElementById('raCkRow');
-    if (row) return;
-
-    row = document.createElement('div');
-    row.id = 'raCkRow';
-    row.className = 'row tight'; // uses your grid; ensures one line with your theme
-    row.style.marginTop = '6px';
-
-    const mk = (label)=>{ const b=document.createElement('button'); b.className='btn small'; b.textContent=label; return b; };
-    const bSave = mk('Save checkpoint');
-    const bRestore = mk('Restore checkpoint');
-
-    bSave.addEventListener('click', saveCheckpoint);
-    bRestore.addEventListener('click', restoreCheckpoint);
-
-    row.append(bSave, bRestore);
-    holder.appendChild(row);
-  }
-
-  // Keep things stable even if UI re-renders parts of the left panel
-  const obs = new MutationObserver(()=>{ hideLegacyUI(); insertRow(); });
-  obs.observe(document.body, { childList:true, subtree:true });
-
-  // Initial pass + also when we know Fabric is ready
-  (function boot(){ hideLegacyUI(); insertRow(); })();
-  document.addEventListener('ra:canvas-ready', ()=>{ hideLegacyUI(); insertRow(); });
-})();
-/* === RA_BASE_LOCK — auto-lock the base NFT image so it can't move === */
-(function RA_BASE_LOCK(){
-  let baseLocked = false;
-
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') return v;
+    // -------- SNAP + ALIGN UI
+    (function snapAlign(){
+      // UI row (Center buttons + Snap toggle)
+      const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
+      const holder = header ? header.parentNode : document.body;
+      if (!$("raSnapRow")){
+        const row = document.createElement("div");
+        row.id="raSnapRow";
+        row.style.cssText="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
+        row.innerHTML = `
+          <button class="btn small" id="raCenterH">Center H</button>
+          <button class="btn small" id="raCenterV">Center V</button>
+          <button class="btn small" id="raCenterHV">Center HV</button>
+          <button class="btn small" id="raSnapToggle">Snap: On</button>
+          <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
+        `;
+        holder.appendChild(row);
+        $("raSnapToggle").onclick = ()=>{
+          window.__snapOn = !window.__snapOn;
+          $("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
+        };
+        function center(which){
+          const o=canvas.getActiveObject(); if(!o) return;
+          if (which==="H" || which==="HV") o.left = canvas.getWidth()/2;
+          if (which==="V" || which==="HV") o.top  = canvas.getHeight()/2;
+          o.setCoords(); canvas.requestRenderAll();
+        }
+        $("raCenterH").onclick  = ()=>center("H");
+        $("raCenterV").onclick  = ()=>center("V");
+        $("raCenterHV").onclick = ()=>center("HV");
       }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v.add==='function' && typeof v.loadFromJSON==='function' && v.upperCanvasEl) return v;
+
+      window.__snapOn = true;
+      if (!canvas.__snapWired){
+        function halfW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)) / 2; }
+        function halfH(o){ return (o.getScaledHeight?o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2; }
+        function clampSnap(o){
+          if (!window.__snapOn) return;
+          const tol = 8, cw=canvas.getWidth(), ch=canvas.getHeight();
+          const hw=halfW(o), hh=halfH(o);
+          // centers
+          if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
+          if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
+          // edges
+          if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
+          if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
+          if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
+          if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
+        }
+        canvas.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
+        canvas.on("mouse:up", ()=> canvas.requestRenderAll());
+        canvas.__snapWired = true;
       }
-    }catch(e){}
-    return null;
-  }
+    })();
 
-  function lockAsBase(img, c){
-    if (!img || img._isBase) return;
-    img._isBase = true;
-    img.selectable = false;
-    img.evented = false;
-    img.hasControls = false;
-    img.lockMovementX = img.lockMovementY = true;
-    img.hoverCursor = 'default';
-    try { c.sendToBack(img); } catch(e){}
-    c.discardActiveObject();
-    c.requestRenderAll();
-    baseLocked = true;
-  }
+    // -------- ADMIN PORTAL (toggle with ?admin=1)
+    (function adminDock(){
+      const isAdmin = /\badmin=1\b/i.test(location.search);
+      if (!isAdmin) { renderPublishedShelf(); return; }
 
-  function isBaseCandidate(obj, c){
-    if (!obj || obj.type !== 'image') return false;
-    const imgs = c.getObjects('image');
-    if (imgs.length === 1) return true; // first image on canvas
-    const w = obj.width * obj.scaleX, h = obj.height * obj.scaleY;
-    const cw = c.getWidth(), ch = c.getHeight();
-    return (w >= cw * 0.9 && h >= ch * 0.9); // very large image ≈ base
-  }
+      if ($("raAdminDock2")) { renderPublishedShelf(); return; }
 
-  function attach(){
-    const c = findCanvas(); if (!c){ setTimeout(attach, 300); return; }
-    // Lock the first suitable image that gets added
-    c.on('object:added', e=>{
-      const o = e.target || e; if (!o) return;
-      if (!baseLocked && isBaseCandidate(o, c)) lockAsBase(o, c);
-    });
-  }
-
-  function resetLockSoon(){
-    baseLocked = false;
-    setTimeout(()=>{
-      const c = findCanvas(); if (!c) return;
-      const imgs = c.getObjects('image');
-      if (imgs.length){
-        // choose the largest image as base if not already marked
-        const base = imgs.reduce((a,b)=>{
-          const sa=(a.width*a.scaleX)*(a.height*a.scaleY), sb=(b.width*b.scaleX)*(b.height*b.scaleY);
-          return sb>sa ? b : a;
-        });
-        lockAsBase(base, c);
+      function fileToDataURL2(file){
+        return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
       }
-    }, 800);
-  }
+      function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+      function setShelf(arr){ try{ (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(arr||[])); }catch(_){} }
+      function setMsg(t){ const el=$("ra2Msg"); if (el) el.textContent=t||''; }
 
-  function wireLoadAndClearButtons(){
-    const btns = Array.from(document.querySelectorAll('button'));
-    const byText = t => btns.find(b => (b.textContent||'').trim().toLowerCase() === t);
-    const clearBase   = byText('clear base');
-    const load        = byText('load');            // paste URL → Load
-    const loadByToken = byText('load by token');   // token loader
-    [clearBase, load, loadByToken].forEach(btn=>{
-      if (btn && !btn._raBL){
-        btn._raBL = true;
-        btn.addEventListener('click', ()=> resetLockSoon());
-      }
-    });
-  }
+      const dock = document.createElement('div');
+      dock.id = 'raAdminDock2';
+      dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
+      dock.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
+          <strong>Admin Overlays</strong>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button id="ra2Export"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
+            <button id="ra2Hide"    style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+          </div>
+        </div>
+        <div id="ra2Body" style="padding:10px 12px;">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+            <button id="ra2Add"   style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
+            <button id="ra2Clear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
+            <div id="ra2Msg" style="opacity:.75;min-height:18px"></div>
+          </div>
+          <div id="ra2Grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
+          <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add items to the shelf below for everyone.</div>
+        </div>
+      `;
+      document.body.appendChild(dock);
 
-  attach();
-  wireLoadAndClearButtons();
-  document.addEventListener('ra:canvas-ready', ()=>{ baseLocked=false; resetLockSoon(); });
-  const obs = new MutationObserver(()=> wireLoadAndClearButtons());
-  obs.observe(document.body, { childList:true, subtree:true });
-})();
-
-/* ===== RA_BASE_LOCK_V2 — unbreakable base lock (works on load, add, restore) ===== */
-(function RA_BASE_LOCK_V2(){
-  let baseObj = null;      // the object we consider "base"
-  let lockedOnce = false;  // stops re-picking random large overlays later
-
-  // Find Fabric canvas (robust)
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas')
-            || document.querySelector('canvas.lower-canvas')
-            || document.querySelector('canvas');
-    if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') return v;
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-            && typeof v.loadFromJSON === 'function'
-            && typeof v.add === 'function'
-            && v.upperCanvasEl) return v;
-      }
-    }catch(e){}
-    return null;
-  }
-
-  function area(o){ return (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1); }
-
-  // Decide if an image is the "base" (very large compared to canvas, and it's early)
-  function isBaseCandidate(o, c){
-    if (!o || o.type !== 'image') return false;
-    const cw = c.getWidth(), ch = c.getHeight();
-    const a = area(o), ca = cw*ch;
-    // Must cover at least ~70% of canvas area OR be within 90% of width/height
-    const bigByArea = a >= ca*0.7;
-    const bigBySide = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) >= cw*0.9
-                   && (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) >= ch*0.9;
-    return bigByArea || bigBySide;
-  }
-
-  function lock(o, c){
-    if (!o || !c) return;
-    baseObj = o;
-    lockedOnce = true;
-    o._isBase = true;
-    o.selectable = false;
-    o.evented = false;
-    o.hasControls = false;
-    o.lockMovementX = o.lockMovementY = true;
-    o.perPixelTargetFind = false;
-    o.hoverCursor = 'default';
-    try { c.sendToBack(o); } catch(e){}
-    // If base accidentally became active, deselect it
-    try { if (c.getActiveObject() === o) { c.discardActiveObject(); } } catch(e){}
-    c.requestRenderAll();
-  }
-
-  // Scan canvas for a base image and lock it
-  function scanAndLock(c){
-    if (!c) return;
-    // Prefer an already-marked base (e.g., after restore)
-    const marked = c.getObjects('image').find(img => img._isBase === true);
-    if (marked) { lock(marked, c); return; }
-    if (lockedOnce) return; // we already chose a base earlier
-
-    const imgs = c.getObjects('image');
-    if (!imgs.length) return;
-    // Sort by area (largest first)
-    imgs.sort((a,b)=> area(b)-area(a));
-    const candidate = imgs[0];
-    if (isBaseCandidate(candidate, c)) lock(candidate, c);
-  }
-
-  // Keep base unselectable even if something tries to select it
-  function guardSelection(c){
-    c.on('selection:created', e=>{
-      const o = c.getActiveObject();
-      if (o === baseObj) { c.discardActiveObject(); c.requestRenderAll(); }
-    });
-    c.on('selection:updated', e=>{
-      const o = c.getActiveObject();
-      if (o === baseObj) { c.discardActiveObject(); c.requestRenderAll(); }
-    });
-    c.on('mouse:down', e=>{
-      const t = e && e.target;
-      if (t === baseObj) {
-        c.discardActiveObject();
-        c.requestRenderAll();
-      }
-    });
-  }
-
-  // Wrap Fabric so we re-lock after JSON restores (checkpoints) too
-  function hookFabric(){
-    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
-      setTimeout(hookFabric, 200); return;
-    }
-    if (!fabric.Canvas.prototype._raBaseLocked){
-      const origInit = fabric.Canvas.prototype.initialize;
-      fabric.Canvas.prototype.initialize = function(...args){
-        const res = origInit.apply(this, args);
-        // expose canvas
-        window.canvas = this;
-        // lock on creation
-        setTimeout(()=>{ scanAndLock(this); guardSelection(this); }, 0);
-        return res;
+      $("ra2Hide").onclick = ()=>{
+        const b=$("ra2Body"); const btn=$("ra2Hide");
+        const h = b.style.display==='none'; b.style.display=h?'block':'none'; btn.textContent=h?'Hide':'Show';
       };
-      // Re-lock after loadFromJSON (e.g., restoring checkpoints)
-      const origLoad = fabric.Canvas.prototype.loadFromJSON;
-      fabric.Canvas.prototype.loadFromJSON = function(json, cb, reviver){
-        const self = this;
-        return origLoad.call(this, json, function(){
-          try { scanAndLock(self); guardSelection(self); } catch(e){}
-          if (typeof cb === 'function') cb.apply(self, arguments);
-        }, reviver);
+      $("ra2Export").onclick = ()=>{
+        const blob = new Blob([JSON.stringify({version:1,items:getShelf()})], {type:'application/json'});
+        const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='overlays.json'; document.body.appendChild(a); a.click();
+        setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
       };
-      // When a big image is added, consider it for base (only if we haven't locked yet)
-      const origAdd = fabric.Canvas.prototype.add;
-      fabric.Canvas.prototype.add = function(...args){
-        const res = origAdd.apply(this, args);
-        try {
-          const last = args && args[0];
-          if (!lockedOnce && last && last.type === 'image' && isBaseCandidate(last, this)) {
-            lock(last, this);
-          } else {
-            // still scan, in case order is odd
-            scanAndLock(this);
+      $("ra2Add").onclick = ()=>{
+        const inp=document.createElement('input');
+        inp.type='file'; inp.accept='image/png'; inp.multiple=true; inp.style.display='none';
+        inp.onchange = async (e)=>{
+          const files = Array.from(e.target.files||[]);
+          files.forEach(async f=>{
+            const dataURL = await fileToDataURL2(f);
+            addTile({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' '), dataURL });
+          });
+          inp.remove();
+        };
+        document.body.appendChild(inp); inp.click();
+      };
+      $("ra2Clear").onclick = ()=>{
+        const g=$("ra2Grid"); if (g) g.innerHTML='';
+        setMsg('Cleared');
+        setTimeout(()=>setMsg(''), 800);
+      };
+
+      function addTile(item){
+        const grid=$("ra2Grid"); if (!grid) return;
+        const tile=document.createElement("div");
+        tile.style.cssText='position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;';
+        tile.innerHTML = `
+          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+            <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+          </div>
+          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+          <div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">
+            <button data-act="publish" class="raTinyBtn2">Publish</button>
+            <button data-act="add"      class="raTinyBtn2">Add</button>
+            <button data-act="del"      class="raTinyBtn2" title="Remove">×</button>
+          </div>
+        `;
+        tile.querySelectorAll('.raTinyBtn2').forEach(b=>{
+          b.style.cssText='background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:3px 8px;cursor:pointer;font-size:12px;';
+        });
+        tile.addEventListener("click", (ev)=>{
+          const btn=ev.target.closest("button"); if(!btn) return;
+          const act=btn.getAttribute("data-act");
+          if (act==="del"){ tile.remove(); return; }
+          if (act==="publish"){
+            const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
+            setMsg(`Published: ${item.name}`); setTimeout(()=>setMsg(''), 800);
           }
-        } catch(e){}
-        return res;
-      };
-      fabric.Canvas.prototype._raBaseLocked = true;
-    }
-
-    // If canvas already exists, apply guards and scan now
-    setTimeout(()=>{ const c = findCanvas(); if (c){ window.canvas = c; scanAndLock(c); guardSelection(c);} }, 300);
-  }
-
-  // Also try periodically in case UI loads late
-  (function tick(){
-    const c = findCanvas();
-    if (c){ window.canvas = c; scanAndLock(c); guardSelection(c); }
-    setTimeout(tick, 800);
-  })();
-
-  hookFabric();
-})();
-
-/* ===== RA_BLOCKER_CLEAN + HARD_BASE_LOCK =====
-   - Removes any huge black rectangle that sits over the canvas.
-   - Re-locks the true base NFT (largest near-full-canvas image).
-   - Runs on load, on add, on restore; plus a "Fix canvas" button.
-================================================ */
-(function RA_BLOCKER_AND_BASE_LOCK(){
-  let baseObj = null; // the locked base image
-
-  // 1) Find Fabric canvas reliably
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') { window.canvas = v; return v; }
+          if (act==="add"){ addOverlayToCanvas(item.dataURL,false); setMsg(`Added: ${item.name}`); setTimeout(()=>setMsg(''), 800); }
+        });
+        grid.appendChild(tile);
       }
+
+      renderPublishedShelf();
+    })();
+
+    // Render Published shelf (visible for everyone)
+    function renderPublishedShelf(){
+      function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+      function ensureShelf(){
+        if ($("ra2Shelf")) return true;
+        const h3 = Array.from(document.querySelectorAll('h3')).find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+        const card = h3 ? h3.parentNode : null; if (!card) return false;
+        const wrap = document.createElement('div'); wrap.id='ra2Shelf'; wrap.style.marginTop='8px';
+        wrap.innerHTML = `
+          <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+          <div id="ra2ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+        `;
+        card.appendChild(wrap); return true;
+      }
+      function addToCanvas(src){ addOverlayToCanvas(src,false); }
+      function draw(){
+        if (!ensureShelf()) { setTimeout(draw,300); return; }
+        const grid=$("ra2ShelfGrid"); if (!grid) return;
+        grid.innerHTML='';
+        getShelf().forEach(item=>{
+          const tile=document.createElement('div');
+          tile.style.cssText='position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+          tile.innerHTML = `
+            <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+              <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+            </div>
+            <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+          `;
+          tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
+          grid.appendChild(tile);
+        });
+      }
+      draw();
     }
+  });
+
+  // ===============================
+  //  EXPORT (optional UI IDs: exportPng / openNewTab)
+  // ===============================
+  document.addEventListener("DOMContentLoaded", ()=>{
+    safeAddListener("exportPng",   "click", ()=> doExport(false));
+    safeAddListener("openNewTab",  "click", ()=> doExport(true));
+  });
+  function doExport(openTab){
+    if (!window.canvas) return;
+    const mult=parseInt(($("exportMultiplier")||{}).value||"2",10);
+    let dataURL;
     try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-            && typeof v.add === 'function'
-            && typeof v.loadFromJSON === 'function'
-            && typeof v.toJSON === 'function'
-            && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    }catch(e){}
-    return null;
-  }
+      dataURL=canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
+    }catch(_){ alert("Export blocked (CORS). Use images with CORS headers or same-origin."); return; }
+    const prev = $("exportPreview"); if (prev) prev.src = dataURL;
+    const a=document.createElement("a"); a.href=dataURL; a.download="rebel-ant-overlay.png";
+    const manual=$("manualLink"); if (manual){ manual.href=dataURL; manual.textContent="Open last export (manual save)"; }
 
-  // 2) Helpers
-  function area(o){ return (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1); }
-  function scaledW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)); }
-  function scaledH(o){ return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)); }
-
-  function isBlackish(fill){
-    if (!fill) return false;
-    const s = (''+fill).trim().toLowerCase();
-    if (s === 'black' || s === '#000' || s === '#000000' || s === 'rgb(0,0,0)' || s === 'rgba(0,0,0,1)') return true;
-    // rgba(...) parser
-    const m = s.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\)/);
-    if (m){
-      const r=+m[1], g=+m[2], b=+m[3], a=(m[4]===undefined?1:+m[4]);
-      return (r<12 && g<12 && b<12 && a>=0.95);
-    }
-    return false;
-  }
-
-  function isHuge(o, c){
-    const cw = c.getWidth(), ch = c.getHeight();
-    const a = area(o), ca = cw*ch;
-    return a >= ca*0.6 || (scaledW(o) >= cw*0.9 && scaledH(o) >= ch*0.9);
-  }
-
-  function isBaseCandidate(o, c){
-    return o && o.type === 'image' && isHuge(o,c);
-  }
-
-  // 3) Lock an object as the unmovable base
-  function lockBase(o, c){
-    if (!o || !c) return;
-    baseObj = o;
-    o._isBase = true;
-    o.selectable = false;
-    o.evented = false;
-    o.hasControls = false;
-    o.lockMovementX = o.lockMovementY = true;
-    o.perPixelTargetFind = false;
-    o.hoverCursor = 'default';
-    try { c.sendToBack(o); } catch(e){}
-    // Drop selection if base became active
-    try { if (c.getActiveObject() === o) c.discardActiveObject(); } catch(e){}
-  }
-
-  // 4) Remove any huge black rect that blocks the view
-  function scrubBlockers(c){
-    let removed = false;
-    const objs = c.getObjects();
-    for (let i=objs.length-1;i>=0;i--){
-      const o = objs[i];
-      if (o && o.type === 'rect' && isHuge(o,c) && isBlackish(o.fill) && !o._isBase){
-        try { c.remove(o); removed = true; } catch(e){ /* ignore */ }
-      }
-    }
-    if (removed) c.requestRenderAll();
-  }
-
-  // 5) Pick/lock base if needed (largest image)
-  function ensureBase(c){
-    if (baseObj && c.getObjects().includes(baseObj)) return;
-    const imgs = c.getObjects('image');
-    if (!imgs.length) return;
-    imgs.sort((a,b)=> area(b)-area(a));
-    const cand = imgs[0];
-    if (isBaseCandidate(cand, c)) lockBase(cand, c);
-    try { c.requestRenderAll(); } catch(e){}
-  }
-
-  // 6) Keep base unselectable even if something tries to select it
-  function guardSelection(c){
-    ['selection:created','selection:updated'].forEach(evt=>{
-      c.on(evt, ()=> {
-        const a = c.getActiveObject();
-        if (a === baseObj){ c.discardActiveObject(); c.requestRenderAll(); }
+    if(openTab){
+      fetch(dataURL).then(r=>r.blob()).then(blob=>{
+        const url=URL.createObjectURL(blob);
+        const w=window.open(url,"_blank","noopener");
+        if(!w){ window.location.href=url; }
       });
-    });
-    c.on('mouse:down', e=>{
-      if (e && e.target === baseObj){ c.discardActiveObject(); c.requestRenderAll(); }
-    });
-  }
-
-  // 7) Run cleanup + base lock now
-  function cleanAndLock(){
-    const c = findCanvas(); if (!c) return;
-    scrubBlockers(c);
-    ensureBase(c);
-    guardSelection(c);
-  }
-
-  // 8) Hook Fabric so we run after adds/restores
-  (function hookFabric(){
-    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) {
-      setTimeout(hookFabric, 200); return;
-    }
-    if (!fabric.Canvas.prototype._raCleanLock){
-      const origInit = fabric.Canvas.prototype.initialize;
-      fabric.Canvas.prototype.initialize = function(...args){
-        const res = origInit.apply(this, args);
-        window.canvas = this;
-        setTimeout(cleanAndLock, 0);
-        return res;
-      };
-      const origAdd = fabric.Canvas.prototype.add;
-      fabric.Canvas.prototype.add = function(...args){
-        const res = origAdd.apply(this, args);
-        setTimeout(cleanAndLock, 0);
-        return res;
-      };
-      const origLoad = fabric.Canvas.prototype.loadFromJSON;
-      fabric.Canvas.prototype.loadFromJSON = function(json, cb, reviver){
-        const self = this;
-        return origLoad.call(this, json, function(){
-          try { cleanAndLock(); } catch(e){}
-          if (typeof cb === 'function') cb.apply(self, arguments);
-        }, reviver);
-      };
-      fabric.Canvas.prototype._raCleanLock = true;
-    }
-    // If canvas already exists, run once shortly
-    setTimeout(cleanAndLock, 300);
-  })();
-
-  // 9) Add a small "Fix canvas" button in Canvas card (manual safety)
-  function insertFixButton(){
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-
-    // Put it next to your checkpoint row if present; otherwise just add a tiny row
-    const row = document.getElementById('raCkRow');
-    const place = row || holder;
-
-    if (!document.getElementById('raFixCanvas')){
-      const btn = document.createElement('button');
-      btn.id = 'raFixCanvas';
-      btn.className = 'btn small';
-      btn.style.marginLeft = '6px';
-      btn.textContent = 'Fix canvas';
-      btn.addEventListener('click', ()=> cleanAndLock());
-      (row ? row.appendChild(btn) : holder.appendChild(btn));
+    }else{
+      document.body.appendChild(a); a.click(); a.remove();
     }
   }
-
-  insertFixButton();
-  const obs = new MutationObserver(()=> insertFixButton());
-  obs.observe(document.body, { childList:true, subtree:true });
-
-  // 10) Keep trying briefly in case UI loads slow
-  (function tick(){ cleanAndLock(); setTimeout(tick, 800); })();
 })();
 
-/* ===== RA_KILL_BLACK_BOX_V3 — remove large dark blocker + keep base locked ===== */
-(function RA_KILL_BLACK_BOX_V3(){
-  let baseObj = null;
+/* =========================
+   RA_CANVAS_RESIZE_SYNC_ONLY_V8
+   - Scales ALL content when canvas size changes (700/900/1024/1200 or size input)
+   - Re-centers everything and resets pan/zoom
+   - Does not touch Admin/Published overlays at all
+   ========================= */
+(function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
+  // Safe handle to the Fabric canvas
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
-  // --- helpers ---
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.loadFromJSON === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.loadFromJSON === 'function') { window.canvas = v; return v; }
-      }
+  // Main resizer: scale+recenter all objects to a new (square) size
+  function resizeCanvasAndScale(newSize){
+    const c = C(); if (!c) return;
+    newSize = parseInt(newSize, 10);
+    if (!newSize || !isFinite(newSize)) return;
+
+    const oldW = c.getWidth(), oldH = c.getHeight();
+    if (!oldW || !oldH) return;
+
+    // No change? just normalize zoom/pan
+    if (oldW === newSize && oldH === newSize){
+      try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
     }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v === 'object'
-            && typeof v.add === 'function'
-            && typeof v.loadFromJSON === 'function'
-            && typeof v.toJSON === 'function'
-            && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    }catch(e){}
-    return null;
-  }
-  const area    = o => (o.width||0)*(o.height||0)*(o.scaleX||1)*(o.scaleY||1);
-  const sW      = o => (o.getScaledWidth ? o.getScaledWidth()  : (o.width||0)*(o.scaleX||1));
-  const sH      = o => (o.getScaledHeight? o.getScaledHeight() : (o.height||0)*(o.scaleY||1));
 
-  function parseRGBA(val){
-    if (!val) return null;
-    const s = (''+val).trim().toLowerCase();
-    if (s === 'black') return [0,0,0,1];
-    if (s.startsWith('#')){
-      const hex = s.replace('#','');
-      const h = hex.length===3 ? hex.split('').map(x=>x+x).join('') : hex;
-      const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
-      return [r,g,b,1];
+    const s = newSize / oldW;                 // uniform scale (square canvas)
+    const oldCenter = new fabric.Point(oldW/2, oldH/2);
+    const newCenter = new fabric.Point(newSize/2, newSize/2);
+
+    // Snapshot objects (exclude nothing here — base, overlays, text all follow)
+    const objs = (c.getObjects() || []).slice();
+    const info = objs.map(o => ({
+      o,
+      ctr: (typeof o.getCenterPoint === 'function') ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0),
+      sx: o.scaleX || 1,
+      sy: o.scaleY || 1
+    }));
+
+    // Resize canvas
+    c.setWidth(newSize);
+    c.setHeight(newSize);
+
+    // If your code exposes a backgroundRect globally, update it too (safe no-op otherwise)
+    const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
+    if (bgRect) {
+      try {
+        bgRect.set({ width: newSize, height: newSize, left: 0, top: 0 });
+        c.sendToBack(bgRect);
+      } catch(_) {}
     }
-    const m = s.match(/rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s]+([0-9.]+))?\)/);
-    if (m) return [ +m[1], +m[2], +m[3], m[4]===undefined?1:+m[4] ];
-    return null;
-  }
-  function isDarkish(fill){
-    const c = parseRGBA(fill); if (!c) return false;
-    const [r,g,b,a] = c; if (a < 0.4) return false;
-    // perceived luminance
-    const lum = (0.299*r + 0.587*g + 0.114*b)/255;
-    return lum < 0.22; // allow very dark greys (not only pure black)
-  }
-  function isHuge(o,c){
-    const cw=c.getWidth(), ch=c.getHeight();
-    return (sW(o)>=cw*0.8 || sH(o)>=ch*0.8 || area(o) >= cw*ch*0.35);
-  }
-  function isBlocker(o,c){
-    return o && o.type==='rect' && isHuge(o,c) && isDarkish(o.fill) && !o._isBase;
-  }
 
-  function lockBase(o,c){
-    if (!o || !c) return;
-    baseObj = o;
-    o._isBase = true;
-    o.selectable = false;
-    o.evented = false;
-    o.hasControls = false;
-    o.lockMovementX = o.lockMovementY = true;
-    o.perPixelTargetFind = false;
-    o.hoverCursor = 'default';
-    try { c.sendToBack(o); } catch(e){}
-    try { if (c.getActiveObject() === o) c.discardActiveObject(); } catch(e){}
-  }
+    // Scale & reposition everything relative to the canvas center
+    info.forEach(({o, ctr, sx, sy}) => {
+      // keep backgroundRect updated above; here we still scale if someone wants it scaled too
+      try {
+        const vx = ctr.x - oldCenter.x;
+        const vy = ctr.y - oldCenter.y;
+        const nx = newCenter.x + vx * s;
+        const ny = newCenter.y + vy * s;
 
-  function ensureBase(c){
-    if (baseObj && c.getObjects().includes(baseObj)) return;
-    const imgs = c.getObjects('image');
-    if (!imgs.length) return;
-    imgs.sort((a,b)=> area(b)-area(a));
-    lockBase(imgs[0], c);
-  }
-
-  function guardBaseSelection(c){
-    ['selection:created','selection:updated'].forEach(evt=>{
-      c.on(evt, ()=>{ if (c.getActiveObject()===baseObj){ c.discardActiveObject(); c.requestRenderAll(); }});
+        o.set({ scaleX: sx * s, scaleY: sy * s });
+        if (typeof o.setPositionByOrigin === 'function') {
+          o.setPositionByOrigin(new fabric.Point(nx, ny), 'center', 'center');
+        } else {
+          o.left = nx; o.top = ny;
+        }
+        o.setCoords();
+      } catch(_) {}
     });
-    c.on('mouse:down', e=>{ if (e && e.target===baseObj){ c.discardActiveObject(); c.requestRenderAll(); }});
+
+    // Reset viewport pan/zoom so it never looks like “zoom only”
+    try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
+    const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
+
+    try { c.requestRenderAll(); } catch(_) {}
   }
 
-  function nukeBlockers(c){
-    let removed = 0;
-    c.getObjects().forEach(o=>{
-      try{ if (isBlocker(o,c)) { c.remove(o); removed++; } }catch(e){}
-    });
-    if (removed) c.requestRenderAll();
-    return removed;
-  }
+  // Expose/override for any existing callers
+  window.raResizeCanvasAndScale = resizeCanvasAndScale;
+  window.setCanvasSize = resizeCanvasAndScale;
 
-  function fixCanvas(){
-    const c = findCanvas(); if (!c) return;
-    nukeBlockers(c);
-    ensureBase(c);
-    guardBaseSelection(c);
-    c.requestRenderAll();
-  }
-
-  // Hook Fabric so fix runs on add/restore too
-  (function hookFabric(){
-    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.initialize) { setTimeout(hookFabric, 200); return; }
-    if (fabric.Canvas.prototype._raKillBox) return;
-    const init = fabric.Canvas.prototype.initialize;
-    fabric.Canvas.prototype.initialize = function(...args){ const r=init.apply(this,args); window.canvas=this; setTimeout(fixCanvas,0); return r; };
-    const add  = fabric.Canvas.prototype.add;
-    fabric.Canvas.prototype.add = function(...args){ const r=add.apply(this,args); setTimeout(fixCanvas,0); return r; };
-    const load = fabric.Canvas.prototype.loadFromJSON;
-    fabric.Canvas.prototype.loadFromJSON = function(json, cb, rev){
-      const self=this;
-      return load.call(this,json,function(){
-        try{ fixCanvas(); }catch(e){}
-        if (typeof cb==='function') cb.apply(self, arguments);
-      }, rev);
-    };
-    fabric.Canvas.prototype._raKillBox = true;
-    setTimeout(fixCanvas, 300);
-  })();
-
-  // Add a small "Fix canvas" button next to your checkpoint row
-  function insertFixBtn(){
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const canvasH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'canvas');
-    const holder = canvasH3 ? canvasH3.parentNode : document.body;
-    const row = document.getElementById('raCkRow') || holder;
-    if (!document.getElementById('raFixCanvas')){
-      const b = document.createElement('button');
-      b.id = 'raFixCanvas';
-      b.className = 'btn small';
-      b.style.marginLeft = '6px';
-      b.textContent = 'Fix canvas';
-      b.addEventListener('click', fixCanvas);
-      (row ? row.appendChild(b) : holder.appendChild(b));
+  // Wire the size input (left panel)
+  function wireSizeInput(){
+    const el = document.getElementById('canvasSize');
+    if (el && !el.__raBound) {
+      el.__raBound = true;
+      el.addEventListener('change', (e)=> resizeCanvasAndScale(parseInt(e.target.value, 10)));
     }
   }
-  insertFixBtn();
-  const obs = new MutationObserver(()=> insertFixBtn());
-  obs.observe(document.body, { childList:true, subtree:true });
 
-  // Run a few times early to catch async image loads
-  let tries = 0; (function early(){ fixCanvas(); if (++tries<8) setTimeout(early, 600); })();
+  // Intercept the quick size buttons (700 / 900 / 1024 / 1200)
+  function wireQuickButtons(){
+    if (document.__raSizeCaptureOnly) return;
+    document.__raSizeCaptureOnly = true;
+    document.addEventListener('click', function(ev){
+      const btn = ev.target && ev.target.closest && ev.target.closest('button');
+      if (!btn) return;
+      const t = (btn.textContent||'').trim();
+      if (/^(700|900|1024|1200)$/i.test(t)) {
+        ev.preventDefault(); ev.stopImmediatePropagation(); ev.stopPropagation();
+        resizeCanvasAndScale(parseInt(t, 10));
+      }
+    }, true);
+  }
+
+  // Boot
+  function boot(){ wireSizeInput(); wireQuickButtons(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
 
-/* === RA_OPEN_NEW_TAB_ONLY_V3 — single open via CLICK only; never hijack builder === */
-(function RA_OPEN_NEW_TAB_ONLY_V3(){
+/* ==========================================================
+   RA_FIXED_CENTER_CANVAS_V1
+   Keeps the canvas card centered in the viewport on scroll.
+   - No layout jump (uses a ghost placeholder).
+   - Stays horizontally aligned with its column.
+   - Recomputes on resize and when canvas size changes.
+   Paste at the very bottom of app.js.
+   ========================================================== */
+(function RA_FIXED_CENTER_CANVAS_V1(){
+  function byId(id){ return document.getElementById(id); }
+  function getCanvasCard(){
+    const c = byId('c');                           // <canvas id="c">
+    if (!c) return null;
+    // Find the visual card that holds the canvas
+    return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
+  }
+
+  function install(){
+    const card = getCanvasCard();
+    if (!card) { setTimeout(install, 200); return; }
+    if (card.__raFixedCenter) return;              // don’t double‑install
+    card.__raFixedCenter = true;
+
+    // 1) Make a ghost to hold space so the layout doesn’t collapse
+    const ghost = document.createElement('div');
+    ghost.id = 'raCanvasGhost';
+    ghost.style.width = card.offsetWidth + 'px';
+    ghost.style.height = card.offsetHeight + 'px';
+    ghost.style.visibility = 'hidden';
+    ghost.style.pointerEvents = 'none';
+    card.parentNode.insertBefore(ghost, card);
+
+    // 2) Fix the real card to the viewport (we’ll align it to the ghost)
+    Object.assign(card.style, {
+      position: 'fixed',
+      zIndex: 4,
+      margin: 0,
+      left: '0px',
+      top:  '0px',
+      right:'auto',
+      transform: 'none'
+    });
+
+    // 3) Function to position the fixed card so it:
+    //    - shares the ghost’s left/width (stays in its column)
+    //    - is vertically centered in the viewport
+    function place(){
+      const rect = ghost.getBoundingClientRect();
+      // keep horizontal alignment with the column
+      card.style.width = rect.width + 'px';
+      card.style.left  = rect.left + 'px';
+
+      // vertical center; clamp if card is taller than viewport
+      const h   = card.offsetHeight || rect.height;
+      const top = Math.max(12, Math.round((window.innerHeight - h) / 2));
+      card.style.top = top + 'px';
+    }
+
+    // 4) Recalculate whenever things change
+    window.addEventListener('scroll', place, { passive: true });
+    window.addEventListener('resize', place);
+    try { new ResizeObserver(place).observe(card); } catch(_) {}
+    try { new ResizeObserver(place).observe(ghost); } catch(_) {}
+    document.addEventListener('ra:canvas-ready', place);
+
+    // First placement
+    place();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', install);
+  } else {
+    install();
+  }
+})();
+
+/* ==========================================================
+   RA_OPEN_NEW_TAB_VIEWER_V1
+   - Opens export in a NEW TAB
+   - Fits image to the browser window (no more giant render)
+   - Click image to toggle: Fit ↔ Actual size (100%)
+   Paste at the very bottom of app.js (replace any prior open-new-tab patch).
+   ========================================================== */
+(function RA_OPEN_NEW_TAB_VIEWER_V1(){
+  // Find Fabric canvas safely
   function findCanvas(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
     if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[k]; if (v && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
       }
     }
     try{
       for (const k in window){
         const v = window[k];
-        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
       }
-    }catch(e){}
+    }catch(_){}
     return null;
   }
 
+  // Read export multiplier (HQ ×2 etc.)
   function getMultiplier(){
-    const txt = (document.querySelector('.export-quality')?.textContent
-                 || document.querySelector('#exportQuality')?.value
-                 || '').toLowerCase();
-    const m = (txt.match(/x\s*([1-8])/i)||[])[1];
-    return Math.max(1, parseInt(m||'1',10));
+    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
+    if (el){
+      const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
+      if (v && v >= 1 && v <= 8) return v;
+    }
+    // fallback default
+    return 2;
   }
 
+  // Pick the "Open in New Tab" control by label
   function isOpenNewTabEl(node){
     const el = node && node.closest && node.closest('button,a');
     if (!el) return null;
-    const t = (el.textContent||'').trim().toLowerCase();
-    return /open\s*in\s*new\s*tab/.test(t) ? el : null;
+    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+    return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
   }
 
-  // Ensure the anchor itself can't navigate even if something else fires
-  function neutralizeLink(){
+  // Prevent native link from navigating current tab
+  function neutralizeLinkHref(){
     const el = Array.from(document.querySelectorAll('a,button'))
       .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
     if (el && el.tagName === 'A'){
       if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
       el.setAttribute('href','javascript:void(0)');
       el.removeAttribute('target');
+      el.setAttribute('rel','noopener');
     }
   }
 
-  function openOnlyNewTab(){
+  // New‑tab viewer that fits the image to the viewport
+  function openNewTabViewer(){
     const c = findCanvas();
     if (!c){ alert('Canvas not ready'); return; }
-    const win = window.open('', '_blank');         // popup‑safe: open synchronously on click
+
+    // Open the tab synchronously (popup‑safe)
+    const win = window.open('', '_blank');
     if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
-    win.document.title = 'Exporting…';
-    win.document.body.style.margin = '0';
-    win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
+    win.document.title = 'Export';
+    win.document.head.innerHTML = `
+      <meta charset="utf-8">
+      <title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img#raImg{
+          display:block;
+          max-width:calc(100vw - 32px);
+          max-height:calc(100vh - 32px);
+          width:auto;height:auto;
+          box-shadow:0 8px 24px rgba(0,0,0,.5);
+          border-radius:8px;
+          image-rendering:auto;
+        }
+        .hud{
+          position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+          color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none
+        }
+      </style>
+    `;
+    win.document.body.innerHTML = `
+      <div class="viewer"><img id="raImg" alt="export"/></div>
+      <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+    `;
+
     try{
       const mult = getMultiplier();
-      const dataUrl = c.toDataURL({ format:'png', multiplier: mult });
-      win.document.body.innerHTML = `<img src="${dataUrl}" style="display:block;max-width:100%;height:auto">`;
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+      const img = win.document.getElementById('raImg');
+      img.src = dataUrl;
+
+      // Fit ↔ Actual size toggle
+      let fit = true;
+      function applyFit(){
+        if (fit){
+          img.style.maxWidth  = 'calc(100vw - 32px)';
+          img.style.maxHeight = 'calc(100vh - 32px)';
+          img.style.width = 'auto';
+          img.style.height = 'auto';
+        } else {
+          img.style.maxWidth  = 'none';
+          img.style.maxHeight = 'none';
+          img.style.width = 'auto';  // natural size
+          img.style.height = 'auto';
+        }
+      }
+      img.addEventListener('click', ()=>{ fit = !fit; applyFit(); });
+      applyFit();
     }catch(e){
-      win.close();
-      alert('Export failed (security/CORS). Try a different image or your hosted domain with CORS headers.');
+      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Try a different image or use a CORS‑enabled host.</div>';
     }
   }
 
-  // Handle ONLY the CLICK event (capture) and guard against accidental double‑fires
-  let lastOpenAt = 0;
+  // Capture click → always open in new tab viewer
+  let lastAt = 0;
   function onClickCapture(e){
     const el = isOpenNewTabEl(e.target);
     if (!el) return;
     const now = Date.now();
-    if (now - lastOpenAt < 400) {                 // guard: ignore rapid duplicates
-      e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false;
-    }
+    if (now - lastAt < 400){ e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false; }
+    lastAt = now;
+
     e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
-    lastOpenAt = now;
-    openOnlyNewTab();
+    openNewTabViewer();
     return false;
   }
 
-  function wire(){
-    neutralizeLink(); // keep doing this in case UI re-renders
-  }
-  wire();
+  function wire(){ neutralizeLinkHref(); }
 
-  // IMPORTANT: Only listen to CLICK (not pointerdown/mousedown) to avoid duplicate opens
+  wire();
   document.addEventListener('click', onClickCapture, true);
-
-  const obs = new MutationObserver(wire);
-  obs.observe(document.body, { childList:true, subtree:true });
-})();
-
-/* === RA_HIDE_FIX_CANVAS_CSS — hide only the Fix canvas button; keep auto-clean === */
-(function(){
-  try{
-    const st = document.createElement('style');
-    st.id = 'raHideFixCanvasStyle';
-    st.textContent = '#raFixCanvas{display:none !important; visibility:hidden !important;}';
-    (document.head || document.documentElement).appendChild(st);
-  }catch(e){}
-})();
-
-/* === RA_ZOOM_PAN_V1 — zoom to pointer, Space‑drag to pan, clamp zoom; keep base locked === */
-(function RA_ZOOM_PAN_V1(){
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
-      }
-    }catch(e){}
-    return null;
-  }
-
-  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-  function centerPoint(c){ return new fabric.Point(c.getWidth()/2, c.getHeight()/2); }
-  function updateZoomUI(c){ const el = document.getElementById('zoomVal'); if (el) el.textContent = Math.round(c.getZoom()*100) + '%'; }
-
-  function wire(){
-    const c = findCanvas(); if (!c) { setTimeout(wire, 200); return; }
-
-    // --- Mouse wheel: zoom to cursor ---
-    if (!c._raWheelZoom){
-      c.on('mouse:wheel', function(opt){
-        const e = opt.e;
-        let zoom = c.getZoom();
-        zoom *= Math.pow(0.999, e.deltaY);           // smooth zoom
-        zoom = clamp(zoom, 0.25, 6);
-        const pt = new fabric.Point(e.offsetX, e.offsetY);
-        c.zoomToPoint(pt, zoom);
-        e.preventDefault(); e.stopPropagation();
-        updateZoomUI(c);
-      });
-      c._raWheelZoom = true;
-    }
-
-    // --- Space‑drag: pan the viewport ---
-    let isPanning = false, last = {x:0,y:0}, spaceDown = false;
-    if (!c._raPanWired){
-      document.addEventListener('keydown', (e)=>{ if (e.code==='Space'){ spaceDown = true; c.defaultCursor='grab'; }});
-      document.addEventListener('keyup',   (e)=>{ if (e.code==='Space'){ spaceDown = false; c.defaultCursor='default'; }});
-
-      c.on('mouse:down', (opt)=>{
-        const e = opt.e;
-        if (spaceDown || e.button===1){              // Space or middle‑mouse
-          isPanning = true; last.x = e.clientX; last.y = e.clientY;
-          c.setCursor('grabbing'); c.renderAll();
-          e.preventDefault();
-        }
-      });
-      c.on('mouse:move', (opt)=>{
-        if (!isPanning) return;
-        const e = opt.e, vt = c.viewportTransform;
-        vt[4] += e.clientX - last.x;                 // translate X
-        vt[5] += e.clientY - last.y;                 // translate Y
-        last.x = e.clientX; last.y = e.clientY;
-        c.requestRenderAll();
-        e.preventDefault();
-      });
-      c.on('mouse:up', ()=>{
-        isPanning = false;
-        c.setCursor(spaceDown ? 'grab' : 'default');
-      });
-      c._raPanWired = true;
-    }
-
-    // --- Hook the + / – / Reset buttons to center‑zoom & recenter ---
-    function id(x){ return document.getElementById(x); }
-    const zOut = id('zoomOut'), zIn = id('zoomIn'), zReset = id('zoomReset');
-
-    function setZoomAbs(newZoom, point){
-      newZoom = clamp(newZoom, 0.25, 6);
-      const p = point || centerPoint(c);
-      c.zoomToPoint(p, newZoom);
-      updateZoomUI(c);
-    }
-
-    if (zIn && !zIn._raZoom){   zIn.addEventListener('click', ()=> setZoomAbs(c.getZoom()*1.15)); zIn._raZoom = true; }
-    if (zOut && !zOut._raZoom){ zOut.addEventListener('click', ()=> setZoomAbs(c.getZoom()/1.15)); zOut._raZoom = true; }
-    if (zReset && !zReset._raZoom){
-      zReset.addEventListener('click', ()=>{
-        c.setViewportTransform([1,0,0,1,0,0]);       // recenter pan
-        setZoomAbs(1);
-      });
-      zReset._raZoom = true;
-    }
-  }
-
-  wire();
-  document.addEventListener('ra:canvas-ready', wire);
-  const obs = new MutationObserver(wire);
-  obs.observe(document.body, { childList:true, subtree:true });
-})();
-
-/* === RA_ZOOM_PAN_V2 — pan with Space/right-drag; wheel=zoom, Shift/Alt/Space+wheel=pAN === */
-(function RA_ZOOM_PAN_V2(){
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const key of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[key]; if (v && typeof v.toDataURL === 'function') return v;
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v.toDataURL==='function' && v.upperCanvasEl) return v;
-      }
-    }catch(e){}
-    return null;
-  }
-
-  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-  function centerPoint(c){ return new fabric.Point(c.getWidth()/2, c.getHeight()/2); }
-  function setZoomAbs(c, z, point){
-    z = clamp(z, 0.25, 6);
-    c.zoomToPoint(point || centerPoint(c), z);
-    const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = Math.round(c.getZoom()*100)+'%';
-  }
-
-  function wire(){
-    const c = findCanvas(); if (!c){ setTimeout(wire, 200); return; }
-    if (c._raZoomPanV2) return;
-
-    // Remove any previous wheel listeners to avoid double-handling
-    try { if (c.__eventListeners && c.__eventListeners['mouse:wheel']) c.__eventListeners['mouse:wheel'] = []; } catch(e){}
-
-    // --- Wheel: Zoom by default; hold Shift/Alt/Space to PAN with wheel ---
-    let spaceDown = false;
-    document.addEventListener('keydown', (e)=>{ if (e.code==='Space'){ spaceDown = true; c.defaultCursor='grab'; }}, false);
-    document.addEventListener('keyup',   (e)=>{ if (e.code==='Space'){ spaceDown = false; c.defaultCursor='default'; }}, false);
-
-    c.on('mouse:wheel', function(opt){
-      const e = opt.e;
-      const panMode = spaceDown || e.shiftKey || e.altKey;
-      if (panMode){
-        // Pan using wheel deltas (natural: content moves with your fingers)
-        const vt = c.viewportTransform;
-        vt[4] -= e.deltaX;
-        vt[5] -= e.deltaY;
-        c.requestRenderAll();
-      }else{
-        // Zoom to pointer
-        let zoom = c.getZoom();
-        zoom *= Math.pow(0.999, e.deltaY);
-        zoom = clamp(zoom, 0.25, 6);
-        const pt = new fabric.Point(e.offsetX, e.offsetY);
-        c.zoomToPoint(pt, zoom);
-      }
-      e.preventDefault(); e.stopPropagation();
-      const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = Math.round(c.getZoom()*100)+'%';
-    });
-
-    // --- Drag pan: Space + left drag OR right/middle drag pans the viewport ---
-    let isPanning = false, last = {x:0,y:0};
-    c.on('mouse:down', (opt)=>{
-      const e = opt.e;
-      const right = e.button === 2;
-      const middle = e.button === 1 || e.buttons === 4;
-      if (spaceDown || right || middle){
-        isPanning = true;
-        last.x = e.clientX; last.y = e.clientY;
-        c.setCursor('grabbing');
-        e.preventDefault();
-      }
-    });
-    c.on('mouse:move', (opt)=>{
-      if (!isPanning) return;
-      const e = opt.e;
-      const vt = c.viewportTransform;
-      vt[4] += e.clientX - last.x;   // translate X
-      vt[5] += e.clientY - last.y;   // translate Y
-      last.x = e.clientX; last.y = e.clientY;
-      c.requestRenderAll();
-      e.preventDefault();
-    });
-    c.on('mouse:up', ()=>{
-      isPanning = false;
-      c.setCursor(spaceDown ? 'grab' : 'default');
-    });
-
-    // --- Hook + / – / Reset buttons to center-zoom and recentre pan ---
-    const id = s => document.getElementById(s);
-    const zIn = id('zoomIn'), zOut = id('zoomOut'), zReset = id('zoomReset');
-    if (zIn && !zIn._raZ2){   zIn.addEventListener('click', ()=> setZoomAbs(c, c.getZoom()*1.15)); zIn._raZ2 = true; }
-    if (zOut && !zOut._raZ2){ zOut.addEventListener('click', ()=> setZoomAbs(c, c.getZoom()/1.15)); zOut._raZ2 = true; }
-    if (zReset && !zReset._raZ2){
-      zReset.addEventListener('click', ()=>{
-        c.setViewportTransform([1,0,0,1,0,0]);      // reset pan
-        setZoomAbs(c, 1);                           // reset zoom
-      });
-      zReset._raZ2 = true;
-    }
-
-    c._raZoomPanV2 = true;
-  }
-
-  wire();
-  document.addEventListener('ra:canvas-ready', wire);
-  const obs = new MutationObserver(wire);
-  obs.observe(document.body, { childList:true, subtree:true });
-})();
-
-/* === RA_BG_SEND_BACK_V1 — send huge dark rectangles behind everything on size change === */
-(function RA_BG_SEND_BACK_V1(){
-  function findCanvas(){
-    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
-    if (el){
-      const cand = [ 'fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas' ]
-        .map(k=>el[k]).find(v => v && v.upperCanvasEl);
-      if (cand) return cand;
-    }
-    return null;
-  }
-  function parseRGBA(v){
-    if (!v) return null;
-    const s=(''+v).trim().toLowerCase();
-    if (s==='black') return [0,0,0,1];
-    if (s.startsWith('#')){
-      const h=s.slice(1); const x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
-      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
-      return [r,g,b,1];
-    }
-    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
-    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
-    return null;
-  }
-  function isDark(fill){
-    const c=parseRGBA(fill); if (!c) return false;
-    const [r,g,b,a]=c; if (a<0.6) return false;
-    const lum=(0.299*r+0.587*g+0.114*b)/255;
-    return lum<0.25; // dark greys included
-  }
-  function sendDarkRectsToBack(){
-    const c=findCanvas(); if (!c) return;
-    const cw=c.getWidth(), ch=c.getHeight();
-    let changed=false;
-    c.getObjects('rect').forEach(o=>{
-      const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
-      const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
-      const huge = (w>=cw*0.8 || h>=ch*0.8);
-      if (huge && isDark(o.fill) && !o._isBase){
-        o._isBgRect = true;
-        o.selectable=false; o.evented=false; o.hasControls=false;
-        o.lockMovementX = o.lockMovementY = true;
-        try { c.sendToBack(o); changed=true; } catch(e){}
-      }
-    });
-    if (changed) c.requestRenderAll();
-  }
-
-  // Run on object add (some builders add a new rect on resize)
-  (function hook(){
-    const c=findCanvas();
-    if (c && !c._raBgOrderHooked){
-      c.on('object:added', ()=> setTimeout(sendDarkRectsToBack, 0));
-      c._raBgOrderHooked = true;
-    } else if (!c){
-      setTimeout(hook, 300);
-    }
-  })();
-
-  // Nudge after clicks on common size buttons (700/900/1024/1200)
-  function wireSizeButtons(){
-    const btns = Array.from(document.querySelectorAll('button'));
-    btns.forEach(b=>{
-      const t=(b.textContent||'').trim();
-      if (/^(700|900|1024|1200)$/i.test(t) && !b._raSizeWired){
-        b._raSizeWired=true;
-        b.addEventListener('click', ()=> setTimeout(sendDarkRectsToBack, 120));
-      }
-    });
-  }
-  wireSizeButtons();
-  const mo=new MutationObserver(()=> wireSizeButtons());
-  mo.observe(document.body, { childList:true, subtree:true });
-
-  // Also run periodically as a safety net
-  setInterval(sendDarkRectsToBack, 800);
-})();
-
-/* === RA_BG_NORMALIZE_V2 — replace huge dark rects with backgroundColor (no more flicker) === */
-(function RA_BG_NORMALIZE_V2(){
-  function findCanvas(){
-    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[k]; if (v && v.upperCanvasEl) return v;
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.loadFromJSON==='function') return v;
-      }
-    }catch(e){}
-    return null;
-  }
-  function parseRGBA(v){
-    if (!v) return null;
-    const s=(''+v).trim().toLowerCase();
-    if (s==='black') return [0,0,0,1];
-    if (s.startsWith('#')){
-      const h=s.slice(1); const x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
-      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
-      return [r,g,b,1];
-    }
-    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
-    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
-    return null;
-  }
-  function isDarkFill(fill){
-    const c=parseRGBA(fill); if (!c) return false;
-    const [r,g,b,a]=c; if (a<0.55) return false;
-    const lum=(0.299*r+0.587*g+0.114*b)/255;
-    return lum<0.25; // allow very dark greys too
-  }
-  function isHugeRect(o,c){
-    if (!o || o.type!=='rect') return false;
-    const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
-    const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
-    return (w>=c.getWidth()*0.8 || h>=c.getHeight()*0.8);
-  }
-  function normalize(){
-    const c=findCanvas(); if (!c) return;
-    let bg=null, removed=false;
-    const objs=c.getObjects('rect');
-    for (let i=objs.length-1;i>=0;i--){
-      const o=objs[i];
-      if (isHugeRect(o,c) && isDarkFill(o.fill) && !o._isBase){
-        bg = o.fill || bg;
-        try{ c.remove(o); removed=true; }catch(e){}
-      }
-    }
-    if (bg || removed){
-      try{ c.setBackgroundColor(bg||c.backgroundColor||'#000', ()=>c.requestRenderAll()); }
-      catch(e){ c.backgroundColor = bg||c.backgroundColor||'#000'; c.requestRenderAll(); }
-    }
-  }
-  // Normalize whenever objects are added/modified or sizes change
-  (function hook(){
-    const c=findCanvas();
-    if (c && !c._raBgNorm2){
-      c.on('object:added', ()=> setTimeout(normalize,0));
-      c.on('object:modified', ()=> setTimeout(normalize,0));
-      c._raBgNorm2=true;
-    } else if (!c){ setTimeout(hook,300); }
-  })();
-  // Nudge after clicking common size buttons
-  function wireSizeButtons(){
-    Array.from(document.querySelectorAll('button')).forEach(b=>{
-      const t=(b.textContent||'').trim();
-      if (/^(700|900|1024|1200)$/i.test(t) && !b._raBgBtn){
-        b._raBgBtn=true; b.addEventListener('click', ()=> setTimeout(normalize,120));
-      }
-    });
-  }
-  wireSizeButtons();
-  new MutationObserver(wireSizeButtons).observe(document.body,{childList:true,subtree:true});
-  // Safety sweep
-  setInterval(normalize, 1000);
-})();
-
-/* === RA_BG_INTERCEPT_V3 — convert huge dark rects into canvas background (before render) === */
-(function RA_BG_INTERCEPT_V3(){
-  function parseRGBA(v){
-    if (!v) return null;
-    const s=(''+v).trim().toLowerCase();
-    if (s==='black') return [0,0,0,1];
-    if (s.startsWith('#')){
-      const h=s.slice(1), x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
-      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
-      return [r,g,b,1];
-    }
-    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
-    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
-    return null;
-  }
-  function isDark(fill){
-    const c=parseRGBA(fill); if (!c) return false;
-    const [r,g,b,a]=c; if (a<0.55) return false;
-    const lum=(0.299*r+0.587*g+0.114*b)/255;
-    return lum<0.25; // include very dark greys
-  }
-  function hook(){
-    if (!window.fabric || !fabric.Canvas || !fabric.Canvas.prototype.add){ setTimeout(hook,200); return; }
-    if (fabric.Canvas.prototype._raBgInterceptV3) return;
-    const origAdd = fabric.Canvas.prototype.add;
-    fabric.Canvas.prototype.add = function(...args){
-      const obj = args[0];
-      try{
-        if (obj && obj.type==='rect') {
-          const c = this;
-          const w = (obj.getScaledWidth? obj.getScaledWidth(): (obj.width||0)*(obj.scaleX||1));
-          const h = (obj.getScaledHeight? obj.getScaledHeight(): (obj.height||0)*(obj.scaleY||1));
-          const cw = c.getWidth(), ch = c.getHeight();
-          const huge = (w>=cw*0.8 || h>=ch*0.8);
-          if (huge && isDark(obj.fill)){
-            const fill = obj.fill;
-            try { c.setBackgroundColor(fill, ()=> c.requestRenderAll()); }
-            catch(e){ c.backgroundColor = fill; c.requestRenderAll(); }
-            return obj; // do NOT add the rect → no flicker
-          }
-        }
-      }catch(e){}
-      return origAdd.apply(this, args);
-    };
-    fabric.Canvas.prototype._raBgInterceptV3 = true;
-  }
-  hook();
-})();
-
-/* === RA_BG_NOFLASH_V4 — stop dark background rects before they render (no flicker) === */
-(function RA_BG_NOFLASH_V4(){
-  function parseRGBA(v){
-    if (!v) return null;
-    const s=(''+v).trim().toLowerCase();
-    if (s==='black') return [0,0,0,1];
-    if (s.startsWith('#')){
-      const h=s.slice(1), x=(h.length===3)?h.split('').map(c=>c+c).join(''):h;
-      const r=parseInt(x.slice(0,2),16), g=parseInt(x.slice(2,4),16), b=parseInt(x.slice(4,6),16);
-      return [r,g,b,1];
-    }
-    const m=s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)/);
-    if (m) return [ +m[1], +m[2], +m[3], m[4]==null?1:+m[4] ];
-    return null;
-  }
-  function isDark(fill){
-    const c=parseRGBA(fill); if (!c) return false;
-    const [r,g,b,a]=c; if (a<0.55) return false;
-    const lum=(0.299*r+0.587*g+0.114*b)/255;
-    return lum<0.25; // include very dark greys
-  }
-  function findCanvas(){
-    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[k]; if (v && v.upperCanvasEl) return v;
-      }
-    }
-    return null;
-  }
-  function install(c){
-    if (c._raNoFlashV4) return;
-    c._raNoFlashV4 = true;
-    let toRemove = [];
-    // Hide candidate rects BEFORE render so they never flash
-    c.on('before:render', ()=>{
-      toRemove.length = 0;
-      const cw=c.getWidth(), ch=c.getHeight();
-      (c.getObjects()||[]).forEach(o=>{
-        if (!o || o.type!=='rect' || o._isBase) return;
-        const w=(o.getScaledWidth?o.getScaledWidth():o.width*(o.scaleX||1));
-        const h=(o.getScaledHeight?o.getScaledHeight():o.height*(o.scaleY||1));
-        const huge = (w>=cw*0.8 || h>=ch*0.8);
-        if (huge && isDark(o.fill)){
-          try { c.backgroundColor = o.fill || c.backgroundColor || '#000'; } catch(e){}
-          o.visible = false;
-          toRemove.push(o);
-        }
-      });
-    });
-    // Remove them right after render, then re-render once (quickly)
-    c.on('after:render', ()=>{
-      if (!toRemove.length) return;
-      toRemove.forEach(o=>{ try{ c.remove(o);}catch(e){} });
-      toRemove.length = 0;
-      c.requestRenderAll();
-    });
-    // If something adds after size change, force a pass
-    c.on('object:added', ()=> setTimeout(()=>c.requestRenderAll(),0));
-  }
-  (function hook(){
-    const c = findCanvas();
-    if (c) install(c); else setTimeout(hook, 300);
-  })();
-})();
-
-/* === RA_ADMIN_DOCK_V4 — Admin dock with Publish + Add + Export pack (isolated) === */
-(function RA_ADMIN_DOCK_V4(){
-  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
-  if (!isAdmin) return;
-  if (document.getElementById('raAdminDock')) return;
-
-  window.raAdminDockPerms = window.raAdminDockPerms || []; // [{name,file,url}]
-
-  // Canvas helpers
-  function findCanvas(){
-    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function') return v;
-      }
-    }catch(e){}
-    return null;
-  }
-  function waitCanvas(fn, tries=0){
-    const c = findCanvas();
-    if (c) return fn(c);
-    if (tries>25) return; setTimeout(()=>waitCanvas(fn, tries+1), 200);
-  }
-  function fileToDataURL(file){
-    return new Promise((resolve,reject)=>{
-      const fr = new FileReader(); fr.onload = ()=>resolve(fr.result); fr.onerror = reject; fr.readAsDataURL(file);
-    });
-  }
-  function addToCanvasFromDataURL(dataURL, name){
-    waitCanvas(c=>{
-      if (!window.fabric || !fabric.Image) return;
-      const imgEl = new Image();
-      imgEl.onload = ()=>{
-        const fImg = new fabric.Image(imgEl);
-        fImg.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
-        try { c.add(fImg); c.bringToFront(fImg); c.setActiveObject(fImg); } catch(e){}
-        c.requestRenderAll();
-        if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
-      };
-      imgEl.src = dataURL;
-    });
-  }
-
-  // Dock UI
-  const dock = document.createElement('div');
-  dock.id = 'raAdminDock';
-  dock.style.cssText = [
-    'position:fixed','right:16px','bottom:16px','width:320px',
-    'background:#0e0f13','border:1px solid #2a2a2e','border-radius:12px',
-    'box-shadow:0 10px 24px rgba(0,0,0,.45)','color:#e7e7ea',
-    'font:13px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif',
-    'z-index: 999999'
-  ].join(';');
-  dock.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #222;">
-      <strong>Admin Overlays</strong>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <button id="raDockExport"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
-        <button id="raDockToggle"  style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
-      </div>
-    </div>
-    <div id="raDockBody" style="padding:10px 12px;">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-        <button id="raDockAdd"  style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
-        <button id="raDockClear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
-        <div id="raDockMsg" style="opacity:.75;min-height:18px"></div>
-      </div>
-      <div id="raDockGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
-      <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add to the Overlays panel row. Share permanently by uploading the exported <code>overlays.json</code> and appending <code>?manifest=URL</code> to your link.</div>
-    </div>
-  `;
-  document.body.appendChild(dock);
-
-  // Toggle + Export
-  document.getElementById('raDockToggle').addEventListener('click', ()=>{
-    const body = document.getElementById('raDockBody');
-    const btn  = document.getElementById('raDockToggle');
-    const hidden = body.style.display === 'none';
-    body.style.display = hidden ? 'block' : 'none';
-    btn.textContent = hidden ? 'Hide' : 'Show';
-  });
-  document.getElementById('raDockExport').addEventListener('click', ()=>{
-    if (typeof window.raExportPublishedPack === 'function') window.raExportPublishedPack();
-  });
-
-  // File picker (fresh input every click)
-  document.getElementById('raDockAdd').addEventListener('click', ()=>{
-    const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = 'image/png'; inp.multiple = true; inp.style.display='none';
-    inp.addEventListener('change', (e)=>{
-      const files = Array.from(e.target.files||[]);
-      if (files.length){
-        files.forEach(f=>{
-          const url = URL.createObjectURL(f);
-          window.raAdminDockPerms.push({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim(), file: f, url });
-        });
-        renderTiles();
-      }
-      inp.remove();
-    }, { once:true });
-    document.body.appendChild(inp);
-    inp.click();
-  });
-
-  // Clear dock
-  document.getElementById('raDockClear').addEventListener('click', ()=>{
-    (window.raAdminDockPerms||[]).forEach(it=>{ try{ if (it.url && /^blob:/i.test(it.url)) URL.revokeObjectURL(it.url); }catch(e){} });
-    window.raAdminDockPerms.length = 0;
-    renderTiles();
-  });
-
-  function setMsg(txt){ const el = document.getElementById('raDockMsg'); if (el) el.textContent = txt||''; }
-
-  function renderTiles(){
-    const grid = document.getElementById('raDockGrid'); if (!grid) return;
-    grid.innerHTML = '';
-    (window.raAdminDockPerms||[]).forEach(it=>{
-      const tile = document.createElement('div');
-      tile.style.cssText = 'position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;';
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${it.url}" alt="${it.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name||''}</div>
-        <div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">
-          <button data-act="publish" class="raTinyBtn">Publish</button>
-          <button data-act="add"      class="raTinyBtn">Add</button>
-          <button data-act="del"      class="raTinyBtn" title="Remove">×</button>
-        </div>
-      `;
-      // style tiny buttons
-      tile.querySelectorAll('.raTinyBtn').forEach(b=>{
-        b.style.cssText = 'background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:3px 8px;cursor:pointer;font-size:12px;';
-      });
-      tile.addEventListener('click', async (ev)=>{
-        const btn = ev.target.closest('button'); if (!btn) return;
-        const act = btn.getAttribute('data-act');
-        if (act==='del'){
-          const arr = window.raAdminDockPerms||[];
-          const idx = arr.indexOf(it);
-          if (idx>=0){
-            try{ if (arr[idx].url && /^blob:/i.test(arr[idx].url)) URL.revokeObjectURL(arr[idx].url); }catch(e){}
-            arr.splice(idx,1);
-          }
-          renderTiles();
-          return;
-        }
-        if (act==='publish'){
-          if (typeof window.raPublishToOverlaysShelf === 'function'){
-            // prefer dataURL for portability
-            const dataURL = await fileToDataURL(it.file);
-            await window.raPublishToOverlaysShelf(it.name, dataURL);
-            setMsg(`Published: ${it.name}`);
-            setTimeout(()=>setMsg(''), 1000);
-          }
-          return;
-        }
-        if (act==='add'){
-          const dataURL = await fileToDataURL(it.file);
-          addToCanvasFromDataURL(dataURL, it.name);
-          setMsg(`Added: ${it.name}`);
-          setTimeout(()=>setMsg(''), 800);
-        }
-      });
-      grid.appendChild(tile);
-    });
-  }
-
-  renderTiles();
-})();
-
-/* === RA_PUBLISHED_SHELF_V2 — Published Overlays row with default manifest + admin delete === */
-(function RA_PUBLISHED_SHELF_V2(){
-  const isAdmin = /(\?|&)admin=1\b/.test(location.search);
-  window.raPublishedOverlays = window.raPublishedOverlays || []; // [{name, src}]
-
-  const $  = s => document.querySelector(s);
-  const $$ = s => Array.from(document.querySelectorAll(s));
-
-  function findOverlaysCard(){
-    const h3 = $$('h3').find(h => (h.textContent||'').trim().toLowerCase() === 'overlays');
-    return h3 ? h3.parentNode : null;
-  }
-
-  function robustAddToCanvas(url, name){
-    function findCanvas(){
-      if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-      try {
-        for (const k in window){
-          const v = window[k];
-          if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function') return v;
-        }
-      } catch(e){}
-      return null;
-    }
-    function wait(fn, tries=0){
-      const c = findCanvas();
-      if (c) return fn(c);
-      if (tries>25) return; setTimeout(()=>wait(fn, tries+1), 200);
-    }
-    wait(c=>{
-      if (!window.fabric || !fabric.Image) return;
-      const isBlob = /^blob:/i.test(url);
-      const opts   = isBlob ? {} : { crossOrigin:'anonymous' };
-      fabric.Image.fromURL(url, img=>{
-        if (!img) return;
-        img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
-        try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
-        c.requestRenderAll();
-        if (typeof window.refreshWatermarkGate==='function') window.refreshWatermarkGate();
-      }, opts);
-    });
-  }
-
-  function ensureShelf(){
-    if ($('#raPublishedShelf')) return true;
-    const card = findOverlaysCard(); if (!card) return false;
-
-    const shelf = document.createElement('div');
-    shelf.id = 'raPublishedShelf';
-    shelf.style.cssText = 'margin-top:8px;';
-    shelf.innerHTML = `
-      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
-      <div id="raPublishedGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
-    `;
-    card.appendChild(shelf);
-    return true;
-  }
-
-  function renderShelf(){
-    if (!ensureShelf()) { setTimeout(renderShelf, 300); return; }
-    const grid = $('#raPublishedGrid'); if (!grid) return;
-    grid.innerHTML = '';
-    (window.raPublishedOverlays||[]).forEach((item, idx)=>{
-      const tile = document.createElement('div');
-      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${item.src}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
-        ${isAdmin ? '<button class="ra-pub-del" title="Remove" style="position:absolute;top:3px;right:5px;background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:2px 6px;cursor:pointer">×</button>' : ''}
-      `;
-      // Add to canvas (ignore delete click)
-      tile.addEventListener('click', (ev)=>{
-        if (isAdmin && ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
-        robustAddToCanvas(item.src, item.name);
-      });
-      // Admin delete
-      if (isAdmin){
-        const del = tile.querySelector('.ra-pub-del');
-        if (del){
-          del.addEventListener('click', (ev)=>{
-            ev.stopPropagation();
-            const arr = window.raPublishedOverlays;
-            arr.splice(idx,1);
-            renderShelf();
-          });
-        }
-      }
-      grid.appendChild(tile);
-    });
-  }
-
-  // Helper for the Admin Dock: publish one item here
-  window.raPublishToOverlaysShelf = async function(name, fileOrData){
-    const toDataURL = file => new Promise((res,rej)=>{
-      const fr = new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
-    });
-    let src = null;
-    if (typeof File !== 'undefined' && fileOrData instanceof File){
-      src = await toDataURL(fileOrData);
-    } else if (typeof fileOrData === 'string'){
-      src = fileOrData; // data: URL or http(s)
-    }
-    if (!src) return;
-    window.raPublishedOverlays.push({ name, src });
-    renderShelf();
-  };
-
-  // Export current published overlays to overlays.json
-  window.raExportPublishedPack = function(){
-    const data = { version:1, items:(window.raPublishedOverlays||[]).map(it=>({ name: it.name, dataURL: it.src })) };
-    const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'overlays.json';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
-  };
-
-  // Load a manifest for ALL users: default /overlays.json (or ?manifest=URL)
-  async function loadManifestFrom(url){
-    try{
-      // bust cache so testers see updates immediately
-      const bust = (url.indexOf('?')>-1 ? '&' : '?') + 't=' + Date.now();
-      const resp = await fetch(url + bust, { cache: 'no-store' });
-      if (!resp.ok) return;
-      const json = await resp.json();
-      if (json && Array.isArray(json.items)){
-        // Replace the list with the manifest so everyone sees the same set
-        window.raPublishedOverlays = json.items
-          .map(it => ({ name: it.name || 'overlay', src: it.dataURL || it.url }))
-          .filter(it => !!it.src);
-        renderShelf();
-      }
-    }catch(e){ /* ignore if file not present yet */ }
-  }
-
-  (async function init(){
-    ensureShelf();
-    renderShelf();
-    const qp = new URLSearchParams(location.search);
-    const manifestURL = qp.get('manifest') || '/overlays.json';
-    await loadManifestFrom(manifestURL);
-  })();
-})();
-
-/* === RA_PUBLISHED_MONO_HANDLER_V2 — add-once (capture), scaled/centered, clear-all compatible === */
-(function(){
-  if (window.__RA_PUB_MONO) return; 
-  window.__RA_PUB_MONO = true;
-
-  function findCanvas(){
-    if (window.canvas && window.canvas.upperCanvasEl) return window.canvas;
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && v.upperCanvasEl && typeof v.add==='function' && typeof v.requestRenderAll==='function'){
-          return v;
-        }
-      }
-    }catch(e){}
-    return null;
-  }
-
-  function addViaFabricScaled(src, name){
-    const c = findCanvas(); 
-    if (!c || !window.fabric || !fabric.Image) return;
-    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin:'anonymous' };
-    fabric.Image.fromURL(src, img=>{
-      if (!img) return;
-
-      const cw = c.getWidth(), ch = c.getHeight();
-      const maxDim = Math.min(cw, ch) * 0.60;
-      const iw = img.width  || maxDim, ih = img.height || maxDim;
-      const scale = Math.min(1, maxDim / Math.max(iw, ih));
-
-      img.set({
-        originX:'center', originY:'center',
-        left:cw/2, top:ch/2,
-        selectable:true, evented:true, hasControls:true, hasBorders:true
-      });
-      if (isFinite(scale) && scale>0) img.scale(scale);
-
-      // Mark for our clear-all safety
-      img.raOverlay = true;
-
-      try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(e){}
-      c.requestRenderAll();
-
-      // Keep any app bookkeeping in sync if present
-      if (Array.isArray(window.overlayList)) {
-        try { window.overlayList.push(img); } catch(e){}
-      }
-      if (typeof window.registerOverlayInstance === 'function') {
-        try { window.registerOverlayInstance(img, { name }); } catch(e){}
-      }
-
-      if (typeof window.refreshWatermarkGate === 'function') window.refreshWatermarkGate();
-    }, opts);
-  }
-
-  // One-click guard (by src)
-  function dedupe(src){
-    const now = Date.now();
-    if (window.__raLastAddKey===src && now - (window.__raLastAddAt||0) < 800) return true;
-    window.__raLastAddKey = src; window.__raLastAddAt = now; return false;
-  }
-
-  // CAPTURE-phase handler: runs before any bubble handlers, then stops propagation.
-  function onTileClickCapture(ev){
-    const grid = document.getElementById('raPublishedGrid');
-    if (!grid || !grid.contains(ev.target)) return;
-
-    // Ignore the admin delete (×) button
-    if (ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
-
-    // Identify the tile and its image
-    const tile   = ev.target.closest('#raPublishedGrid > div'); if (!tile) return;
-    const imgEl  = tile.querySelector('img'); if (!imgEl) return;
-    const nameEl = tile.querySelector('div:nth-child(2)');
-    const src  = imgEl.getAttribute('src');
-    const name = nameEl ? (nameEl.textContent||'overlay').trim() : 'overlay';
-    if (!src) return;
-
-    // Only our path (scaled + centered)
-    if (!dedupe(src)) addViaFabricScaled(src, name);
-
-    // Kill other listeners (prevents native/bubble adds that caused duplicates/huge size)
-    ev.preventDefault();
-    ev.stopImmediatePropagation();
-    ev.stopPropagation();
-  }
-
-  function attach(){
-    // Global capture so we run before tile/bubble handlers
-    if (!window.__RA_PUB_CAPTURE_BOUND){
-      window.__RA_PUB_CAPTURE_BOUND = true;
-      document.addEventListener('click', onTileClickCapture, { capture:true });
-    }
-
-    // Safety: make "Clear All Overlays" also remove items we added
-    const clearBtn = Array.from(document.querySelectorAll('button'))
-      .find(b => (b.textContent||'').trim().toLowerCase()==='clear all overlays');
-    if (clearBtn && !clearBtn.__raBound2){
-      clearBtn.__raBound2 = true;
-      clearBtn.addEventListener('click', ()=>{
-        setTimeout(()=>{
-          const c = findCanvas(); if (!c) return;
-          const extras = c.getObjects().filter(o => o && o.raOverlay === true);
-          extras.forEach(o => c.remove(o));
-          c.requestRenderAll();
-          if (Array.isArray(window.overlayList)) {
-            window.overlayList = window.overlayList.filter(o => !(o && o.raOverlay));
-          }
-        }, 60);
-      });
-    }
-  }
-
-  attach();
+  new MutationObserver(wire).observe(document.body, { childList:true, subtree:true });
+  document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
