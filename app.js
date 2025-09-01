@@ -1056,3 +1056,88 @@
   new MutationObserver(wire).observe(document.body, { childList:true, subtree:true });
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
+
+/* === RA_MOBILE_RESPONSIVE_V1 — fix mobile view (fit to screen, disable center-lock) === */
+(function RA_MOBILE_RESPONSIVE_V1(){
+  // 1) Small CSS nudge: on mobile, don't keep the fixed/sticky center wrap;
+  //    let it flow and size the canvas visually to the viewport width.
+  try {
+    const css = document.createElement('style');
+    css.id = 'raMobileResponsiveCSS';
+    css.textContent = `
+      @media (max-width: 900px){
+        /* If the center-lock wrapper exists, disable its fixed centering on mobile */
+        #raCenterWrap{
+          position: static !important;
+          top: auto !important;
+          left: auto !important;
+          transform: none !important;
+          width: 100% !important;
+          margin: 12px auto !important;
+        }
+        /* Make the visible canvas shrink to the screen width */
+        #raCenterWrap canvas,
+        canvas#c{
+          width: 92vw !important;
+          height: auto !important;
+          max-width: 100% !important;
+          display: block !important;
+          margin: 0 auto !important;
+        }
+        html, body { overflow-x: hidden; }
+      }
+    `;
+    (document.head || document.documentElement).appendChild(css);
+  } catch(_) {}
+
+  // 2) JS fit: on phones/tablets, auto-zoom the Fabric canvas so what you see
+  //    actually fits the screen (no giant black box). On desktop, restore 1:1.
+  function isMobile(){ return window.matchMedia('(max-width: 900px)').matches; }
+  function getCanvas(){
+    const c = window.canvas;
+    return c && typeof c.getWidth === 'function' ? c : null;
+  }
+  function updateZoomLabel(scale){
+    const z = document.getElementById('zoomVal');
+    if (z) z.textContent = Math.round(scale*100) + '%';
+  }
+
+  function fitToViewport(){
+    const c = getCanvas();
+    if (!c){ setTimeout(fitToViewport, 200); return; }
+
+    if (isMobile()){
+      // Fit the *entire canvas* into the visible viewport area
+      const vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
+      const vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight;
+
+      // Target: use ~92% of width, and up to ~80% of height
+      const targetW = Math.max(240, vw * 0.92);
+      const targetH = Math.max(240, vh * 0.80);
+
+      const scaleX = targetW / c.getWidth();
+      const scaleY = targetH / c.getHeight();
+      const scale  = Math.max(0.25, Math.min(3, Math.min(scaleX, scaleY)));
+
+      // Reset pan + apply zoom (center is handled by CSS centering)
+      c.setViewportTransform([scale, 0, 0, scale, 0, 0]);
+      c.requestRenderAll();
+      updateZoomLabel(scale);
+    } else {
+      // Desktop: keep your normal 1:1 canvas zoom; center-lock patch handles centering
+      c.setViewportTransform([1,0,0,1,0,0]);
+      c.requestRenderAll();
+      updateZoomLabel(1);
+    }
+  }
+
+  // Re-fit on orientation / resize, and when Fabric is ready
+  window.addEventListener('resize',          () => setTimeout(fitToViewport, 60));
+  window.addEventListener('orientationchange', () => setTimeout(fitToViewport, 180));
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fitToViewport);
+  } else {
+    fitToViewport();
+  }
+  document.addEventListener('ra:canvas-ready', fitToViewport);
+})();
