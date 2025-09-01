@@ -1057,108 +1057,67 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === RA_MOBILE_FLOW_V2 — disable fixed centering on mobile & fit canvas === */
-(function RA_MOBILE_FLOW_V2(){
-  function isSmall(){ return window.matchMedia('(max-width: 900px)').matches; }
-
-  function getWrap(){
-    // Your center-lock patch creates #raCenterWrap around the <canvas>
-    // If not present, try to find the parent of canvas #c and use that.
-    var wrap = document.getElementById('raCenterWrap');
-    if (wrap) return wrap;
-    var c = document.getElementById('c');
-    return c && c.parentElement ? c.parentElement : null;
-  }
-
-  function fitCanvas(){
-    var wrap = getWrap();
-    var c = window.canvas;
-    if (!wrap || !c || typeof c.getWidth !== 'function'){ setTimeout(fitCanvas, 200); return; }
-
-    if (isSmall()){
-      // Put the wrapper back into normal flow so it doesn't cover the UI
-      Object.assign(wrap.style, {
-        position: 'static',
-        top: 'auto', left: 'auto',
-        transform: 'none',
-        width: '100%',
-        maxWidth: '100%',
-        margin: '12px auto',
-        zIndex: '0'
-      });
-
-      // Make the visible <canvas> element responsive
-      var domCanvas = wrap.querySelector('canvas') || document.getElementById('c');
-      if (domCanvas){
-        Object.assign(domCanvas.style, {
-          width: '92vw',
-          height: 'auto',
-          maxWidth: '100%',
-          display: 'block',
-          margin: '0 auto'
-        });
-      }
-
-      // Fit the Fabric viewport to the screen (no black box)
-      var vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
-      var vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight;
-      var targetW = Math.max(260, vw * 0.92);
-      var targetH = Math.max(260, vh * 0.78);
-
-      var scaleX = targetW / c.getWidth();
-      var scaleY = targetH / c.getHeight();
-      var scale  = Math.max(0.25, Math.min(3, Math.min(scaleX, scaleY)));
-
-      c.setViewportTransform([scale,0,0,scale,0,0]);
-      c.requestRenderAll();
-
-      // Prevent horizontal scroll bleed
-      document.documentElement.style.overflowX = 'hidden';
-      document.body.style.overflowX = 'hidden';
-    } else {
-      // Desktop → keep your original centered/fixed behavior
-      Object.assign(wrap.style, {
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%,-50%)',
-        zIndex: '10'
-      });
-
-      var domCanvas = wrap.querySelector('canvas') || document.getElementById('c');
-      if (domCanvas){
-        // Remove mobile sizing so CSS from desktop theme applies
-        ['width','height','maxWidth','display','margin'].forEach(k=> domCanvas.style[k]='');
-      }
-
-      c.setViewportTransform([1,0,0,1,0,0]);
-      c.requestRenderAll();
-      document.documentElement.style.overflowX = '';
-      document.body.style.overflowX = '';
-    }
-  }
-
-  // Make sure it also works if CSS loads late
+/* === RA_MOBILE_SAFE_OVERRIDE_MIN — mobile-only: put canvas back in page flow & fit it === */
+(function RA_MOBILE_SAFE_OVERRIDE_MIN(){
+  // 1) CSS: disable fixed centering only on small screens and make the <canvas> responsive
   try{
     var css = document.createElement('style');
+    css.id = 'raMobileSafeOverride';
     css.textContent = `
       @media (max-width: 900px){
-        /* Safety: if the wrapper still has fixed, force normal flow */
-        #raCenterWrap{ position: static !important; transform: none !important; left:auto !important; top:auto !important; z-index:0 !important; width:100% !important; max-width:100% !important; }
-        #raCenterWrap canvas, canvas#c{ width:92vw !important; height:auto !important; max-width:100% !important; display:block !important; margin:0 auto !important; }
-        html, body{ overflow-x:hidden; }
+        /* If the center wrapper exists, stop it from being fixed on mobile */
+        #raCenterWrap{
+          position: static !important;
+          left: auto !important;
+          top: auto !important;
+          transform: none !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          margin: 12px auto !important;
+          z-index: auto !important;
+        }
+        /* Make the visible canvas scale to screen width */
+        #raCenterWrap canvas, canvas#c{
+          width: 92vw !important;
+          height: auto !important;
+          max-width: 100% !important;
+          display: block !important;
+          margin: 0 auto !important;
+        }
+        html, body{ overflow-x: hidden !important; }
       }
     `;
     (document.head || document.documentElement).appendChild(css);
   }catch(_){}
 
-  // Run now and on resize/orientation
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fitCanvas);
-  } else {
-    fitCanvas();
+  // 2) JS: light zoom fit for Fabric on mobile only (desktop untouched)
+  function isMobile(){ return window.matchMedia('(max-width: 900px)').matches; }
+  function fitZoom(){
+    if (!isMobile() || !window.canvas || typeof window.canvas.getWidth !== 'function') return;
+    var c = window.canvas;
+
+    var vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
+    var vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight;
+
+    var targetW = Math.max(260, vw * 0.92);
+    var targetH = Math.max(260, vh * 0.78);
+
+    var scale = Math.min(targetW / c.getWidth(), targetH / c.getHeight());
+    scale = Math.max(0.25, Math.min(3, scale));
+
+    var vt = c.viewportTransform || [1,0,0,1,0,0];
+    if (Math.abs((vt[0]||1) - scale) > 0.02){
+      c.setViewportTransform([scale,0,0,scale,0,0]);
+      c.requestRenderAll();
+    }
   }
-  window.addEventListener('resize', () => setTimeout(fitCanvas, 60));
-  window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 160));
-  document.addEventListener('ra:canvas-ready', fitCanvas);
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fitZoom);
+  } else {
+    fitZoom();
+  }
+  window.addEventListener('resize', function(){ if (isMobile()) setTimeout(fitZoom, 80); });
+  window.addEventListener('orientationchange', function(){ setTimeout(fitZoom, 160); });
+  document.addEventListener('ra:canvas-ready', fitZoom);
 })();
