@@ -727,36 +727,33 @@
   }
 })();
 
-/* === RA_PATCH_V2: Published Overlays (admin publish) + Canvas size buttons === */
+/* === RA_PATCH_V3 — Fix "Publish to shelf" + real canvas resize (scales all objects) === */
 (function(){
   'use strict';
 
-  // ------------------------
-  // Admin flag & selectors
-  // ------------------------
+  // -------------------------------
+  // Admin flag + storage for shelf
+  // -------------------------------
   const isAdmin = /[?&]admin=1\b/i.test(location.search);
-  const STORAGE_KEY = 'ra_published_manifest_v1';
+  const STORE = 'ra_published_manifest_v1';
 
-  // ------------------------
-  // Simple store (localStorage) + mirror to global
-  // ------------------------
-  function loadStore(){
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+  function loadShelf(){
+    try { return JSON.parse(localStorage.getItem(STORE) || '[]'); }
     catch(_) { return []; }
   }
-  function saveStore(items){
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(items || [])); } catch(_){}
-    // mirror for any other code that looks here
+  function saveShelf(items){
+    try { localStorage.setItem(STORE, JSON.stringify(items || [])); } catch(_){}
+    // keep a mirror some parts of the app may read
     window.raPublishedOverlays = (items || []).map(it => ({ name: it.name || 'overlay', src: it.dataURL || it.src }));
   }
 
-  // ------------------------
+  // -------------------------------
   // DataURL helpers
-  // ------------------------
+  // -------------------------------
   function fileToDataURL(file){
     return new Promise((resolve, reject)=>{
       const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
+      fr.onload  = () => resolve(fr.result);
       fr.onerror = reject;
       fr.readAsDataURL(file);
     });
@@ -765,133 +762,159 @@
     if (!src) return null;
     if (/^data:/i.test(src)) return src;
     try {
-      const r = await fetch(src);                    // works for blob: and same-origin http(s)
+      const r = await fetch(src);                     // works for blob: and same-origin http(s)
       const b = await r.blob();
       return await new Promise(res => { const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
-    } catch(_){
-      // last resort, keep as-is (may not embed, but will still display if CORS allows)
-      return src;
+    } catch(_) {
+      return null;
     }
   }
 
-  // ------------------------
-  // Ensure "Published Overlays" row exists
-  // (Uses existing #raPublishedGrid if present, else creates its own)
-  // ------------------------
-  function ensureShelfContainer(){
-    // If another module already created it, use that
+  // -------------------------------
+  // Overlays card + shelf container
+  // (Uses existing "Published Overlays" label; we only add a grid)
+  // -------------------------------
+  function findOverlaysCard(){
+    const h3s = Array.from(document.querySelectorAll('h3'));
+    const overlaysH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'overlays');
+    return overlaysH3 ? overlaysH3.parentNode : null;
+  }
+
+  function ensurePublishedGrid(){
+    // If app already has a grid, use it
     let grid = document.getElementById('raPublishedGrid');
     if (grid) return grid;
 
-    // Try ours (if we already inserted once)
-    grid = document.getElementById('raPatchShelfGrid');
-    if (grid) return grid;
+    const card = findOverlaysCard();
+    if (!card) {
+      // last resort: attach to body (keeps working even if card isn’t mounted yet)
+      grid = document.createElement('div');
+      grid.id = 'raPublishedGrid';
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;margin:8px';
+      document.body.appendChild(grid);
+      return grid;
+    }
 
-    // Create a shelf under the "Overlays" card
-    const h3s = Array.from(document.querySelectorAll('h3'));
-    const overlaysH3 = h3s.find(h => (h.textContent||'').trim().toLowerCase() === 'overlays');
-    const holder = overlaysH3 ? overlaysH3.parentNode : document.body;
+    // If a previous injected shelf with its own heading exists, remove it to avoid duplicate titles
+    const oldWraps = ['raPublishedShelf','raPatchShelfWrap'];
+    oldWraps.forEach(id => { const el = document.getElementById(id); if (el && card.contains(el)) el.remove(); });
 
-    const wrap = document.createElement('div');
-    wrap.id = 'raPatchShelfWrap';
-    wrap.style.marginTop = '8px';
-    wrap.innerHTML = `
-      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
-      <div id="raPatchShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
-    `;
-    holder.appendChild(wrap);
-    return document.getElementById('raPatchShelfGrid');
+    // Find the text node “Published Overlays” inside the Overlays card
+    const label = Array.from(card.querySelectorAll('*')).find(el =>
+      !el.firstElementChild && (el.textContent||'').trim().toLowerCase() === 'published overlays'
+    );
+
+    grid = document.createElement('div');
+    grid.id = 'raPublishedGrid';
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;margin-top:6px;';
+
+    if (label) label.insertAdjacentElement('afterend', grid);
+    else card.appendChild(grid);
+
+    return grid;
   }
 
-  function tileHTML(item, showDelete){
-    const name = (item.name || 'overlay').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return `
-      <div class="raPubTile" style="position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;">
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${item.dataURL || item.src}" alt="${name}" style="max-width:100%;max-height:80px"/>
-        </div>
-        <div class="raPubName" style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}</div>
-        ${showDelete ? '<button class="ra-pub-del" title="Remove" style="position:absolute;top:3px;right:5px;background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:2px 6px;cursor:pointer">×</button>' : ''}
-      </div>`;
+  function renderShelf(){
+    const grid  = ensurePublishedGrid();
+    const items = loadShelf();
+
+    grid.innerHTML = '';
+    items.forEach((it, idx) => {
+      const tile = document.createElement('div');
+      tile.className = 'raPubTile';
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+
+      const imgWrap = document.createElement('div');
+      imgWrap.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
+      const img = document.createElement('img');
+      img.src = it.dataURL || it.src;
+      img.alt = it.name || 'overlay';
+      img.style.maxWidth = '100%';
+      img.style.maxHeight = '80px';
+      imgWrap.appendChild(img);
+
+      const cap = document.createElement('div');
+      cap.className = 'raPubName';
+      cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      cap.textContent = it.name || 'overlay';
+
+      tile.appendChild(imgWrap);
+      tile.appendChild(cap);
+
+      // Admin-only delete (×)
+      if (isAdmin) {
+        const del = document.createElement('button');
+        del.className = 'ra-pub-del';
+        del.title = 'Remove';
+        del.textContent = '×';
+        del.style.cssText = 'position:absolute;top:3px;right:5px;background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:2px 6px;cursor:pointer';
+        del.addEventListener('click', (ev)=>{
+          ev.stopPropagation();
+          const arr = loadShelf();
+          arr.splice(idx, 1);
+          saveShelf(arr);
+          renderShelf();
+        });
+        tile.appendChild(del);
+      }
+
+      // Click tile → add to canvas
+      tile.addEventListener('click', ()=> addOverlayToCanvasSmart(img.src));
+
+      grid.appendChild(tile);
+    });
+
+    saveShelf(items); // refresh the global mirror too
   }
 
+  // Add overlay to canvas, scaled & centered
   function addOverlayToCanvasSmart(src){
-    // If your app already exposes an "addOverlayToCanvas", prefer it
+    // Use app helper if present
     if (typeof window.addOverlayToCanvas === 'function') {
       try { window.addOverlayToCanvas(src, false); return; } catch(_){}
     }
-    // Fallback: add via Fabric directly
     const c = window.canvas;
     if (!c || !window.fabric || !fabric.Image) return;
-    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin: 'anonymous' };
+
+    const opts = /^data:|^blob:/i.test(src) ? {} : { crossOrigin:'anonymous' };
     fabric.Image.fromURL(src, img=>{
       if (!img) return;
-      img.set({ originX:'center', originY:'center', left:c.getWidth()/2, top:c.getHeight()/2 });
+      const cw = c.getWidth(), ch = c.getHeight();
+      const maxDim = Math.min(cw, ch) * 0.60;                 // overlay starts at ~60% of canvas
+      const iw = img.width  || maxDim, ih = img.height || maxDim;
+      const scale = Math.min(1, maxDim / Math.max(iw, ih));
+      img.set({
+        originX:'center', originY:'center',
+        left:cw/2, top:ch/2, selectable:true, evented:true, hasControls:true, hasBorders:true
+      });
+      if (isFinite(scale) && scale>0) img.scale(scale);
+      img.raOverlay = true;                                   // mark so "clear overlays" can remove
       try { c.add(img); c.bringToFront(img); c.setActiveObject(img); } catch(_){}
       c.requestRenderAll && c.requestRenderAll();
     }, opts);
   }
 
-  function renderShelf(){
-    const grid = ensureShelfContainer();
-    if (!grid) return;
-
-    const items = loadStore();
-    grid.innerHTML = items.map(it => tileHTML(it, isAdmin)).join('');
-
-    // Click to add to canvas
-    grid.querySelectorAll('.raPubTile').forEach((tile, idx)=>{
-      tile.addEventListener('click', (ev)=>{
-        // ignore delete clicks
-        if (ev.target && ev.target.classList && ev.target.classList.contains('ra-pub-del')) return;
-        const img = tile.querySelector('img');
-        if (img && img.src) addOverlayToCanvasSmart(img.src);
-      });
-
-      // Admin delete
-      const del = tile.querySelector('.ra-pub-del');
-      if (isAdmin && del){
-        del.addEventListener('click', (ev)=>{
-          ev.stopPropagation();
-          const arr = loadStore();
-          arr.splice(idx, 1);
-          saveStore(arr);
-          renderShelf();
-        });
-      }
-    });
-
-    // Keep global mirror fresh for any other code
-    saveStore(items);
-  }
-
-  // ------------------------
-  // PUBLIC API for Admin Dock (and others):
-  // window.raPublishToOverlaysShelf(name, fileOrData)
-  // window.raExportPublishedPack()
-  // ------------------------
+  // ------------------------------------------
+  // Public API so Admin Dock can call directly
+  // ------------------------------------------
   if (typeof window.raPublishToOverlaysShelf !== 'function') {
     window.raPublishToOverlaysShelf = async function(name, fileOrData){
       let dataURL = null;
       if (typeof File !== 'undefined' && fileOrData instanceof File) {
         dataURL = await fileToDataURL(fileOrData);
       } else if (typeof fileOrData === 'string') {
-        dataURL = await srcToDataURL(fileOrData);
-      } else {
-        // fallback: try to detect an <img> src inside admin tile if available
-        dataURL = null;
+        dataURL = await srcToDataURL(fileOrData) || fileOrData; // keep raw src if we can't embed
       }
       if (!dataURL) return;
 
-      const items = loadStore();
-      // de‑dupe by exact dataURL
+      const items = loadShelf();
+      // de-dupe by exact dataURL/src
       if (!items.some(it => (it.dataURL || it.src) === dataURL)) {
         items.push({ name: name || 'overlay', dataURL });
-        saveStore(items);
+        saveShelf(items);
       }
       renderShelf();
 
-      // Optional: tiny feedback if the Admin Dock status area exists
       const msg = document.getElementById('raDockMsg');
       if (msg){ msg.textContent = `Published: ${name || 'overlay'}`; setTimeout(()=>{ msg.textContent=''; }, 1000); }
     };
@@ -899,7 +922,7 @@
 
   if (typeof window.raExportPublishedPack !== 'function') {
     window.raExportPublishedPack = function(){
-      const data = { version: 1, items: loadStore().map(it => ({ name: it.name || 'overlay', dataURL: it.dataURL || it.src })) };
+      const data = { version: 1, items: loadShelf().map(it => ({ name: it.name || 'overlay', dataURL: it.dataURL || it.src })) };
       const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -910,11 +933,9 @@
     };
   }
 
-  // ------------------------
-  // Fallback publish click proxy (works even if Admin Dock didn't bind)
-  // - Captures clicks on any button with data-act="publish" or text "Publish"
-  // - Reads the tile's <img> src and name, converts to dataURL, and publishes.
-  // ------------------------
+  // -------------------------------------------------
+  // Fallback: capture Publish button clicks anywhere
+  // -------------------------------------------------
   document.addEventListener('click', async (ev)=>{
     const btn = ev.target && ev.target.closest('button');
     if (!btn) return;
@@ -922,98 +943,107 @@
                    || ((btn.textContent||'').trim().toLowerCase() === 'publish');
     if (!isPublish) return;
 
-    // Find the surrounding tile (climb until a node that has an <img>)
+    // Find the nearest <img> for that tile
     let tile = btn.parentElement;
-    while (tile && !tile.querySelector('img')) tile = tile.parentElement;
-    const img = tile ? tile.querySelector('img') : null;
+    let img = null;
+    while (tile && !img) { img = tile.querySelector && tile.querySelector('img'); tile = tile.parentElement; }
     if (!img || !img.src) return;
 
-    // Try to find a display name in the tile (fallback to filename)
+    // Name from tile text or file name
     let name = 'overlay';
-    if (tile){
-      const nameEl = tile.querySelector('.raPubName') || Array.from(tile.querySelectorAll('div')).slice(-1)[0];
-      if (nameEl && nameEl.textContent) name = nameEl.textContent.trim();
-      if (!name && img.src) {
-        try { name = decodeURIComponent(img.src.split('/').pop()).replace(/\.(png|jpg|jpeg)$/i,''); } catch(_) {}
-      }
+    const nameEl = (tile && tile.querySelector) ? tile.querySelector('.raPubName') : null;
+    if (nameEl && nameEl.textContent) name = nameEl.textContent.trim();
+    if (!name && img.alt) name = img.alt.trim();
+
+    const dataURL = await srcToDataURL(img.src) || img.src;
+    const items = loadShelf();
+    if (!items.some(it => (it.dataURL || it.src) === dataURL)) {
+      items.push({ name, dataURL });
+      saveShelf(items);
+      renderShelf();
     }
+  }, true);
 
-    const dataURL = await srcToDataURL(img.src);
-    if (dataURL){
-      await window.raPublishToOverlaysShelf(name, dataURL);
-      // Prevent double‑add only if another handler would run too (optional dedupe)
-      // Not stopping propagation here because Admin Dock's own handler also calls the same API,
-      // and our storage de‑dupe will avoid duplicates gracefully.
-    }
-  }, true); // capture
-
-  // ------------------------
-  // Canvas SIZE buttons & select: 700 / 900 / 1024 / 1200 (no zoom)
-  // ------------------------
-  function applyCanvasSize(n){
-    if (!isFinite(n) || n <= 0) return;
-
-    // Sync the selector if present
-    const sel = document.getElementById('canvasSize');
-    if (sel) sel.value = String(n);
-
-    // Prefer the app's own resizer if available
-    if (typeof window.setCanvasSize === 'function') {
-      try { window.setCanvasSize(n); } catch(_){}
-    } else {
-      // Minimal fallback: directly resize the Fabric canvas
-      const c = window.canvas;
-      if (c && typeof c.setWidth === 'function' && typeof c.setHeight === 'function') {
-        c.setWidth(n);
-        c.setHeight(n);
-        c.requestRenderAll && c.requestRenderAll();
-      }
-    }
-
-    // Always reset viewport zoom/pan so this never looks like "zoom"
+  // -----------------------------------------------
+  // REAL Canvas Resize (700/900/1024/1200 & <select>)
+  //  - scales ALL objects and resets zoom to 100%
+  // -----------------------------------------------
+  function getFabricCanvas(){
     const c = window.canvas;
-    if (c && typeof c.setViewportTransform === 'function') {
-      try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
-      if (typeof c.setZoom === 'function') try { c.setZoom(1); } catch(_){}
+    if (c && c.upperCanvasEl && typeof c.getWidth === 'function') return c;
+    // fallback: scan globals
+    for (const k in window) {
+      const v = window[k];
+      if (v && v.upperCanvasEl && typeof v.getWidth === 'function') return v;
     }
-    const zv = document.getElementById('zoomVal'); if (zv) zv.textContent = '100%';
+    return null;
   }
 
-  // Click on number buttons (700 / 900 / 1024 / 1200)
+  function resizeCanvasSquare(newSize){
+    const c = getFabricCanvas(); if (!c || !newSize) return;
+
+    // Current size (square canvas)
+    const prevW = c.getWidth()  || newSize;
+    const prevH = c.getHeight() || newSize;
+    const base   = Math.max(1, Math.min(prevW, prevH));       // avoid divide-by-zero
+    const s      = newSize / base;
+
+    // Scale every object by the same factor and reposition
+    (c.getObjects() || []).forEach(o=>{
+      try {
+        if (o.scaleX != null) o.scaleX *= s;
+        if (o.scaleY != null) o.scaleY *= s;
+        if (o.left   != null) o.left   *= s;
+        if (o.top    != null) o.top    *= s;
+        if (typeof o.setCoords === 'function') o.setCoords();
+      } catch(_){}
+    });
+
+    // Set the new canvas size
+    try { c.setWidth(newSize);  } catch(_){}
+    try { c.setHeight(newSize); } catch(_){}
+
+    // Reset any viewport pan/zoom so it never looks like "zoom"
+    try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
+    if (typeof c.setZoom === 'function') try { c.setZoom(1); } catch(_){}
+
+    // Sync UI
+    const sel = document.getElementById('canvasSize'); if (sel) sel.value = String(newSize);
+    const zv  = document.getElementById('zoomVal');    if (zv)  zv.textContent = '100%';
+
+    c.requestRenderAll && c.requestRenderAll();
+  }
+
+  // Click: 700 / 900 / 1024 / 1200 buttons
   document.addEventListener('click', (ev)=>{
     const el = ev.target && ev.target.closest('button,a,[role="button"]');
     if (!el) return;
     const txt = (el.textContent || '').replace(/\s+/g,'').trim();
-    if (['700','900','1024','1200'].includes(txt)) {
-      applyCanvasSize(parseInt(txt, 10));
-      // Do NOT stop propagation; other background-fix patches can still run safely
+    if (/^(700|900|1024|1200)$/.test(txt)) {
+      resizeCanvasSquare(parseInt(txt, 10));
     }
-  }, true); // capture
+  }, true);
 
-  // Change via <select id="canvasSize">
+  // Change: <select id="canvasSize">
   document.addEventListener('change', (ev)=>{
     const t = ev.target;
     if (t && t.id === 'canvasSize') {
       const n = parseInt(t.value, 10);
-      applyCanvasSize(n);
+      if (isFinite(n)) resizeCanvasSquare(n);
     }
   }, true);
 
-  // ------------------------
-  // Boot
-  // ------------------------
+  // -------------------------------
+  // Boot + keep shelf in sync
+  // -------------------------------
   function init(){
-    // initial render of shelf
     renderShelf();
-
-    // Re-render if the Overlays card mounts later
-    const mo = new MutationObserver(()=> renderShelf());
-    mo.observe(document.body, { childList:true, subtree:true });
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
   }
+  new MutationObserver(()=> renderShelf()).observe(document.body, { childList:true, subtree:true });
 
 })();
