@@ -1057,191 +1057,140 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === MOBILE INLINE CANVAS v8 — move Fabric WRAPPER, enable touch-drag, no gap === */
+/* === MOBILE RESPONSIVE REPAIR v9 — keep checkerboard, fix touch drag, no gaps === */
 (function(){
-  if (window.__RA_MOBILE_INLINE_V8) return; window.__RA_MOBILE_INLINE_V8 = true;
+  if (window.__RA_MOBILE_RESP_V9) return; window.__RA_MOBILE_RESP_V9 = true;
 
-  // remove older attempts so they don't conflict
-  ['raMobileFixedV4Style','raMobileV3','raStickyCanvasCSS','raMobileInlineCanvasRow','raMobileInlineCanvasRowOld']
-    .forEach(id=>{ const n=document.getElementById(id); if (n) try{ n.remove(); }catch(_){} });
+  // In case any older mobile rows/styles are still around, remove them quietly
+  ['raMobileInlineCanvasRow','raMobileInlineCanvasRowOld','raMobileFixedV4Style','raStickyCanvasCSS','raMobileV3']
+    .forEach(id => { const n = document.getElementById(id); if (n) try{ n.remove(); }catch(_){} });
 
-  const MAX_MOBILE = 820;                 // treat <= this as mobile
-  const VIEW_FRAC  = 0.88;                // canvas width = 88% of viewport
-  const MIN_SZ = 320, MAX_SZ = 1200;
-  const TOP_M = 12, BTM_M = 14;
+  const MAX_MOBILE_PX = 820;     // treat <= 820px as mobile
+  const VIEW_FRAC     = 0.90;    // canvas covers 90% of viewport width on mobile
+  const MIN_SZ        = 320;
+  const MAX_SZ        = 1200;
 
-  const isMobile = () => window.matchMedia(`(max-width:${MAX_MOBILE}px)`).matches;
-
-  function getFabricWrapper(){
+  function isMobile(){ return window.matchMedia(`(max-width:${MAX_MOBILE_PX}px)`).matches; }
+  function getWrap(){
     const C = window.canvas;
     if (C && C.wrapperEl) return C.wrapperEl;
-    if (C && C.upperCanvasEl && C.upperCanvasEl.parentNode) return C.upperCanvasEl.parentNode;
-    const up = document.querySelector('canvas.upper-canvas');
+    const up = C && C.upperCanvasEl ? C.upperCanvasEl : document.querySelector('canvas.upper-canvas');
     return up ? up.parentNode : null;
   }
-
-  function getLowerCanvas(){
+  function getLower(){
     const C = window.canvas;
-    if (!C) return null;
-    // Fabric 5 exposes lowerCanvasEl; older builds use contextContainer.canvas
-    return C.lowerCanvasEl || (C.contextContainer && C.contextContainer.canvas) || null;
+    return C ? (C.lowerCanvasEl || (C.contextContainer && C.contextContainer.canvas) || null) : null;
   }
-
-  function id(s){ return document.getElementById(s); }
   function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
-  let enabled = false, row = null;
-  let homeParent = null, homeNext = null;
-  let collapsed = [];
-
-  function ensureRow(){
-    if (row) return row;
-    row = document.createElement('div');
-    row.id = 'raMobileInlineCanvasRow';
-    Object.assign(row.style, {
-      position:'relative',
-      display:'flex', justifyContent:'center', alignItems:'flex-start',
-      width:'100%', margin:`${TOP_M}px auto ${BTM_M}px auto`, padding:'0',
-      background:'transparent', zIndex: 1
-    });
-    document.body.insertBefore(row, document.body.firstChild);
-    return row;
-  }
-
-  function collapseNode(n){
-    if (!n || collapsed.includes(n)) return;
-    collapsed.push(n);
-    n.__raOldStyle = n.getAttribute('style');
-    Object.assign(n.style, {
-      display:'none', visibility:'hidden', height:'0px', minHeight:'0px',
-      padding:'0', margin:'0', border:'0', overflow:'hidden', pointerEvents:'none'
-    });
-  }
-  function restoreCollapsed(){
-    collapsed.forEach(n=>{
-      if (!n) return;
-      if (n.__raOldStyle==null) n.removeAttribute('style');
-      else n.setAttribute('style', n.__raOldStyle);
-      delete n.__raOldStyle;
-    });
-    collapsed = [];
-  }
-
-  function collapseOldHostChain(start){
-    if (!start) return;
-    // collapse original wrapper parent (stage cell)
-    const host = start.parentNode;
-    collapseNode(host || start);
-    // if there is a plain wrapper above without controls, collapse that too (removes gap)
-    const p = (host||start).parentNode;
-    if (p && !p.querySelector('input,button,select,textarea') && !p.querySelector('#raMobileInlineCanvasRow')) {
-      collapseNode(p);
-      const pp = p.parentNode;
-      if (pp && !pp.querySelector('input,button,select,textarea') && !pp.querySelector('#raMobileInlineCanvasRow')) {
-        collapseNode(pp);
-      }
-    }
-  }
-
-  function styleForTouch(el){
+  function styleTouch(el){
     if (!el) return;
-    el.style.touchAction = 'none';         // let Fabric handle gestures
+    el.style.touchAction = 'none';          // let Fabric receive pointer/touch gestures
     el.style.webkitUserSelect = 'none';
     el.style.userSelect = 'none';
     el.style.pointerEvents = 'auto';
   }
 
-  function recalcOffset(){
+  function recalc(){
     const C = window.canvas; if (!C) return;
     try { C.calcOffset(); } catch(_){}
   }
 
-  function recenterBaseAndBackground(){
+  function recenterBaseAndBg(){
     const C = window.canvas; if (!C) return;
     const cx = C.getWidth()/2, cy = C.getHeight()/2;
-    C.getObjects().forEach(o=>{
-      if (o === window.backgroundRect){
-        o.set({ left:0, top:0, width:C.getWidth(), height:C.getHeight(), originX:'left', originY:'top' });
-        o.setCoords && o.setCoords();
-      } else if (o && (o._isBase===true || o===window.baseGroup)){
-        o.set({ left:cx, top:cy, originX:'center', originY:'center' });
-        o.setCoords && o.setCoords();
-      }
-    });
+
+    // Background rectangle (your dark stage)
+    if (window.backgroundRect){
+      backgroundRect.set({
+        left: 0, top: 0,
+        width: C.getWidth(),
+        height: C.getHeight(),
+        originX: 'left', originY: 'top'
+      });
+      backgroundRect.setCoords && backgroundRect.setCoords();
+    }
+
+    // Center the base image/group if present
+    const base = window.baseGroup;
+    if (base){
+      base.set({ left: cx, top: cy, originX:'center', originY:'center' });
+      base.setCoords && base.setCoords();
+    }
     C.requestRenderAll();
   }
 
-  function applySize(){
-    const C = window.canvas; const wrap = getFabricWrapper();
+  function apply(){
+    const C = window.canvas; const wrap = getWrap();
     if (!C || !wrap) return;
 
-    const target = clamp(Math.round(window.innerWidth * VIEW_FRAC), MIN_SZ, MAX_SZ);
+    const host = wrap.parentNode;  // leave host in place so checkerboard stays behind
 
-    // Reset pan/zoom before resizing
-    try { C.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
+    if (isMobile()){
+      // Compute target canvas size from viewport width
+      const target = clamp(Math.round(window.innerWidth * VIEW_FRAC), MIN_SZ, MAX_SZ);
 
-    if (typeof window.setCanvasSize === 'function') {
-      window.setCanvasSize(target);
-      const sizeEl = id('canvasSize'); if (sizeEl) sizeEl.value = String(target);
-    } else {
-      C.setWidth(target); C.setHeight(target);
-    }
+      // Reset pan/zoom before resizing so hit‑testing stays correct
+      try { C.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
 
-    // Keep DOM wrapper + both canvas layers in sync
-    wrap.style.width  = target+'px';
-    wrap.style.height = target+'px';
-    const up = C.upperCanvasEl, lo = getLowerCanvas();
-    if (up) { up.style.width = target+'px'; up.style.height = target+'px'; styleForTouch(up); }
-    if (lo) { lo.style.width = target+'px'; lo.style.height = target+'px'; styleForTouch(lo); }
-    styleForTouch(wrap);
-
-    recalcOffset();
-    recenterBaseAndBackground();
-  }
-
-  function enableMobile(){
-    if (enabled) { applySize(); return; }
-    const wrap = getFabricWrapper();
-    if (!wrap) { setTimeout(enableMobile, 120); return; }
-
-    if (!homeParent){ homeParent = wrap.parentNode; homeNext = wrap.nextSibling; }
-    ensureRow().appendChild(wrap);         // move the WHOLE Fabric wrapper (events + canvas)
-    collapseOldHostChain(wrap);
-
-    enabled = true;
-    applySize();
-  }
-
-  function disableMobile(){
-    if (!enabled) return;
-    const wrap = getFabricWrapper();
-    if (wrap && homeParent){
-      if (homeNext && homeNext.parentNode===homeParent) homeParent.insertBefore(wrap, homeNext);
-      else homeParent.appendChild(wrap);
-    }
-    restoreCollapsed();
-    if (row) { row.remove(); row = null; }
-    enabled = false;
-
-    // restore desktop size
-    try {
-      const sizeEl = id('canvasSize');
-      if (sizeEl && typeof window.setCanvasSize === 'function'){
-        window.setCanvasSize(parseInt(sizeEl.value,10) || 700);
+      // Resize Fabric canvas via your helper if present (preserves proportions)
+      if (typeof window.setCanvasSize === 'function'){
+        window.setCanvasSize(target);
+        const sizeEl = document.getElementById('canvasSize');
+        if (sizeEl) sizeEl.value = String(target);
+      } else {
+        C.setWidth(target); C.setHeight(target);
       }
-    } catch(_){}
-    recalcOffset();
-    recenterBaseAndBackground();
+
+      // Make the host center its content; this keeps the checkerboard and removes gaps
+      if (host && host.style){
+        host.style.display = 'flex';
+        host.style.justifyContent = 'center';
+        host.style.alignItems = 'flex-start';
+        host.style.padding = '0';
+        host.style.margin = '0';
+      }
+
+      // Keep wrapper and both canvas layers in sync with Fabric size
+      wrap.style.width  = target + 'px';
+      wrap.style.height = target + 'px';
+      wrap.style.margin = '12px auto 14px';
+      styleTouch(wrap);
+
+      const up = C.upperCanvasEl, lo = getLower();
+      if (up){ up.style.width = target + 'px'; up.style.height = target + 'px'; styleTouch(up); }
+      if (lo){ lo.style.width = target + 'px'; lo.style.height = target + 'px'; styleTouch(lo); }
+
+      recalc();
+      recenterBaseAndBg();
+    } else {
+      // Desktop → return host/wrapper styles to normal
+      if (host && host.style){
+        host.style.display = '';
+        host.style.justifyContent = '';
+        host.style.alignItems = '';
+        host.style.padding = '';
+        host.style.margin = '';
+      }
+      ['width','height','margin','touchAction','webkitUserSelect','userSelect','pointerEvents']
+        .forEach(k => { try { wrap.style[k] = ''; } catch(_){ } });
+
+      const up = C.upperCanvasEl, lo = getLower();
+      if (up){ up.style.width = ''; up.style.height = ''; up.style.touchAction = ''; }
+      if (lo){ lo.style.width = ''; lo.style.height = ''; lo.style.touchAction = ''; }
+
+      recalc();
+    }
   }
 
-  function apply(){
-    if (isMobile()) enableMobile(); else disableMobile();
+  function runWhenReady(){
+    if (window.canvas && window.canvas.upperCanvasEl) { apply(); return; }
+    setTimeout(runWhenReady, 120);
   }
 
-  const kick = () => setTimeout(apply, 40);
-  document.addEventListener('DOMContentLoaded', kick);
-  if (document.readyState !== 'loading') kick();
-  document.addEventListener('ra:canvas-ready', kick);
-  window.addEventListener('resize', ()=> setTimeout(apply, 40), { passive:true });
-  window.addEventListener('orientationchange', ()=> setTimeout(apply, 140));
+  // Hooks
+  document.addEventListener('DOMContentLoaded', runWhenReady);
+  document.addEventListener('ra:canvas-ready', () => setTimeout(apply, 30));
+  window.addEventListener('resize', () => setTimeout(apply, 50), { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(apply, 120));
 })();
