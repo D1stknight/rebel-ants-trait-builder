@@ -1057,105 +1057,103 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === RA_MOBILE_DETACH_WRAP_V2 — mobile-only: remove fixed center wrapper & fit canvas === */
-(function RA_MOBILE_DETACH_WRAP_V2(){
-  var BP = 900; // apply only when viewport width <= 900px
+/* === MOBILE VIEW v3 — centered, non‑sticky canvas + proper size & recenter === */
+(function(){
+  if (window.__RA_MOBILE_V3) return; window.__RA_MOBILE_V3 = true;
 
-  function isMobile(){
-    var w = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
-    return w <= BP;
-  }
+  // 1) CSS overrides for small screens: canvas is a centered square block, no sticky
+  (function injectCSS(){
+    const css = `
+      @media (max-width: 820px){
+        /* kill any sticky/fixed wrappers that might have been added */
+        #canvasDock, .canvasDock, .stickyCanvas, .sticky-canvas, .canvas-stage, .stage {
+          position: static !important; top: auto !important; left: auto !important; transform: none !important;
+          width: auto !important; height: auto !important;
+        }
 
-  // Find the Fabric canvas element and its wrapper (our desktop center wrapper or parent)
-  function getWrapAndCanvas(){
-    var cv = document.getElementById('c') || document.querySelector('canvas#c') || document.querySelector('canvas');
-    if (!cv) return null;
-    // Prefer our desktop wrapper if it exists, else just use the direct parent
-    var wrap = cv.closest('#raCenterWrap') || cv.parentElement || cv;
-    return { wrap: wrap, canvasEl: cv };
-  }
+        /* make the <canvas id="c"> a centered square that fits the screen width */
+        #c {
+          display: block !important;
+          width: 92vw !important;
+          height: 92vw !important;           /* keep it square */
+          margin: 12px auto 18px !important; /* center above controls */
+          max-width: 92vw !important;
+          max-height: 92vw !important;
+        }
 
-  // Create a safe slot in the document flow to hold the canvas on mobile
-  function ensureMobileSlot(){
-    var slot = document.getElementById('raMobileCanvasSlot');
-    if (slot) return slot;
+        /* be gentle with scrolling on iOS Safari */
+        body { overscroll-behavior-y: contain; }
 
-    slot = document.createElement('div');
-    slot.id = 'raMobileCanvasSlot';
-    slot.style.cssText = 'width:100%;max-width:100%;margin:10px auto;display:block;';
-    // Put it near the top of the main content (before the first card) or at body start
-    var firstCard = document.querySelector('.card') || document.querySelector('h3') || document.body.firstChild;
-    if (firstCard && firstCard.parentNode) firstCard.parentNode.insertBefore(slot, firstCard);
-    else document.body.insertBefore(slot, document.body.firstChild);
-    return slot;
-  }
+        /* let the side cards use full width so they’re easy to use */
+        .panel, .card, .section { max-width: 100% !important; }
+      }
+    `;
+    const st = document.createElement('style');
+    st.id = 'raMobileV3';
+    st.textContent = css;
+    (document.head || document.documentElement).appendChild(st);
+  })();
 
-  // Force-remove fixed positioning and big z-index of the desktop wrapper
-  function forceStatic(el){
-    try{
-      el.style.setProperty('position','static','important');
-      el.style.setProperty('left','auto','important');
-      el.style.setProperty('top','auto','important');
-      el.style.setProperty('transform','none','important');
-      el.style.setProperty('z-index','1','important');
-      el.style.setProperty('width','100%','important');
-      el.style.setProperty('max-width','100%','important');
-      el.style.setProperty('height','auto','important');
-      el.style.setProperty('margin','12px auto','important');
-      el.style.setProperty('pointer-events','auto','important');
-    }catch(_){}
-  }
+  // 2) Helpers
+  const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
 
-  // Make the <canvas> element itself responsive on mobile
-  function styleCanvasResponsive(cv){
-    try{
-      cv.style.setProperty('width','94vw','important');
-      cv.style.setProperty('height','auto','important');
-      cv.style.setProperty('max-width','100%','important');
-      cv.style.setProperty('display','block','important');
-      cv.style.setProperty('margin','0 auto','important');
-    }catch(_){}
-  }
+  // Recalculate canvas for mobile: square size + reset pan/zoom + recenter base
+  function recalcMobileCanvas(){
+    const c = window.canvas;
+    if (!c || typeof c.setWidth !== 'function') { setTimeout(recalcMobileCanvas, 200); return; }
 
-  // Fit the Fabric zoom so the drawing matches the visible canvas size
-  function fitFabricZoom(){
-    if (!window.canvas || typeof window.canvas.getWidth !== 'function') return;
-    var c  = window.canvas;
-    var vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
-    var vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight;
-
-    var targetW = Math.max(260, vw * 0.94);
-    var targetH = Math.max(260, vh * 0.72);
-    var scale   = Math.min(targetW / c.getWidth(), targetH / c.getHeight());
-    scale = Math.max(0.25, Math.min(3, scale));
-
-    var vt = c.viewportTransform || [1,0,0,1,0,0];
-    if (Math.abs((vt[0]||1) - scale) > 0.02){
-      c.setViewportTransform([scale,0,0,scale,0,0]);
-      c.requestRenderAll();
+    if (!isMobile()){
+      // desktop → nothing to do (your desktop centering logic stays)
+      return;
     }
+
+    const size = Math.max(320, Math.floor(window.innerWidth * 0.92)); // square based on viewport width
+    try {
+      // Hard reset any panning/zooming that could push the image to a corner
+      c.setViewportTransform([1,0,0,1,0,0]);
+
+      // Use your existing setter if present so everything stays in sync
+      if (typeof window.setCanvasSize === 'function') {
+        window.setCanvasSize(size);
+        const sizeEl = document.getElementById('canvasSize');
+        if (sizeEl) sizeEl.value = String(size);
+      } else {
+        c.setWidth(size);
+        c.setHeight(size);
+      }
+
+      // Recenter base (fixes "image stuck in corner") and stretch background
+      const cx = c.getWidth()/2, cy = c.getHeight()/2;
+      const objs = c.getObjects();
+      objs.forEach(o=>{
+        // stretch dark background rect if you use one
+        if (o === window.backgroundRect) {
+          o.set({ left:0, top:0, width:c.getWidth(), height:c.getHeight(), originX:'left', originY:'top' });
+          if (o.setCoords) o.setCoords();
+        }
+        // move base image/group back to center
+        if (o._isBase === true || o === window.baseGroup) {
+          o.set({ left:cx, top:cy, originX:'center', originY:'center' });
+          if (o.setCoords) o.setCoords();
+        }
+      });
+
+      c.requestRenderAll();
+    } catch (_) {}
   }
 
-  function applyMobileLayout(){
-    if (!isMobile()) return; // desktop untouched
+  // 3) Run now and on changes
+  const schedule = () => setTimeout(recalcMobileCanvas, 50);
 
-    var pair = getWrapAndCanvas(); if (!pair) return;
-    var wrap = pair.wrap, cv = pair.canvasEl;
+  document.addEventListener('DOMContentLoaded', schedule);
+  if (document.readyState !== 'loading') schedule();
 
-    forceStatic(wrap);                 // kill fixed center
-    ensureMobileSlot().appendChild(wrap); // put it back into normal flow
-    styleCanvasResponsive(cv);         // scale the visible <canvas>
-    fitFabricZoom();                   // and match Fabric's zoom to it
-    // prevent horizontal wobble
-    try{
-      document.documentElement.style.setProperty('overflow-x','hidden','important');
-      document.body.style.setProperty('overflow-x','hidden','important');
-    }catch(_){}
-  }
+  // When Fabric canvas is created by your app
+  document.addEventListener('ra:canvas-ready', schedule);
 
-  function init(){ if (isMobile()) applyMobileLayout(); }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
-  window.addEventListener('resize', function(){ if (isMobile()) applyMobileLayout(); });
-  window.addEventListener('orientationchange', function(){ setTimeout(applyMobileLayout, 220); });
-  document.addEventListener('ra:canvas-ready', function(){ if (isMobile()) applyMobileLayout(); });
+  // On resize and orientation change
+  window.addEventListener('resize', schedule, { passive:true });
+  window.addEventListener('orientationchange', () => {
+    setTimeout(() => { window.scrollTo(0,0); schedule(); }, 150);
+  });
 })();
