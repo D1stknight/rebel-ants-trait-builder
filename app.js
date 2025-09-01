@@ -1057,140 +1057,135 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === RA_MOBILE_INLINE_v12 — mobile-only: inline canvas, draggable overlays, desktop unchanged === */
-(function(){
-  if (window.__RA_MOBILE_INLINE_v12) return; window.__RA_MOBILE_INLINE_v12 = true;
+/* ===================== MOBILE CANVAS FLOW — V5 (phones only) ===================== */
+(function RA_MOBILE_FLOW_V5(){
+  // Only affect phones; tablets/desktop untouched
+  const mq = window.matchMedia('(max-width: 820px)');
+  let placeholder = null;     // where the canvas came from
+  let anchor = null;          // where we show it on mobile (top)
+  let installedCSS = false;
 
-  const MOBILE_MAX = 820;         // viewport width threshold
-  const VIEW_FRACTION = 0.92;     // canvas width = 92% of screen
-  const MIN = 320, MAX = 1400;    // guard rails
-  let lastAppliedW = 0;
-  const touched = new Map();      // remember inline styles we override, so we can restore on desktop
-
-  function isMobile(){ return window.innerWidth <= MOBILE_MAX; }
-
-  function getCanvas(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-  function getWrap(C){ return C && C.wrapperEl ? C.wrapperEl : (C ? C.upperCanvasEl.parentNode : null); }
-  function getLower(C){ return C ? (C.lowerCanvasEl || (C.contextContainer && C.contextContainer.canvas) || null) : null; }
-
-  function remember(el, prop){
-    if (!el || !el.style) return;
-    const key = el;
-    if (!touched.has(key)) touched.set(key, {});
-    const bag = touched.get(key);
-    if (!(prop in bag)) bag[prop] = el.style[prop] || '';
-  }
-  function setStyle(el, prop, val){
-    if (!el || !el.style) return;
-    remember(el, prop);
-    el.style[prop] = val;
-  }
-  function restoreAll(){
-    touched.forEach((bag, el)=>{
-      if (!el || !el.style) return;
-      for (const k in bag){ el.style[k] = bag[k]; }
-    });
-    touched.clear();
-  }
-
-  function recenter(C){
-    try{
-      // backgroundRect + baseGroup are what your app uses
-      if (window.backgroundRect){
-        backgroundRect.set({
-          left: 0, top: 0,
-          width: C.getWidth(),
-          height: C.getHeight(),
-          originX: 'left', originY: 'top'
-        });
-        backgroundRect.setCoords && backgroundRect.setCoords();
+  function installCSS(){
+    if (installedCSS) return;
+    const css = document.createElement('style');
+    css.id = 'raMobileFlowV5CSS';
+    css.textContent = `
+      /* Kill any sticky/fixed wrappers on phones — let page scroll normally */
+      @media (max-width:820px){
+        /* Generic safety: if any wrapper tried to be sticky/fixed, neutralize it */
+        .sticky, .is-sticky, .canvas-sticky, .canvas-fixed { position: static !important; top:auto !important; }
+        /* Remove mysterious tall spacers and rogue checkerboards */
+        .checkerboard, .pattern-bg, [class*="checkerboard"], [class*="pattern-bg"] { display:none !important; }
+        /* Make Fabric container behave and take available width */
+        #raMobileCanvasTop .canvas-container { width: 100% !important; height: auto !important; margin: 0 auto !important; }
+        #raMobileCanvasTop canvas { width: 100% !important; height: auto !important; }
+        /* Keep things centered and compact at top */
+        #raMobileCanvasTop { padding: 12px 12px 0; box-sizing: border-box; }
+        #raMobileFrame {
+          max-width: 720px; margin: 0 auto;
+          border-radius: 12px; overflow: hidden;
+          /* a subtle checkerboard behind the canvas (non-interfering) */
+          background-image:
+            linear-gradient(45deg,#12141a 25%,transparent 25%),
+            linear-gradient(-45deg,#12141a 25%,transparent 25%),
+            linear-gradient(45deg,transparent 75%,#12141a 75%),
+            linear-gradient(-45deg,transparent 75%,#12141a 75%);
+          background-size:20px 20px;
+          background-position:0 0,0 10px,10px -10px,-10px 0;
+        }
       }
-      if (window.baseGroup){
-        window.baseGroup.set({
-          left: C.getWidth()/2,
-          top:  C.getHeight()/2,
-          originX:'center',
-          originY:'center'
-        });
-        window.baseGroup.setCoords && window.baseGroup.setCoords();
-      }
-      C.requestRenderAll();
-    }catch(_){}
+    `;
+    document.head.appendChild(css);
+    installedCSS = true;
   }
 
-  function applyMobile(){
-    const C = getCanvas(); if (!C) return;
-    const wrap = getWrap(C), host = wrap && wrap.parentNode;
-    const target = Math.max(MIN, Math.min(MAX, Math.round(window.innerWidth * VIEW_FRACTION)));
+  function removeCSS(){
+    const s = document.getElementById('raMobileFlowV5CSS');
+    if (s) s.remove();
+    installedCSS = false;
+  }
 
-    // Avoid thrashing
-    if (Math.abs(target - lastAppliedW) < 2 && isMobile()) return;
-    lastAppliedW = target;
+  function findFabricContainer(){
+    // The Fabric wrapper around <canvas id="c"> is .canvas-container
+    const c = document.getElementById('c');
+    if (!c) return null;
+    return c.closest('.canvas-container') || c.parentElement;
+  }
 
-    // Kill sticky/fixed styles *only on mobile* by inlining neutral values
-    [host, wrap, host && host.parentNode].forEach(n=>{
-      if (!n || !n.style) return;
-      ['position','top','bottom','left','right','transform'].forEach(p=> setStyle(n, p, ''));
-    });
+  function placeAtTop(){
+    const cont = findFabricContainer();
+    if (!cont) return;
 
-    // Resize Fabric canvas to match CSS size (so dragging works)
-    try { C.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
-    if (typeof window.setCanvasSize === 'function'){
-      window.setCanvasSize(target);
-      const sizeEl = document.getElementById('canvasSize'); if (sizeEl) sizeEl.value = String(target);
+    installCSS();
+
+    // Make sure we can drag overlays with finger on iOS Safari
+    const upper = cont.querySelector('canvas.upper-canvas');
+    const lower = cont.querySelector('canvas.lower-canvas');
+    if (upper) { upper.style.touchAction = 'none'; upper.style.pointerEvents = 'auto'; }
+    if (lower) { lower.style.touchAction = 'none'; lower.style.pointerEvents = 'auto'; }
+
+    // Remember old spot so we can restore on desktop
+    if (!placeholder && cont.parentNode){
+      placeholder = document.createComment('RA:canvas-home');
+      cont.parentNode.insertBefore(placeholder, cont);
+    }
+
+    // Build a safe top anchor once
+    if (!anchor){
+      anchor = document.createElement('div');
+      anchor.id = 'raMobileCanvasTop';
+      const frame = document.createElement('div');
+      frame.id = 'raMobileFrame';
+      frame.appendChild(cont);
+      anchor.appendChild(frame);
+
+      // Put it right after the page title (if present) or at the top of main/content
+      const main = document.querySelector('main') || document.getElementById('app') || document.body;
+      main.insertBefore(anchor, main.firstChild);
     } else {
-      C.setWidth(target); C.setHeight(target);
+      // If the container isn't already inside our frame, move it
+      const frame = anchor.querySelector('#raMobileFrame');
+      if (frame && cont.parentNode !== frame) frame.appendChild(cont);
     }
 
-    // Match wrapper and both canvas layers to the same px size
-    if (host){
-      setStyle(host, 'display', 'block');
-      setStyle(host, 'margin',  '0 auto');
-      setStyle(host, 'padding', '0');
-    }
-    if (wrap){
-      setStyle(wrap, 'width',  target + 'px');
-      setStyle(wrap, 'height', target + 'px');
-      setStyle(wrap, 'margin', '12px auto 14px');
-      // allow touch gestures to go to Fabric (prevents the “can’t move overlays” issue)
-      setStyle(wrap, 'touchAction', 'none');
-      setStyle(wrap, 'webkitUserSelect', 'none');
-      setStyle(wrap, 'userSelect', 'none');
-      setStyle(wrap, 'pointerEvents', 'auto');
-    }
-    const up = C.upperCanvasEl, lo = getLower(C);
-    if (up){
-      setStyle(up, 'width',  target + 'px');
-      setStyle(up, 'height', target + 'px');
-      setStyle(up, 'touchAction', 'none');
-    }
-    if (lo){
-      setStyle(lo, 'width',  target + 'px');
-      setStyle(lo, 'height', target + 'px');
-      setStyle(lo, 'touchAction', 'none');
-    }
-
-    // Recompute offsets + center base/background
-    try { C.calcOffset(); } catch(_){}
-    recenter(C);
+    // Prevent accidental horizontal scrollbars
+    document.documentElement.style.overflowX = 'hidden';
   }
 
-  function applyDesktop(){
-    // Put everything back exactly as it was (desktop remains sticky/centered as before)
-    restoreAll();
-    lastAppliedW = 0;
-    const C = getCanvas(); if (!C) return;
-    try { C.calcOffset(); } catch(_){}
+  function restoreDesktop(){
+    const cont = findFabricContainer();
+    if (cont && placeholder && placeholder.parentNode){
+      placeholder.parentNode.insertBefore(cont, placeholder);
+      placeholder.remove(); placeholder = null;
+    }
+    if (anchor) { anchor.remove(); anchor = null; }
+    removeCSS();
+
+    // Remove touch overrides (desktop uses mouse)
+    if (cont){
+      const upper = cont.querySelector('canvas.upper-canvas');
+      const lower = cont.querySelector('canvas.lower-canvas');
+      if (upper){ upper.style.touchAction = ''; upper.style.pointerEvents=''; }
+      if (lower){ lower.style.touchAction = ''; lower.style.pointerEvents=''; }
+    }
+    document.documentElement.style.overflowX = '';
   }
 
-  function update(){
-    if (!getCanvas()){ setTimeout(update, 120); return; }
-    if (isMobile()) applyMobile(); else applyDesktop();
+  function apply(){
+    if (mq.matches) placeAtTop(); else restoreDesktop();
   }
 
-  // Run at the right times
-  document.addEventListener('DOMContentLoaded', update);
-  document.addEventListener('ra:canvas-ready', () => setTimeout(update, 30));
-  window.addEventListener('resize', () => setTimeout(update, 50), { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(update, 150));
+  // Run now and on size/orientation changes
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply);
+  } else {
+    apply();
+  }
+  mq.addEventListener ? mq.addEventListener('change', apply) : mq.addListener(apply);
+  window.addEventListener('orientationchange', () => setTimeout(apply, 200));
+  window.addEventListener('resize', () => { if (mq.matches) setTimeout(apply, 200); });
+
+  // In case Fabric initializes late, try again shortly
+  setTimeout(apply, 400);
+  setTimeout(apply, 1200);
 })();
