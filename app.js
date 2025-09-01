@@ -1057,186 +1057,190 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* ===================== MOBILE CANVAS ABOVE "REBEL ANT" — V7 ===================== */
-(function RA_MOBILE_TOP_V7(){
+/* ==================== MOBILE INLINE CANVAS (V8) ==================== */
+/* Purpose:
+   - On phones (<=820px), move the Fabric canvas into normal page flow
+     directly ABOVE the “Rebel Ant / Upload image” box.
+   - No overlay/fixed/sticky behavior on mobile.
+   - Desktop stays exactly as-is.
+*/
+(function RA_MOBILE_INLINE_V8(){
   const mq = window.matchMedia('(max-width:820px)');
-  let homeMarker = null;     // where the canvas wrapper originally lived
-  let anchor = null;         // mount point above "Rebel Ant"
+  let homeMarker = null;   // original spot holder for restoring on desktop
+  let mount = null;        // container we insert above "Rebel Ant"
   let cssTag = null;
-  let retryTimer = null;
+  let observer = null;
 
-  /* ---------- helpers ---------- */
+  /* ---------- utilities ---------- */
+  function $(sel, root=document){ return root.querySelector(sel); }
+  function $all(sel, root=document){ return Array.from(root.querySelectorAll(sel)); }
+
   function addCSS(){
     if (cssTag) return;
     cssTag = document.createElement('style');
-    cssTag.id = 'raMobileTopV7CSS';
+    cssTag.id = 'raMobileInlineV8CSS';
     cssTag.textContent = `
       @media (max-width:820px){
-        /* container we insert above "Rebel Ant" */
-        #raMobileTop { padding: 10px 12px 0; }
-        #raMobileTopInner { width: 100%; max-width: 740px; margin: 0 auto; }
+        /* mount container that sits ABOVE the Rebel Ant card */
+        #raMobileInlineTop { padding: 12px 10px 0; }
+        #raMobileInlineTopInner{ margin: 0 auto 12px; max-width: 740px; }
 
-        /* make the canvas fluid on phones */
-        #raMobileTopInner .canvas-container{
-          width: 100% !important; height: auto !important; margin: 0 auto !important;
-        }
-        #raMobileTopInner canvas{
-          width: 100% !important; height: auto !important; max-width: 100% !important;
-          display:block !important;
-        }
-
-        /* disable any sticky/fixed behaviors for the canvas on phones */
-        .sticky, .is-sticky, .canvas-sticky, .canvas-fixed{
-          position: static !important; top:auto !important; bottom:auto !important;
+        /* give the moved canvas a subtle checkerboard frame background */
+        #raMobileFrame{
+          background:
+            linear-gradient(45deg, rgba(35,39,52,.35) 25%, transparent 25%) 0 0/24px 24px,
+            linear-gradient(-45deg, rgba(35,39,52,.35) 25%, transparent 25%) 0 12px/24px 24px,
+            linear-gradient(45deg, transparent 75%, rgba(35,39,52,.35) 75%) 12px -12px/24px 24px,
+            linear-gradient(-45deg, transparent 75%, rgba(35,39,52,.35) 75%) -12px 0/24px 24px,
+            #0f1217;
+          border-radius: 12px;
+          padding: 12px;
         }
 
-        /* kill generic oversized spacers on phones */
-        .spacer, .space, [class*="spacer"]{ min-height:0 !important; height:auto !important; }
+        /* IMPORTANT: keep everything in normal flow on phones */
+        #raMobileInlineTop, #raMobileInlineTop *{
+          z-index: auto !important;
+        }
+        #raMobileInlineTop .sticky, #raMobileInlineTop .is-sticky,
+        #raMobileInlineTop [class*="sticky"], #raMobileInlineTop [class*="fixed"]{
+          position: static !important;
+          top: auto !important; bottom: auto !important; left: auto !important; right: auto !important;
+        }
 
-        /* avoid sideways scroll on iOS */
+        /* Allow the canvas to breathe horizontally but DO NOT force height */
+        #raMobileInlineTop .canvas-container{
+          position: relative !important;   /* Fabric expects relative for its abs canvases */
+          width: 100% !important;          /* fill the frame width */
+          margin: 0 auto !important;
+        }
+
+        /* Scale the visual element by CSS size (not transform; preserves pointer math) */
+        #raMobileInlineTop canvas{
+          width: 100% !important;
+          height: auto !important;         /* keep aspect */
+          max-width: 100% !important;
+          display: block !important;
+          touch-action: none;              /* enable touch-drag */
+          pointer-events: auto;
+        }
+
+        /* Prevent any sideways scroll caused by large original widths */
         html, body { overflow-x: hidden !important; }
+
+        /* Hide weird tiny "checkerboard strips" iOS sometimes leaves around */
+        .ra-rogue-strip{ display:none !important; }
       }
     `;
     document.head.appendChild(cssTag);
   }
   function removeCSS(){ if (cssTag){ cssTag.remove(); cssTag = null; } }
 
-  function findCanvas(){
-    return document.getElementById('c') || document.querySelector('canvas[id="c"]') ||
-           document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-  }
-
-  // Choose the best wrapper that contains the canvas AND the checkerboard frame
-  function findBestWrapper(){
-    const c = findCanvas();
-    if (!c) return null;
-
-    // collect likely ancestors
-    const set = new Set();
-    const add = el => { if (el && el.nodeType === 1) set.add(el); };
-    [
-      '.canvas-container','.artboard','.stage','.canvas-wrap','.canvas-frame',
-      '.canvas-outer','.board','.frame','.checkerboard','.grid',
-      '[class*="canvas"]','[class*="board"]','[class*="frame"]','[class*="grid"]'
-    ].forEach(sel => add(c.closest(sel)));
-
-    // fall back: walk up to 6 parents
-    let p = c.parentElement, depth = 0;
-    while (p && depth < 6){ add(p); p = p.parentElement; depth++; }
-
-    // choose the largest ancestor that still contains the canvas
-    let best = null, score = -1;
-    set.forEach(node => {
-      if (!node.contains(c)) return;
-      const rect = node.getBoundingClientRect();
-      const area = Math.max(1, rect.width || node.offsetWidth) * Math.max(1, rect.height || node.offsetHeight);
-      if (area > score){ score = area; best = node; }
-    });
-    return best;
-  }
-
-  // Find the panel with the "Rebel Ant" heading; insert anchor before it
   function findRebelPanel(){
-    // look for headings that say "Rebel Ant"
-    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4'));
-    let h = headings.find(el => /rebel\s*ant/i.test(el.textContent || ''));
-    if (!h){
-      // fallback: a section that contains "Upload image"
-      h = Array.from(document.querySelectorAll('section,div,fieldset,legend'))
-           .find(el => /upload\s*image/i.test(el.textContent || ''));
+    // Prefer a heading that says "Rebel Ant"
+    const h = $all('h1,h2,h3,h4').find(el => /rebel\s*ant/i.test(el.textContent||''));
+    if (h){
+      const card = h.closest('.card, .panel, .section, .box, .module, .group, .stack, .block, .ra-panel') || h.parentElement;
+      return card;
     }
-    if (!h) return null;
-
-    let card = h.closest('.card, .panel, .section, .box, .module, .group, .stack, .block, .ra-panel');
-    if (!card) card = h.parentElement;
-    return card;
+    // Fallback: any section that includes "Upload image"
+    return $all('section,div,fieldset,legend').find(el => /upload\s*image/i.test(el.textContent||'')) || null;
   }
 
-  function ensureAnchor(){
+  function ensureMount(){
     const rebel = findRebelPanel();
     if (!rebel || !rebel.parentNode) return null;
-
-    if (!anchor){
-      anchor = document.createElement('div');
-      anchor.id = 'raMobileTop';
-      anchor.innerHTML = '<div id="raMobileTopInner"></div>';
+    if (!mount){
+      mount = document.createElement('div');
+      mount.id = 'raMobileInlineTop';
+      mount.innerHTML = `<div id="raMobileInlineTopInner"><div id="raMobileFrame"></div></div>`;
     }
-    if (anchor.parentNode !== rebel.parentNode){
-      rebel.parentNode.insertBefore(anchor, rebel);  // <- mount above Rebel Ant
+    if (mount.parentNode !== rebel.parentNode){
+      rebel.parentNode.insertBefore(mount, rebel); // <- normal flow, ABOVE Rebel Ant
     }
-    return anchor.querySelector('#raMobileTopInner');
+    return $('#raMobileFrame', mount);
   }
 
-  function enableTouchDrag(wrapper){
-    // allow touch drag for Fabric upper canvas on iOS
-    const upper = wrapper.querySelector('canvas.upper-canvas');
-    const lower = wrapper.querySelector('canvas.lower-canvas');
-    if (upper){ upper.style.touchAction = 'none'; upper.style.pointerEvents = 'auto'; }
-    if (lower){ lower.style.touchAction = 'none'; lower.style.pointerEvents = 'auto'; }
+  function getCanvasContainer(){
+    // Fabric creates .canvas-container wrapping lower/upper canvases
+    return $('.canvas-container');
   }
 
-  // Hide stray tiny checkerboard "lines" iOS sometimes leaves behind
-  function purgeThinCheckerStrips(){
-    const nodes = Array.from(document.querySelectorAll('div,section'));
-    nodes.forEach(n => {
+  function neutralizeStickyAround(node){
+    // Turn off sticky/fixed on the wrapper and a couple ancestors if present
+    let p = node;
+    for (let i=0; i<3 && p; i++, p=p.parentElement){
+      const s = p.style || {};
+      s.position = 'static';
+      s.top = s.right = s.bottom = s.left = 'auto';
+      s.zIndex = 'auto';
+    }
+  }
+
+  function hideRogueStrips(){
+    // Any thin checkerboard-looking elements become hidden
+    $all('div,section').forEach(n=>{
       const cs = getComputedStyle(n);
-      const h = n.offsetHeight;
-      if (h > 0 && h < 24 && (cs.backgroundImage || '').toLowerCase().includes('gradient')){
-        n.style.display = 'none';
+      if (n.offsetHeight > 0 && n.offsetHeight < 28 &&
+          (cs.backgroundImage||'').match(/gradient|check|grid/i)){
+        n.classList.add('ra-rogue-strip');
       }
     });
   }
 
-  /* ---------- state transitions ---------- */
   function toMobile(){
     addCSS();
-    const wrap = findBestWrapper();
-    if (!wrap) return;
 
-    // remember origin for desktop restore
-    if (!homeMarker && wrap.parentNode){
-      homeMarker = document.createComment('RA:canvas-wrapper-origin');
-      wrap.parentNode.insertBefore(homeMarker, wrap);
+    const cc = getCanvasContainer();
+    if (!cc) return; // wait for Fabric init
+
+    // Save home for desktop restore (only once)
+    if (!homeMarker && cc.parentNode){
+      homeMarker = document.createComment('RA:canvas-home');
+      cc.parentNode.insertBefore(homeMarker, cc);
     }
 
-    const mount = ensureAnchor();
-    if (!mount) return;
+    const frame = ensureMount();
+    if (!frame) return;
 
-    // move wrapper above Rebel panel
-    if (wrap.parentNode !== mount) mount.appendChild(wrap);
+    // Move the Fabric canvas container *into* the frame (inline flow)
+    if (cc.parentNode !== frame) frame.appendChild(cc);
 
-    enableTouchDrag(wrap);
-    purgeThinCheckerStrips();
+    // Kill sticky/fixed on any wrappers near it
+    neutralizeStickyAround(cc);
+
+    // Ensure touch interactions work on phones
+    const upper = $('canvas.upper-canvas', cc);
+    if (upper){
+      upper.style.touchAction = 'none';
+      upper.style.pointerEvents = 'auto';
+    }
+
+    hideRogueStrips();
   }
 
   function toDesktop(){
-    const wrap = findBestWrapper();
-    if (wrap && homeMarker && homeMarker.parentNode){
-      homeMarker.parentNode.insertBefore(wrap, homeMarker);
-      homeMarker.remove(); homeMarker = null;
+    const cc = getCanvasContainer();
+    if (cc && homeMarker && homeMarker.parentNode){
+      homeMarker.parentNode.insertBefore(cc, homeMarker);
     }
-    if (anchor){ anchor.remove(); anchor = null; }
+    if (homeMarker){ homeMarker.remove(); homeMarker = null; }
+    if (mount){ mount.remove(); mount = null; }
     removeCSS();
   }
 
-  function apply(){
-    if (mq.matches) toMobile(); else toDesktop();
-  }
+  function apply(){ mq.matches ? toMobile() : toDesktop(); }
 
-  // Run now and retry a couple of times to wait for Fabric/init
-  const kick = () => {
-    apply();
-    // retries (late canvas load)
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(() => { apply(); setTimeout(apply, 700); }, 250);
-  };
-
+  // Run now + watch for late canvas creation
+  const kick = () => { apply(); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', kick);
   else kick();
 
-  // react to size/orientation changes
-  (mq.addEventListener ? mq.addEventListener('change', apply) : mq.addListener(apply));
+  if (mq.addEventListener) mq.addEventListener('change', apply); else mq.addListener(apply);
   window.addEventListener('orientationchange', () => setTimeout(apply, 250));
   window.addEventListener('resize', () => { if (mq.matches) setTimeout(apply, 250); });
 
+  if (!observer){
+    observer = new MutationObserver(() => { if (mq.matches && getCanvasContainer()) apply(); });
+    observer.observe(document.documentElement, {childList:true, subtree:true});
+  }
 })();
