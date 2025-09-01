@@ -913,3 +913,140 @@
     install();
   }
 })();
+
+/* ==========================================================
+   RA_OPEN_NEW_TAB_FIX_V2
+   - Intercepts the "Open in New Tab" control
+   - Opens a NEW TAB (popup‑safe) and renders the PNG there
+   - Never navigates the builder tab
+   Paste at the very bottom of app.js.
+   ========================================================== */
+(function RA_OPEN_NEW_TAB_FIX_V2(){
+  // --- Find the real Fabric canvas ---
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
+        const v = el[k];
+        if (v && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
+      }
+    }
+    try{
+      for (const k in window){
+        const v = window[k];
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    }catch(_){}
+    return null;
+  }
+
+  // --- Read export multiplier (HQ ×2 etc.) with fallbacks ---
+  function getMultiplier(){
+    // 1) explicit input/select
+    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
+    if (el) {
+      const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
+      if (v && v >= 1 && v <= 8) return v;
+    }
+    // 2) look for "x2" or "×2" text somewhere near Export
+    const exportCard = Array.from(document.querySelectorAll('h3, .export-quality, .export'))
+      .find(n => /export/i.test(n.textContent||''));
+    if (exportCard) {
+      const m = (exportCard.parentElement?.textContent||'').match(/[x×]\s*([1-8])/i);
+      if (m) return parseInt(m[1],10);
+    }
+    return 2; // sane default
+  }
+
+  // --- Identify the UI control (button or link) by its label ---
+  function isOpenNewTabEl(node){
+    const el = node && node.closest && node.closest('button,a');
+    if (!el) return null;
+    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+    return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
+  }
+
+  // --- Keep the native link from navigating the current tab ---
+  function neutralizeLinkHref(){
+    const el = Array.from(document.querySelectorAll('a,button'))
+      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
+    if (!el) return;
+
+    if (el.tagName === 'A') {
+      // Preserve href but stop default navigation
+      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
+      el.setAttribute('href', 'javascript:void(0)');
+      el.removeAttribute('target');   // our handler will open _blank safely
+      el.setAttribute('rel','noopener');
+    }
+  }
+
+  // --- Do the actual new-tab export (popup-safe because from user click) ---
+  function openOnlyNewTab(){
+    const c = findCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
+
+    // Open the tab synchronously before any heavy work to avoid popup blockers
+    const win = window.open('', '_blank');
+    if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
+
+    // Minimal doc while we render
+    win.document.title = 'Exporting…';
+    win.document.body.style.margin = '0';
+    win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Generating image…</div>';
+
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+
+      // Render the PNG in the new tab
+      win.document.body.innerHTML = '';
+      const img = win.document.createElement('img');
+      img.src = dataUrl;
+      img.style.display = 'block';
+      img.style.maxWidth = '100%';
+      img.style.height = 'auto';
+      win.document.body.appendChild(img);
+      win.document.title = 'Export';
+    }catch(e){
+      // CORS or security failure
+      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial">Export failed (CORS/security). Try a different image or load from a CORS‑enabled host.</div>';
+    }
+  }
+
+  // --- Handle only the CLICK (capture) to prevent default navigation ---
+  let lastOpenAt = 0;
+  function onClickCapture(e){
+    const el = isOpenNewTabEl(e.target);
+    if (!el) return;
+
+    // Debounce double fires
+    const now = Date.now();
+    if (now - lastOpenAt < 400) {
+      e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false;
+    }
+    lastOpenAt = now;
+
+    // Stop the original link/button behavior and do our own thing
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    e.stopPropagation();
+
+    openOnlyNewTab();
+    return false;
+  }
+
+  function wire(){
+    neutralizeLinkHref();
+  }
+
+  // Initial wire + keep re‑wiring if the Export card re-renders
+  wire();
+  document.addEventListener('click', onClickCapture, true);
+  const mo = new MutationObserver(wire);
+  mo.observe(document.body, { childList:true, subtree:true });
+
+  // If Fabric announces readiness, keep the global normalized
+  document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
+})();
