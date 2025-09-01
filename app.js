@@ -1057,52 +1057,76 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === RA_MOBILE_SAFE_OVERRIDE_MIN — mobile-only: put canvas back in page flow & fit it === */
-(function RA_MOBILE_SAFE_OVERRIDE_MIN(){
-  // 1) CSS: disable fixed centering only on small screens and make the <canvas> responsive
-  try{
-    var css = document.createElement('style');
-    css.id = 'raMobileSafeOverride';
-    css.textContent = `
-      @media (max-width: 900px){
-        /* If the center wrapper exists, stop it from being fixed on mobile */
-        #raCenterWrap{
-          position: static !important;
-          left: auto !important;
-          top: auto !important;
-          transform: none !important;
-          width: 100% !important;
-          max-width: 100% !important;
-          margin: 12px auto !important;
-          z-index: auto !important;
-        }
-        /* Make the visible canvas scale to screen width */
-        #raCenterWrap canvas, canvas#c{
-          width: 92vw !important;
-          height: auto !important;
-          max-width: 100% !important;
-          display: block !important;
-          margin: 0 auto !important;
-        }
-        html, body{ overflow-x: hidden !important; }
-      }
-    `;
-    (document.head || document.documentElement).appendChild(css);
-  }catch(_){}
+/* === RA_MOBILE_DETACH_WRAP_V2 — mobile-only: remove fixed center wrapper & fit canvas === */
+(function RA_MOBILE_DETACH_WRAP_V2(){
+  var BP = 900; // apply only when viewport width <= 900px
 
-  // 2) JS: light zoom fit for Fabric on mobile only (desktop untouched)
-  function isMobile(){ return window.matchMedia('(max-width: 900px)').matches; }
-  function fitZoom(){
-    if (!isMobile() || !window.canvas || typeof window.canvas.getWidth !== 'function') return;
-    var c = window.canvas;
+  function isMobile(){
+    var w = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
+    return w <= BP;
+  }
 
+  // Find the Fabric canvas element and its wrapper (our desktop center wrapper or parent)
+  function getWrapAndCanvas(){
+    var cv = document.getElementById('c') || document.querySelector('canvas#c') || document.querySelector('canvas');
+    if (!cv) return null;
+    // Prefer our desktop wrapper if it exists, else just use the direct parent
+    var wrap = cv.closest('#raCenterWrap') || cv.parentElement || cv;
+    return { wrap: wrap, canvasEl: cv };
+  }
+
+  // Create a safe slot in the document flow to hold the canvas on mobile
+  function ensureMobileSlot(){
+    var slot = document.getElementById('raMobileCanvasSlot');
+    if (slot) return slot;
+
+    slot = document.createElement('div');
+    slot.id = 'raMobileCanvasSlot';
+    slot.style.cssText = 'width:100%;max-width:100%;margin:10px auto;display:block;';
+    // Put it near the top of the main content (before the first card) or at body start
+    var firstCard = document.querySelector('.card') || document.querySelector('h3') || document.body.firstChild;
+    if (firstCard && firstCard.parentNode) firstCard.parentNode.insertBefore(slot, firstCard);
+    else document.body.insertBefore(slot, document.body.firstChild);
+    return slot;
+  }
+
+  // Force-remove fixed positioning and big z-index of the desktop wrapper
+  function forceStatic(el){
+    try{
+      el.style.setProperty('position','static','important');
+      el.style.setProperty('left','auto','important');
+      el.style.setProperty('top','auto','important');
+      el.style.setProperty('transform','none','important');
+      el.style.setProperty('z-index','1','important');
+      el.style.setProperty('width','100%','important');
+      el.style.setProperty('max-width','100%','important');
+      el.style.setProperty('height','auto','important');
+      el.style.setProperty('margin','12px auto','important');
+      el.style.setProperty('pointer-events','auto','important');
+    }catch(_){}
+  }
+
+  // Make the <canvas> element itself responsive on mobile
+  function styleCanvasResponsive(cv){
+    try{
+      cv.style.setProperty('width','94vw','important');
+      cv.style.setProperty('height','auto','important');
+      cv.style.setProperty('max-width','100%','important');
+      cv.style.setProperty('display','block','important');
+      cv.style.setProperty('margin','0 auto','important');
+    }catch(_){}
+  }
+
+  // Fit the Fabric zoom so the drawing matches the visible canvas size
+  function fitFabricZoom(){
+    if (!window.canvas || typeof window.canvas.getWidth !== 'function') return;
+    var c  = window.canvas;
     var vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0) || window.innerWidth;
     var vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || 0) || window.innerHeight;
 
-    var targetW = Math.max(260, vw * 0.92);
-    var targetH = Math.max(260, vh * 0.78);
-
-    var scale = Math.min(targetW / c.getWidth(), targetH / c.getHeight());
+    var targetW = Math.max(260, vw * 0.94);
+    var targetH = Math.max(260, vh * 0.72);
+    var scale   = Math.min(targetW / c.getWidth(), targetH / c.getHeight());
     scale = Math.max(0.25, Math.min(3, scale));
 
     var vt = c.viewportTransform || [1,0,0,1,0,0];
@@ -1112,12 +1136,26 @@
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fitZoom);
-  } else {
-    fitZoom();
+  function applyMobileLayout(){
+    if (!isMobile()) return; // desktop untouched
+
+    var pair = getWrapAndCanvas(); if (!pair) return;
+    var wrap = pair.wrap, cv = pair.canvasEl;
+
+    forceStatic(wrap);                 // kill fixed center
+    ensureMobileSlot().appendChild(wrap); // put it back into normal flow
+    styleCanvasResponsive(cv);         // scale the visible <canvas>
+    fitFabricZoom();                   // and match Fabric's zoom to it
+    // prevent horizontal wobble
+    try{
+      document.documentElement.style.setProperty('overflow-x','hidden','important');
+      document.body.style.setProperty('overflow-x','hidden','important');
+    }catch(_){}
   }
-  window.addEventListener('resize', function(){ if (isMobile()) setTimeout(fitZoom, 80); });
-  window.addEventListener('orientationchange', function(){ setTimeout(fitZoom, 160); });
-  document.addEventListener('ra:canvas-ready', fitZoom);
+
+  function init(){ if (isMobile()) applyMobileLayout(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+  window.addEventListener('resize', function(){ if (isMobile()) applyMobileLayout(); });
+  window.addEventListener('orientationchange', function(){ setTimeout(applyMobileLayout, 220); });
+  document.addEventListener('ra:canvas-ready', function(){ if (isMobile()) applyMobileLayout(); });
 })();
