@@ -1057,35 +1057,52 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* ==================== MOBILE INLINE CANVAS (V8) ==================== */
-/* Purpose:
-   - On phones (<=820px), move the Fabric canvas into normal page flow
-     directly ABOVE the “Rebel Ant / Upload image” box.
-   - No overlay/fixed/sticky behavior on mobile.
-   - Desktop stays exactly as-is.
+/* ==================== MOBILE INLINE + SCALING (V9) ==================== */
+/* What this does (phones only, <= 820px):
+   1) Puts the Fabric canvas IN normal page flow, directly ABOVE "Rebel Ant / Upload image".
+   2) Scales the canvas and all control panels to a comfortable, centered width.
+   3) Keeps touch/drag working on the canvas. 
+   4) Hides those rogue thin checkerboard strips.
+   5) Desktop remains untouched and restores automatically.
 */
-(function RA_MOBILE_INLINE_V8(){
+(function RA_MOBILE_INLINE_V9(){
   const mq = window.matchMedia('(max-width:820px)');
-  let homeMarker = null;   // original spot holder for restoring on desktop
-  let mount = null;        // container we insert above "Rebel Ant"
+  let homeMarker = null;   // canvas' original spot to restore on desktop
+  let mount = null;        // mobile mount above "Rebel Ant"
   let cssTag = null;
   let observer = null;
 
-  /* ---------- utilities ---------- */
-  function $(sel, root=document){ return root.querySelector(sel); }
-  function $all(sel, root=document){ return Array.from(root.querySelectorAll(sel)); }
+  /* ---------- helpers ---------- */
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
   function addCSS(){
     if (cssTag) return;
     cssTag = document.createElement('style');
-    cssTag.id = 'raMobileInlineV8CSS';
+    cssTag.id = 'raMobileInlineV9CSS';
     cssTag.textContent = `
       @media (max-width:820px){
-        /* mount container that sits ABOVE the Rebel Ant card */
-        #raMobileInlineTop { padding: 12px 10px 0; }
-        #raMobileInlineTopInner{ margin: 0 auto 12px; max-width: 740px; }
+        :root{
+          /* Tweak these three lines if you want it smaller/bigger */
+          --ra-mobile-canvas-w: 84vw;     /* canvas visual width */
+          --ra-mobile-canvas-max: 640px;  /* cap on very large phones */
+          --ra-mobile-panel-w:  92vw;     /* width of each control panel */
+          --ra-mobile-panel-max: 640px;
 
-        /* give the moved canvas a subtle checkerboard frame background */
+          --ra-mobile-font: 14.5px;       /* base text on mobile */
+          --ra-mobile-btn-font: 14px;     /* button text */
+          --ra-mobile-pad: 12px;
+        }
+
+        html, body { overflow-x: hidden !important; }
+        body { font-size: var(--ra-mobile-font); }
+
+        /* ---------- MOBILE CANVAS BLOCK ---------- */
+        #raMobileInlineTop { padding: var(--ra-mobile-pad) 0 0; }
+        #raMobileInlineTopInner{
+          width: min(var(--ra-mobile-canvas-w), var(--ra-mobile-canvas-max));
+          margin: 0 auto 12px;
+        }
         #raMobileFrame{
           background:
             linear-gradient(45deg, rgba(35,39,52,.35) 25%, transparent 25%) 0 0/24px 24px,
@@ -1096,58 +1113,85 @@
           border-radius: 12px;
           padding: 12px;
         }
-
-        /* IMPORTANT: keep everything in normal flow on phones */
         #raMobileInlineTop, #raMobileInlineTop *{
-          z-index: auto !important;
+          z-index: auto !important;       /* ensure it's not floating over anything */
         }
-        #raMobileInlineTop .sticky, #raMobileInlineTop .is-sticky,
-        #raMobileInlineTop [class*="sticky"], #raMobileInlineTop [class*="fixed"]{
-          position: static !important;
-          top: auto !important; bottom: auto !important; left: auto !important; right: auto !important;
-        }
-
-        /* Allow the canvas to breathe horizontally but DO NOT force height */
         #raMobileInlineTop .canvas-container{
-          position: relative !important;   /* Fabric expects relative for its abs canvases */
-          width: 100% !important;          /* fill the frame width */
+          position: relative !important;  /* Fabric expects relative container */
+          width: 100% !important;
           margin: 0 auto !important;
         }
-
-        /* Scale the visual element by CSS size (not transform; preserves pointer math) */
         #raMobileInlineTop canvas{
-          width: 100% !important;
-          height: auto !important;         /* keep aspect */
+          width: 100% !important;         /* scale by CSS size, keeps pointer math */
+          height: auto !important;
           max-width: 100% !important;
           display: block !important;
-          touch-action: none;              /* enable touch-drag */
+          touch-action: none;
           pointer-events: auto;
         }
 
-        /* Prevent any sideways scroll caused by large original widths */
-        html, body { overflow-x: hidden !important; }
-
-        /* Hide weird tiny "checkerboard strips" iOS sometimes leaves around */
+        /* Hide tiny rogue checkerboard strips that iOS sometimes leaves */
         .ra-rogue-strip{ display:none !important; }
+
+        /* ---------- CENTER + SCALE PANELS BELOW ---------- */
+        /* We tag a few panels and give them a common class ".ra-panel" */
+        .ra-panel{
+          width: min(var(--ra-mobile-panel-w), var(--ra-mobile-panel-max));
+          margin: 12px auto;
+          padding-left: 8px; padding-right: 8px;
+          position: static !important;
+          z-index: auto !important;
+        }
+        .ra-panel button{
+          font-size: var(--ra-mobile-btn-font) !important;
+          padding: 8px 10px !important;
+        }
+        /* Keep inputs at >=16px to avoid iOS zoom-on-focus */
+        .ra-panel input, .ra-panel select, .ra-panel textarea{
+          font-size: 16px !important;
+        }
+
+        /* Make overly-wide internal grids wrap nicely without overflowing */
+        .ra-panel *[class*="grid"], .ra-panel *[class*="columns"], .ra-panel *[style*="grid"]{
+          gap: 8px !important;
+        }
       }
     `;
     document.head.appendChild(cssTag);
   }
   function removeCSS(){ if (cssTag){ cssTag.remove(); cssTag = null; } }
 
-  function findRebelPanel(){
-    // Prefer a heading that says "Rebel Ant"
-    const h = $all('h1,h2,h3,h4').find(el => /rebel\s*ant/i.test(el.textContent||''));
-    if (h){
-      const card = h.closest('.card, .panel, .section, .box, .module, .group, .stack, .block, .ra-panel') || h.parentElement;
-      return card;
-    }
-    // Fallback: any section that includes "Upload image"
-    return $all('section,div,fieldset,legend').find(el => /upload\s*image/i.test(el.textContent||'')) || null;
+  function findPanelByHeader(rx){
+    // Find a heading, then take its surrounding "card" container
+    const h = $$('h1,h2,h3,h4').find(el => rx.test((el.textContent||'').trim()));
+    if (!h) return null;
+    return h.closest('.card, .panel, .section, .box, .module, .group, .stack, .block') || h.parentElement;
+  }
+
+  function tagPanelsForMobile(){
+    const panels = [
+      [/^rebel\s*ant/i,            'ra-panel-rebel'],
+      [/^overlays/i,               'ra-panel-overlays'],
+      [/^selection/i,              'ra-panel-selection'],
+      [/^token\s*id\s*styles/i,    'ra-panel-token'],
+      [/^custom\s*text/i,          'ra-panel-text'],
+      [/^export/i,                 'ra-panel-export'],
+    ];
+    panels.forEach(([rx, cls])=>{
+      const p = findPanelByHeader(rx);
+      if (p && !p.classList.contains('ra-panel')){
+        p.classList.add('ra-panel', cls);
+        // make sure nothing here is sticky/fixed on mobile
+        p.style.position = 'static';
+        p.style.top = p.style.right = p.style.bottom = p.style.left = 'auto';
+        p.style.zIndex = 'auto';
+      }
+    });
   }
 
   function ensureMount(){
-    const rebel = findRebelPanel();
+    // Insert our mobile canvas wrapper directly ABOVE the Rebel Ant panel
+    const rebel = findPanelByHeader(/^rebel\s*ant/i);
     if (!rebel || !rebel.parentNode) return null;
     if (!mount){
       mount = document.createElement('div');
@@ -1155,21 +1199,22 @@
       mount.innerHTML = `<div id="raMobileInlineTopInner"><div id="raMobileFrame"></div></div>`;
     }
     if (mount.parentNode !== rebel.parentNode){
-      rebel.parentNode.insertBefore(mount, rebel); // <- normal flow, ABOVE Rebel Ant
+      rebel.parentNode.insertBefore(mount, rebel);
     }
     return $('#raMobileFrame', mount);
   }
 
   function getCanvasContainer(){
-    // Fabric creates .canvas-container wrapping lower/upper canvases
+    // Fabric.js wraps canvases in .canvas-container
     return $('.canvas-container');
   }
 
   function neutralizeStickyAround(node){
-    // Turn off sticky/fixed on the wrapper and a couple ancestors if present
+    // Kill sticky/fixed on local wrappers that could float above UI
     let p = node;
     for (let i=0; i<3 && p; i++, p=p.parentElement){
-      const s = p.style || {};
+      const s = p && p.style ? p.style : null;
+      if (!s) continue;
       s.position = 'static';
       s.top = s.right = s.bottom = s.left = 'auto';
       s.zIndex = 'auto';
@@ -1177,11 +1222,12 @@
   }
 
   function hideRogueStrips(){
-    // Any thin checkerboard-looking elements become hidden
-    $all('div,section').forEach(n=>{
+    $$('div,section').forEach(n=>{
       const cs = getComputedStyle(n);
-      if (n.offsetHeight > 0 && n.offsetHeight < 28 &&
-          (cs.backgroundImage||'').match(/gradient|check|grid/i)){
+      if (
+        n.offsetHeight > 0 && n.offsetHeight < 28 &&
+        (cs.backgroundImage||'').match(/gradient|check|grid/i)
+      ){
         n.classList.add('ra-rogue-strip');
       }
     });
@@ -1189,26 +1235,25 @@
 
   function toMobile(){
     addCSS();
+    tagPanelsForMobile();
 
     const cc = getCanvasContainer();
     if (!cc) return; // wait for Fabric init
 
-    // Save home for desktop restore (only once)
+    // Save original place (once) for desktop restoration
     if (!homeMarker && cc.parentNode){
       homeMarker = document.createComment('RA:canvas-home');
       cc.parentNode.insertBefore(homeMarker, cc);
     }
 
+    // Move the Fabric container into our inline frame (normal flow)
     const frame = ensureMount();
-    if (!frame) return;
+    if (frame && cc.parentNode !== frame){
+      frame.appendChild(cc);
+    }
 
-    // Move the Fabric canvas container *into* the frame (inline flow)
-    if (cc.parentNode !== frame) frame.appendChild(cc);
-
-    // Kill sticky/fixed on any wrappers near it
+    // Ensure proper interaction
     neutralizeStickyAround(cc);
-
-    // Ensure touch interactions work on phones
     const upper = $('canvas.upper-canvas', cc);
     if (upper){
       upper.style.touchAction = 'none';
@@ -1230,8 +1275,8 @@
 
   function apply(){ mq.matches ? toMobile() : toDesktop(); }
 
-  // Run now + watch for late canvas creation
-  const kick = () => { apply(); };
+  // Run + keep in sync
+  const kick = () => apply();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', kick);
   else kick();
 
@@ -1240,7 +1285,7 @@
   window.addEventListener('resize', () => { if (mq.matches) setTimeout(apply, 250); });
 
   if (!observer){
-    observer = new MutationObserver(() => { if (mq.matches && getCanvasContainer()) apply(); });
+    observer = new MutationObserver(() => { if (mq.matches) { tagPanelsForMobile(); if (getCanvasContainer()) apply(); } });
     observer.observe(document.documentElement, {childList:true, subtree:true});
   }
 })();
