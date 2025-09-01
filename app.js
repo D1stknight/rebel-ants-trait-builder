@@ -1057,51 +1057,65 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === MOBILE INLINE CANVAS v5 — scrolls with content, top of page, no overlap === */
+/* === MOBILE INLINE CANVAS v6 — inline at top, scrolls with page, hides old host === */
 (function(){
-  if (window.__RA_MOBILE_INLINE_V5) return; window.__RA_MOBILE_INLINE_V5 = true;
+  if (window.__RA_MOBILE_INLINE_V6) return; window.__RA_MOBILE_INLINE_V6 = true;
 
-  // ----- Kill any older mobile patches we may have added earlier -----
+  // Remove styles/hosts from older attempts if present
   ['raMobileFixedV4Style','raMobileV3','raStickyCanvasCSS'].forEach(id=>{
     try{ const n=document.getElementById(id); if(n) n.remove(); }catch(_){}
   });
-  // Remove fixed host/spacer if they exist
-  (function removeOldHosts(){
+  (function removeOldFixedHosts(){
     try{
       const host = document.getElementById('raFixedCanvasHost');
       const spacer = document.getElementById('raFixedCanvasSpacer');
-      if (host && host.firstChild) {
-        // move canvas temporarily back to body; we'll relocate below
-        document.body.appendChild(host.firstChild);
-      }
-      if (host) host.remove();
-      if (spacer) spacer.remove();
+      if (host && host.firstChild) document.body.appendChild(host.firstChild);
+      if (host) host.remove(); if (spacer) spacer.remove();
     }catch(_){}
   })();
 
-  // ----- Config -----
-  const MAX_MOBILE_WIDTH = 820;     // treat ≤ this as mobile
-  const VIEW_FRACTION    = 0.88;    // canvas width = 88% of viewport width
-  const TOP_MARGIN       = 12;      // margin above canvas on mobile
-  const BTM_MARGIN       = 14;      // margin below canvas on mobile
-  const MIN_SIZE         = 320;     // min px so it’s usable
-  const MAX_SIZE         = 1200;    // absolute safety cap
+  // --- Config ---
+  const MAX_MOBILE_WIDTH = 820;   // treat ≤ this as mobile
+  const VIEW_FRACTION    = 0.88;  // canvas width = 88% of viewport width
+  const MIN_SIZE         = 320;
+  const MAX_SIZE         = 1200;
+  const TOP_MARGIN       = 12;
+  const BTM_MARGIN       = 14;
 
-  // ----- Utilities -----
   const isMobile = () => window.matchMedia(`(max-width:${MAX_MOBILE_WIDTH}px)`).matches;
-  const getCanvasEl = () => document.getElementById('c');
+  const id = s => document.getElementById(s);
+  const getCanvasEl = () => id('c');
+  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 
-  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  let enabled = false;
+  let row = null;                      // our inline host at the very top
+  let homeParent = null, homeNext = null;
+  let savedHostStyle = null, savedHostParentStyle = null;
+
+  function ensureRow(){
+    if (row) return row;
+    row = document.createElement('div');
+    row.id = 'raMobileInlineCanvasRow';
+    Object.assign(row.style, {
+      position:'relative', zIndex:1,
+      display:'flex', justifyContent:'center', alignItems:'flex-start',
+      width:'100%', margin:`${TOP_MARGIN}px auto ${BTM_MARGIN}px auto`,
+      padding:'0', background:'transparent'
+    });
+    // place at the very top of the document content
+    document.body.insertBefore(row, document.body.firstChild);
+    return row;
+  }
 
   function recenterBaseAndBackground(){
     const c = window.canvas; if (!c || !c.getObjects) return;
-    const cx = c.getWidth()/2, cy = c.getHeight()/2;
+    const cx=c.getWidth()/2, cy=c.getHeight()/2;
     c.getObjects().forEach(o=>{
-      if (o === window.backgroundRect){
+      if (o===window.backgroundRect){
         o.set({ left:0, top:0, width:c.getWidth(), height:c.getHeight(), originX:'left', originY:'top' });
         o.setCoords && o.setCoords();
       }
-      if (o._isBase === true || o === window.baseGroup){
+      if (o && (o._isBase===true || o===window.baseGroup)){
         o.set({ left:cx, top:cy, originX:'center', originY:'center' });
         o.setCoords && o.setCoords();
       }
@@ -1109,66 +1123,64 @@
     c.requestRenderAll();
   }
 
-  // ----- State to restore canvas back on desktop -----
-  let homeParent = null, homeNext = null;   // original DOM location for #c
-  let row = null;                           // mobile row host
-  let enabled = false;
-
-  // Create the inline row that sits at the very top and scrolls with content
-  function ensureRow(){
-    if (row) return row;
-    row = document.createElement('div');
-    row.id = 'raMobileInlineCanvasRow';
-    Object.assign(row.style, {
-      position: 'relative',
-      zIndex: 1,                  // normal stacking; won’t cover controls
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'flex-start',
-      padding: '0',
-      margin: `${TOP_MARGIN}px auto ${BTM_MARGIN}px auto`,
-      width: '100%',
-      background: 'transparent'
-    });
-    // Insert at the very top of the page content
-    document.body.insertBefore(row, document.body.firstChild);
-    return row;
-  }
-
   function applyMobileSize(){
-    const c = window.canvas, el = getCanvasEl(); if (!c || !el) return;
-    const target = clamp(Math.round(window.innerWidth * VIEW_FRACTION), MIN_SIZE, MAX_SIZE);
+    const el = getCanvasEl(), c = window.canvas; if (!el || !c) return;
+    const target = clamp(Math.round(window.innerWidth*VIEW_FRACTION), MIN_SIZE, MAX_SIZE);
 
-    // normalize pan/zoom so it doesn’t drift to a corner
-    try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
+    // Reset pan/zoom drift
+    try{ c.setViewportTransform([1,0,0,1,0,0]); }catch(_){}
 
-    if (typeof window.setCanvasSize === 'function') {
+    if (typeof window.setCanvasSize==='function') {
       window.setCanvasSize(target);
-      const sizeEl = document.getElementById('canvasSize');
-      if (sizeEl) sizeEl.value = String(target);
+      const sizeEl = id('canvasSize'); if (sizeEl) sizeEl.value = String(target);
     } else {
       c.setWidth(target); c.setHeight(target);
     }
-
-    // Keep the DOM element square and centered
-    el.style.width  = target + 'px';
-    el.style.height = target + 'px';
+    el.style.width  = target+'px';
+    el.style.height = target+'px';
     el.style.position = 'static';
-    el.style.zIndex = 'auto';
+    el.style.zIndex   = 'auto';
 
     recenterBaseAndBackground();
   }
 
+  function collapseOldHost(){
+    // Hide/collapse the *original* canvas host so we don't see a giant empty checkerboard
+    if (!homeParent) return;
+
+    if (savedHostStyle === null) savedHostStyle = homeParent.getAttribute('style');
+    homeParent.style.display = 'none';
+
+    // Some builds paint the checkerboard on the parent wrapper; collapse that too if needed
+    const p = homeParent.parentNode;
+    if (p && !p.querySelector('#c')) {
+      if (savedHostParentStyle === null) savedHostParentStyle = p.getAttribute('style');
+      // Only collapse if that wrapper doesn’t contain inputs/buttons (i.e., it’s just a stage)
+      const hasControls = p.querySelector('input,button,select,textarea');
+      if (!hasControls) {
+        p.style.minHeight='0'; p.style.height='0'; p.style.padding='0'; p.style.border='0';
+      }
+    }
+  }
+
+  function restoreOldHost(){
+    if (!homeParent) return;
+    // Restore original styles exactly (even if empty/null)
+    if (savedHostStyle===null) homeParent.style.removeProperty('display');
+    else homeParent.setAttribute('style', savedHostStyle);
+    const p = homeParent.parentNode;
+    if (p && savedHostParentStyle!==null) p.setAttribute('style', savedHostParentStyle);
+    savedHostStyle = null; savedHostParentStyle = null;
+  }
+
   function enableMobileInline(){
     if (enabled) { applyMobileSize(); return; }
-    const el = getCanvasEl(); if (!el) { setTimeout(enableMobileInline, 120); return; }
+    const el = getCanvasEl(); if (!el) { setTimeout(enableMobileInline,120); return; }
 
-    // Remember original home once
     if (!homeParent) { homeParent = el.parentNode; homeNext = el.nextSibling; }
 
-    const host = ensureRow();
-    host.appendChild(el);          // move into inline row at very top (scrolls with page)
-
+    ensureRow().appendChild(el);   // move canvas to inline row at top
+    collapseOldHost();             // hide empty old stage
     enabled = true;
     applyMobileSize();
   }
@@ -1177,21 +1189,19 @@
     if (!enabled) return;
     const el = getCanvasEl();
     if (el && homeParent){
-      if (homeNext && homeNext.parentNode === homeParent) homeParent.insertBefore(el, homeNext);
+      if (homeNext && homeNext.parentNode===homeParent) homeParent.insertBefore(el, homeNext);
       else homeParent.appendChild(el);
     }
-    // Clean inline sizing so desktop CSS takes over
-    if (el){ el.style.width=''; el.style.height=''; el.style.position=''; el.style.zIndex=''; }
-    if (row){ row.remove(); row = null; }
+    restoreOldHost();
+    if (row){ row.remove(); row=null; }
     enabled = false;
 
-    // Snap canvas back to whatever size the selector says on desktop
-    try {
-      const sizeEl = document.getElementById('canvasSize');
-      if (sizeEl && typeof window.setCanvasSize === 'function') {
+    // Back to desktop size
+    try{
+      const sizeEl = id('canvasSize');
+      if (sizeEl && typeof window.setCanvasSize==='function')
         window.setCanvasSize(parseInt(sizeEl.value,10) || 700);
-      }
-    } catch(_){}
+    }catch(_){}
     recenterBaseAndBackground();
   }
 
@@ -1199,11 +1209,10 @@
     if (isMobile()) enableMobileInline(); else disableMobileInline();
   }
 
-  // Run on ready + when Fabric reports in + on viewport changes
   const kick = () => setTimeout(apply, 40);
   document.addEventListener('DOMContentLoaded', kick);
   if (document.readyState !== 'loading') kick();
   document.addEventListener('ra:canvas-ready', kick);
   window.addEventListener('resize', kick, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(kick, 140));
+  window.addEventListener('orientationchange', ()=> setTimeout(kick, 140));
 })();
