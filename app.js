@@ -1057,103 +1057,147 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === MOBILE VIEW v3 — centered, non‑sticky canvas + proper size & recenter === */
+/* === MOBILE FIXED‑TOP CANVAS v4 — fixed at top, centered, with spacer + recenter === */
 (function(){
-  if (window.__RA_MOBILE_V3) return; window.__RA_MOBILE_V3 = true;
+  if (window.__RA_MOBILE_FIXED_V4) return; window.__RA_MOBILE_FIXED_V4 = true;
 
-  // 1) CSS overrides for small screens: canvas is a centered square block, no sticky
+  // Remove any older mobile style blocks we might have added before
+  try { const old = document.getElementById('raMobileV3'); if (old) old.remove(); } catch(_){}
+
+  // --- Config ---
+  const MAX_MOBILE_WIDTH = 820;          // consider ≤ 820px as "mobile"
+  const VIEW_FRACTION    = 0.92;         // canvas takes ~92% of viewport width
+  const TOP_PADDING      = 12;           // extra pixels below the fixed canvas
+
+  // --- CSS for the fixed host & spacer ---
   (function injectCSS(){
     const css = `
-      @media (max-width: 820px){
-        /* kill any sticky/fixed wrappers that might have been added */
-        #canvasDock, .canvasDock, .stickyCanvas, .sticky-canvas, .canvas-stage, .stage {
-          position: static !important; top: auto !important; left: auto !important; transform: none !important;
-          width: auto !important; height: auto !important;
-        }
-
-        /* make the <canvas id="c"> a centered square that fits the screen width */
-        #c {
-          display: block !important;
-          width: 92vw !important;
-          height: 92vw !important;           /* keep it square */
-          margin: 12px auto 18px !important; /* center above controls */
-          max-width: 92vw !important;
-          max-height: 92vw !important;
-        }
-
-        /* be gentle with scrolling on iOS Safari */
-        body { overscroll-behavior-y: contain; }
-
-        /* let the side cards use full width so they’re easy to use */
-        .panel, .card, .section { max-width: 100% !important; }
+      #raFixedCanvasHost{
+        position: fixed; top: 0; left: 0; right: 0;
+        z-index: 50;               /* above page background, below modals */
+        display: flex; justify-content: center;
+        pointer-events: auto;      /* allow editing on canvas */
+        background: transparent;   /* no header bar */
+      }
+      #raFixedCanvasSpacer{ width: 100%; }
+      @media (min-width: ${MAX_MOBILE_WIDTH+1}px){
+        #raFixedCanvasHost, #raFixedCanvasSpacer { display: none !important; }
       }
     `;
     const st = document.createElement('style');
-    st.id = 'raMobileV3';
+    st.id = 'raMobileFixedV4Style';
     st.textContent = css;
     (document.head || document.documentElement).appendChild(st);
   })();
 
-  // 2) Helpers
-  const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
+  // --- State we need to move the canvas back on desktop ---
+  let homeParent = null, homeNext = null;  // original position of #c
+  let host = null, spacer = null;
+  let enabled = false;
 
-  // Recalculate canvas for mobile: square size + reset pan/zoom + recenter base
-  function recalcMobileCanvas(){
-    const c = window.canvas;
-    if (!c || typeof c.setWidth !== 'function') { setTimeout(recalcMobileCanvas, 200); return; }
+  const isMobile = () => window.matchMedia(`(max-width: ${MAX_MOBILE_WIDTH}px)`).matches;
+  const getCanvasEl = () => document.getElementById('c');
 
-    if (!isMobile()){
-      // desktop → nothing to do (your desktop centering logic stays)
-      return;
+  function ensureHosts(){
+    if (!host){
+      host = document.createElement('div');
+      host.id = 'raFixedCanvasHost';
+      document.body.prepend(host);
     }
-
-    const size = Math.max(320, Math.floor(window.innerWidth * 0.92)); // square based on viewport width
-    try {
-      // Hard reset any panning/zooming that could push the image to a corner
-      c.setViewportTransform([1,0,0,1,0,0]);
-
-      // Use your existing setter if present so everything stays in sync
-      if (typeof window.setCanvasSize === 'function') {
-        window.setCanvasSize(size);
-        const sizeEl = document.getElementById('canvasSize');
-        if (sizeEl) sizeEl.value = String(size);
-      } else {
-        c.setWidth(size);
-        c.setHeight(size);
-      }
-
-      // Recenter base (fixes "image stuck in corner") and stretch background
-      const cx = c.getWidth()/2, cy = c.getHeight()/2;
-      const objs = c.getObjects();
-      objs.forEach(o=>{
-        // stretch dark background rect if you use one
-        if (o === window.backgroundRect) {
-          o.set({ left:0, top:0, width:c.getWidth(), height:c.getHeight(), originX:'left', originY:'top' });
-          if (o.setCoords) o.setCoords();
-        }
-        // move base image/group back to center
-        if (o._isBase === true || o === window.baseGroup) {
-          o.set({ left:cx, top:cy, originX:'center', originY:'center' });
-          if (o.setCoords) o.setCoords();
-        }
-      });
-
-      c.requestRenderAll();
-    } catch (_) {}
+    if (!spacer){
+      spacer = document.createElement('div');
+      spacer.id = 'raFixedCanvasSpacer';
+      // spacer lives right *after* the fixed host so it pushes content down
+      document.body.insertBefore(spacer, host.nextSibling);
+    }
   }
 
-  // 3) Run now and on changes
-  const schedule = () => setTimeout(recalcMobileCanvas, 50);
+  function recenterBaseAndBackground(){
+    const c = window.canvas; if (!c || !c.getObjects) return;
+    const cx = c.getWidth()/2, cy = c.getHeight()/2;
+    c.getObjects().forEach(o=>{
+      if (o === window.backgroundRect){
+        o.set({ left:0, top:0, width:c.getWidth(), height:c.getHeight(), originX:'left', originY:'top' });
+        if (o.setCoords) o.setCoords();
+      }
+      if (o._isBase === true || o === window.baseGroup){
+        o.set({ left:cx, top:cy, originX:'center', originY:'center' });
+        if (o.setCoords) o.setCoords();
+      }
+    });
+    c.requestRenderAll();
+  }
 
-  document.addEventListener('DOMContentLoaded', schedule);
-  if (document.readyState !== 'loading') schedule();
+  function applySizeForMobile(){
+    const c = window.canvas, el = getCanvasEl();
+    if (!c || !el) return;
 
-  // When Fabric canvas is created by your app
-  document.addEventListener('ra:canvas-ready', schedule);
+    const size = Math.max(320, Math.floor(window.innerWidth * VIEW_FRACTION));
 
-  // On resize and orientation change
-  window.addEventListener('resize', schedule, { passive:true });
-  window.addEventListener('orientationchange', () => {
-    setTimeout(() => { window.scrollTo(0,0); schedule(); }, 150);
-  });
+    // Reset pan/zoom (prevents “image in corner” after orientation changes)
+    try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
+
+    if (typeof window.setCanvasSize === 'function') {
+      window.setCanvasSize(size);
+      const sizeEl = document.getElementById('canvasSize');
+      if (sizeEl) sizeEl.value = String(size);
+    } else {
+      c.setWidth(size); c.setHeight(size);
+    }
+
+    // Keep DOM <canvas> square to match Fabric size
+    el.style.width  = size + 'px';
+    el.style.height = size + 'px';
+
+    // Push the content down so it never hides under the fixed canvas
+    if (spacer) spacer.style.height = (size + TOP_PADDING) + 'px';
+
+    recenterBaseAndBackground();
+  }
+
+  function enableFixedTop(){
+    if (enabled) { applySizeForMobile(); return; }
+    const el = getCanvasEl(); if (!el) { setTimeout(enableFixedTop, 150); return; }
+
+    // Remember original home so we can put #c back on desktop
+    if (!homeParent) { homeParent = el.parentNode; homeNext = el.nextSibling; }
+
+    ensureHosts();
+    host.appendChild(el);          // move canvas into fixed host
+    enabled = true;
+    applySizeForMobile();
+  }
+
+  function disableFixedTop(){
+    if (!enabled) return;
+    const el = getCanvasEl(); if (el && homeParent){
+      if (homeNext && homeNext.parentNode === homeParent) homeParent.insertBefore(el, homeNext);
+      else homeParent.appendChild(el);
+    }
+    // Clean inline sizing so desktop layout rules take over
+    if (el){ el.style.width=''; el.style.height=''; }
+    if (spacer){ spacer.style.height=''; }
+    enabled = false;
+
+    // Re-apply desktop size if you use the size selector
+    try {
+      const sizeEl = document.getElementById('canvasSize');
+      if (sizeEl && typeof window.setCanvasSize === 'function') {
+        window.setCanvasSize(parseInt(sizeEl.value, 10) || 700);
+      }
+    } catch(_){}
+    recenterBaseAndBackground();
+  }
+
+  function apply(){
+    if (isMobile()) enableFixedTop(); else disableFixedTop();
+  }
+
+  // Run on ready + on fabric-ready + on viewport changes
+  const kick = () => setTimeout(apply, 50);
+  document.addEventListener('DOMContentLoaded', kick);
+  if (document.readyState !== 'loading') kick();
+  document.addEventListener('ra:canvas-ready', kick);
+  window.addEventListener('resize', kick, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(kick, 150));
 })();
