@@ -837,3 +837,67 @@
   function boot(){ wireSizeInput(); wireQuickButtons(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
+
+/* ==========================================================
+   RA_STICKY_CANVAS_CENTER_V1
+   Keeps the canvas card vertically centered in the viewport
+   while the page scrolls (position: sticky + centering).
+   Paste at the very bottom of app.js.
+   ========================================================== */
+(function RA_STICKY_CANVAS_CENTER_V1(){
+  function getCanvasEl(){ return document.getElementById('c'); }
+
+  function apply(){
+    const c = getCanvasEl();
+    if (!c) { setTimeout(apply, 200); return; }
+
+    // Find the outer "card" that contains the <canvas id="c">
+    // (works with your current markup; falls back to parent if needed)
+    let card = c.closest('.card, .panel, .box, .canvas-card') || c.parentElement;
+    if (!card) return;
+
+    // Tag it (for CSS/debug) and make it sticky+centered
+    if (!card.id) card.id = 'raCanvasStickyCard';
+    Object.assign(card.style, {
+      position: 'sticky',
+      top: '50vh',                   // stick at mid‑viewport…
+      transform: 'translateY(-50%)', // …and truly center it
+      alignSelf: 'center',
+      marginLeft: 'auto',
+      marginRight: 'auto',
+      zIndex: 3,
+      // optional polish:
+      willChange: 'transform'
+    });
+
+    // If any immediate ancestors block sticky (overflow hidden/auto),
+    // relax them so sticky can work.
+    let p = card.parentElement, hops = 0;
+    while (p && hops < 3) {
+      const cs = getComputedStyle(p);
+      if (/(auto|hidden|scroll)/.test(cs.overflowY) || /(auto|hidden|scroll)/.test(cs.overflow)) {
+        p.style.overflow = 'visible';
+        p.style.overflowY = 'visible';
+      }
+      p = p.parentElement; hops++;
+    }
+
+    // Keep the column tall enough so layout doesn’t jump while sticky
+    const keepHeight = ()=> {
+      const h = card.getBoundingClientRect().height;
+      if (card.parentElement) {
+        card.parentElement.style.minHeight = Math.max(420, h) + 'px';
+      }
+    };
+    keepHeight();
+    try { new ResizeObserver(keepHeight).observe(card); } catch(_) {}
+  }
+
+  // Run once now; run again when Fabric broadcasts readiness
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply);
+  } else {
+    apply();
+  }
+  document.addEventListener('ra:canvas-ready', apply);
+})();
