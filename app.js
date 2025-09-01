@@ -1057,169 +1057,186 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* ===================== MOBILE CANVAS FLOW — V6 (phones only) ===================== */
-(function RA_MOBILE_FLOW_V6(){
+/* ===================== MOBILE CANVAS ABOVE "REBEL ANT" — V7 ===================== */
+(function RA_MOBILE_TOP_V7(){
   const mq = window.matchMedia('(max-width:820px)');
-  let placeholder = null;      // remember where the wrapper came from
-  let anchor = null;           // top-of-page mount on phones
+  let homeMarker = null;     // where the canvas wrapper originally lived
+  let anchor = null;         // mount point above "Rebel Ant"
   let cssTag = null;
+  let retryTimer = null;
 
+  /* ---------- helpers ---------- */
   function addCSS(){
     if (cssTag) return;
     cssTag = document.createElement('style');
-    cssTag.id = 'raMobileFlowV6CSS';
+    cssTag.id = 'raMobileTopV7CSS';
     cssTag.textContent = `
       @media (max-width:820px){
-        /* Top anchor wrapper */
-        #raMobileCanvasTop { padding: 10px 12px 0; }
-        #raMobileCanvasTopInner { max-width: 720px; margin: 0 auto; }
+        /* container we insert above "Rebel Ant" */
+        #raMobileTop { padding: 10px 12px 0; }
+        #raMobileTopInner { width: 100%; max-width: 740px; margin: 0 auto; }
 
-        /* Make the Fabric wrapper & canvases fluid */
-        #raMobileCanvasTopInner .canvas-container{
+        /* make the canvas fluid on phones */
+        #raMobileTopInner .canvas-container{
           width: 100% !important; height: auto !important; margin: 0 auto !important;
         }
-        #raMobileCanvasTopInner canvas{
+        #raMobileTopInner canvas{
           width: 100% !important; height: auto !important; max-width: 100% !important;
           display:block !important;
         }
 
-        /* Hide known grid/checker layers that may remain elsewhere */
-        .checkerboard, .grid, .grid-bg, .bg-grid,
-        [class*="checkerboard"], [class*="grid-bg"], [class*="bg-grid"]{
-          display:none !important;
-        }
-
-        /* Kill generic sticky/fixed wrappers on phones */
+        /* disable any sticky/fixed behaviors for the canvas on phones */
         .sticky, .is-sticky, .canvas-sticky, .canvas-fixed{
-          position: static !important; top:auto !important;
+          position: static !important; top:auto !important; bottom:auto !important;
         }
 
-        /* Avoid accidental huge spacers */
+        /* kill generic oversized spacers on phones */
         .spacer, .space, [class*="spacer"]{ min-height:0 !important; height:auto !important; }
+
+        /* avoid sideways scroll on iOS */
+        html, body { overflow-x: hidden !important; }
       }
     `;
     document.head.appendChild(cssTag);
   }
-
-  function removeCSS(){
-    if (cssTag){ cssTag.remove(); cssTag = null; }
-  }
+  function removeCSS(){ if (cssTag){ cssTag.remove(); cssTag = null; } }
 
   function findCanvas(){
-    return document.getElementById('c') || document.querySelector('canvas[id="c"]');
+    return document.getElementById('c') || document.querySelector('canvas[id="c"]') ||
+           document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
   }
 
-  // pick the best wrapper TO MOVE (so nothing is left behind = no big gap)
+  // Choose the best wrapper that contains the canvas AND the checkerboard frame
   function findBestWrapper(){
     const c = findCanvas();
     if (!c) return null;
 
-    const uniq = new Set();
-    const push = el => { if (el && el.nodeType === 1) uniq.add(el); };
-
-    // likely wrappers
+    // collect likely ancestors
+    const set = new Set();
+    const add = el => { if (el && el.nodeType === 1) set.add(el); };
     [
       '.canvas-container','.artboard','.stage','.canvas-wrap','.canvas-frame',
-      '.canvas-outer','.board','.grid','.checkerboard','[class*="canvas"]',
-      '[class*="board"]','[class*="grid"]'
-    ].forEach(sel => push(c.closest(sel)));
+      '.canvas-outer','.board','.frame','.checkerboard','.grid',
+      '[class*="canvas"]','[class*="board"]','[class*="frame"]','[class*="grid"]'
+    ].forEach(sel => add(c.closest(sel)));
 
-    // add up to 6 ancestors as fallback
+    // fall back: walk up to 6 parents
     let p = c.parentElement, depth = 0;
-    while (p && depth < 6){ push(p); p = p.parentElement; depth++; }
+    while (p && depth < 6){ add(p); p = p.parentElement; depth++; }
 
-    // choose the element that contains the canvas and has the largest area
+    // choose the largest ancestor that still contains the canvas
     let best = null, score = -1;
-    uniq.forEach(node => {
+    set.forEach(node => {
       if (!node.contains(c)) return;
       const rect = node.getBoundingClientRect();
       const area = Math.max(1, rect.width || node.offsetWidth) * Math.max(1, rect.height || node.offsetHeight);
       if (area > score){ score = area; best = node; }
     });
-
     return best;
   }
 
+  // Find the panel with the "Rebel Ant" heading; insert anchor before it
+  function findRebelPanel(){
+    // look for headings that say "Rebel Ant"
+    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4'));
+    let h = headings.find(el => /rebel\s*ant/i.test(el.textContent || ''));
+    if (!h){
+      // fallback: a section that contains "Upload image"
+      h = Array.from(document.querySelectorAll('section,div,fieldset,legend'))
+           .find(el => /upload\s*image/i.test(el.textContent || ''));
+    }
+    if (!h) return null;
+
+    let card = h.closest('.card, .panel, .section, .box, .module, .group, .stack, .block, .ra-panel');
+    if (!card) card = h.parentElement;
+    return card;
+  }
+
   function ensureAnchor(){
-    if (anchor) return anchor;
-    anchor = document.createElement('div');
-    anchor.id = 'raMobileCanvasTop';
+    const rebel = findRebelPanel();
+    if (!rebel || !rebel.parentNode) return null;
 
-    const inner = document.createElement('div');
-    inner.id = 'raMobileCanvasTopInner';
-    anchor.appendChild(inner);
-
-    const host = document.querySelector('main') || document.getElementById('app') || document.body;
-    host.insertBefore(anchor, host.firstChild);
-    return anchor;
+    if (!anchor){
+      anchor = document.createElement('div');
+      anchor.id = 'raMobileTop';
+      anchor.innerHTML = '<div id="raMobileTopInner"></div>';
+    }
+    if (anchor.parentNode !== rebel.parentNode){
+      rebel.parentNode.insertBefore(anchor, rebel);  // <- mount above Rebel Ant
+    }
+    return anchor.querySelector('#raMobileTopInner');
   }
 
   function enableTouchDrag(wrapper){
+    // allow touch drag for Fabric upper canvas on iOS
     const upper = wrapper.querySelector('canvas.upper-canvas');
     const lower = wrapper.querySelector('canvas.lower-canvas');
     if (upper){ upper.style.touchAction = 'none'; upper.style.pointerEvents = 'auto'; }
     if (lower){ lower.style.touchAction = 'none'; lower.style.pointerEvents = 'auto'; }
   }
 
+  // Hide stray tiny checkerboard "lines" iOS sometimes leaves behind
   function purgeThinCheckerStrips(){
-    // Hide any stray tiny checkerboard bars (common on iOS)
-    const elems = Array.from(document.querySelectorAll('div,section'));
-    elems.forEach(n => {
+    const nodes = Array.from(document.querySelectorAll('div,section'));
+    nodes.forEach(n => {
       const cs = getComputedStyle(n);
-      if (n.offsetHeight > 0 && n.offsetHeight < 24 &&
-          (cs.backgroundImage.includes('gradient') || cs.backgroundImage.includes('checker'))){
+      const h = n.offsetHeight;
+      if (h > 0 && h < 24 && (cs.backgroundImage || '').toLowerCase().includes('gradient')){
         n.style.display = 'none';
       }
     });
   }
 
+  /* ---------- state transitions ---------- */
   function toMobile(){
     addCSS();
+    const wrap = findBestWrapper();
+    if (!wrap) return;
 
-    const wrapper = findBestWrapper();
-    if (!wrapper) return;
-
-    // Remember original place for desktop restore
-    if (!placeholder && wrapper.parentNode){
-      placeholder = document.createComment('RA:canvas-wrapper-home');
-      wrapper.parentNode.insertBefore(placeholder, wrapper);
+    // remember origin for desktop restore
+    if (!homeMarker && wrap.parentNode){
+      homeMarker = document.createComment('RA:canvas-wrapper-origin');
+      wrap.parentNode.insertBefore(homeMarker, wrap);
     }
 
-    // Mount at top
-    const mount = ensureAnchor().querySelector('#raMobileCanvasTopInner');
-    if (wrapper.parentNode !== mount) mount.appendChild(wrapper);
+    const mount = ensureAnchor();
+    if (!mount) return;
 
-    // Fluid sizing & touch drag
-    enableTouchDrag(wrapper);
+    // move wrapper above Rebel panel
+    if (wrap.parentNode !== mount) mount.appendChild(wrap);
 
-    // avoid horizontal scrollbars on phones
-    document.documentElement.style.overflowX = 'hidden';
-
-    // remove stray little checker strips if any
+    enableTouchDrag(wrap);
     purgeThinCheckerStrips();
   }
 
   function toDesktop(){
-    const wrapper = findBestWrapper();
-    if (wrapper && placeholder && placeholder.parentNode){
-      placeholder.parentNode.insertBefore(wrapper, placeholder);
-      placeholder.remove(); placeholder = null;
+    const wrap = findBestWrapper();
+    if (wrap && homeMarker && homeMarker.parentNode){
+      homeMarker.parentNode.insertBefore(wrap, homeMarker);
+      homeMarker.remove(); homeMarker = null;
     }
     if (anchor){ anchor.remove(); anchor = null; }
     removeCSS();
-    document.documentElement.style.overflowX = '';
   }
 
   function apply(){
     if (mq.matches) toMobile(); else toDesktop();
   }
 
-  // run now & on changes (with retries for late Fabric init)
-  const kick = () => { apply(); setTimeout(apply, 300); setTimeout(apply, 1000); };
-  if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', kick); }
-  else { kick(); }
+  // Run now and retry a couple of times to wait for Fabric/init
+  const kick = () => {
+    apply();
+    // retries (late canvas load)
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => { apply(); setTimeout(apply, 700); }, 250);
+  };
 
-  mq.addEventListener ? mq.addEventListener('change', apply) : mq.addListener(apply);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', kick);
+  else kick();
+
+  // react to size/orientation changes
+  (mq.addEventListener ? mq.addEventListener('change', apply) : mq.addListener(apply));
   window.addEventListener('orientationchange', () => setTimeout(apply, 250));
   window.addEventListener('resize', () => { if (mq.matches) setTimeout(apply, 250); });
+
 })();
