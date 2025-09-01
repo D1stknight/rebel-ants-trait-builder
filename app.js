@@ -1057,390 +1057,104 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* ==================== MOBILE INLINE + PORTRAIT FIX (V10) ==================== */
-/* Phones only (<= 820px)
-   - Canvas lives inline at the top (above Rebel Ant) and scrolls away with the page.
-   - Scales & centers the canvas and all panels for BOTH portrait and landscape.
-   - Removes the big empty gap (hides the original stage container).
-   - Hides rogue checkerboard strips.
-   - Desktop restores 100% on exit.
-*/
-(function RA_MOBILE_INLINE_V10(){
-  const mq = window.matchMedia('(max-width:820px)');
-  let homeMarker = null;     // where the canvas originally was
-  let originalHost = null;   // the old stage wrapper we collapse on mobile
-  let flowHost = null;       // the parent that lays out canvas + Rebel Ant; we force 1 column on mobile
-  let flowBackup = null;     // to restore flowHost on desktop
-  let mount = null;          // our inline mount above Rebel Ant
-  let cssTag = null;
-  let observer = null;
-
-  /* ---------- helpers ---------- */
-  const $ = (s, r=document) => r.querySelector(s);
-  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
-
-  function addCSS(){
-    if (cssTag) return;
-    cssTag = document.createElement('style');
-    cssTag.id = 'raMobileInlineV10CSS';
-    cssTag.textContent = `
-      @media (max-width:820px){
-        :root{
-          /* ----- default mobile (landscape or wider phones) knobs ----- */
-          --ra-mobile-canvas-w: 84vw;
-          --ra-mobile-canvas-max: 640px;
-          --ra-mobile-panel-w:  92vw;
-          --ra-mobile-panel-max: 640px;
-          --ra-mobile-font: 14.5px;
-          --ra-mobile-btn-font: 14px;
-          --ra-mobile-pad: 12px;
-        }
-        /* ----- tighter in PORTRAIT ----- */
-        @media (orientation: portrait){
-          :root{
-            --ra-mobile-canvas-w: 92vw;
-            --ra-mobile-canvas-max: 520px;
-            --ra-mobile-panel-w:  94vw;
-            --ra-mobile-panel-max: 540px;
-            --ra-mobile-font: 14px;
-            --ra-mobile-btn-font: 13.5px;
-          }
-        }
-        /* really small screens */
-        @media (max-width:380px) and (orientation: portrait){
-          :root{
-            --ra-mobile-canvas-w: 94vw;
-            --ra-mobile-panel-w:  96vw;
-            --ra-mobile-canvas-max: 500px;
-            --ra-mobile-panel-max: 520px;
-          }
-        }
-
-        html, body { overflow-x: hidden !important; }
-        body { font-size: var(--ra-mobile-font); }
-
-        /* ---------- INLINE CANVAS BLOCK (in normal flow) ---------- */
-        #raMobileInlineTop { padding: var(--ra-mobile-pad) 0 0; }
-        #raMobileInlineTopInner{
-          width: min(var(--ra-mobile-canvas-w), var(--ra-mobile-canvas-max));
-          margin: 0 auto 12px;
-        }
-        #raMobileFrame{
-          background:
-            linear-gradient(45deg, rgba(35,39,52,.35) 25%, transparent 25%) 0 0/24px 24px,
-            linear-gradient(-45deg, rgba(35,39,52,.35) 25%, transparent 25%) 0 12px/24px 24px,
-            linear-gradient(45deg, transparent 75%, rgba(35,39,52,.35) 75%) 12px -12px/24px 24px,
-            linear-gradient(-45deg, transparent 75%, rgba(35,39,52,.35) 75%) -12px 0/24px 24px,
-            #0f1217;
-          border-radius: 12px;
-          padding: 12px;
-        }
-        #raMobileInlineTop, #raMobileInlineTop *{
-          z-index: auto !important;     /* keep it in page flow, not hovering */
-        }
-        #raMobileInlineTop .canvas-container{
-          position: relative !important;
-          width: 100% !important;
-          margin: 0 auto !important;
-        }
-        #raMobileInlineTop canvas{
-          width: 100% !important;       /* CSS-scale keeps Fabric pointer math intact */
-          height: auto !important;
-          max-width: 100% !important;
-          display: block !important;
-          touch-action: none;
-          pointer-events: auto;
-        }
-
-        /* Hide stray tiny checkerboard strips (iOS quirk) */
-        .ra-rogue-strip{ display:none !important; }
-
-        /* ---------- PANELS CENTERED & SCALED ---------- */
-        .ra-panel{
-          width: min(var(--ra-mobile-panel-w), var(--ra-mobile-panel-max));
-          margin: 12px auto;
-          padding-left: 8px; padding-right: 8px;
-          position: static !important;
-          z-index: auto !important;
-        }
-        .ra-panel button{
-          font-size: var(--ra-mobile-btn-font) !important;
-          padding: 8px 10px !important;
-        }
-        /* keep inputs >=16px to avoid iOS zoom-on-focus */
-        .ra-panel input, .ra-panel select, .ra-panel textarea{
-          font-size: 16px !important;
-        }
-        /* keep internal grids from overflowing */
-        .ra-panel *[class*="grid"], .ra-panel *[class*="columns"], .ra-panel *[style*="grid"]{
-          gap: 8px !important;
-        }
-      }
-    `;
-    document.head.appendChild(cssTag);
-  }
-  function removeCSS(){ if (cssTag){ cssTag.remove(); cssTag = null; } }
-
-  function findPanelByHeader(rx){
-    const h = $$('h1,h2,h3,h4').find(el => rx.test((el.textContent||'').trim()));
-    if (!h) return null;
-    return h.closest('.card, .panel, .section, .box, .module, .group, .stack, .block') || h.parentElement;
-  }
-
-  function tagPanelsForMobile(){
-    const panels = [
-      [/^rebel\s*ant/i,            'ra-panel-rebel'],
-      [/^overlays/i,               'ra-panel-overlays'],
-      [/^selection/i,              'ra-panel-selection'],
-      [/^token\s*id\s*styles/i,    'ra-panel-token'],
-      [/^custom\s*text/i,          'ra-panel-text'],
-      [/^export/i,                 'ra-panel-export'],
-    ];
-    panels.forEach(([rx, cls])=>{
-      const p = findPanelByHeader(rx);
-      if (p && !p.classList.contains('ra-panel')){
-        p.classList.add('ra-panel', cls);
-        p.style.position = 'static';
-        p.style.top = p.style.right = p.style.bottom = p.style.left = 'auto';
-        p.style.zIndex = 'auto';
-      }
-    });
-  }
-
-  function ensureMount(){
-    const rebel = findPanelByHeader(/^rebel\s*ant/i);
-    if (!rebel || !rebel.parentNode) return null;
-
-    // Force its parent (usually a grid with 2 columns) to a single column on mobile
-    flowHost = rebel.parentNode;
-    if (!flowHost.hasAttribute('data-ra-flow-patched')){
-      flowBackup = {
-        display: flowHost.style.display,
-        gridTemplateColumns: flowHost.style.gridTemplateColumns,
-        gridAutoFlow: flowHost.style.gridAutoFlow,
-        placeItems: flowHost.style.placeItems,
-        alignItems: flowHost.style.alignItems
-      };
-      flowHost.setAttribute('data-ra-flow-patched','1');
-      // collapse to simple block so mount + Rebel Ant stack vertically
-      flowHost.style.display = 'block';
-      flowHost.style.gridTemplateColumns = 'unset';
-      flowHost.style.gridAutoFlow = 'unset';
-      flowHost.style.placeItems = 'unset';
-      flowHost.style.alignItems = 'stretch';
-      flowHost.style.width = '100%';
-    }
-
-    if (!mount){
-      mount = document.createElement('div');
-      mount.id = 'raMobileInlineTop';
-      mount.innerHTML = `<div id="raMobileInlineTopInner"><div id="raMobileFrame"></div></div>`;
-    }
-    if (mount.parentNode !== flowHost){
-      flowHost.insertBefore(mount, rebel); // directly above Rebel Ant
-    }
-    return $('#raMobileFrame', mount);
-  }
-
-  function getCanvasContainer(){ return $('.canvas-container'); }
-
-  function neutralizeStickyAround(node){
-    // ensure no sticky/fixed parents hover above content on mobile
-    let p = node;
-    for (let i=0; i<3 && p; i++, p=p.parentElement){
-      const s = p && p.style ? p.style : null;
-      if (!s) continue;
-      s.position = 'static';
-      s.top = s.right = s.bottom = s.left = 'auto';
-      s.zIndex = 'auto';
-    }
-  }
-
-  function hideRogueStrips(){
-    $$('div,section').forEach(n=>{
-      const cs = getComputedStyle(n);
-      if (n.offsetHeight > 0 && n.offsetHeight < 28 && (cs.backgroundImage||'').match(/gradient|check|grid/i)){
-        n.classList.add('ra-rogue-strip');
-      }
-    });
-  }
-
-  function collapseOriginalStage(){
-    // collapse the original wrapper (the empty area that left the big gap)
-    if (!homeMarker) return;
-    originalHost = homeMarker.parentElement;
-    if (!originalHost || originalHost.hasAttribute('data-ra-collapsed')) return;
-    const prev = originalHost.getAttribute('style') || '';
-    originalHost.setAttribute('data-ra-prev-style', prev);
-    originalHost.setAttribute('data-ra-collapsed','1');
-    Object.assign(originalHost.style, {
-      display: 'none',
-      height: '0px',
-      minHeight: '0',
-      padding: '0',
-      margin: '0'
-    });
-  }
-
-  function uncollapseOriginalStage(){
-    if (!originalHost) return;
-    const prev = originalHost.getAttribute('data-ra-prev-style') || '';
-    originalHost.setAttribute('style', prev);
-    originalHost.removeAttribute('data-ra-prev-style');
-    originalHost.removeAttribute('data-ra-collapsed');
-    originalHost = null;
-  }
-
-  function toMobile(){
-    addCSS();
-    tagPanelsForMobile();
-
-    const cc = getCanvasContainer();
-    if (!cc) return; // wait until Fabric is ready
-
-    // Save original place for desktop return (only once)
-    if (!homeMarker && cc.parentNode){
-      homeMarker = document.createComment('RA:canvas-home');
-      cc.parentNode.insertBefore(homeMarker, cc);
-    }
-
-    // Move Fabric container into our inline mount
-    const frame = ensureMount();
-    if (frame && cc.parentNode !== frame){
-      frame.appendChild(cc);
-    }
-
-    // Interactions OK on touch
-    neutralizeStickyAround(cc);
-    const upper = $('canvas.upper-canvas', cc);
-    if (upper){
-      upper.style.touchAction = 'none';
-      upper.style.pointerEvents = 'auto';
-    }
-
-    // remove visual artifacts
-    collapseOriginalStage();
-    hideRogueStrips();
-  }
-
-  function toDesktop(){
-    const cc = getCanvasContainer();
-    if (cc && homeMarker && homeMarker.parentNode){
-      homeMarker.parentNode.insertBefore(cc, homeMarker);
-    }
-    if (homeMarker){ homeMarker.remove(); homeMarker = null; }
-
-    // restore layout container
-    if (flowHost && flowHost.hasAttribute('data-ra-flow-patched')){
-      if (flowBackup){
-        flowHost.style.display = flowBackup.display;
-        flowHost.style.gridTemplateColumns = flowBackup.gridTemplateColumns;
-        flowHost.style.gridAutoFlow = flowBackup.gridAutoFlow;
-        flowHost.style.placeItems = flowBackup.placeItems;
-        flowHost.style.alignItems = flowBackup.alignItems;
-      } else {
-        flowHost.removeAttribute('style');
-      }
-      flowHost.removeAttribute('data-ra-flow-patched');
-    }
-    flowHost = null; flowBackup = null;
-
-    // unhide original stage
-    uncollapseOriginalStage();
-
-    if (mount){ mount.remove(); mount = null; }
-    removeCSS();
-  }
-
-  function apply(){ mq.matches ? toMobile() : toDesktop(); }
-
-  // Run + keep synced
-  const kick = () => apply();
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', kick);
-  else kick();
-  if (mq.addEventListener) mq.addEventListener('change', apply); else mq.addListener(apply);
-  window.addEventListener('orientationchange', () => setTimeout(apply, 250));
-  window.addEventListener('resize', () => { if (mq.matches) setTimeout(apply, 250); });
-
-  if (!observer){
-    observer = new MutationObserver(() => { if (mq.matches) { tagPanelsForMobile(); if (getCanvasContainer()) apply(); } });
-    observer.observe(document.documentElement, {childList:true, subtree:true});
-  }
-})();
-
 /* =========================================================
-   RA_MOBILE_LANDSCAPE_ONLY_V11L  (safe on V10)
-   - Runs ONLY on phones/tablets in landscape (<=900px wide)
-   - Desktop untouched, portrait untouched
-   - Scales the main canvas to fit screen width, centers it
-   - Restores original inline styles when leaving landscape
+   RA_MOBILE_ALL_V12  — mobile-only canvas sizing (portrait + landscape)
+   Desktop is untouched. Canvas stays in normal page flow.
    ========================================================= */
 (() => {
   try {
-    if (document.documentElement.hasAttribute('data-ra-mobile-landscape-v11l')) return;
-    document.documentElement.setAttribute('data-ra-mobile-landscape-v11l', '');
+    // Prevent double-install
+    if (document.documentElement.hasAttribute('data-ra-mobile-v12')) return;
+    document.documentElement.setAttribute('data-ra-mobile-v12', '');
 
-    // Match only small screens AND landscape
-    const mq = window.matchMedia('(max-width: 900px) and (orientation: landscape)');
+    const isMobile = () => window.matchMedia('(max-width: 900px)').matches;
+    const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
 
-    // Find the main drawing canvas (largest on the page)
+    // Pick the main drawing canvas (largest one on the page)
     const getMainCanvas = () => {
       const list = Array.from(document.querySelectorAll('canvas'));
       if (!list.length) return null;
       return list.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
     };
 
-    const apply = () => {
+    const rememberInline = (el, key) => {
+      if (!el || el.dataset[key]) return;
+      el.dataset[key] = JSON.stringify({
+        position: el.style.position || '',
+        inset:    el.style.inset || '',
+        left:     el.style.left || '',
+        top:      el.style.top || '',
+        width:    el.style.width || '',
+        height:   el.style.height || '',
+        margin:   el.style.margin || '',
+        zIndex:   el.style.zIndex || '',
+        display:  el.style.display || ''
+      });
+    };
+
+    const restoreInline = (el, key) => {
+      try {
+        if (!el || !el.dataset[key]) return;
+        const s = JSON.parse(el.dataset[key] || '{}');
+        el.style.position = s.position || '';
+        el.style.inset    = s.inset || '';
+        el.style.left     = s.left || '';
+        el.style.top      = s.top || '';
+        el.style.width    = s.width || '';
+        el.style.height   = s.height || '';
+        el.style.margin   = s.margin || '';
+        el.style.zIndex   = s.zIndex || '';
+        el.style.display  = s.display || '';
+      } catch { /* no-op */ }
+    };
+
+    const applyMobileSizing = () => {
       const cv = getMainCanvas();
       if (!cv) return;
-      const host = cv.parentElement || cv; // the frame that contains the canvas
 
-      // Remember original inline styles the first time we touch them
-      if (!host.dataset.raLOrig) {
-        host.dataset.raLOrig = JSON.stringify({
-          w: host.style.width || '',
-          h: host.style.height || '',
-          m: host.style.margin || ''
-        });
-      }
-      if (!cv.dataset.raLOrig) {
-        cv.dataset.raLOrig = JSON.stringify({
-          w: cv.style.width || '',
-          h: cv.style.height || ''
-        });
-      }
+      const host = cv.parentElement || cv;     // canvas frame in your DOM
+      rememberInline(host, 'raOrigHostV12');
+      rememberInline(cv,   'raOrigCanvasV12');
 
-      if (mq.matches) {
-        // Landscape on phone: make the canvas box fit the screen width
-        const side = Math.round(Math.min(window.innerWidth * 0.9, 820)); // roomy but safe
-        host.style.width  = side + 'px';
-        host.style.height = side + 'px'; // square workspace
-        host.style.margin = '8px auto 12px'; // centered
+      if (isMobile()) {
+        // Compute a square that fits both width and height on small screens
+        const vw = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);
+        const vh = Math.min(window.innerHeight, document.documentElement.clientHeight || window.innerHeight);
 
+        // Portrait: plenty of height, limit by width.
+        // Landscape: less height, so limit by the smaller of width vs some % of height.
+        const maxByWidth  = vw * 0.92;
+        const maxByHeight = isPortrait() ? vh * 0.65 : vh * 0.78;  // keep comfortable margins
+        const side = Math.round(Math.max(240, Math.min(maxByWidth, maxByHeight)));
+
+        // Keep the canvas in flow, centered, no overlaying
+        host.style.position = 'static';
+        host.style.zIndex   = 'auto';
+        host.style.display  = 'block';
+        host.style.width    = side + 'px';
+        host.style.height   = side + 'px';       // square workspace prevents “rogue line”
+        host.style.margin   = '12px auto 16px';  // centered on the page
+
+        // Fill the host neatly
         cv.style.width  = '100%';
         cv.style.height = '100%';
+        cv.style.display = 'block';
+
       } else {
-        // Restore original styles when not in mobile landscape
-        try {
-          const hO = JSON.parse(host.dataset.raLOrig || '{}');
-          host.style.width  = hO.w || '';
-          host.style.height = hO.h || '';
-          host.style.margin = hO.m || '';
-          const cO = JSON.parse(cv.dataset.raLOrig || '{}');
-          cv.style.width  = cO.w || '';
-          cv.style.height = cO.h || '';
-        } catch (e) { /* noop */ }
+        // Not mobile: restore exactly how desktop looked originally
+        restoreInline(host, 'raOrigHostV12');
+        restoreInline(cv,   'raOrigCanvasV12');
       }
     };
 
-    // Run now and keep it responsive
-    const kick = () => { apply(); setTimeout(apply, 200); };
-    if (document.readyState === 'complete' || document.readyState === 'interactive') kick();
-    else window.addEventListener('DOMContentLoaded', kick, { once: true });
+    // Run now (after DOM ready) and keep responsive to changes
+    const start = () => { applyMobileSizing(); setTimeout(applyMobileSizing, 200); };
+    if (document.readyState === 'complete' || document.readyState === 'interactive') start();
+    else window.addEventListener('DOMContentLoaded', start, { once: true });
 
-    window.addEventListener('resize', apply, { passive: true });
-    window.addEventListener('orientationchange', apply, { passive: true });
+    window.addEventListener('resize', applyMobileSizing, { passive: true });
+    window.addEventListener('orientationchange', applyMobileSizing, { passive: true });
   } catch (err) {
-    console.warn('RA_MOBILE_LANDSCAPE_ONLY_V11L error:', err);
+    console.warn('RA_MOBILE_ALL_V12 error:', err);
   }
 })();
