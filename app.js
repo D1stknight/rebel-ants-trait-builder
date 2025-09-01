@@ -1057,140 +1057,140 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* === MOBILE RESPONSIVE REPAIR v9 — keep checkerboard, fix touch drag, no gaps === */
+/* === RA_MOBILE_INLINE_v12 — mobile-only: inline canvas, draggable overlays, desktop unchanged === */
 (function(){
-  if (window.__RA_MOBILE_RESP_V9) return; window.__RA_MOBILE_RESP_V9 = true;
+  if (window.__RA_MOBILE_INLINE_v12) return; window.__RA_MOBILE_INLINE_v12 = true;
 
-  // In case any older mobile rows/styles are still around, remove them quietly
-  ['raMobileInlineCanvasRow','raMobileInlineCanvasRowOld','raMobileFixedV4Style','raStickyCanvasCSS','raMobileV3']
-    .forEach(id => { const n = document.getElementById(id); if (n) try{ n.remove(); }catch(_){} });
+  const MOBILE_MAX = 820;         // viewport width threshold
+  const VIEW_FRACTION = 0.92;     // canvas width = 92% of screen
+  const MIN = 320, MAX = 1400;    // guard rails
+  let lastAppliedW = 0;
+  const touched = new Map();      // remember inline styles we override, so we can restore on desktop
 
-  const MAX_MOBILE_PX = 820;     // treat <= 820px as mobile
-  const VIEW_FRAC     = 0.90;    // canvas covers 90% of viewport width on mobile
-  const MIN_SZ        = 320;
-  const MAX_SZ        = 1200;
+  function isMobile(){ return window.innerWidth <= MOBILE_MAX; }
 
-  function isMobile(){ return window.matchMedia(`(max-width:${MAX_MOBILE_PX}px)`).matches; }
-  function getWrap(){
-    const C = window.canvas;
-    if (C && C.wrapperEl) return C.wrapperEl;
-    const up = C && C.upperCanvasEl ? C.upperCanvasEl : document.querySelector('canvas.upper-canvas');
-    return up ? up.parentNode : null;
+  function getCanvas(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  function getWrap(C){ return C && C.wrapperEl ? C.wrapperEl : (C ? C.upperCanvasEl.parentNode : null); }
+  function getLower(C){ return C ? (C.lowerCanvasEl || (C.contextContainer && C.contextContainer.canvas) || null) : null; }
+
+  function remember(el, prop){
+    if (!el || !el.style) return;
+    const key = el;
+    if (!touched.has(key)) touched.set(key, {});
+    const bag = touched.get(key);
+    if (!(prop in bag)) bag[prop] = el.style[prop] || '';
   }
-  function getLower(){
-    const C = window.canvas;
-    return C ? (C.lowerCanvasEl || (C.contextContainer && C.contextContainer.canvas) || null) : null;
+  function setStyle(el, prop, val){
+    if (!el || !el.style) return;
+    remember(el, prop);
+    el.style[prop] = val;
   }
-  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-
-  function styleTouch(el){
-    if (!el) return;
-    el.style.touchAction = 'none';          // let Fabric receive pointer/touch gestures
-    el.style.webkitUserSelect = 'none';
-    el.style.userSelect = 'none';
-    el.style.pointerEvents = 'auto';
+  function restoreAll(){
+    touched.forEach((bag, el)=>{
+      if (!el || !el.style) return;
+      for (const k in bag){ el.style[k] = bag[k]; }
+    });
+    touched.clear();
   }
 
-  function recalc(){
-    const C = window.canvas; if (!C) return;
+  function recenter(C){
+    try{
+      // backgroundRect + baseGroup are what your app uses
+      if (window.backgroundRect){
+        backgroundRect.set({
+          left: 0, top: 0,
+          width: C.getWidth(),
+          height: C.getHeight(),
+          originX: 'left', originY: 'top'
+        });
+        backgroundRect.setCoords && backgroundRect.setCoords();
+      }
+      if (window.baseGroup){
+        window.baseGroup.set({
+          left: C.getWidth()/2,
+          top:  C.getHeight()/2,
+          originX:'center',
+          originY:'center'
+        });
+        window.baseGroup.setCoords && window.baseGroup.setCoords();
+      }
+      C.requestRenderAll();
+    }catch(_){}
+  }
+
+  function applyMobile(){
+    const C = getCanvas(); if (!C) return;
+    const wrap = getWrap(C), host = wrap && wrap.parentNode;
+    const target = Math.max(MIN, Math.min(MAX, Math.round(window.innerWidth * VIEW_FRACTION)));
+
+    // Avoid thrashing
+    if (Math.abs(target - lastAppliedW) < 2 && isMobile()) return;
+    lastAppliedW = target;
+
+    // Kill sticky/fixed styles *only on mobile* by inlining neutral values
+    [host, wrap, host && host.parentNode].forEach(n=>{
+      if (!n || !n.style) return;
+      ['position','top','bottom','left','right','transform'].forEach(p=> setStyle(n, p, ''));
+    });
+
+    // Resize Fabric canvas to match CSS size (so dragging works)
+    try { C.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
+    if (typeof window.setCanvasSize === 'function'){
+      window.setCanvasSize(target);
+      const sizeEl = document.getElementById('canvasSize'); if (sizeEl) sizeEl.value = String(target);
+    } else {
+      C.setWidth(target); C.setHeight(target);
+    }
+
+    // Match wrapper and both canvas layers to the same px size
+    if (host){
+      setStyle(host, 'display', 'block');
+      setStyle(host, 'margin',  '0 auto');
+      setStyle(host, 'padding', '0');
+    }
+    if (wrap){
+      setStyle(wrap, 'width',  target + 'px');
+      setStyle(wrap, 'height', target + 'px');
+      setStyle(wrap, 'margin', '12px auto 14px');
+      // allow touch gestures to go to Fabric (prevents the “can’t move overlays” issue)
+      setStyle(wrap, 'touchAction', 'none');
+      setStyle(wrap, 'webkitUserSelect', 'none');
+      setStyle(wrap, 'userSelect', 'none');
+      setStyle(wrap, 'pointerEvents', 'auto');
+    }
+    const up = C.upperCanvasEl, lo = getLower(C);
+    if (up){
+      setStyle(up, 'width',  target + 'px');
+      setStyle(up, 'height', target + 'px');
+      setStyle(up, 'touchAction', 'none');
+    }
+    if (lo){
+      setStyle(lo, 'width',  target + 'px');
+      setStyle(lo, 'height', target + 'px');
+      setStyle(lo, 'touchAction', 'none');
+    }
+
+    // Recompute offsets + center base/background
+    try { C.calcOffset(); } catch(_){}
+    recenter(C);
+  }
+
+  function applyDesktop(){
+    // Put everything back exactly as it was (desktop remains sticky/centered as before)
+    restoreAll();
+    lastAppliedW = 0;
+    const C = getCanvas(); if (!C) return;
     try { C.calcOffset(); } catch(_){}
   }
 
-  function recenterBaseAndBg(){
-    const C = window.canvas; if (!C) return;
-    const cx = C.getWidth()/2, cy = C.getHeight()/2;
-
-    // Background rectangle (your dark stage)
-    if (window.backgroundRect){
-      backgroundRect.set({
-        left: 0, top: 0,
-        width: C.getWidth(),
-        height: C.getHeight(),
-        originX: 'left', originY: 'top'
-      });
-      backgroundRect.setCoords && backgroundRect.setCoords();
-    }
-
-    // Center the base image/group if present
-    const base = window.baseGroup;
-    if (base){
-      base.set({ left: cx, top: cy, originX:'center', originY:'center' });
-      base.setCoords && base.setCoords();
-    }
-    C.requestRenderAll();
+  function update(){
+    if (!getCanvas()){ setTimeout(update, 120); return; }
+    if (isMobile()) applyMobile(); else applyDesktop();
   }
 
-  function apply(){
-    const C = window.canvas; const wrap = getWrap();
-    if (!C || !wrap) return;
-
-    const host = wrap.parentNode;  // leave host in place so checkerboard stays behind
-
-    if (isMobile()){
-      // Compute target canvas size from viewport width
-      const target = clamp(Math.round(window.innerWidth * VIEW_FRAC), MIN_SZ, MAX_SZ);
-
-      // Reset pan/zoom before resizing so hit‑testing stays correct
-      try { C.setViewportTransform([1,0,0,1,0,0]); } catch(_){}
-
-      // Resize Fabric canvas via your helper if present (preserves proportions)
-      if (typeof window.setCanvasSize === 'function'){
-        window.setCanvasSize(target);
-        const sizeEl = document.getElementById('canvasSize');
-        if (sizeEl) sizeEl.value = String(target);
-      } else {
-        C.setWidth(target); C.setHeight(target);
-      }
-
-      // Make the host center its content; this keeps the checkerboard and removes gaps
-      if (host && host.style){
-        host.style.display = 'flex';
-        host.style.justifyContent = 'center';
-        host.style.alignItems = 'flex-start';
-        host.style.padding = '0';
-        host.style.margin = '0';
-      }
-
-      // Keep wrapper and both canvas layers in sync with Fabric size
-      wrap.style.width  = target + 'px';
-      wrap.style.height = target + 'px';
-      wrap.style.margin = '12px auto 14px';
-      styleTouch(wrap);
-
-      const up = C.upperCanvasEl, lo = getLower();
-      if (up){ up.style.width = target + 'px'; up.style.height = target + 'px'; styleTouch(up); }
-      if (lo){ lo.style.width = target + 'px'; lo.style.height = target + 'px'; styleTouch(lo); }
-
-      recalc();
-      recenterBaseAndBg();
-    } else {
-      // Desktop → return host/wrapper styles to normal
-      if (host && host.style){
-        host.style.display = '';
-        host.style.justifyContent = '';
-        host.style.alignItems = '';
-        host.style.padding = '';
-        host.style.margin = '';
-      }
-      ['width','height','margin','touchAction','webkitUserSelect','userSelect','pointerEvents']
-        .forEach(k => { try { wrap.style[k] = ''; } catch(_){ } });
-
-      const up = C.upperCanvasEl, lo = getLower();
-      if (up){ up.style.width = ''; up.style.height = ''; up.style.touchAction = ''; }
-      if (lo){ lo.style.width = ''; lo.style.height = ''; lo.style.touchAction = ''; }
-
-      recalc();
-    }
-  }
-
-  function runWhenReady(){
-    if (window.canvas && window.canvas.upperCanvasEl) { apply(); return; }
-    setTimeout(runWhenReady, 120);
-  }
-
-  // Hooks
-  document.addEventListener('DOMContentLoaded', runWhenReady);
-  document.addEventListener('ra:canvas-ready', () => setTimeout(apply, 30));
-  window.addEventListener('resize', () => setTimeout(apply, 50), { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(apply, 120));
+  // Run at the right times
+  document.addEventListener('DOMContentLoaded', update);
+  document.addEventListener('ra:canvas-ready', () => setTimeout(update, 30));
+  window.addEventListener('resize', () => setTimeout(update, 50), { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(update, 150));
 })();
