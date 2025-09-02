@@ -1341,165 +1341,162 @@
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
 /* ==========================================================
-   RA_MOBILE_GAP_PROBE_KILLER_V2  — MOBILE ONLY (≤920px)
-   Purpose:
-     • Find the *real* element that creates the big empty space between
-       “Custom Text” and “Overlays” and collapse it (display:none, height:0).
-     • If some wrapper still keeps height, nudge Overlays up by the exact gap.
-     • Never touches desktop.
-   How it works:
-     • Measures the vertical gap.
-     • Samples the area between the two cards with elementFromPoint().
-     • Collapses the biggest offender; repeats a couple of times.
-     • Falls back to an exact negative margin if needed.
+   RA_MOBILE_OVERLAY_GAP_FINAL_V1  — MOBILE ONLY (≤920px)
+   Goal: Remove the big empty space between “Custom Text” and “Overlays”.
+   Method:
+     • Anchor to real controls by IDs (#addCustomText and #overlayGrid).
+     • Measure the exact gap between those two “cards”.
+     • First, collapse obvious spacers between them (empty wrappers / checkerboard).
+     • Then, if any gap remains, pull the Overlays card up by the exact pixels
+       so the visible gap is a clean ~12px.
+   Desktop is not touched.
    ========================================================== */
 (() => {
   const MQ = '(max-width: 920px)';
   if (!window.matchMedia(MQ).matches) return;
-  if (window.__RA_MOBILE_GAP_PROBE_KILLER_V2__) return;
-  window.__RA_MOBILE_GAP_PROBE_KILLER_V2__ = true;
+  if (window.__RA_MOBILE_OVERLAY_GAP_FINAL_V1__) return;
+  window.__RA_MOBILE_OVERLAY_GAP_FINAL_V1__ = true;
 
-  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
-  const  $ = (s,r=document)=>r.querySelector(s);
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
-  // Find a card by its heading text
-  function findCardByHeading(re){
-    const h = $$('h1,h2,h3,h4').find(n => re.test((n.textContent||'').trim().toLowerCase()));
-    return h ? (h.closest('.card, section, article, form, div') || h.parentElement) : null;
-  }
+  function rect(el){ try { return el.getBoundingClientRect(); } catch(_) { return {top:0,bottom:0,height:0,left:0,right:0,width:0}; } }
+  function isHidden(el){ const cs = getComputedStyle(el); return cs.display==='none' || cs.visibility==='hidden' || cs.opacity==='0'; }
 
-  function rect(el){ try { return el.getBoundingClientRect(); } catch(_) { return {top:0,bottom:0,left:0,right:0,height:0,width:0}; } }
-  function isFixed(el){ try { return getComputedStyle(el).position === 'fixed'; } catch(_) { return false; } }
-
-  // Hide / collapse a node safely
-  function collapse(el){
-    if (!el || el.nodeType !== 1) return;
-    if (el.__raGapKilled) return;
-    el.__raGapKilled = true;
-    el.setAttribute('data-ra-gap-killed','1');
-    el.style.setProperty('display','none','important');
-    el.style.setProperty('height','0','important');
-    el.style.setProperty('margin','0','important');
-    el.style.setProperty('padding','0','important');
-    el.style.setProperty('border','0','important');
-    el.style.setProperty('min-height','0','important');
-  }
-
-  function measureGap(a,b){
-    const A = rect(a), B = rect(b);
-    return Math.round(B.top - A.bottom);
-  }
-
-  // Probe the space between cards and pick the largest contributing element
-  function findWorstOffender(cardA, cardB){
-    const A = rect(cardA), B = rect(cardB);
-    const startY = Math.max(0, Math.ceil(A.bottom) + 2);
-    const endY   = Math.max(startY, Math.floor(B.top) - 2);
-    if (endY - startY < 12) return null;
-
-    // X coordinate: center line of the column holding the cards
-    const x = Math.round((A.left + A.right) / 2) || Math.round(window.innerWidth/2);
-
-    const bad = new Map(); // element -> score
-    for (let y = startY; y < endY; y += 16){
-      let el = document.elementFromPoint(x, y);
-      if (!el) continue;
-
-      // Skip fixed overlays / floating buttons
-      if (isFixed(el)) continue;
-
-      // Bubble up a little if we hit a text node or tiny child
-      for (let i=0;i<3 && el && el.nodeType===1 && el.getBoundingClientRect().height<8;i++){
-        el = el.parentElement;
+  // Find the “cards” that contain our anchors
+  function getCustomTextCard(){
+    const anchors = ['#addCustomText', '#customText', '#fontFamily', '#fontSize'];
+    for (const sel of anchors){
+      const el = $(sel);
+      if (el){
+        const card = el.closest('.card, section, article, .panel, .box, .content, form, div');
+        if (card) return card;
       }
-      if (!el || el === cardA || el === cardB) continue;
-      if (cardA.contains(el) || cardB.contains(el)) continue;
-
-      // Don’t kill a container that *is* a content card (has a heading)
-      if (el.querySelector && el.querySelector('h1,h2,h3,h4')) continue;
-
-      const r = rect(el);
-      // Must actually sit between the two cards and contribute height
-      const overlaps = r.bottom > A.bottom && r.top < B.top && r.height > 12;
-      if (!overlaps) continue;
-
-      const score = (r.width * r.height) || r.height;
-      bad.set(el, Math.max(bad.get(el)||0, score));
     }
-
-    // Pick the largest
-    let best = null, bestScore = 0;
-    for (const [el,score] of bad.entries()){
-      if (score > bestScore){ best = el; bestScore = score; }
-    }
-    return best;
+    // fallback: heading text
+    const h = $$('h1,h2,h3,h4').find(n => /custom\s*text/i.test((n.textContent||'')));
+    return h ? (h.closest('.card, section, article, .panel, .box, .content, form, div') || h.parentElement) : null;
   }
 
-  function nudgeOverlays(cardA, cardB){
-    const gap = measureGap(cardA, cardB);
-    // keep 12px breathing space
-    const desired = 12;
-    const lift = gap - desired;
-    // Reset previous nudge
-    cardB.style.removeProperty('--ra-gap-nudge');
-    cardB.style.removeProperty('margin-top');
-    if (lift > 2){
-      cardB.style.setProperty('--ra-gap-nudge', `-${lift}px`);
-      // Use margin so the page flow follows (better than translate for this case)
-      cardB.style.setProperty('margin-top', `var(--ra-gap-nudge)`);
+  function getOverlaysCard(){
+    const grid = $('#overlayGrid');
+    if (grid){
+      const card = grid.closest('.card, section, article, .panel, .box, .content, form, div');
+      return card || grid.parentElement;
     }
+    // fallback: heading text
+    const h = $$('h1,h2,h3,h4').find(n => /^\s*overlays\s*$/i.test((n.textContent||'')));
+    return h ? (h.closest('.card, section, article, .panel, .box, .content, form, div') || h.parentElement) : null;
   }
 
-  // Known ghosts from earlier mobile workarounds — remove if present
-  function removeKnownGhosts(){
-    ['#raCanvasGhost','#ra-mobile-stage-host','#ra-mobile-stage-frame']
-      .forEach(sel => { const el = $(sel); if (el) try{ el.remove(); }catch(_){ } });
+  function collapseObviousSpacers(prevCard, overlaysCard){
+    if (!prevCard || !overlaysCard) return false;
+    let changed = false;
+    // Walk siblings between prevCard and overlaysCard and hide useless blocks
+    let node = prevCard.nextElementSibling;
+    while (node && node !== overlaysCard){
+      if (node.__raGapKilled){ node = node.nextElementSibling; continue; }
+      const r = rect(node);
+      const txt = (node.textContent||'').trim();
+      const bg  = getComputedStyle(node).backgroundImage || '';
+      const looksChecker = bg.includes('linear-gradient') || bg.includes('repeating');
+      const looksEmpty   = !txt && r.height > 0 && r.height < 260; // empty spacer-ish
+      const nearZero     = r.height < 14; // tiny sliver
+
+      if (looksChecker || looksEmpty || nearZero){
+        node.__raGapKilled = true;
+        node.setAttribute('data-ra-gap-killed','1');
+        node.style.setProperty('display','none','important');
+        node.style.setProperty('height','0','important');
+        node.style.setProperty('margin','0','important');
+        node.style.setProperty('padding','0','important');
+        node.style.setProperty('border','0','important');
+        node.style.setProperty('min-height','0','important');
+        changed = true;
+      }
+      node = node.nextElementSibling;
+    }
+    return changed;
   }
 
-  function fixGap(){
+  function closeGap(){
     if (!window.matchMedia(MQ).matches) return;
 
-    removeKnownGhosts();
+    const customCard   = getCustomTextCard();
+    const overlaysCard = getOverlaysCard();
+    if (!customCard || !overlaysCard) return;
 
-    const custom   = findCardByHeading(/custom\s*text/);
-    const overlays = findCardByHeading(/^overlays$/i);
-    if (!custom || !overlays) return;
+    // reset previous nudge before re-measuring
+    overlaysCard.style.removeProperty('--ra-gap-nudge');
+    overlaysCard.style.removeProperty('margin-top');
 
-    // Try up to 3 collapses in case the gap is produced by nested wrappers
-    for (let i=0; i<3; i++){
-      const g = measureGap(custom, overlays);
-      if (g <= 14) { // already tight
-        overlays.style.removeProperty('--ra-gap-nudge');
-        overlays.style.removeProperty('margin-top');
-        return;
+    const ar = rect(customCard);
+    const br = rect(overlaysCard);
+    if (isHidden(customCard) || isHidden(overlaysCard)) return;
+
+    let gap = Math.round(br.top - ar.bottom);
+
+    // If a ghost/host from older patches exists near here, kill it on mobile
+    ['#raCanvasGhost','#ra-mobile-stage-host','#ra-mobile-stage-frame'].forEach(sel => {
+      const g = $(sel);
+      if (g && g !== customCard && g !== overlaysCard){
+        try { g.remove(); } catch(_){}
       }
-      const off = findWorstOffender(custom, overlays);
-      if (!off) break;
-      collapse(off);
+    });
+
+    // Try collapsing obvious spacer nodes between the two cards
+    if (gap > 14){
+      const changed = collapseObviousSpacers(customCard, overlaysCard);
+      if (changed){
+        // re-measure after collapsing
+        const ar2 = rect(customCard);
+        const br2 = rect(overlaysCard);
+        gap = Math.round(br2.top - ar2.bottom);
+      }
     }
 
-    // Final pass: if we still have a visible gap, nudge Overlays up by exact amount
-    nudgeOverlays(custom, overlays);
+    // Final guard: if there is still a visible gap, pull Overlays up by exact pixels
+    if (gap > 14){
+      const lift = Math.min(800, Math.max(0, gap - 12)); // keep ~12px breathing space
+      overlaysCard.style.setProperty('--ra-gap-nudge', `-${lift}px`);
+      overlaysCard.style.setProperty('margin-top', `var(--ra-gap-nudge)`);
+    }
   }
 
-  // Keep applying as the page mutates
-  const mo = new MutationObserver(() => { requestAnimationFrame(fixGap); });
+  // Keep it applied as the UI changes
+  const mo = new MutationObserver(() => requestAnimationFrame(closeGap));
   mo.observe(document.documentElement, { childList:true, subtree:true });
 
-  window.addEventListener('resize', fixGap, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(fixGap, 120), { passive:true });
+  window.addEventListener('resize', closeGap, { passive: true });
+  window.addEventListener('orientationchange', () => setTimeout(closeGap, 120), { passive: true });
 
+  // Run after common actions that change layout
+  ['click','change'].forEach(ev => {
+    document.addEventListener(ev, e => {
+      const t = e.target && (e.target.closest('button,input,select') || e.target);
+      if (!t) return;
+      const label = (t.textContent||t.value||'').toLowerCase();
+      if (/load|clear|token|overlay|publish|add png|custom text/.test(label)) {
+        setTimeout(closeGap, 80);
+      }
+    }, true);
+  });
+
+  // Initial pass
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fixGap, { once:true });
+    document.addEventListener('DOMContentLoaded', () => setTimeout(closeGap, 60), { once:true });
   } else {
-    fixGap();
+    setTimeout(closeGap, 30);
   }
 
-  // tiny guard style
+  // Tiny CSS guard for killed spacers (mobile only)
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
-      [data-ra-gap-killed="1"]{ display:none !important; height:0 !important; margin:0 !important; padding:0 !important; border:0 !important; min-height:0 !important; }
+      [data-ra-gap-killed="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; border:0 !important; min-height:0 !important; }
+      /* If the optional Published Overlays shelf is empty, hide the wrapper to avoid phantom height */
+      #ra2ShelfGrid:empty { display:none !important; }
+      #ra2Shelf:has(#ra2ShelfGrid:empty) { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
     }
   `;
   document.head.appendChild(style);
