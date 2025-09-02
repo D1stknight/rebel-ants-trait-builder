@@ -1340,3 +1340,87 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
+/* ================= RA_ADMIN_PUBLISH_NOW_V2 — make Admin “Publish” show up immediately =================
+   What this does (no desktop changes):
+   • Watches the Admin dock for clicks on “Publish”
+   • Reads written items from localStorage('ra2_published') and redraws the “Published Overlays” grid
+   • Creates the grid if it isn’t there yet (avoids duplicates)
+   • Listens to the storage event so other tabs update too
+   ================================================================================================ */
+(() => {
+  const KEY = 'ra2_published';
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+  function getShelf(){
+    try { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
+    catch (_) { return []; }
+  }
+
+  function findOverlaysCard(){
+    const h = $$('h1,h2,h3').find(n => /overlays/i.test((n.textContent||'').trim().toLowerCase()));
+    return h ? (h.closest('.card, .panel, section, .box, .container, .content, form, div') || h.parentElement) : null;
+  }
+
+  function drawShelf(){
+    const card = findOverlaysCard();
+    if (!card) return;
+
+    // Use existing shelf if present; otherwise create it once.
+    let wrap = document.getElementById('ra2Shelf');
+    if (!wrap){
+      wrap = document.createElement('div');
+      wrap.id = 'ra2Shelf';
+      wrap.style.marginTop = '8px';
+      wrap.innerHTML = `
+        <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+        <div id="ra2ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+      `;
+      card.appendChild(wrap);
+    }
+    const grid = document.getElementById('ra2ShelfGrid');
+    if (!grid) return;
+
+    const items = getShelf();
+    grid.innerHTML = '';
+    items.forEach(item => {
+      const tile = document.createElement('div');
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+      tile.innerHTML = `
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+        </div>
+        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+      `;
+      tile.addEventListener('click', () => {
+        try { window.addOverlayToCanvas(item.dataURL, false); } catch(_) {}
+      });
+      grid.appendChild(tile);
+    });
+  }
+
+  // Redraw right after clicking “Publish” in the Admin dock
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('button');
+    if (!btn) return;
+    const txt = (btn.textContent||'').trim().toLowerCase();
+    if (txt === 'publish' && btn.closest('#ra2Grid')) {
+      // Admin dock just wrote to localStorage — redraw shortly after
+      setTimeout(drawShelf, 60);
+    }
+  }, true);
+
+  // Keep other tabs in sync
+  window.addEventListener('storage', (e) => {
+    if (e && e.key === KEY) drawShelf();
+  });
+
+  // Build/refresh the shelf once the Overlays card exists
+  const mo = new MutationObserver(drawShelf);
+  mo.observe(document.documentElement, { childList:true, subtree:true });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', drawShelf);
+  } else {
+    drawShelf();
+  }
+})();
