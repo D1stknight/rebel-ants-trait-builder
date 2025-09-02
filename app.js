@@ -1340,139 +1340,166 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* =========================================
-   RA_MOBILE_CLOSE_GAP_LCA_AND_NUDGE_V1 (≤920px)
-   - Collapses ANY nodes between “Custom Text” and “Overlays”
-   - If anything still reserves height, pulls Overlays up by the exact gap
-   - Removes known canvas ghosts/hosts on mobile
-   - Desktop untouched
-   ========================================= */
+/* ==========================================================
+   RA_MOBILE_GAP_PROBE_KILLER_V2  — MOBILE ONLY (≤920px)
+   Purpose:
+     • Find the *real* element that creates the big empty space between
+       “Custom Text” and “Overlays” and collapse it (display:none, height:0).
+     • If some wrapper still keeps height, nudge Overlays up by the exact gap.
+     • Never touches desktop.
+   How it works:
+     • Measures the vertical gap.
+     • Samples the area between the two cards with elementFromPoint().
+     • Collapses the biggest offender; repeats a couple of times.
+     • Falls back to an exact negative margin if needed.
+   ========================================================== */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (window.__RA_GAP_FIX_LCA_NUDGE_V1__) return;
-  window.__RA_GAP_FIX_LCA_NUDGE_V1__ = true;
+  if (!window.matchMedia(MQ).matches) return;
+  if (window.__RA_MOBILE_GAP_PROBE_KILLER_V2__) return;
+  window.__RA_MOBILE_GAP_PROBE_KILLER_V2__ = true;
 
-  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
-  const  $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  const  $ = (s,r=document)=>r.querySelector(s);
 
-  // Find a card by heading text (case-insensitive)
+  // Find a card by its heading text
   function findCardByHeading(re){
     const h = $$('h1,h2,h3,h4').find(n => re.test((n.textContent||'').trim().toLowerCase()));
     return h ? (h.closest('.card, section, article, form, div') || h.parentElement) : null;
   }
 
-  function lca(a,b){
-    if (!a || !b) return document.body;
-    const seen = new Set();
-    for (let n=a; n; n=n.parentElement) seen.add(n);
-    for (let n=b; n; n=n.parentElement) if (seen.has(n)) return n;
-    return document.body;
-  }
+  function rect(el){ try { return el.getBoundingClientRect(); } catch(_) { return {top:0,bottom:0,left:0,right:0,height:0,width:0}; } }
+  function isFixed(el){ try { return getComputedStyle(el).position === 'fixed'; } catch(_) { return false; } }
 
+  // Hide / collapse a node safely
   function collapse(el){
     if (!el || el.nodeType !== 1) return;
-    // Never collapse the two real cards or anything that contains a heading (protect sections)
-    if (el.querySelector('h1,h2,h3,h4')) return;
-    el.setAttribute('data-ra-gap-cut','1');
+    if (el.__raGapKilled) return;
+    el.__raGapKilled = true;
+    el.setAttribute('data-ra-gap-killed','1');
     el.style.setProperty('display','none','important');
     el.style.setProperty('height','0','important');
     el.style.setProperty('margin','0','important');
     el.style.setProperty('padding','0','important');
+    el.style.setProperty('border','0','important');
+    el.style.setProperty('min-height','0','important');
   }
 
+  function measureGap(a,b){
+    const A = rect(a), B = rect(b);
+    return Math.round(B.top - A.bottom);
+  }
+
+  // Probe the space between cards and pick the largest contributing element
+  function findWorstOffender(cardA, cardB){
+    const A = rect(cardA), B = rect(cardB);
+    const startY = Math.max(0, Math.ceil(A.bottom) + 2);
+    const endY   = Math.max(startY, Math.floor(B.top) - 2);
+    if (endY - startY < 12) return null;
+
+    // X coordinate: center line of the column holding the cards
+    const x = Math.round((A.left + A.right) / 2) || Math.round(window.innerWidth/2);
+
+    const bad = new Map(); // element -> score
+    for (let y = startY; y < endY; y += 16){
+      let el = document.elementFromPoint(x, y);
+      if (!el) continue;
+
+      // Skip fixed overlays / floating buttons
+      if (isFixed(el)) continue;
+
+      // Bubble up a little if we hit a text node or tiny child
+      for (let i=0;i<3 && el && el.nodeType===1 && el.getBoundingClientRect().height<8;i++){
+        el = el.parentElement;
+      }
+      if (!el || el === cardA || el === cardB) continue;
+      if (cardA.contains(el) || cardB.contains(el)) continue;
+
+      // Don’t kill a container that *is* a content card (has a heading)
+      if (el.querySelector && el.querySelector('h1,h2,h3,h4')) continue;
+
+      const r = rect(el);
+      // Must actually sit between the two cards and contribute height
+      const overlaps = r.bottom > A.bottom && r.top < B.top && r.height > 12;
+      if (!overlaps) continue;
+
+      const score = (r.width * r.height) || r.height;
+      bad.set(el, Math.max(bad.get(el)||0, score));
+    }
+
+    // Pick the largest
+    let best = null, bestScore = 0;
+    for (const [el,score] of bad.entries()){
+      if (score > bestScore){ best = el; bestScore = score; }
+    }
+    return best;
+  }
+
+  function nudgeOverlays(cardA, cardB){
+    const gap = measureGap(cardA, cardB);
+    // keep 12px breathing space
+    const desired = 12;
+    const lift = gap - desired;
+    // Reset previous nudge
+    cardB.style.removeProperty('--ra-gap-nudge');
+    cardB.style.removeProperty('margin-top');
+    if (lift > 2){
+      cardB.style.setProperty('--ra-gap-nudge', `-${lift}px`);
+      // Use margin so the page flow follows (better than translate for this case)
+      cardB.style.setProperty('margin-top', `var(--ra-gap-nudge)`);
+    }
+  }
+
+  // Known ghosts from earlier mobile workarounds — remove if present
   function removeKnownGhosts(){
     ['#raCanvasGhost','#ra-mobile-stage-host','#ra-mobile-stage-frame']
       .forEach(sel => { const el = $(sel); if (el) try{ el.remove(); }catch(_){ } });
   }
 
-  // Sweep every element BETWEEN the two cards (even across nested wrappers)
-  function collapseBetweenCards(cardA, cardB){
-    const root = lca(cardA, cardB);
-    const it = document.createNodeIterator(root, NodeFilter.SHOW_ELEMENT);
-    let n, inside = false;
-    while (n = it.nextNode()){
-      if (n === cardA) { inside = true; continue; }
-      if (n === cardB) break;
-      if (!inside) continue;
-
-      // Only collapse nodes that are not ancestors/descendants of either card
-      if (n.contains(cardA) || cardA.contains(n) || n.contains(cardB) || cardB.contains(n)) continue;
-
-      // If the node actually contributes height, collapse it
-      const h = (n.getBoundingClientRect ? n.getBoundingClientRect().height : 0);
-      if (h > 8) collapse(n);
-    }
-  }
-
-  // If a small layout shell still holds height, nudge Overlays up by exact gap
-  function nudgeIfGap(cardA, cardB){
-    const a = cardA.getBoundingClientRect();
-    const b = cardB.getBoundingClientRect();
-    const gap = Math.round(b.top - a.bottom);   // px between the two cards in viewport
-
-    // Desired breathing space between the two cards
-    const desired = 12;
-
-    // Reset previous nudge before remeasuring
-    cardB.style.removeProperty('--ra-nudge');
-    cardB.style.removeProperty('transform');
-
-    if (gap > desired + 2){
-      const lift = (gap - desired); // how much to pull up
-      cardB.style.setProperty('--ra-nudge', `-${lift}px`);
-      cardB.style.setProperty('transform', `translateY(var(--ra-nudge))`);
-    }
-  }
-
-  function normalizeCanvasCardOnMobile(){
-    // If a “fixed center” canvas card leaked onto mobile, restore normal flow
-    const cav = document.getElementById('c');
-    if (!cav) return;
-    const card = cav.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || cav.parentElement;
-    if (!card) return;
-    const cs = getComputedStyle(card);
-    if (cs.position === 'fixed' || card.style.position === 'fixed'){
-      ['position','left','top','right','bottom','transform','z-index','margin','width']
-        .forEach(k => card.style.removeProperty(k));
-      card.style.position = 'relative';
-    }
-  }
-
-  function apply(){
-    if (!matchMedia(MQ).matches) return;
+  function fixGap(){
+    if (!window.matchMedia(MQ).matches) return;
 
     removeKnownGhosts();
-    normalizeCanvasCardOnMobile();
 
     const custom   = findCardByHeading(/custom\s*text/);
-    const overlays = findCardByHeading(/overlays/);
+    const overlays = findCardByHeading(/^overlays$/i);
     if (!custom || !overlays) return;
 
-    // 1) Collapse any nodes between the two cards
-    collapseBetweenCards(custom, overlays);
+    // Try up to 3 collapses in case the gap is produced by nested wrappers
+    for (let i=0; i<3; i++){
+      const g = measureGap(custom, overlays);
+      if (g <= 14) { // already tight
+        overlays.style.removeProperty('--ra-gap-nudge');
+        overlays.style.removeProperty('margin-top');
+        return;
+      }
+      const off = findWorstOffender(custom, overlays);
+      if (!off) break;
+      collapse(off);
+    }
 
-    // 2) If a wrapper still holds space, pull Overlays up by the exact measured gap
-    nudgeIfGap(custom, overlays);
+    // Final pass: if we still have a visible gap, nudge Overlays up by exact amount
+    nudgeOverlays(custom, overlays);
   }
 
-  // Keep it applied as the UI mutates
-  const mo = new MutationObserver(apply);
+  // Keep applying as the page mutates
+  const mo = new MutationObserver(() => { requestAnimationFrame(fixGap); });
   mo.observe(document.documentElement, { childList:true, subtree:true });
 
-  window.addEventListener('resize', apply, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(apply, 150), { passive:true });
+  window.addEventListener('resize', fixGap, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(fixGap, 120), { passive:true });
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', apply, { once:true });
+    document.addEventListener('DOMContentLoaded', fixGap, { once:true });
   } else {
-    apply();
+    fixGap();
   }
 
-  // minimal CSS guard for collapsed nodes / nudge
+  // tiny guard style
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
-      [data-ra-gap-cut="1"]{ display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+      [data-ra-gap-killed="1"]{ display:none !important; height:0 !important; margin:0 !important; padding:0 !important; border:0 !important; min-height:0 !important; }
     }
   `;
   document.head.appendChild(style);
