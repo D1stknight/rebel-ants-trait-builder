@@ -1340,150 +1340,91 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ========== RA_mobile_close_gap_v12_scanBand (MOBILE ONLY) ==========
-   Fix: big empty space between “Custom Text” and “Overlays” on phones.
-   1) Moves Overlays right after Custom Text.
-   2) Scans the vertical band between them and collapses any tall, non‑interactive
-      filler elements (no inputs/buttons/links/canvas inside).
-   Desktop remains untouched. Revert by deleting this whole block.
-   ==================================================================== */
+/* ========== RA_mobile_close_gap_v21_pullUp (MOBILE ONLY) ==========
+   Goal: close the empty space BETWEEN “Custom Text” and “Overlays”.
+   How: compute the gap and apply a negative margin to the Overlays card
+   so it visually touches Custom Text. No desktop changes. Revert by
+   deleting this whole block.
+   ================================================================== */
 (() => {
-  const MQ = '(max-width: 920px)';                 // phones & small tablets
-  if (!window.matchMedia(MQ).matches) return;
-  if (window.__RA_MOBILE_GAP_V12__) return;        // run once
-  window.__RA_MOBILE_GAP_V12__ = true;
+  const MQ = '(max-width: 920px)';                         // phones & small tablets
+  if (!window.matchMedia(MQ).matches) return;              // desktop untouched
+  if (window.__RA_MOBILE_GAP_PULLUP__) return;             // only once per load
+  window.__RA_MOBILE_GAP_PULLUP__ = true;
 
-  // ---------- helpers ----------
-  const qAll = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  // --- tiny helpers ---
   const norm = s => (s || '').trim().toLowerCase();
-  const textOf = el => norm(el?.textContent || '');
+  const qAll = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const hasInteractive = (el) =>
-    !!el.querySelector('input,select,textarea,button,a[href],[role="button"],[role="slider"],canvas');
-
-  const closestCard = (el) => {
+  function closestCard(el) {
     if (!el) return null;
     let p = el;
     for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
-      const cs = p instanceof HTMLElement ? getComputedStyle(p) : null;
-      if (!cs) break;
-      const controls = p.querySelectorAll('input,button,select,textarea,canvas,[role="slider"],[role="button"]');
-      if (cs.display !== 'inline' && controls.length >= 1) return p;
+      if (!(p instanceof HTMLElement)) break;
+      const hasControls = p.querySelector('input,button,select,textarea,canvas,[role="slider"]');
+      const cs = getComputedStyle(p);
+      if (cs.display !== 'inline' && hasControls) return p;
     }
     return el;
-  };
+  }
 
-  const findHeadingLike = (labels) => {
-    const wants = labels.map(norm);
-    const nodes = qAll('h1,h2,h3,h4,h5,h6,legend,[role="heading"],section,div');
-    for (const el of nodes) {
-      const t = textOf(el);
-      if (!t) continue;
-      if (wants.some(w => t.includes(w))) return el;
-    }
-    return null;
-  };
-
-  const findCustomCard = () => {
-    const addBtn = qAll('button').find(b => /add\s*text/i.test(b.textContent));
+  function findCustomCard() {
+    // anchor by the "Add Text" button or “Custom Text” heading
+    const addBtn = qAll('button').find(b => /add\s*text/i.test(b.textContent || ''));
     if (addBtn) return closestCard(addBtn);
-    const h = findHeadingLike(['custom text']);
-    return closestCard(h);
-  };
+    const maybe = qAll('h1,h2,h3,h4,h5,h6,[role="heading"]').find(h => /custom\s*text/i.test(norm(h.textContent)));
+    return closestCard(maybe);
+  }
 
-  const findOverlaysCard = () => {
-    let h = findHeadingLike(['overlays', 'published overlays', 'embedded permanents']);
-    if (h) return closestCard(h);
+  function findOverlaysCard() {
+    // anchor by "Overlays" heading or the "Choose Files" control
+    const head = qAll('h1,h2,h3,h4,h5,h6,[role="heading"]').find(h => /overlays/i.test(norm(h.textContent)));
+    if (head) return closestCard(head);
     const chooser = qAll('button,input[type="file"]').find(el =>
       /choose\s*files?/i.test(el.textContent || el.value || '')
     );
     return closestCard(chooser);
-  };
-
-  const rectPage = (el) => {
-    const r = el.getBoundingClientRect();
-    return { t: r.top + window.scrollY, b: r.bottom + window.scrollY, h: r.height };
-  };
-
-  // Move Overlays after Custom Text and tighten margins
-  function ensureOrderAndTighten(custom, overlays) {
-    if (!custom || !overlays) return;
-    try {
-      if (overlays.previousElementSibling !== custom) {
-        custom.after(overlays); // detach & insert right after Custom Text
-      }
-      custom.style.marginBottom = '12px';
-      overlays.style.marginTop  = '12px';
-    } catch {}
   }
 
-  // Scan the vertical band between the two cards and collapse any large, non-interactive filler
-  function collapseBand(custom, overlays) {
-    if (!custom || !overlays) return;
-    const rc = rectPage(custom);
-    const ro = rectPage(overlays);
-    const band = ro.t - rc.b;
-    if (band <= 20) return; // already tight
+  function measureTop(el)  { const r = el.getBoundingClientRect(); return r.top + window.scrollY; }
+  function measureBot(el)  { const r = el.getBoundingClientRect(); return r.bottom + window.scrollY; }
 
-    const seen = new Set();
-    const sampleXs = [window.innerWidth * 0.25, window.innerWidth * 0.5, window.innerWidth * 0.75];
-    for (let y = rc.b + 10; y < ro.t - 10; y += 32) {
-      for (const x of sampleXs) {
-        const els = document.elementsFromPoint(x, y);
-        els.forEach(el => {
-          if (!(el instanceof HTMLElement)) return;
-          if (custom.contains(el) || overlays.contains(el) || el.contains(custom) || el.contains(overlays)) return;
-          if (seen.has(el)) return;
-          seen.add(el);
-        });
-      }
-    }
-
-    seen.forEach(el => {
-      // Ignore fixed UI (like the little floating menu button)
-      const cs = getComputedStyle(el);
-      if (cs.position === 'fixed' || cs.visibility === 'hidden' || cs.display === 'none') return;
-
-      // Collapse only large, non-interactive blocks
-      const r = el.getBoundingClientRect();
-      if (r.height > 40 && r.width > window.innerWidth * 0.5 && !hasInteractive(el)) {
-        el.setAttribute('data-ra-gap-collapsed', '1');
-        Object.assign(el.style, {
-          display:   'none',
-          height:    '0px',
-          minHeight: '0px',
-          margin:    '0',
-          padding:   '0'
-        });
-      }
-    });
-  }
-
-  function run() {
+  function pullUp() {
     const custom   = findCustomCard();
     const overlays = findOverlaysCard();
-    if (!custom || !overlays) return;
-    ensureOrderAndTighten(custom, overlays);
-    collapseBand(custom, overlays);
+    if (!custom || !overlays || custom === overlays) return;
+
+    // Nice small margins for mobile
+    custom.style.marginBottom   = '12px';
+    overlays.style.marginTop    = '';        // we’ll set it below
+    overlays.style.position     = 'relative'; // safe for negative margin
+    overlays.style.zIndex       = '0';       // keep in normal layer flow
+
+    // put overlays after custom if it isn’t already
+    try { if (overlays.previousElementSibling !== custom) custom.after(overlays); } catch {}
+
+    // compute the actual empty gap
+    const gap = Math.round(measureTop(overlays) - measureBot(custom));
+    // if there’s a big gap, pull Overlays up by that amount (leave 12px breathing room)
+    if (gap > 16) {
+      overlays.style.marginTop = `${-(gap - 12)}px`;
+    } else {
+      overlays.style.marginTop = '12px';
+    }
   }
 
-  // initial + keep it sticky on updates/orientation
-  const kick = () => requestAnimationFrame(run);
+  const kick = () => requestAnimationFrame(pullUp);
+  // initial + keep it updated
   kick();
-  new MutationObserver(kick).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('resize', kick);
+  new MutationObserver(kick).observe(document.body, { childList: true, subtree: true });
 
-  // safety CSS for any collapsed filler
+  // tiny CSS guard (mobile only)
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
-      [data-ra-gap-collapsed="1"] {
-        display: none !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-      }
+      /* just ensure the two cards sit close on phones */
+      .ra-mobile-tight { margin-top: 12px !important; margin-bottom: 12px !important; }
     }
   `;
   document.head.appendChild(style);
