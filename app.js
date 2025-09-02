@@ -1340,13 +1340,7 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ==================== RA_MOBILE_KILL_GAP_V6 (MOBILE ONLY) ====================
-   Purpose: Eliminate the stubborn empty gap between "Custom Text" and "Overlays".
-   - Collapses known spacer/ghost nodes.
-   - Scans the DOM between the two cards and hides any tall, empty blocks.
-   - As a fallback, tightens margins and (if safe) reorders Overlays after Custom Text.
-   - Runs continuously on mutations/resize. Desktop unaffected.
-============================================================================= */
+/* ================= RA_MOBILE_GLUE_V1 — close Custom Text ↔ Overlays gap (mobile only) ================ */
 (() => {
   const MQ = '(max-width: 920px)';
   if (!window.matchMedia(MQ).matches) return;
@@ -1354,83 +1348,101 @@
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
   const  $ = (s, r=document) => r.querySelector(s);
 
-  function findCardByTitle(re){
-    const h = $$('h1,h2,h3').find(el => re.test((el.textContent||'').trim().toLowerCase()));
+  function byTitle(rx){
+    const h = $$('h1,h2,h3').find(n => rx.test((n.textContent||'').trim().toLowerCase()));
     if (!h) return null;
     return h.closest('.card, .panel, section, .box, .container, .content, form, div') || h.parentElement;
   }
+  function rect(el){ try { return el.getBoundingClientRect(); } catch(_){ return {top:0,bottom:0,height:0}; } }
 
   function kill(el){
-    if (!el || el.dataset.raKilledGap === '1') return;
+    if (!el || el.dataset.raGapKilled === '1') return;
     el.style.setProperty('display','none','important');
-    el.style.setProperty('height','0px','important');
-    el.style.setProperty('min-height','0px','important');
+    el.style.setProperty('height','0','important');
+    el.style.setProperty('min-height','0','important');
     el.style.setProperty('margin','0','important');
     el.style.setProperty('padding','0','important');
-    el.setAttribute('data-ra-killed-gap','1');
+    el.dataset.raGapKilled = '1';
   }
 
-  // Heuristic: “spacer” = tall, almost no text, no inputs/canvas/images/tiles
-  function isSpacer(el){
+  function looksSpacer(el){
     if (!el) return false;
-    const r = el.getBoundingClientRect();
-    if (r.height < 12) return false;
+    const r = rect(el);
+    if (r.height < 16) return false;
     if (el.querySelector('input,button,select,textarea,canvas,video,img,.tile,[role="button"],.konvajs-content')) return false;
-    const txtLen = (el.textContent || '').replace(/\s+/g,'').length;
-    if (txtLen > 8) return false;
-    return true; // tall & empty enough → collapse it
+    const t = (el.textContent||'').replace(/\s+/g,'');
+    if (t.length > 8) return false;
+    return true;
   }
 
-  function squash(){
+  function scanAndCollapse(custom, overlays){
+    // Walk forward in the DOM from Custom → Overlays; collapse tall/empty nodes.
+    let node = custom;
+    let guard = 0;
+    while (node && node !== overlays && guard++ < 60){
+      let nxt = node.nextElementSibling;
+      if (!nxt) { node = node.parentElement; continue; }
+      if (nxt === overlays) break;
+      if (looksSpacer(nxt)) kill(nxt);
+      node = nxt;
+    }
+
+    // Also sample through the vertical gap with elementsFromPoint (catches deep wrappers).
+    const midX = Math.round(window.innerWidth / 2);
+    const y0 = Math.round(rect(custom).bottom + 2);
+    const y1 = Math.round(rect(overlays).top - 2);
+    for (let y = y0; y <= y1; y += 20){
+      const stack = document.elementsFromPoint(midX, y) || [];
+      for (const el of stack){
+        if (!el || el === document.body || el === document.documentElement) continue;
+        if (custom.contains(el) || overlays.contains(el)) continue;
+        if (looksSpacer(el)) kill(el);
+      }
+    }
+  }
+
+  function glue(){
     if (!window.matchMedia(MQ).matches) return;
 
-    // 1) Remove known ghost/floaters that sometimes sit in the gap
-    ['#raCanvasGhost','#ra-mobile-stage-host','#ra-mobile-stage-frame',
-     '#ra-mobile-checker','.ra-canvas-floater','[data-ra-role="stage-floater"]'
+    // Hide any known floaters that sometimes create phantom space
+    ['#raCanvasGhost','#ra-mobile-stage-host','#ra-mobile-stage-frame','#ra-mobile-checker',
+     '.ra-canvas-floater','[data-ra-role="stage-floater"]'
     ].forEach(sel => $$(sel).forEach(kill));
 
-    // 2) Find the two cards we care about
-    const custom   = findCardByTitle(/custom\s*text/i);
-    const overlays = findCardByTitle(/^overlays/i);
+    const custom   = byTitle(/custom\s*text/i);
+    const overlays = byTitle(/^overlays/i);
     if (!custom || !overlays) return;
 
-    // 3) Walk forward from Custom → Overlays and collapse any spacer siblings
-    let p = custom;
-    let hops = 0, MAX_HOPS = 40;
-    while (p && p !== overlays && hops < MAX_HOPS){
-      let n = p.nextElementSibling;
-      if (!n){
-        // climb a level if needed (handles nested layouts)
-        p = p.parentElement;
-        hops++;
-        continue;
-      }
-      if (n === overlays) break;
-      if (isSpacer(n)) kill(n);
-      p = n; hops++;
-    }
+    // Tighten their own margins first
+    custom.style.setProperty('margin-bottom','12px','important');
+    overlays.style.setProperty('margin-top','12px','important');
 
-    // 4) If there’s still a visible gap, tighten margins and, if safe, reorder
-    const r1 = custom.getBoundingClientRect();
-    const r2 = overlays.getBoundingClientRect();
-    if (r2.top - r1.bottom > 24){
-      custom.style.setProperty('margin-bottom','12px','important');
-      overlays.style.setProperty('margin-top','12px','important');
-      if (custom.parentElement && custom.parentElement === overlays.parentElement){
-        try { custom.parentElement.insertBefore(overlays, custom.nextElementSibling); } catch(_){}
-      }
+    // Try to collapse true spacer nodes
+    scanAndCollapse(custom, overlays);
+
+    // Measure remaining gap and mathematically remove it
+    const r1 = rect(custom);
+    const r2 = rect(overlays);
+    const desired = 12;                                // desired spacing in px
+    const gap = Math.round(r2.top - r1.bottom);       // positive when there is a hole
+    if (gap > desired){
+      // Pull Overlays upward by (gap - desired) using a negative margin
+      const pull = desired - gap;                     // negative value
+      overlays.style.setProperty('margin-top', pull + 'px', 'important');
+    } else {
+      // If there is no gap (or overlap), normalize to desired spacing
+      overlays.style.setProperty('margin-top', desired + 'px', 'important');
     }
   }
 
-  // Run now and whenever the app mutates/resizes
-  const mo = new MutationObserver(() => squash());
+  const mo = new MutationObserver(glue);
   mo.observe(document.documentElement, { childList:true, subtree:true });
-  window.addEventListener('resize', squash, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(squash,150), { passive:true });
+  window.addEventListener('resize', glue, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(glue, 150), { passive:true });
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', squash, { once:true });
+    document.addEventListener('DOMContentLoaded', glue, { once:false });
   } else {
-    squash();
+    glue();
   }
 })();
