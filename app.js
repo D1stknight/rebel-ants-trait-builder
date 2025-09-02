@@ -1057,3 +1057,128 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
+/* =========================================================
+   RA_MOBILE_PHONE_V13 — phones only (portrait + landscape)
+   - Canvas stays in normal page flow at the top
+   - Centered & scaled nicely
+   - No rogue checkerboard line
+   - No big empty gap
+   - Desktop and tablets are NOT affected
+   ========================================================= */
+(() => {
+  try {
+    const FLAG = 'data-ra-mobile-v13';
+    if (document.documentElement.hasAttribute(FLAG)) return;
+    document.documentElement.setAttribute(FLAG, '');
+
+    // Phone detection (does NOT trigger on desktop or tablets)
+    const isPhone = () => {
+      const ua = (navigator.userAgent || navigator.vendor || window.opera || '').toLowerCase();
+      const uaPhone = /(iphone|ipod|android.+mobile|windows phone)/i.test(ua);
+      const narrowTouch = window.matchMedia('(pointer: coarse)').matches &&
+                          Math.min(screen.width || 0, screen.height || 0) <= 500;
+      return uaPhone || narrowTouch;
+    };
+    const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
+
+    // Largest canvas = the drawing surface
+    const getMainCanvas = () => {
+      const list = Array.from(document.querySelectorAll('canvas'));
+      if (!list.length) return null;
+      return list.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
+    };
+
+    // Save / restore original inline styles (so desktop remains pristine)
+    const saveInline = (el, key) => {
+      if (!el || el.dataset[key]) return;
+      el.dataset[key] = JSON.stringify({
+        position: el.style.position, inset: el.style.inset, left: el.style.left, top: el.style.top,
+        width: el.style.width, height: el.style.height, margin: el.style.margin,
+        zIndex: el.style.zIndex, display: el.style.display, backgroundImage: el.style.backgroundImage
+      });
+    };
+    const restoreInline = (el, key) => {
+      if (!el || !el.dataset[key]) return;
+      const s = JSON.parse(el.dataset[key] || '{}');
+      el.style.position = s.position || '';
+      el.style.inset    = s.inset || '';
+      el.style.left     = s.left || '';
+      el.style.top      = s.top || '';
+      el.style.width    = s.width || '';
+      el.style.height   = s.height || '';
+      el.style.margin   = s.margin || '';
+      el.style.zIndex   = s.zIndex || '';
+      el.style.display  = s.display || '';
+      el.style.backgroundImage = s.backgroundImage || '';
+    };
+
+    const killRogueCheckerSiblings = (host) => {
+      if (!host || !host.parentElement) return;
+      const sibs = Array.from(host.parentElement.children);
+      sibs.forEach(el => {
+        if (el === host) return;
+        const cs = getComputedStyle(el);
+        const isChecker = /gradient|check|grid|checker/i.test(cs.backgroundImage || '');
+        if (isChecker && el.clientHeight <= 12) {
+          // Hide tiny decorative checker strips that caused the thin line
+          el.dataset.raHiddenBefore = el.style.display || '';
+          el.style.display = 'none';
+        }
+      });
+    };
+
+    const applyPhoneSizing = () => {
+      const cv = getMainCanvas();
+      if (!cv) return;
+      const host = cv.parentElement || cv;
+
+      // Guard: if not a phone, restore and leave
+      if (!isPhone()) {
+        restoreInline(host, 'raOrigHostV13');
+        restoreInline(cv,   'raOrigCanvasV13');
+        return;
+      }
+
+      // Save originals once
+      saveInline(host, 'raOrigHostV13');
+      saveInline(cv,   'raOrigCanvasV13');
+
+      // Compute a comfortable square size that fits the viewport
+      const vw = Math.min(window.innerWidth,  document.documentElement.clientWidth || window.innerWidth);
+      const vh = Math.min(window.innerHeight, document.documentElement.clientHeight || window.innerHeight);
+
+      // Portrait: keep it smaller vertically so controls aren't pushed away.
+      // Landscape: allow a bit more height usage.
+      const byWidth  = vw * 0.92;
+      const byHeight = (isPortrait() ? vh * 0.54 : vh * 0.78);
+      const side = Math.round(Math.max(240, Math.min(byWidth, byHeight)));
+
+      // Keep canvas in normal flow, centered, fixed square to avoid gaps/strips
+      host.style.position = 'static';
+      host.style.zIndex   = 'auto';
+      host.style.display  = 'block';
+      host.style.width    = side + 'px';
+      host.style.height   = side + 'px';
+      host.style.margin   = '12px auto 18px';
+
+      // Ensure canvas fills the host neatly
+      cv.style.display = 'block';
+      cv.style.width   = '100%';
+      cv.style.height  = '100%';
+
+      // Some themes render a checkerboard via an element/sibling; make sure we don't
+      // get a tiny leftover “strip” under the canvas.
+      // If host itself paints a checkerboard via background, keep it (behind canvas).
+      killRogueCheckerSiblings(host);
+    };
+
+    const start = () => { applyPhoneSizing(); setTimeout(applyPhoneSizing, 150); };
+    if (document.readyState === 'complete' || document.readyState === 'interactive') start();
+    else window.addEventListener('DOMContentLoaded', start, { once: true });
+
+    window.addEventListener('resize', applyPhoneSizing, { passive: true });
+    window.addEventListener('orientationchange', applyPhoneSizing, { passive: true });
+  } catch (e) {
+    console.warn('RA_MOBILE_PHONE_V13 error:', e);
+  }
+})();
