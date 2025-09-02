@@ -1057,37 +1057,47 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* ==== RA_MOBILE_FIT_v12P — Mobile-only canvas fit & lock (does NOT touch desktop) ==== */
+/* ==== RA_MOBILE_DOCK_v13 — Mobile-only: dock canvas into page flow, scale & lock base ==== */
 (() => {
-  const ID = 'ra-mobile-fit-v12p';
-  if (document.getElementById(ID)) return; // don’t double-apply
+  const STYLE_ID = 'ra-mobile-dock-v13';
+  const DOCK_ID  = 'raMobileDock_v13';
 
-  // --------- CSS (phones only) ----------
+  // Don’t double-apply if already present
+  if (document.getElementById(STYLE_ID)) return;
+
+  // ---------- CSS: phones only ----------
   const style = document.createElement('style');
-  style.id = ID;
+  style.id = STYLE_ID;
   style.textContent = `
-  @media (max-width: 768px) {
-    /* The canvas "box" we tag below */
-    [data-ra-mbox]{
+  @media (max-width: 768px){
+    /* The dock sits IN THE FLOW above "Rebel Ant" */
+    #${DOCK_ID}{
       position: relative !important;
-      width: min(94vw, 640px) !important;   /* nicely scaled for phones */
-      aspect-ratio: 1 / 1 !important;       /* square canvas */
-      margin: 12px auto 18px !important;    /* centered */
+      width: min(92vw, 92vh, 640px) !important; /* fits portrait & landscape */
+      aspect-ratio: 1 / 1 !important;          /* square canvas */
+      margin: 12px auto 18px !important;
       border-radius: 16px !important;
       overflow: hidden !important;
       box-shadow: 0 0 0 1px rgba(255,255,255,.08),
                   inset 0 0 0 1px rgba(0,0,0,.5) !important;
 
-      /* checkerboard behind the canvas (no more stray strip) */
+      /* Checkerboard BACKGROUND lives here (no stray strip) */
       background:
         conic-gradient(#0f1319 0 25%, #141922 0 50%) 0 0/16px 16px repeat !important;
     }
 
-    /* Make the actual drawing area fill the box without changing desktop logic */
-    [data-ra-mbox] canvas,
-    [data-ra-mbox] > .konvajs-content,
-    [data-ra-mbox] > .canvas-container,
-    [data-ra-mbox] > *:not(.ra-rogue-check){
+    /* Fill the dock with the stage/canvas */
+    #${DOCK_ID} > .raStageFill{
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* Make whatever container Konva is using fill the dock */
+    #${DOCK_ID} .konvajs-content,
+    #${DOCK_ID} .canvas-container,
+    #${DOCK_ID} canvas{
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
@@ -1096,65 +1106,125 @@
       max-height: 100% !important;
     }
 
-    /* Kill any old spacer/gap that some phones kept around */
+    /* Remove the old spacer/gap some builds created */
     #ra-canvas-dock-space, .ra-canvas-gap, [data-ra-gap]{
-      display: none !important;
-      height: 0 !important;
-      min-height: 0 !important;
+      display: none !important; height: 0 !important; min-height: 0 !important; margin: 0 !important;
     }
 
-    /* Hide any stray checkerboard element not inside our box */
-    .checkerboard, [class*="checker"][class*="board"], [data-checkerboard]{
+    /* Hide any stray checkerboard elements not in our dock */
+    .checkerboard, [data-checkerboard], .bg-grid, .grid-bg{
       display: none !important;
     }
   }`;
   document.head.appendChild(style);
 
-  // --------- JS (phones only) ----------
+  // ---------- Helpers ----------
   const isPhone = () => window.matchMedia('(max-width: 768px)').matches;
 
-  // Pick the main drawing canvas (largest one on the page).
-  function getLargestCanvas() {
-    const list = Array.from(document.querySelectorAll('canvas'));
-    if (!list.length) return null;
-    return list.reduce((a, c) =>
-      (c.width * c.height > (a?.width || 0) * (a?.height || 0) ? c : a), null);
+  function getLargestCanvas(){
+    const canvases = Array.from(document.querySelectorAll('canvas'));
+    if (!canvases.length) return null;
+    return canvases.reduce((a,c) => (c.width*c.height > (a?.width||0)*(a?.height||0) ? c : a), null);
   }
 
-  function applyMobileFit() {
-    if (!isPhone()) return;
+  function findRebelAntCard(){
+    // Try headings that read "Rebel Ant"
+    const heads = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,legend,.card-title,.section-title'));
+    const hit = heads.find(el => /rebel\s*ant/i.test(el.textContent || ''));
+    if (hit) return hit.closest('section, .card, .panel, .box, .container, div');
+    // Fallback: look for the "Load" button area (Upload/URL card)
+    const loadBtn = Array.from(document.querySelectorAll('button, input[type="button"], a')).find(el => /load/i.test((el.textContent || el.value || '')));
+    if (loadBtn) return loadBtn.closest('section, .card, .panel, .box, .container, div');
+    // Last resort: main app container
+    return document.querySelector('main') || document.getElementById('__next') || document.body;
+  }
+
+  // ---------- Dock / Restore ----------
+  function dockIntoFlow(){
+    if (!isPhone()) { restore(); return; }
 
     const mainCanvas = getLargestCanvas();
     if (!mainCanvas) return;
 
-    // Use the nearest sensible container as "the canvas box"
-    let box = mainCanvas.closest('.konvajs-content, .canvas-container, [data-ra-stage]') || mainCanvas.parentElement;
-    if (!box) return;
+    // Stage container (Konva wraps a DIV around the canvas)
+    const stageBox = mainCanvas.closest('.konvajs-content, .canvas-container, [data-ra-stage]') || mainCanvas.parentElement;
+    if (!stageBox) return;
 
-    // Tag it so our CSS styles it (no DOM moves, stays in the page flow)
-    box.setAttribute('data-ra-mbox', '');
+    // Store original location once (so desktop can restore)
+    if (!stageBox.dataset.raOrigParent) {
+      stageBox.dataset.raOrigParent = '1';
+      stageBox.__raOrigParent = stageBox.parentNode;
+      stageBox.__raOrigNext   = stageBox.nextSibling;
+      stageBox.__raOrigStyle  = stageBox.getAttribute('style') || '';
+    }
 
-    // Prevent whole-canvas zoom/scroll on mobile (keeps overlays movable)
-    const kill = e => e.preventDefault();
-    box.addEventListener('wheel',          kill, { passive: false });
-    box.addEventListener('gesturestart',   kill, { passive: false });
-    box.addEventListener('gesturechange',  kill, { passive: false });
-    box.addEventListener('gestureend',     kill, { passive: false });
+    // Create the dock above the "Rebel Ant" card
+    let dock = document.getElementById(DOCK_ID);
+    if (!dock){
+      dock = document.createElement('div');
+      dock.id = DOCK_ID;
+      const card = findRebelAntCard();
+      card?.parentNode?.insertBefore(dock, card) || document.body.prepend(dock);
+    }
 
-    // If Konva stage exists, make sure the stage itself isn’t draggable (base image locked)
+    // Inner filler for absolute children, while dock itself remains in flow
+    let fill = dock.querySelector('.raStageFill');
+    if (!fill){
+      fill = document.createElement('div');
+      fill.className = 'raStageFill';
+      dock.appendChild(fill);
+    }
+
+    // Move the stageBox into the dock
+    if (stageBox.parentNode !== fill) {
+      fill.appendChild(stageBox);
+    }
+
+    // Ensure it fills the dock (mobile only)
+    stageBox.style.position = 'absolute';
+    stageBox.style.inset    = '0';
+    stageBox.style.width    = '100%';
+    stageBox.style.height   = '100%';
+
+    // Lock base image from panning/zooming on mobile
     try {
       if (window.stage && typeof window.stage.draggable === 'function') {
         window.stage.draggable(false);
       }
-    } catch (_) {}
+    } catch(_) {}
+    const prevent = e => e.preventDefault();
+    dock.addEventListener('wheel', prevent, {passive:false});
+    dock.addEventListener('gesturestart', prevent, {passive:false});
+    dock.addEventListener('gesturechange', prevent, {passive:false});
+    dock.addEventListener('gestureend', prevent, {passive:false});
   }
 
-  const ready = () => applyMobileFit();
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', ready);
-  } else {
-    ready();
+  function restore(){
+    // Put the stage back where it was (for desktop)
+    const dock = document.getElementById(DOCK_ID);
+    const stageBox = dock?.querySelector('.raStageFill > *');
+    if (stageBox && stageBox.__raOrigParent){
+      try {
+        if (stageBox.__raOrigNext && stageBox.__raOrigNext.parentNode === stageBox.__raOrigParent) {
+          stageBox.__raOrigParent.insertBefore(stageBox, stageBox.__raOrigNext);
+        } else {
+          stageBox.__raOrigParent.appendChild(stageBox);
+        }
+      } catch(_) {
+        (document.querySelector('main') || document.body).appendChild(stageBox);
+      }
+      stageBox.setAttribute('style', stageBox.__raOrigStyle || '');
+    }
+    dock?.remove();
   }
-  window.addEventListener('resize', ready);
-  window.addEventListener('orientationchange', ready);
+
+  // ---------- Run ----------
+  const go = () => dockIntoFlow();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', go);
+  } else {
+    go();
+  }
+  window.addEventListener('resize', go);
+  window.addEventListener('orientationchange', go);
 })();
