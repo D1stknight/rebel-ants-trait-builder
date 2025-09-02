@@ -1340,128 +1340,148 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ============ RA_mobile_compact_gap_v6_scan — MOBILE ONLY ============
-   Goal: On phones, remove the large empty strip by collapsing ANY element
-         that sits between the “Custom Text” card and the “Overlays” card.
-         Works even if those cards are in different parents.
-   Safe: Desktop untouched. Easy to remove (delete this block).
-   ==================================================================== */
+/* ============ RA_mobile_compact_gap_v7_pickLargest — MOBILE ONLY ============
+   Fix: Remove the big empty band between “Custom Text” and “Overlays”.
+   How: Find those two cards, locate the LARGEST element vertically between
+        them, and collapse that element (display:none; height:0; etc.).
+   Notes: Desktop untouched. Easy to revert (delete this whole block).
+   ========================================================================== */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V6_SCAN__) return;
-  window.__RA_MOBILE_GAP_V6_SCAN__ = true;
+  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V7__) return;
+  window.__RA_MOBILE_GAP_V7__ = true;
 
-  // ---------- tiny utils ----------
+  // ---------- helpers ----------
   const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
-  const txt  = el => (el && (el.textContent || '')).trim().toLowerCase();
+  const norm = s => (s || '').trim().toLowerCase();
+  const textOf = el => norm(el?.textContent || '');
 
-  const findHeading = (needles) => {
-    const wants = needles.map(s => s.toLowerCase());
-    // look across common heading-ish tags & labeled containers
-    const nodes = $all('h1,h2,h3,h4,h5,h6,legend,section,div,[role="heading"]');
+  const findHeadingLike = (labels) => {
+    const wants = labels.map(norm);
+    const nodes = $all('h1,h2,h3,h4,h5,h6,legend,[role="heading"],section,div');
     for (const el of nodes) {
-      const t = txt(el);
+      const t = textOf(el);
       if (!t) continue;
       if (wants.some(w => t.includes(w))) return el;
     }
     return null;
   };
 
-  const cardFrom = (el) => {
-    if (!el) return null;
-    // climb to a wrapper that behaves like a “card” (has multiple controls)
-    let p = el;
-    for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
-      const hasControls = p && p.querySelectorAll(
-        'input,button,select,textarea,canvas,[role="slider"],[role="button"]'
-      ).length >= 2;
-      if (hasControls) return p;
-    }
-    return el;
-  };
-
   const findCustomCard = () => {
     const addBtn = $all('button').find(b => /add\s*text/i.test(b.textContent));
-    if (addBtn) return cardFrom(addBtn);
-    const h = findHeading(['custom text']);
-    return cardFrom(h);
+    if (addBtn) return closestCard(addBtn);
+    const h = findHeadingLike(['custom text']);
+    return closestCard(h);
   };
 
   const findOverlaysCard = () => {
-    const h = findHeading(['overlays']) || findHeading(['embedded permanents']);
-    let card = cardFrom(h);
-    if (!card) {
-      const chooser = $all('button,input[type="file"]').find(el =>
-        /choose\s*files?/i.test(el.textContent || el.value || '')
-      );
-      if (chooser) card = cardFrom(chooser);
-    }
-    return card;
+    const h = findHeadingLike(['overlays', 'embedded permanents']);
+    if (h) return closestCard(h);
+    const chooser = $all('button,input[type="file"]').find(el =>
+      /choose\s*files?/i.test(el.textContent || el.value || '')
+    );
+    return closestCard(chooser);
   };
 
-  // order helpers
-  const isBefore = (a, b) =>
-    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-  const isAfter = (a, b) =>
-    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_PRECEDING);
-
-  const collapse = (el) => {
-    if (!el || el.hasAttribute('data-ra-gap-collapsed')) return;
-    el.setAttribute('data-ra-gap-collapsed', '1');
-    Object.assign(el.style, {
-      display: 'none',
-      height:  '0px',
-      margin:  '0',
-      padding: '0'
-    });
-  };
-
-  function squashGap() {
-    const customCard   = findCustomCard();
-    const overlaysCard = findOverlaysCard();
-    if (!customCard || !overlaysCard) return;
-
-    // Put Overlays right after Custom Text in the same parent, if possible
-    const parent = customCard.parentNode;
-    if (overlaysCard.parentNode !== parent && parent) {
-      try { parent.insertBefore(overlaysCard, customCard.nextSibling); } catch {}
-    } else if (customCard.nextElementSibling !== overlaysCard) {
-      try { parent.insertBefore(overlaysCard, customCard.nextElementSibling); } catch {}
+  function closestCard(el) {
+    if (!el) return null;
+    // climb to a “card-ish” container (has multiple controls)
+    let p = el;
+    for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
+      const controls = p.querySelectorAll('input,button,select,textarea,canvas,[role="slider"],[role="button"]');
+      if (controls.length >= 2) return p;
     }
-
-    // Scan the whole document and collapse anything between the two cards
-    const all = $all('body *');
-    for (const el of all) {
-      if (!(el instanceof HTMLElement)) continue;
-      if (customCard.contains(el) || overlaysCard.contains(el)) continue;
-      if (!isBefore(customCard, el) || !isBefore(el, overlaysCard)) continue; // el must be between
-      const cs = getComputedStyle(el);
-      if (cs.position === 'fixed' || cs.position === 'sticky') continue; // don’t kill floating UI
-      const rect = el.getBoundingClientRect();
-      if (rect.height < 48 || rect.width < 48) continue; // small elements are fine
-      // Skip obvious content containers (safety)
-      if (el.querySelector('input,button,select,textarea,canvas,[role="slider"],[role="button"],a')) continue;
-      collapse(el);
-    }
-
-    // Tidy spacing
-    customCard.style.marginBottom = '12px';
-    overlaysCard.style.marginTop  = '12px';
+    return el;
   }
 
-  // Run now & keep it sticky across re-renders
-  const kick = () => requestAnimationFrame(squashGap);
-  kick();
-  const mo = new MutationObserver(kick);
-  mo.observe(document.body, { childList: true, subtree: true });
+  function lca(a, b) {
+    if (!a || !b) return document.body;
+    const setA = new Set();
+    let x = a;
+    while (x) { setA.add(x); x = x.parentElement; }
+    x = b;
+    while (x) { if (setA.has(x)) return x; x = x.parentElement; }
+    return document.body;
+  }
 
-  // safety CSS
+  function collapse(el) {
+    if (!el || el.hasAttribute('data-ra-gap-collapsed')) return;
+    el.setAttribute('data-ra-gap-collapsed', '1');
+    const s = el.style;
+    s.display   = 'none';
+    s.height    = '0px';
+    s.minHeight = '0px';
+    s.margin    = '0';
+    s.padding   = '0';
+  }
+
+  function fixGap() {
+    const custom = findCustomCard();
+    const overlays = findOverlaysCard();
+    if (!custom || !overlays) return;
+
+    // put them close if they share a parent
+    if (custom.parentNode && overlays.parentNode === custom.parentNode) {
+      const parent = custom.parentNode;
+      if (custom.nextElementSibling !== overlays) {
+        try { parent.insertBefore(overlays, custom.nextElementSibling); } catch {}
+      }
+    }
+
+    const rectC = custom.getBoundingClientRect();
+    const rectO = overlays.getBoundingClientRect();
+    // if overlays already right under custom (no visible gap), bail
+    if (rectO.top - rectC.bottom < 40) return;
+
+    const root = lca(custom, overlays);
+
+    // Find the single biggest element whose vertical center lies between the cards
+    let biggest = null;
+    let biggestH = 0;
+    const all = root.querySelectorAll('*');
+    for (const el of all) {
+      if (!(el instanceof HTMLElement)) continue;
+      if (el.contains(custom) || el.contains(overlays) || custom.contains(el) || overlays.contains(el)) continue;
+
+      const r = el.getBoundingClientRect();
+      if (!r || r.height < 40) continue; // tiny items don’t matter
+      const centerY = (r.top + r.bottom) / 2;
+      if (centerY <= rectC.bottom || centerY >= rectO.top) continue; // not between
+
+      // Ignore browser-fixed UI
+      const pos = getComputedStyle(el).position;
+      if (pos === 'fixed') continue;
+
+      // Track the biggest visible block
+      if (r.height > biggestH) {
+        biggestH = r.height;
+        biggest  = el;
+      }
+    }
+
+    if (biggest) {
+      collapse(biggest);
+      // tighten spacing where they meet
+      custom.style.marginBottom  = '12px';
+      overlays.style.marginTop   = '12px';
+    }
+  }
+
+  // Run now and keep it sticky across client-side re-renders
+  const run = () => requestAnimationFrame(fixGap);
+  run();
+  const mo = new MutationObserver(run);
+  mo.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('resize', run);
+  
+  // safety CSS (mobile only)
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
       [data-ra-gap-collapsed="1"] {
         display: none !important;
         height: 0 !important;
+        min-height: 0 !important;
         margin: 0 !important;
         padding: 0 !important;
       }
