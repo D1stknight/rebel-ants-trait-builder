@@ -1341,31 +1341,36 @@
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
 /* =========================================
-   RA_MOBILE_REORDER_PORTAL_V1 — MOBILE ONLY (≤920px)
-   • Moves the Overlays card directly under Custom Text
-   • Removes the fixed-canvas ghost
-   • Collapses any leftover spacer elements between them
-   • Desktop is untouched
+   RA_MOBILE_FORCE_STACK_V2 — MOBILE ONLY (≤920px)
+   • Moves Overlays directly under Custom Text inside a fresh stack
+   • Removes canvas ghosts/hosts
+   • Collapses any leftover siblings that created the “gap”
+   • Desktop untouched
    ========================================= */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (window.__RA_MOB_REORDER_PORTAL_V1__) return;
-  window.__RA_MOB_REORDER_PORTAL_V1__ = true;
+  if (window.__RA_MOBILE_FORCE_STACK_V2__) return;
+  window.__RA_MOBILE_FORCE_STACK_V2__ = true;
 
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
   const  $ = (s, r=document) => r.querySelector(s);
 
-  // Find a section/card by its heading text
-  function cardByHeading(regex){
-    const h = $$('h1,h2,h3,h4').find(n => regex.test((n.textContent||'').trim().toLowerCase()));
+  function headingCard(re){
+    const h = $$('h1,h2,h3,h4').find(n => re.test((n.textContent||'').trim().toLowerCase()));
     return h ? (h.closest('.card, section, article, form, div') || h.parentElement) : null;
   }
 
-  // Remove known spacer ghosts from older patches
-  function killGhosts(){
-    $$('#raCanvasGhost,[data-ra-gap-cut]').forEach(el => {
-      try { el.remove(); } catch(_) {}
-    });
+  function killKnownGhosts(){
+    ['#raCanvasGhost', '#ra-mobile-stage-host', '#ra-mobile-stage-frame']
+      .forEach(sel => { const el = $(sel); if (el) try{ el.remove(); }catch(_){ } });
+  }
+
+  function makeStackAfter(node){
+    const stack = document.createElement('div');
+    stack.id = 'ra-mobile-stack';
+    stack.style.cssText = 'display:block;margin:0;padding:0';
+    node.parentNode.insertBefore(stack, node.nextSibling);
+    return stack;
   }
 
   function collapseBetween(a, b){
@@ -1385,44 +1390,65 @@
   function apply(){
     if (!matchMedia(MQ).matches) return;
 
-    // Make sure any fixed-canvas styling is neutralized on mobile
-    const c = document.getElementById('c');
-    if (c){
-      const card = c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
+    // Neutralize any fixed/center canvas card on mobile
+    const cav = document.getElementById('c');
+    if (cav){
+      const card = cav.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || cav.parentElement;
       if (card && (getComputedStyle(card).position === 'fixed' || card.style.position === 'fixed')){
-        card.style.position = 'relative';
-        ['left','top','right','bottom','width','transform','zIndex','margin']
+        ['position','left','top','right','bottom','width','transform','z-index','margin']
           .forEach(k => card.style.removeProperty(k));
+        card.style.position = 'relative';
       }
     }
-    killGhosts();
+    killKnownGhosts();
 
-    // Find the two sections we care about
-    const customTextCard = cardByHeading(/custom\s*text/);
-    const overlaysCard   = cardByHeading(/overlays/);
-    if (!customTextCard || !overlaysCard) return;
+    const custom   = headingCard(/custom\s*text/);
+    const overlays = headingCard(/overlays/);
+    if (!custom || !overlays) return;
 
-    // Already in order?
-    if (overlaysCard.__raMovedAfter === customTextCard) return;
+    // Build a fresh stack right after Custom Text (only once)
+    let stack = $('#ra-mobile-stack');
+    if (!stack) stack = makeStackAfter(custom);
 
-    // Move Overlays immediately after Custom Text within the same parent column
-    const parent = customTextCard.parentNode || document.body;
-    parent.insertBefore(overlaysCard, customTextCard.nextSibling);
-    overlaysCard.__raMovedAfter = customTextCard;
+    // Move Overlays into the stack (just once)
+    if (!overlays.__raParked){
+      stack.appendChild(overlays);
+      overlays.__raParked = true;
+      overlays.style.marginTop = '12px';
+    }
 
-    // Collapse anything that was between them
-    collapseBetween(customTextCard, overlaysCard);
+    // Anything that used to live between Custom Text and the stack becomes 0‑height
+    collapseBetween(custom, stack);
+
+    // If Overlays’ *old* column is now empty, hide it so it can’t reserve space
+    const oldCol = overlays.parentElement;
+    if (oldCol && oldCol !== stack && oldCol.childElementCount === 0){
+      oldCol.style.setProperty('display','none','important');
+      oldCol.style.setProperty('height','0','important');
+      oldCol.style.setProperty('margin','0','important');
+      oldCol.style.setProperty('padding','0','important');
+    }
   }
 
+  // Keep it applied as the app mutates
   const mo = new MutationObserver(apply);
   mo.observe(document.documentElement, { childList:true, subtree:true });
-
-  window.addEventListener('resize', apply, { passive: true });
-  window.addEventListener('orientationchange', () => setTimeout(apply, 150), { passive: true });
+  window.addEventListener('resize', apply, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(apply, 150), { passive:true });
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', apply, { once: true });
+    document.addEventListener('DOMContentLoaded', apply, { once:true });
   } else {
     apply();
   }
+
+  // Minimal CSS guard (mobile only)
+  const style = document.createElement('style');
+  style.textContent = `
+    @media ${MQ} {
+      #ra-mobile-stack > * { margin-top: 12px; }
+      [data-ra-gap-cut="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+    }
+  `;
+  document.head.appendChild(style);
 })();
