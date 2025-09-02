@@ -1824,3 +1824,243 @@
   }
   new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
 })();
+
+/* ====================== RA_ANIMATE_PREVIEW_VIDEO_V1 =========================
+   Adds a tiny Animate UI (Export card) + 3 motion styles + video export.
+   - No servers/keys. Records the canvas with MediaRecorder.
+   - Works on desktop + mobile (falls back to preview if codec unsupported).
+   - Does not change your layout; runs only when a base image exists.
+   ========================================================================== */
+(function RA_ANIMATE_PREVIEW_VIDEO_V1(){
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // ---- UI -----------------------------------------------------------------
+  function ensureUI(){
+    if (document.getElementById('raAnimRow')) return true;
+    const h3 = Array.from(document.querySelectorAll('h3'))
+      .find(h => /export/i.test((h.textContent||'').trim()));
+    const card = h3 ? h3.parentElement : null;
+    if (!card) return false;
+
+    const row = document.createElement('div');
+    row.id = 'raAnimRow';
+    row.style.cssText = 'margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center';
+
+    row.innerHTML = `
+      <div style="font-weight:600;opacity:.85">Animate (beta)</div>
+      <select id="raAnimStyle" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
+        <option value="ken">Cinematic (Ken Burns)</option>
+        <option value="parallax">Parallax</option>
+        <option value="sway">Sway</option>
+      </select>
+      <select id="raAnimDur" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
+        <option value="3">3s</option>
+        <option value="5" selected>5s</option>
+        <option value="8">8s</option>
+      </select>
+      <button id="raAnimPreview" class="btn small">Preview</button>
+      <button id="raAnimMake" class="btn small">Make video</button>
+      <span id="raAnimStatus" style="opacity:.7;font-size:12px;margin-left:6px;"></span>
+    `;
+    card.appendChild(row);
+
+    document.getElementById('raAnimPreview').onclick = () => run({record:false});
+    document.getElementById('raAnimMake').onclick    = () => run({record:true});
+
+    return true;
+  }
+
+  // ---- helpers -------------------------------------------------------------
+  function baseAndOverlays(c){
+    const objs = c.getObjects() || [];
+    const bg   = objs.find(o => o._isBgRect || o._isBg || o._isBackground);
+    const base = objs.find(o => o._isBase);
+    const overlays = objs.filter(o => o._kind === 'overlay');
+    const others   = objs.filter(o => o !== bg && o !== base && o._kind !== 'overlay');
+    return { bg, base, overlays, others, all: objs };
+  }
+
+  function snapState(objs){
+    return objs.map(o => ({
+      o,
+      left: o.left || 0,
+      top:  o.top  || 0,
+      sx:   o.scaleX || 1,
+      sy:   o.scaleY || 1,
+      ang:  o.angle  || 0
+    }));
+  }
+  function restoreState(state, c){
+    state.forEach(s=>{
+      try{
+        s.o.left   = s.left;
+        s.o.top    = s.top;
+        s.o.scaleX = s.sx;
+        s.o.scaleY = s.sy;
+        s.o.angle  = s.ang;
+        s.o.setCoords && s.o.setCoords();
+      }catch(_){}
+    });
+    try{ c.requestRenderAll(); }catch(_){}
+  }
+
+  // cubic ease in/out (pleasant, not too sharp)
+  function ease(t){ return (t<0.5) ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2; }
+  const lerp = (a,b,t)=> a + (b-a)*t;
+
+  // pick the best mime the browser can record
+  function pickMime(){
+    const m = window.MediaRecorder;
+    if (!m) return '';
+    const list = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/mp4' // Safari may support this
+    ];
+    return list.find(type => m.isTypeSupported ? m.isTypeSupported(type) : true) || '';
+  }
+
+  // ---- animation core ------------------------------------------------------
+  async function run({record}){
+    const c = C(); const st = document.getElementById('raAnimStatus');
+    if (!c){ st && (st.textContent = 'Canvas not ready.'); return; }
+
+    // Require a base image
+    const { base, overlays, all } = baseAndOverlays(c);
+    if (!base){ st && (st.textContent = 'Load an image first.'); return; }
+
+    // UI params
+    const styleSel = document.getElementById('raAnimStyle');
+    const durSel   = document.getElementById('raAnimDur');
+    const style    = styleSel ? styleSel.value : 'ken';
+    const duration = Math.max(1, parseInt(durSel ? durSel.value : '5', 10));
+
+    // Snapshot & prep
+    const state = snapState(all);
+    const wasActive = c.getActiveObject && c.getActiveObject();
+    c.discardActiveObject && c.discardActiveObject();
+    c.selection = false;
+
+    // for recording
+    let rec, chunks=[], url='';
+    if (record){
+      const fps = 30;
+      const mime = pickMime();
+      const stream = (c.lowerCanvasEl && c.lowerCanvasEl.captureStream)
+        ? c.lowerCanvasEl.captureStream(fps)
+        : c.upperCanvasEl.captureStream ? c.upperCanvasEl.captureStream(fps) : null;
+
+      if (stream && window.MediaRecorder && mime){
+        try{
+          rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
+          rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+          rec.start(200); // collect in small chunks
+        }catch(_){}
+      }
+      st && (st.textContent = 'Recording…');
+    }else{
+      st && (st.textContent = 'Playing…');
+    }
+
+    // Params per style
+    const cw = c.getWidth(), ch = c.getHeight();
+    const start = performance.now(), D = duration * 1000;
+    const maxShift = Math.round(Math.min(cw,ch) * 0.05);   // ~5% canvas
+    const swayDeg  = 3;                                    // small rotation
+    const kenScale = 1.07;                                 // 7% zoom
+
+    function tick(now){
+      const t = Math.min(1, (now - start) / D);
+      const e = ease(t);
+
+      // Reset to snapshot, then apply offsets at this frame
+      restoreState(state, c);
+
+      try{
+        if (style === 'ken'){
+          // zoom base slightly + drift from TL -> center
+          const dx = lerp(-maxShift, 0, e), dy = lerp(-maxShift, 0, e);
+          base.left = (base.left||0) + dx; base.top = (base.top||0) + dy;
+          base.scaleX *= lerp(1, kenScale, e);
+          base.scaleY *= lerp(1, kenScale, e);
+          base.setCoords && base.setCoords();
+
+          // overlays drift at smaller rate so it feels layered
+          overlays.forEach((o,i)=>{
+            const f = 0.5 + i*0.08;
+            o.left = (o.left||0) + dx * 0.6 * f;
+            o.top  = (o.top ||0) + dy * 0.6 * f;
+            o.setCoords && o.setCoords();
+          });
+        }
+        else if (style === 'parallax'){
+          // overlays move in opposing directions based on index
+          overlays.forEach((o,i)=>{
+            const dir = (i%2===0) ? 1 : -1;
+            const amp = maxShift * (0.4 + i*0.06);
+            o.left = (o.left||0) + dir * (e * amp * 0.8);
+            o.top  = (o.top ||0) + dir * (e * amp * 0.5);
+            o.setCoords && o.setCoords();
+          });
+          // tiny base drift so it doesn't feel static
+          base.left = (base.left||0) + lerp(0, maxShift*0.25, e);
+          base.top  = (base.top ||0) + lerp(0, maxShift*0.15, e);
+          base.setCoords && base.setCoords();
+        }
+        else if (style === 'sway'){
+          // gentle scale breathe + small rotation back & forth
+          const s = 1 + 0.02*Math.sin(e*Math.PI);          // +2% at mid
+          base.scaleX *= s; base.scaleY *= s;
+          base.angle = lerp(0, swayDeg, Math.sin(e*Math.PI));
+          base.setCoords && base.setCoords();
+          overlays.forEach((o,i)=>{
+            const a = swayDeg*(i%3===0?1:-1)*0.6;
+            o.angle = lerp(0, a, Math.sin(e*Math.PI));
+            o.setCoords && o.setCoords();
+          });
+        }
+      }catch(_){}
+
+      try{ c.requestRenderAll(); }catch(_){}
+
+      if (t < 1){
+        requestAnimationFrame(tick);
+      }else{
+        // end
+        if (rec){
+          rec.onstop = ()=>{
+            try{
+              const blob = new Blob(chunks, { type: rec.mimeType });
+              url = URL.createObjectURL(blob);
+              // auto download
+              const ext = /mp4/i.test(rec.mimeType) ? 'mp4' : 'webm';
+              const a = document.createElement('a');
+              a.href = url; a.download = `rebel-ant-anim.${ext}`;
+              document.body.appendChild(a); a.click(); a.remove();
+              st && (st.textContent = `Saved ${ext.toUpperCase()} ✓`);
+            }catch(_){ st && (st.textContent = 'Recording finished.'); }
+            // restore canvas exactly as it was
+            restoreState(state, c);
+            if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
+          };
+          try{ rec.stop(); }catch(_){}
+        }else{
+          // just a preview—restore canvas
+          restoreState(state, c);
+          if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
+          st && (st.textContent = 'Done ✓');
+          setTimeout(()=>{ st && (st.textContent=''); }, 900);
+        }
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function boot(){
+    ensureUI();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+  new MutationObserver(boot).observe(document.documentElement, {childList:true, subtree:true});
+})();
