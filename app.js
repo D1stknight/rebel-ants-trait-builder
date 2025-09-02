@@ -1340,3 +1340,150 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
+/* ==================== RA_AI_QUOTE_v1 — “✨ Inspire me” (motivational quotes) ====================
+   What this adds:
+   • A button “✨ Inspire me” near your Custom Text controls
+   • Each click adds (or replaces) a motivational quote on the canvas
+   • Quotes are varied and avoid recent repeats (remembers 40 recent in localStorage)
+   • Text is centered, wrapped to 80% of canvas width, with a readable outline
+   • Uses your existing text controls (font, size, color, stroke) after insertion
+   ============================================================================================== */
+(() => {
+  const RECENT_KEY = 'ra_ai_quotes_recent_v1';
+
+  // ——— Small helpers ———
+  const $  = (sel, r=document) => r.querySelector(sel);
+  const $$ = (sel, r=document) => Array.from(r.querySelectorAll(sel));
+
+  function getRecent() {
+    try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch (_) { return []; }
+  }
+  function pushRecent(q) {
+    const arr = getRecent();
+    arr.unshift(String(q).trim());
+    // keep only the latest 40 unique
+    const seen = new Set();
+    const dedup = [];
+    for (const s of arr) { if (!seen.has(s)) { seen.add(s); dedup.push(s); } }
+    dedup.length = Math.min(dedup.length, 40);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(dedup)); } catch (_) {}
+  }
+
+  // ——— Quote generator (lightweight, but varied) ———
+  const COMMANDS = [
+    "Keep going", "Stay hungry", "Trust the process", "Outwork yesterday",
+    "Start before you're ready", "Consistency compounds", "Progress over perfection",
+    "Ship it", "Make it simple", "Play the long game", "No zero days",
+    "Bet on yourself", "Stay curious", "Do the hard things", "Win the morning",
+    "Keep showing up", "Build in public", "One brick at a time", "Move with purpose",
+    "Be relentlessly resourceful", "Protect your momentum", "Take the stairs",
+    "Create then iterate", "Make it a habit", "Focus beats talent",
+    "Earn it daily", "Start now", "Prove it", "Own your time", "Small steps, big moves"
+  ];
+  const TAILS = [
+    "small steps add up", "momentum beats perfect", "discipline is freedom",
+    "tiny wins compound", "results love consistency", "courage over comfort",
+    "1% better every day", "clarity comes from action", "done beats perfect",
+    "practice makes progress", "keep the promise to yourself", "get uncomfortable",
+    "dreams need deadlines", "start messy", "execute loudly",
+    "be patient and persistent", "aim for better, not easy", "work the plan",
+    "prove it with work", "show up for yourself", "stack your wins",
+    "build the streak", "trust your future self", "act like it matters",
+    "make room for greatness", "keep it moving", "focus and finish",
+    "make today count", "finish strong", "do one more rep"
+  ];
+  const SEPS = [" — ", " · ", " — ", ": "]; // weighted toward em‑dash
+
+  function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+  function makeQuote(attempt=0){
+    const q = `${pick(COMMANDS)}${pick(SEPS)}${pick(TAILS)}.`;
+    const recent = getRecent();
+    if (!recent.includes(q)) return q;
+    // Try a few times to avoid an immediate repeat
+    return attempt < 60 ? makeQuote(attempt+1) : q;
+  }
+
+  // ——— Drop (or replace) quote on Fabric canvas ———
+  function addOrReplaceQuote(){
+    const c = window.canvas;
+    if (!c || !window.fabric) { alert('Canvas not ready'); return; }
+
+    const quote = makeQuote();
+    const cw = c.getWidth(), ch = c.getHeight();
+    const width = Math.round(cw * 0.84);
+
+    // Size scales with canvas (feels right across 700/900/1024/1200)
+    const defaultSize = Math.round(Math.max(28, Math.min(64, cw * 0.055)));
+
+    // Prefer the current UI controls if present (so user style is respected)
+    const family = ($('#fontFamily')||{}).value || "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif";
+    const size   = parseInt(($('#fontSize')||{}).value||defaultSize, 10);
+    const fill   = ($('#fontColor')||{}).value || "#ffffff";
+    const stroke = ($('#strokeColor')||{}).value || "#000000";
+    const swidth = parseInt(($('#strokeWidth')||{}).value||"2", 10);
+
+    // If a custom text is selected, replace its contents; otherwise add a new one
+    const active = c.getActiveObject();
+    if (active && active._kind === 'customText') {
+      active.text = quote;
+      active.setCoords();
+      c.requestRenderAll();
+      pushRecent(quote);
+      return;
+    }
+
+    const tb = new fabric.Textbox(quote, {
+      left: cw/2, top: ch/2,
+      originX: "center", originY: "center",
+      width, textAlign: "center",
+      fontFamily: family,
+      fontSize: size,
+      fill, stroke, strokeWidth: swidth,
+      editable: true
+    });
+    tb._kind = 'customText';
+    tb._raAiQuote = true;
+
+    c.add(tb).setActiveObject(tb);
+    // Keep token ID label on top if you use it
+    try { if (typeof window.bringInterfaceToFront === 'function') window.bringInterfaceToFront(); } catch(_){}
+    c.requestRenderAll();
+    pushRecent(quote);
+  }
+
+  // ——— Inject the “✨ Inspire me” button into your existing UI ———
+  function injectButton(){
+    if (document.getElementById('raAiQuoteBtn')) return;
+
+    // Try to place it next to your existing "Add" custom text button if present
+    let anchor = document.getElementById('addCustomText');
+    if (!anchor) {
+      // Fall back to placing after the custom text input/textarea or in the same panel
+      anchor = document.getElementById('customText') ||
+               $$('input,textarea,button').find(b => /custom\s*text/i.test((b.id||b.textContent||'')));
+    }
+    if (!anchor) { setTimeout(injectButton, 300); return; }
+
+    const btn = document.createElement('button');
+    btn.id = 'raAiQuoteBtn';
+    btn.textContent = '✨ Inspire me';
+    btn.className = 'btn';
+    btn.style.marginLeft = '8px';
+    btn.style.cursor = 'pointer';
+
+    // If your buttons use a "small" variant, mirror it
+    if (anchor.classList.contains('small')) btn.classList.add('small');
+
+    btn.addEventListener('click', addOrReplaceQuote);
+    // Insert right after the anchor button/input
+    anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+  }
+
+  // Boot once DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', injectButton, { once:true });
+  } else {
+    injectButton();
+  }
+})();
