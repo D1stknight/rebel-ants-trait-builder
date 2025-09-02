@@ -1213,3 +1213,180 @@
   kick();
 })();
 
+/* =========================================================
+   RA_mobile_fit_on_load_v13
+   Purpose: On mobile, auto-set zoom so the whole image fits
+   whenever a token loads or the canvas px changes.
+   Desktop: No-Op.
+   Safe to paste at the very end of app.js/App.jsx.
+   ========================================================= */
+(() => {
+  if (typeof window === 'undefined') return;
+  if (document.documentElement.hasAttribute('data-ra-fit-mobile-patched')) return;
+  document.documentElement.setAttribute('data-ra-fit-mobile-patched', '1');
+
+  // --- helpers --------------------------------------------------------------
+  const isMobile = () =>
+    window.matchMedia('(pointer: coarse)').matches ||
+    window.matchMedia('(max-width: 1024px)').matches;
+
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+  const byText = (root, tag, text) =>
+    Array.from(root.querySelectorAll(tag)).find(
+      el => (el.textContent || '').trim().toLowerCase() === text.toLowerCase()
+    );
+
+  // Find the "Canvas" card (the one that contains "Size (px)")
+  function findCanvasCard() {
+    const all = Array.from(document.querySelectorAll('section,div,article'));
+    return all.find(
+      el =>
+        /canvas/i.test(el.textContent || '') &&
+        /size\s*\(px\)/i.test(el.textContent || '')
+    );
+  }
+
+  // Inside the Canvas card, find zoom controls and the px input
+  function findZoomControls() {
+    const card = findCanvasCard();
+    if (!card) return {};
+    const buttons = Array.from(card.querySelectorAll('button'));
+    const minus = buttons.find(
+      b =>
+        b.textContent?.trim() === '-' ||
+        /minus/i.test(b.getAttribute('aria-label') || '')
+    );
+    const plus = buttons.find(
+      b =>
+        b.textContent?.trim() === '+' ||
+        /plus/i.test(b.getAttribute('aria-label') || '')
+    );
+
+    // "% display" can be a button/span/input depending on your build
+    const pctEl =
+      Array.from(card.querySelectorAll('button,span,input')).find(el =>
+        /%/.test((el.textContent || el.value || '').trim())
+      ) || null;
+
+    // Canvas px input (numeric)
+    const pxInput = Array.from(card.querySelectorAll('input')).find(inp => {
+      const t = (inp.type || '').toLowerCase();
+      return t === 'number' || inp.inputMode === 'numeric';
+    });
+
+    return { card, minus, plus, pctEl, pxInput };
+  }
+
+  function readPct(pctEl) {
+    const raw = (pctEl?.textContent || pctEl?.value || '100').replace(/[^\d]/g, '');
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : 100;
+  }
+
+  // Determine step (5% / 10% / etc) by probing a single +
+  function detectStep(ctrls) {
+    if (!ctrls.plus || !ctrls.minus || !ctrls.pctEl) return 5;
+    const before = readPct(ctrls.pctEl);
+    ctrls.plus.click();
+    const after = readPct(ctrls.pctEl);
+    const step = clamp(after - before, 1, 25);
+    // Undo what we clicked
+    for (let i = 0; i < step; i++) ctrls.minus.click();
+    return step || 5;
+  }
+
+  // Set zoom by clicking +/- so app state stays correct
+  function setZoomViaUI(targetPct, ctrls) {
+    const { plus, minus, pctEl } = ctrls;
+    if (!plus || !minus || !pctEl) return;
+
+    targetPct = clamp(Math.round(targetPct), 25, 100);
+    const step = detectStep(ctrls);
+    let current = readPct(pctEl);
+
+    // Compute how many clicks (rounded to nearest step)
+    const clicks = Math.round((targetPct - current) / step);
+    const btn = clicks > 0 ? plus : minus;
+    const total = Math.abs(clicks);
+
+    // Click in a tight loop (non-blocking)
+    let i = 0;
+    const timer = setInterval(() => {
+      btn.click();
+      i += 1;
+      if (i >= total) clearInterval(timer);
+    }, 0);
+  }
+
+  // Compute a "fit to width" zoom for phones
+  function computeFitPct(px, hostWidth) {
+    const padding = 24; // rough horizontal padding inside your layout
+    const available = clamp((hostWidth || window.innerWidth) - padding * 2, 200, 2000);
+    const raw = (available / px) * 100;
+    return clamp(Math.floor(raw), 30, 100);
+  }
+
+  // Main: fit on mobile
+  const fitOnMobile = () => {
+    if (!isMobile()) return;
+
+    const ctrls = findZoomControls();
+    if (!ctrls.card) return;
+
+    // canvas px (fallback 700)
+    let canvasPx = 700;
+    if (ctrls.pxInput) {
+      const v = parseInt(ctrls.pxInput.value, 10);
+      if (Number.isFinite(v) && v > 0) canvasPx = v;
+    }
+
+    // width to fit against (Canvas card width or viewport)
+    const hostWidth = ctrls.card.clientWidth || window.innerWidth;
+    const targetPct = computeFitPct(canvasPx, hostWidth);
+
+    setZoomViaUI(targetPct, ctrls);
+  };
+
+  // --- triggers -------------------------------------------------------------
+  // Throttle so we don't spam during rapid DOM churn
+  let t = 0;
+  const kick = () => {
+    if (!isMobile()) return;
+    clearTimeout(t);
+    t = setTimeout(fitOnMobile, 120);
+  };
+
+  // Run when the app finishes mounting
+  window.addEventListener('load', kick);
+  window.addEventListener('resize', kick);
+  window.addEventListener('orientationchange', kick);
+
+  // Run after user clicks "Load" or "Load by Token"
+  document.addEventListener('click', (ev) => {
+    const el = ev.target;
+    if (!(el instanceof HTMLElement)) return;
+    const txt = (el.textContent || '').trim().toLowerCase();
+    if (txt === 'load' || txt === 'load by token') {
+      setTimeout(kick, 250); // give the image a moment to mount
+    }
+  }, true);
+
+  // Run if the Canvas px field changes
+  document.addEventListener('input', (ev) => {
+    const el = ev.target;
+    if (!(el instanceof HTMLInputElement)) return;
+    if (/^\d+$/.test(el.value || '')) {
+      // Heuristic: when a numeric input inside the Canvas card changes
+      const card = findCanvasCard();
+      if (card && card.contains(el)) kick();
+    }
+  }, true);
+
+  // Safety: if the UI re-renders, try once more
+  const mo = new MutationObserver(() => kick());
+  mo.observe(document.body, { childList: true, subtree: true });
+
+  // Optional manual hook for testing in console:
+  window.raFitToScreenMobile = fitOnMobile;
+})();
