@@ -1340,108 +1340,40 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ========= RA_mobile_close_gap_v24_removeBetween (MOBILE ONLY) =========
-   Purpose: Remove the large empty space BETWEEN “Custom Text” and “Overlays”
-   by hiding the tall, non‑interactive spacer that sits between them.
-   Desktop is not affected. Revert by deleting this entire block.
-   ===================================================================== */
+/* =========================
+   RA_MOBILE_KILL_GHOST_GAP_v1  — MOBILE ONLY (≤920px)
+   Removes the #raCanvasGhost placeholder that desktop uses,
+   which is what creates the large empty space on phones.
+   Revert = delete this block.
+   ========================= */
 (() => {
-  const MQ = '(max-width: 920px)';                       // phones & small tablets
-  if (!window.matchMedia(MQ).matches) return;            // desktop untouched
-  if (window.__RA_CLOSE_GAP_V24__) return;
-  window.__RA_CLOSE_GAP_V24__ = true;
+  const MQ = '(max-width: 920px)';
+  if (!window.matchMedia(MQ).matches) return;   // Desktop untouched
+  if (window.__RA_MOBILE_KILL_GHOST__) return;
+  window.__RA_MOBILE_KILL_GHOST__ = true;
 
-  // --- helpers ---------------------------------------------------------
-  const INTERACTIVE = 'input,button,select,textarea,canvas,[contenteditable],a[href],[role="button"],[role="slider"]';
-  const AVOID_TAG   = new Set(['HTML','BODY','HEAD','MAIN','NAV','FOOTER']);
-  const qAll = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-  const norm = s => (s || '').trim().toLowerCase();
-  const rectY = el => {
-    const r = el.getBoundingClientRect();
-    return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY, h: r.height };
-  };
-
-  // Find the visual "card" that holds a given heading/control
-  function closestCard(el) {
-    if (!el) return null;
-    let p = el;
-    for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
-      if (!(p instanceof HTMLElement)) break;
-      const hasControls = p.querySelector('input,button,select,textarea,canvas,[role="slider"]');
-      const cs = getComputedStyle(p);
-      if (cs.display !== 'inline' && hasControls) return p;
-    }
-    return el.parentElement || el;
-  }
-
-  function findCustomTextCard() {
-    // anchor by “Custom Text” heading or the “Add Text” button
-    const head = qAll('h1,h2,h3,h4,h5,h6,[role="heading"]').find(h => /custom\s*text/i.test(norm(h.textContent)));
-    if (head) return closestCard(head);
-    const addBtn = qAll('button').find(b => /add\s*text/i.test(norm(b.textContent)));
-    return closestCard(addBtn);
-  }
-
-  function findOverlaysCard() {
-    const head = qAll('h1,h2,h3,h4,h5,h6,[role="heading"]').find(h => /overlays/i.test(norm(h.textContent)));
-    if (head) return closestCard(head);
-    const chooser = qAll('button,input[type="file"]').find(el => /choose\s*files?/i.test((el.textContent || el.value || '')));
-    return closestCard(chooser);
-  }
-
-  function removeTallSpacerBetween() {
-    const custom   = findCustomTextCard();
-    const overlays = findOverlaysCard();
-    if (!custom || !overlays || custom === overlays) return;
-
-    // Keep a small breathing space
-    custom.style.marginBottom = '12px';
-    overlays.style.marginTop  = '12px';
-
-    const cY = rectY(custom);
-    const oY = rectY(overlays);
-    if (oY.top <= cY.bottom) return; // already touching or overlapping
-
-    // Scan every visible element; pick the biggest non‑interactive block between them
-    const all = Array.from(document.body.getElementsByTagName('*'));
-    const candidates = [];
-    for (const el of all) {
-      if (!(el instanceof HTMLElement)) continue;
-      if (AVOID_TAG.has(el.tagName)) continue;
-      if (el.hasAttribute('data-ra-gap-fixed')) continue;
-
-      const r = el.getBoundingClientRect();
-      if (r.height < 40) continue;                       // ignore tiny stuff
-      const top = r.top + window.scrollY;
-      const bot = r.bottom + window.scrollY;
-
-      // Fully between the two cards?
-      if (top >= cY.bottom - 2 && bot <= oY.top + 2) {
-        const hasUI = el.querySelector(INTERACTIVE);
-        const text  = norm(el.textContent);
-        const looksLikeCard = /overlays|custom\s*text/i.test(text);
-        if (!hasUI && !looksLikeCard) {
-          candidates.push({ h: r.height, el });
-        }
-      }
-    }
-
-    // Hide the largest culprit (and a second one if present)
-    candidates.sort((a, b) => b.h - a.h);
-    const toHide = candidates.slice(0, 2).map(x => x.el);
-    for (const el of toHide) {
-      el.setAttribute('data-ra-gap-fixed', '');
-      el.style.setProperty('display', 'none', 'important');
-      el.style.setProperty('height',  '0',    'important');
-      el.style.setProperty('margin',  '0',    'important');
-      el.style.setProperty('padding', '0',    'important');
-      el.style.setProperty('border',  '0',    'important');
+  function nukeGhost() {
+    // The desktop "fixed canvas" patch inserts this element.
+    const g = document.getElementById('raCanvasGhost');
+    if (g) {
+      g.style.setProperty('display', 'none', 'important');
+      g.style.setProperty('height',  '0px',  'important');
+      g.style.setProperty('margin',  '0',    'important');
+      g.style.setProperty('padding', '0',    'important');
+      g.setAttribute('data-ra-ghost-killed','1');
     }
   }
 
-  // Run now and whenever the page mutates/resizes
-  const kick = () => requestAnimationFrame(removeTallSpacerBetween);
-  kick();
-  window.addEventListener('resize', kick, { passive: true });
-  new MutationObserver(kick).observe(document.body, { childList: true, subtree: true });
+  // Run now, and keep watching (in case the desktop script reinserts it)
+  nukeGhost();
+  new MutationObserver(nukeGhost).observe(document.body, { childList:true, subtree:true });
+
+  // CSS safety net (covers any server‑side styles)
+  const style = document.createElement('style');
+  style.textContent = `
+    @media ${MQ} {
+      #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+    }
+  `;
+  document.head.appendChild(style);
 })();
