@@ -1340,85 +1340,104 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ================= RA_mobile_compact_gap_v1 (MOBILE ONLY) =================
-   Purpose: Tighten/kill the small empty spacer between "Custom Text" and
-            "Overlays" on phones, without touching desktop or exports.
-   - Keeps canvas in normal page flow
-   - No input focus shenanigans (keyboard stays up)
+/* ================= RA_mobile_compact_gap_v2 (MOBILE ONLY) =================
+   Goal: Remove the empty gap between "Custom Text" and "Overlays" on phones.
+         - Mobile-only (max-width: 920px)
+         - Moves the Overlays panel right after Custom Text in the DOM
+         - Collapses any tiny spacer rows in between
+         - Does NOT touch desktop or exports
    ======================================================================= */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V1__) return;
-  window.__RA_MOBILE_GAP_V1__ = true;
+  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V2__) return;
+  window.__RA_MOBILE_GAP_V2__ = true;
 
-  const $$ = (sel, r = document) => Array.from(r.querySelectorAll(sel));
-
-  function findCardByHeading(text) {
-    const needle = text.toLowerCase();
-    for (const el of $$('h1,h2,h3,div,section')) {
+  const byText = (labels) => {
+    const needles = labels.map(s => s.toLowerCase());
+    const nodes = document.querySelectorAll('h1,h2,h3,h4,div,section,button,label');
+    for (const el of nodes) {
       const t = (el.textContent || '').trim().toLowerCase();
-      if (t.startsWith(needle)) {
-        // climb to a panel-like container
-        let p = el.closest('.card, section, div') || el.parentElement;
-        while (p && p.parentElement && p.offsetHeight < 60) p = p.parentElement;
-        return p || el;
+      if (!t) continue;
+      for (const n of needles) {
+        if (t.startsWith(n)) return el;
       }
     }
     return null;
-  }
+  };
 
-  function squashGap() {
-    const custom = findCardByHeading('custom text');
-    const overlays = findCardByHeading('overlays');
+  const getPanelFromHeading = (headingEl) => {
+    if (!headingEl) return null;
+    let p = headingEl.closest('.card, section, div') || headingEl.parentElement;
+    // climb until we hit a reasonably sized panel container
+    while (p && p.parentElement) {
+      const cs = getComputedStyle(p);
+      const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      const h   = p.getBoundingClientRect().height;
+      if (h > 120 && pad >= 12) break;
+      p = p.parentElement;
+    }
+    return p || headingEl;
+  };
+
+  function ensureOverlayAfterCustom() {
+    const hCustom   = byText(['custom text']);
+    const hOverlays = byText(['overlays']);
+    const custom    = getPanelFromHeading(hCustom);
+    const overlays  = getPanelFromHeading(hOverlays);
     if (!custom || !overlays) return;
 
-    // tighten card margins
-    custom.style.marginBottom = '12px';
-    overlays.style.marginTop  = '12px';
+    // If Overlays isn't immediately after Custom Text, move it there.
+    let isAlreadyNext = false;
+    let sib = custom.nextElementSibling;
+    while (sib) {
+      if (sib === overlays) { isAlreadyNext = true; break; }
+      // Stop if we encounter a real panel (non-empty, noticeable height)
+      if (sib.getBoundingClientRect().height > 60 && (sib.textContent || '').trim()) break;
+      sib = sib.nextElementSibling;
+    }
+    if (!isAlreadyNext) {
+      custom.parentNode.insertBefore(overlays, custom.nextElementSibling);
+    }
 
-    // remove stray spacer(s) between them (empty/visual-only rows)
+    // Clean up any tiny spacers between them (visual-only rows)
     let cur = custom.nextElementSibling;
     let guard = 0;
-    while (cur && cur !== overlays && guard++ < 10) {
-      const h  = cur.getBoundingClientRect().height;
-      const cs = getComputedStyle(cur);
-      const looksSpacer = h < 40 || !(cur.textContent || '').trim();
-      const isChecker   = (cs.backgroundImage || '').includes('linear-gradient')
-                       || (cs.backgroundImage || '').includes('repeating');
-
-      if (looksSpacer || isChecker) {
+    while (cur && cur !== overlays && guard++ < 8) {
+      const h = cur.getBoundingClientRect().height;
+      if (h <= 40 || !(cur.textContent || '').trim()) {
+        cur.setAttribute('data-ra-gap-hidden', '1');
         cur.style.display = 'none';
         cur.style.height  = '0px';
         cur.style.margin  = '0';
         cur.style.padding = '0';
-        cur.setAttribute('data-ra-hidden-gap', '1');
       }
       cur = cur.nextElementSibling;
     }
+
+    // Tighten margins so the two cards sit neatly together
+    custom.style.marginBottom = '12px';
+    overlays.style.marginTop  = '12px';
   }
 
-  // Keep tidy as DOM mutates
-  const mo = new MutationObserver(() => squashGap());
-  mo.observe(document.documentElement, { childList: true, subtree: true });
+  const schedule = () => requestAnimationFrame(ensureOverlayAfterCustom);
+  schedule();
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => squashGap(), { once: true });
-  } else {
-    squashGap();
-  }
+  // In case the UI re-renders, keep it tidy.
+  const mo = new MutationObserver(schedule);
+  mo.observe(document.body, { childList: true, subtree: true });
 
-  // Minimal CSS (mobile only) to make hidden gap rows fully collapse
+  // Safety CSS (mobile only) for collapsed rows
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
-      [data-ra-hidden-gap="1"] {
-        display: none !important;
-        height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
+      [data-ra-gap-hidden="1"]{
+        display:none !important;
+        height:0 !important;
+        margin:0 !important;
+        padding:0 !important;
       }
     }
   `;
   document.head.appendChild(style);
 })();
- /* ================= END RA_mobile_compact_gap_v1 (MOBILE ONLY) ================= */
+ /* ================= END RA_mobile_compact_gap_v2 ================= */
