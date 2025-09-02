@@ -1341,91 +1341,90 @@
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
 /* =========================================
-   RA_MOBILE_CLOSE_GAP_v5  — MOBILE ONLY (≤920px)
-   - Forces "Overlays" to sit immediately after "Custom Text"
-   - Collapses spacer/ghost blocks between them
-   - Leaves desktop behavior unchanged
+   RA_MOBILE_CLOSE_GAP_PULLUP_v2 — MOBILE ONLY (≤920px)
+   - Forces "Overlays" to sit right under "Custom Text"
+   - Collapses in‑between spacer blocks
+   - If a parent still holds height, pulls Overlays up with a safe negative margin
+   - Desktop remains untouched
    ========================================= */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_CLOSE_GAP_V5__) return;
-  window.__RA_MOBILE_CLOSE_GAP_V5__ = true;
+  if (!matchMedia(MQ).matches || window.__RA_GAP_PULLUP_V2__) return;
+  window.__RA_GAP_PULLUP_V2__ = true;
 
-  const $  = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const  $ = (s, r=document) => r.querySelector(s);
 
-  function hide(el){
-    if (!el) return;
-    el.style.setProperty('display','none','important');
-    el.style.setProperty('height','0px','important');
-    el.style.setProperty('margin','0','important');
-    el.style.setProperty('padding','0','important');
-    el.setAttribute('data-ra-mobile-gap-collapsed','1');
+  function cardFromHeading(rx){
+    const h = $$('h1,h2,h3,h4').find(n => rx.test((n.textContent || '').trim().toLowerCase()));
+    if (!h) return null;
+    // choose the nearest “card-like” container; fall back to the parent
+    return h.closest('.card,section,article,form,div') || h.parentElement;
   }
 
-  function looksLikeSpacer(el){
-    if (!el || el.getAttribute('data-ra-mobile-gap-collapsed') === '1') return false;
-    const rect = el.getBoundingClientRect();
-    if (rect.height < 24) return false;               // tiny margins are fine
-    // anything with real controls is not a spacer
-    if (el.querySelector('input,select,textarea,button,canvas,video,iframe')) return false;
-    // visible child present? then not a spacer
-    const anyVisible = [...el.children].some(ch => {
-      const r = ch.getBoundingClientRect();
-      const cs = getComputedStyle(ch);
-      return r.height > 1 && cs.display !== 'none' && cs.visibility !== 'hidden';
-    });
-    return !anyVisible;
-  }
-
-  function moveOverlaysAfterCustomText(){
-    // find the two section cards by their headings
-    const hCT = $$('h2,h3,h4').find(h => /custom\s*text/i.test(h.textContent||''));
-    const hOV = $$('h2,h3,h4').find(h => /overlays/i.test(h.textContent||''));
-    if (!hCT || !hOV) return;
-
-    const ctCard = hCT.closest('.card,section,div') || hCT.parentElement;
-    const ovCard = hOV.closest('.card,section,div') || hOV.parentElement;
-    if (!ctCard || !ovCard) return;
-
-    // 1) collapse anything in between
-    let cur = ctCard.nextElementSibling;
-    while (cur && cur !== ovCard){
-      if (looksLikeSpacer(cur)) hide(cur);
+  function hardCollapseBetween(a, b){
+    if (!a || !b) return;
+    let cur = a.nextElementSibling;
+    while (cur && cur !== b){
+      cur.style.setProperty('display','none','important');
+      cur.style.setProperty('height','0','important');
+      cur.style.setProperty('margin','0','important');
+      cur.style.setProperty('padding','0','important');
+      cur.setAttribute('data-ra-gap-collapsed','1');
       cur = cur.nextElementSibling;
     }
-
-    // 2) if Overlays still isn't right after Custom Text, move it there
-    if (ctCard.nextElementSibling !== ovCard){
-      try { ctCard.parentNode.insertBefore(ovCard, ctCard.nextElementSibling); } catch(_) {}
-    }
   }
 
-  function killGhosts(){
-    // desktop ghost placeholder + any floaters
-    ['#raCanvasGhost','.ra-canvas-floater','[data-ra-role="stage-floater"]','[data-ra-hidden-gap="1"]']
-      .forEach(sel => $$(sel).forEach(hide));
+  function pullUp(){
+    if (!matchMedia(MQ).matches) return;
+
+    // locate cards
+    const ct = cardFromHeading(/custom\s*text/);
+    const ov = cardFromHeading(/overlays/);
+    if (!ct || !ov) return;
+
+    // 1) collapse any obvious in-between spacer nodes
+    hardCollapseBetween(ct, ov);
+
+    // 2) measure remaining visual gap; if still large, pull overlays up
+    requestAnimationFrame(() => {
+      const rCT = ct.getBoundingClientRect();
+      const rOV = ov.getBoundingClientRect();
+      const gap = Math.round(rOV.top - rCT.bottom);
+
+      if (gap > 24) {                    // clearly a void
+        const delta = gap - 12;          // leave ~12px spacing
+        ov.style.setProperty('margin-top', `-${delta}px`, 'important');
+        ov.style.setProperty('position', 'relative', 'important');
+        ov.style.setProperty('z-index', '2', 'important');
+      } else {
+        // normal spacing → remove any previous tweak
+        ov.style.removeProperty('margin-top');
+        ov.style.removeProperty('position');
+        ov.style.removeProperty('z-index');
+      }
+    });
   }
 
-  function run(){
-    killGhosts();
-    moveOverlaysAfterCustomText();
-  }
+  // keep tidy on DOM mutations & viewport changes
+  const mo = new MutationObserver(pullUp);
+  mo.observe(document.body, { childList:true, subtree:true });
+  window.addEventListener('resize', pullUp, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(pullUp, 150), { passive:true });
 
-  // run now and keep tidy as DOM mutates
-  run();
-  new MutationObserver(run).observe(document.body, { childList:true, subtree:true });
+  // clean up known ghosts if they reappear (mobile only)
+  ['#raCanvasGhost', '.ra-canvas-floater', '[data-ra-role="stage-floater"]', '[data-ra-hidden-gap="1"]']
+    .forEach(sel => $$(sel).forEach(el => { try { el.remove(); } catch(_) {} }));
 
-  // keep it on orientation/resize
-  window.addEventListener('resize', () => { if (matchMedia(MQ).matches) run(); }, { passive:true });
-
-  // small CSS safety net
+  // small CSS backstop
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
-      #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
-      [data-ra-mobile-gap-collapsed="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+      [data-ra-gap-collapsed="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
     }
   `;
   document.head.appendChild(style);
+
+  // first run
+  pullUp();
 })();
