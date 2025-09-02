@@ -1340,39 +1340,91 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* =========================
-   RA_MOBILE_KILL_GHOST_GAP_v1  — MOBILE ONLY (≤920px)
-   Removes the #raCanvasGhost placeholder that desktop uses,
-   which is what creates the large empty space on phones.
-   Revert = delete this block.
-   ========================= */
+/* =========================================
+   RA_MOBILE_CLOSE_GAP_v5  — MOBILE ONLY (≤920px)
+   - Forces "Overlays" to sit immediately after "Custom Text"
+   - Collapses spacer/ghost blocks between them
+   - Leaves desktop behavior unchanged
+   ========================================= */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches) return;   // Desktop untouched
-  if (window.__RA_MOBILE_KILL_GHOST__) return;
-  window.__RA_MOBILE_KILL_GHOST__ = true;
+  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_CLOSE_GAP_V5__) return;
+  window.__RA_MOBILE_CLOSE_GAP_V5__ = true;
 
-  function nukeGhost() {
-    // The desktop "fixed canvas" patch inserts this element.
-    const g = document.getElementById('raCanvasGhost');
-    if (g) {
-      g.style.setProperty('display', 'none', 'important');
-      g.style.setProperty('height',  '0px',  'important');
-      g.style.setProperty('margin',  '0',    'important');
-      g.style.setProperty('padding', '0',    'important');
-      g.setAttribute('data-ra-ghost-killed','1');
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+  function hide(el){
+    if (!el) return;
+    el.style.setProperty('display','none','important');
+    el.style.setProperty('height','0px','important');
+    el.style.setProperty('margin','0','important');
+    el.style.setProperty('padding','0','important');
+    el.setAttribute('data-ra-mobile-gap-collapsed','1');
+  }
+
+  function looksLikeSpacer(el){
+    if (!el || el.getAttribute('data-ra-mobile-gap-collapsed') === '1') return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.height < 24) return false;               // tiny margins are fine
+    // anything with real controls is not a spacer
+    if (el.querySelector('input,select,textarea,button,canvas,video,iframe')) return false;
+    // visible child present? then not a spacer
+    const anyVisible = [...el.children].some(ch => {
+      const r = ch.getBoundingClientRect();
+      const cs = getComputedStyle(ch);
+      return r.height > 1 && cs.display !== 'none' && cs.visibility !== 'hidden';
+    });
+    return !anyVisible;
+  }
+
+  function moveOverlaysAfterCustomText(){
+    // find the two section cards by their headings
+    const hCT = $$('h2,h3,h4').find(h => /custom\s*text/i.test(h.textContent||''));
+    const hOV = $$('h2,h3,h4').find(h => /overlays/i.test(h.textContent||''));
+    if (!hCT || !hOV) return;
+
+    const ctCard = hCT.closest('.card,section,div') || hCT.parentElement;
+    const ovCard = hOV.closest('.card,section,div') || hOV.parentElement;
+    if (!ctCard || !ovCard) return;
+
+    // 1) collapse anything in between
+    let cur = ctCard.nextElementSibling;
+    while (cur && cur !== ovCard){
+      if (looksLikeSpacer(cur)) hide(cur);
+      cur = cur.nextElementSibling;
+    }
+
+    // 2) if Overlays still isn't right after Custom Text, move it there
+    if (ctCard.nextElementSibling !== ovCard){
+      try { ctCard.parentNode.insertBefore(ovCard, ctCard.nextElementSibling); } catch(_) {}
     }
   }
 
-  // Run now, and keep watching (in case the desktop script reinserts it)
-  nukeGhost();
-  new MutationObserver(nukeGhost).observe(document.body, { childList:true, subtree:true });
+  function killGhosts(){
+    // desktop ghost placeholder + any floaters
+    ['#raCanvasGhost','.ra-canvas-floater','[data-ra-role="stage-floater"]','[data-ra-hidden-gap="1"]']
+      .forEach(sel => $$(sel).forEach(hide));
+  }
 
-  // CSS safety net (covers any server‑side styles)
+  function run(){
+    killGhosts();
+    moveOverlaysAfterCustomText();
+  }
+
+  // run now and keep tidy as DOM mutates
+  run();
+  new MutationObserver(run).observe(document.body, { childList:true, subtree:true });
+
+  // keep it on orientation/resize
+  window.addEventListener('resize', () => { if (matchMedia(MQ).matches) run(); }, { passive:true });
+
+  // small CSS safety net
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
       #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+      [data-ra-mobile-gap-collapsed="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
     }
   `;
   document.head.appendChild(style);
