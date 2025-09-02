@@ -1340,93 +1340,109 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ================= RA_mobile_compact_gap_v2 (MOBILE ONLY) =================
-   Goal: Remove the empty gap between "Custom Text" and "Overlays" on phones.
-         - Mobile-only (max-width: 920px)
-         - Moves the Overlays panel right after Custom Text in the DOM
-         - Collapses any tiny spacer rows in between
-         - Does NOT touch desktop or exports
-   ======================================================================= */
+/* ============== RA_mobile_compact_gap_v3 — MOBILE ONLY ==============
+   Goal: On phones, move the "Overlays" panel directly under "Custom Text"
+         and collapse any spacer(s) between them. Desktop is untouched.
+   How:  Text-based lookup (no classnames), robust to re-renders.
+   ================================================================== */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V2__) return;
-  window.__RA_MOBILE_GAP_V2__ = true;
+  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V3__) return;
+  window.__RA_MOBILE_GAP_V3__ = true;
 
-  const byText = (labels) => {
-    const needles = labels.map(s => s.toLowerCase());
-    const nodes = document.querySelectorAll('h1,h2,h3,h4,div,section,button,label');
+  // --- helpers ------------------------------------------------------
+  const qAll = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  const text = (el) => (el && (el.textContent || '') || '').trim().toLowerCase();
+
+  // Find a heading-ish element by text
+  const findHeading = (needles) => {
+    const lookFor = needles.map(s => s.toLowerCase());
+    const nodes = qAll('h1,h2,h3,h4,legend,div,section');
     for (const el of nodes) {
-      const t = (el.textContent || '').trim().toLowerCase();
+      const t = text(el);
       if (!t) continue;
-      for (const n of needles) {
-        if (t.startsWith(n)) return el;
-      }
+      if (lookFor.some(n => t.includes(n))) return el;
     }
     return null;
   };
 
-  const getPanelFromHeading = (headingEl) => {
+  // Climb to a card/panel container that actually wraps the section
+  const findPanelFor = (headingEl, mustContainWords=[]) => {
     if (!headingEl) return null;
-    let p = headingEl.closest('.card, section, div') || headingEl.parentElement;
-    // climb until we hit a reasonably sized panel container
-    while (p && p.parentElement) {
-      const cs = getComputedStyle(p);
-      const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-      const h   = p.getBoundingClientRect().height;
-      if (h > 120 && pad >= 12) break;
+    let p = headingEl;
+    for (let i=0; i<8 && p && p.parentElement; i++) {
+      const h = p.getBoundingClientRect().height;
+      const hasWords = mustContainWords.every(w =>
+        text(p).includes(w.toLowerCase())
+      );
+      // Heuristics: a "panel" likely has some height and contains the section text
+      if (h > 140 && hasWords) return p;
       p = p.parentElement;
     }
-    return p || headingEl;
+    // Fallback: largest ancestor within a few hops
+    p = headingEl;
+    let best = p, bestH = 0;
+    for (let i=0; i<8 && p && p.parentElement; i++) {
+      const h = p.getBoundingClientRect().height;
+      if (h > bestH) { best = p; bestH = h; }
+      p = p.parentElement;
+    }
+    return best || headingEl;
   };
 
-  function ensureOverlayAfterCustom() {
-    const hCustom   = byText(['custom text']);
-    const hOverlays = byText(['overlays']);
-    const custom    = getPanelFromHeading(hCustom);
-    const overlays  = getPanelFromHeading(hOverlays);
-    if (!custom || !overlays) return;
+  // Tiny utility: hide a spacer-y element
+  const hideAsSpacer = (el) => {
+    el.setAttribute('data-ra-gap-hidden','1');
+    Object.assign(el.style, {
+      display:'none', height:'0px', margin:'0', padding:'0'
+    });
+  };
 
-    // If Overlays isn't immediately after Custom Text, move it there.
-    let isAlreadyNext = false;
-    let sib = custom.nextElementSibling;
-    while (sib) {
-      if (sib === overlays) { isAlreadyNext = true; break; }
-      // Stop if we encounter a real panel (non-empty, noticeable height)
-      if (sib.getBoundingClientRect().height > 60 && (sib.textContent || '').trim()) break;
-      sib = sib.nextElementSibling;
-    }
-    if (!isAlreadyNext) {
-      custom.parentNode.insertBefore(overlays, custom.nextElementSibling);
+  function compactOnce() {
+    // 1) Locate "Custom Text" and "Overlays" sections
+    const hCustom   = findHeading(['custom text']);
+    const hOverlays = findHeading(['overlays']) || findHeading(['embedded permanents']);
+
+    if (!hCustom || !hOverlays) return;
+
+    const customPanel   = findPanelFor(hCustom,   ['custom','text']);
+    const overlaysPanel = findPanelFor(hOverlays, ['overlays']);
+
+    if (!customPanel || !overlaysPanel) return;
+
+    // 2) Ensure overlays panel sits immediately after custom panel
+    if (customPanel.nextElementSibling !== overlaysPanel) {
+      customPanel.parentNode.insertBefore(overlaysPanel, customPanel.nextElementSibling);
     }
 
-    // Clean up any tiny spacers between them (visual-only rows)
-    let cur = custom.nextElementSibling;
+    // 3) Collapse any spacer elements between them (rare race conditions)
+    let node = customPanel.nextElementSibling;
     let guard = 0;
-    while (cur && cur !== overlays && guard++ < 8) {
-      const h = cur.getBoundingClientRect().height;
-      if (h <= 40 || !(cur.textContent || '').trim()) {
-        cur.setAttribute('data-ra-gap-hidden', '1');
-        cur.style.display = 'none';
-        cur.style.height  = '0px';
-        cur.style.margin  = '0';
-        cur.style.padding = '0';
+    while (node && node !== overlaysPanel && guard++ < 12) {
+      // Consider an element a spacer if:
+      //  - height is small-ish OR
+      //  - it contains almost no interactive/content elements
+      const h = node.getBoundingClientRect().height;
+      const hasInteractive = node.querySelector('button,input,select,textarea,a,canvas,svg,[role]');
+      const hasText = text(node).length > 16;
+      if (!hasInteractive && (!hasText || h < 64)) {
+        hideAsSpacer(node);
       }
-      cur = cur.nextElementSibling;
+      node = node.nextElementSibling;
     }
 
-    // Tighten margins so the two cards sit neatly together
-    custom.style.marginBottom = '12px';
-    overlays.style.marginTop  = '12px';
+    // 4) Tighten margins so they sit snugly
+    customPanel.style.marginBottom = '12px';
+    overlaysPanel.style.marginTop  = '12px';
   }
 
-  const schedule = () => requestAnimationFrame(ensureOverlayAfterCustom);
-  schedule();
-
-  // In case the UI re-renders, keep it tidy.
-  const mo = new MutationObserver(schedule);
+  // Run now and on future UI changes
+  const kick = () => requestAnimationFrame(compactOnce);
+  kick();
+  const mo = new MutationObserver(kick);
   mo.observe(document.body, { childList: true, subtree: true });
 
-  // Safety CSS (mobile only) for collapsed rows
+  // Safety CSS for hidden spacers (mobile only)
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
@@ -1440,4 +1456,3 @@
   `;
   document.head.appendChild(style);
 })();
- /* ================= END RA_mobile_compact_gap_v2 ================= */
