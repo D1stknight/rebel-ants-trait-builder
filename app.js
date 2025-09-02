@@ -1057,190 +1057,104 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* =====================  RA_mobile_portrait_v12  ===================== */
-/* Purpose: Mobile PORTRAIT fix only. Keeps desktop & landscape intact.
-   - Moves the canvas+checkerboard into page flow ABOVE the "Rebel Ant" card
-   - Centers & scales nicely on phones
-   - Removes the rogue checkerboard strip & extra gap
-   - No impact to desktop widths
-*/
+/* ==== RA_MOBILE_FIT_v12P — Mobile-only canvas fit & lock (does NOT touch desktop) ==== */
 (() => {
-  if (window.__RA_MOBILE_V12__) return;
-  window.__RA_MOBILE_V12__ = true;
+  const ID = 'ra-mobile-fit-v12p';
+  if (document.getElementById(ID)) return; // don’t double-apply
 
-  // ---- 1) Inject phone-only CSS (desktop untouched) -----------------
-  const css = `
+  // --------- CSS (phones only) ----------
+  const style = document.createElement('style');
+  style.id = ID;
+  style.textContent = `
   @media (max-width: 768px) {
-    /* 1a) A safe slot that will hold the stage at the top of the Rebel Ant card */
-    #ra-mobile-stage-slot {
-      display: block;
-      width: min(92vw, 540px);
-      margin: 12px auto 10px;       /* center + small breathing room */
-      position: relative;
-      border-radius: 12px;
-      overflow: hidden;              /* avoid stray overflow on small screens */
-      isolation: isolate;
+    /* The canvas "box" we tag below */
+    [data-ra-mbox]{
+      position: relative !important;
+      width: min(94vw, 640px) !important;   /* nicely scaled for phones */
+      aspect-ratio: 1 / 1 !important;       /* square canvas */
+      margin: 12px auto 18px !important;    /* centered */
+      border-radius: 16px !important;
+      overflow: hidden !important;
+      box-shadow: 0 0 0 1px rgba(255,255,255,.08),
+                  inset 0 0 0 1px rgba(0,0,0,.5) !important;
+
+      /* checkerboard behind the canvas (no more stray strip) */
+      background:
+        conic-gradient(#0f1319 0 25%, #141922 0 50%) 0 0/16px 16px repeat !important;
     }
 
-    /* Our own checkerboard background behind the canvas (no pointer hit) */
-    #ra-mobile-stage-slot::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      z-index: 0;
-      /* dark checkerboard */
-      background-image:
-        conic-gradient(#161b24 90deg, #0f131a 0 180deg, #161b24 0 270deg, #0f131a 0),
-        conic-gradient(#0f131a 90deg, #161b24 0 180deg, #0f131a 0 270deg, #161b24 0);
-      background-size: 18px 18px;
-      background-position: 0 0, 9px 9px;
-      border-radius: 12px;
-    }
-
-    /* 1b) Make whatever is the stage/container/canvas fill the slot */
-    #ra-mobile-stage-slot > * {
-      position: relative;
-      z-index: 1;
+    /* Make the actual drawing area fill the box without changing desktop logic */
+    [data-ra-mbox] canvas,
+    [data-ra-mbox] > .konvajs-content,
+    [data-ra-mbox] > .canvas-container,
+    [data-ra-mbox] > *:not(.ra-rogue-check){
+      position: absolute !important;
+      inset: 0 !important;
       width: 100% !important;
-      height: auto !important;
+      height: 100% !important;
       max-width: 100% !important;
-    }
-    #ra-mobile-stage-slot canvas,
-    #ra-mobile-stage-slot .canvas,
-    #ra-mobile-stage-slot .stage,
-    #ra-mobile-stage-slot [data-ra-stage] {
-      width: 100% !important;
-      height: auto !important;
-      max-width: 100% !important;
+      max-height: 100% !important;
     }
 
-    /* 1c) Make control cards comfortable on phones (not giant) */
-    .panel, .card, .box, .ra-card {
-      width: min(92vw, 560px);
-      margin: 0 auto 16px;
+    /* Kill any old spacer/gap that some phones kept around */
+    #ra-canvas-dock-space, .ra-canvas-gap, [data-ra-gap]{
+      display: none !important;
+      height: 0 !important;
+      min-height: 0 !important;
     }
-    .panel h1, .panel h2, .panel h3,
-    .card  h1, .card  h2, .card  h3 { line-height: 1.15; }
 
-    /* 1d) Hide any old "flow spacer" or stray checkerboard outside our slot */
-    [data-ra-flow-spacer], .ra-flow-spacer { display: none !important; }
-    body[data-ra-mobile="1"] [class*="checkerboard"]:not(#ra-mobile-stage-slot *),
-    body[data-ra-mobile="1"] .checkerboard:not(#ra-mobile-stage-slot *),
-    body[data-ra-mobile="1"] .bg-checker:not(#ra-mobile-stage-slot *),
-    body[data-ra-mobile="1"] .bg-checkerboard:not(#ra-mobile-stage-slot *) {
+    /* Hide any stray checkerboard element not inside our box */
+    .checkerboard, [class*="checker"][class*="board"], [data-checkerboard]{
       display: none !important;
     }
   }`;
-  const style = document.createElement('style');
-  style.id = 'ra-mobile-v12-style';
-  style.textContent = css;
   document.head.appendChild(style);
 
-  // ---- 2) Helpers to find stage and "Rebel Ant" card ----------------
-  function findStageBox() {
-    // Try common hooks: container with canvas or stage
-    const candidates = [
-      '[data-ra-stage]', '#stage', '.stage', '#ra-canvas', '.canvas-container',
-      '.canvasHost', '.konvajs-content', '.fabric-canvas', 'canvas'
-    ];
-    for (const sel of candidates) {
-      const el = document.querySelector(sel);
-      if (el) {
-        // Prefer an outer box if present (often carries the checkerboard)
-        const outer = el.closest('[class*="canvas"], [class*="stage"], [class*="board"], [class*="host"]');
-        return outer || el;
+  // --------- JS (phones only) ----------
+  const isPhone = () => window.matchMedia('(max-width: 768px)').matches;
+
+  // Pick the main drawing canvas (largest one on the page).
+  function getLargestCanvas() {
+    const list = Array.from(document.querySelectorAll('canvas'));
+    if (!list.length) return null;
+    return list.reduce((a, c) =>
+      (c.width * c.height > (a?.width || 0) * (a?.height || 0) ? c : a), null);
+  }
+
+  function applyMobileFit() {
+    if (!isPhone()) return;
+
+    const mainCanvas = getLargestCanvas();
+    if (!mainCanvas) return;
+
+    // Use the nearest sensible container as "the canvas box"
+    let box = mainCanvas.closest('.konvajs-content, .canvas-container, [data-ra-stage]') || mainCanvas.parentElement;
+    if (!box) return;
+
+    // Tag it so our CSS styles it (no DOM moves, stays in the page flow)
+    box.setAttribute('data-ra-mbox', '');
+
+    // Prevent whole-canvas zoom/scroll on mobile (keeps overlays movable)
+    const kill = e => e.preventDefault();
+    box.addEventListener('wheel',          kill, { passive: false });
+    box.addEventListener('gesturestart',   kill, { passive: false });
+    box.addEventListener('gesturechange',  kill, { passive: false });
+    box.addEventListener('gestureend',     kill, { passive: false });
+
+    // If Konva stage exists, make sure the stage itself isn’t draggable (base image locked)
+    try {
+      if (window.stage && typeof window.stage.draggable === 'function') {
+        window.stage.draggable(false);
       }
-    }
-    return null;
+    } catch (_) {}
   }
 
-  function findRebelAntPanel() {
-    // Look for a heading containing "Rebel Ant" and use its card/panel container
-    const hdr = Array.from(document.querySelectorAll('h1,h2,h3,h4'))
-      .find(h => /rebel\s*ant/i.test(h.textContent || ''));
-    if (hdr) {
-      let p = hdr;
-      while (p && p.parentElement) {
-        if (
-          p.classList?.contains('panel') || p.classList?.contains('card') ||
-          p.classList?.contains('box')   || p.classList?.contains('ra-card') ||
-          p.tagName === 'SECTION' || p.tagName === 'ARTICLE'
-        ) return p;
-        p = p.parentElement;
-      }
-    }
-    // Fallback: first card-like element
-    return document.querySelector('.panel, .card, .box, section, article') || document.body;
+  const ready = () => applyMobileFit();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ready);
+  } else {
+    ready();
   }
-
-  // ---- 3) Move stage above Rebel Ant (phones only), keep desktop intact ----
-  let original = null;      // remember original parent/position for desktop
-  let slot = null;
-
-  function installForPhone() {
-    document.documentElement.setAttribute('data-ra-mobile', '1');
-
-    const stageBox = findStageBox();
-    const rebel = findRebelAntPanel();
-    if (!stageBox || !rebel) return;
-
-    // Create the slot if needed and insert it above the Rebel Ant card
-    if (!slot) {
-      slot = document.createElement('div');
-      slot.id = 'ra-mobile-stage-slot';
-    }
-    if (rebel.parentNode && slot.parentNode !== rebel.parentNode) {
-      rebel.parentNode.insertBefore(slot, rebel);
-    }
-
-    // Cache original location (for desktop restore)
-    if (!original) {
-      original = { parent: stageBox.parentNode, next: stageBox.nextSibling };
-    }
-
-    // Move the entire stage container into the slot
-    if (stageBox.parentNode !== slot) {
-      slot.appendChild(stageBox);
-      // Normalize margins so we don't get a big empty gap
-      stageBox.style.margin = '0 auto';
-    }
-
-    // Remove any leftover spacer or stray checkerboard created by older patches
-    document.querySelectorAll('[data-ra-flow-spacer], .ra-flow-spacer, #ra-flow-spacer')
-      .forEach(n => n.remove());
-  }
-
-  function uninstallForDesktop() {
-    document.documentElement.removeAttribute('data-ra-mobile');
-
-    if (!original || !slot) return;
-    const stageBox = slot.firstElementChild;
-    if (stageBox && original.parent) {
-      if (original.next) original.parent.insertBefore(stageBox, original.next);
-      else original.parent.appendChild(stageBox);
-    }
-    if (slot && slot.parentNode) slot.parentNode.removeChild(slot);
-    slot = null;
-  }
-
-  function applyByViewport() {
-    if (window.innerWidth <= 768) {
-      installForPhone();
-    } else {
-      uninstallForDesktop();
-    }
-  }
-
-  // Run on load and whenever DOM changes (builder often re-renders nodes)
-  const mo = new MutationObserver(() => {
-    if (window.innerWidth <= 768) installForPhone();
-  });
-  mo.observe(document.documentElement, { childList: true, subtree: true });
-
-  window.addEventListener('resize', applyByViewport, { passive: true });
-  document.addEventListener('DOMContentLoaded', applyByViewport, { once: true });
-  // Safety run after initial boot
-  setTimeout(applyByViewport, 250);
-  setTimeout(applyByViewport, 900);
+  window.addEventListener('resize', ready);
+  window.addEventListener('orientationchange', ready);
 })();
