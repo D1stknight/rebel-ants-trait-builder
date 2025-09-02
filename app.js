@@ -1340,22 +1340,28 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ========== RA_mobile_close_gap_v21_pullUp (MOBILE ONLY) ==========
-   Goal: close the empty space BETWEEN “Custom Text” and “Overlays”.
-   How: compute the gap and apply a negative margin to the Overlays card
-   so it visually touches Custom Text. No desktop changes. Revert by
-   deleting this whole block.
-   ================================================================== */
+/* ========= RA_mobile_close_gap_v24_removeBetween (MOBILE ONLY) =========
+   Purpose: Remove the large empty space BETWEEN “Custom Text” and “Overlays”
+   by hiding the tall, non‑interactive spacer that sits between them.
+   Desktop is not affected. Revert by deleting this entire block.
+   ===================================================================== */
 (() => {
-  const MQ = '(max-width: 920px)';                         // phones & small tablets
-  if (!window.matchMedia(MQ).matches) return;              // desktop untouched
-  if (window.__RA_MOBILE_GAP_PULLUP__) return;             // only once per load
-  window.__RA_MOBILE_GAP_PULLUP__ = true;
+  const MQ = '(max-width: 920px)';                       // phones & small tablets
+  if (!window.matchMedia(MQ).matches) return;            // desktop untouched
+  if (window.__RA_CLOSE_GAP_V24__) return;
+  window.__RA_CLOSE_GAP_V24__ = true;
 
-  // --- tiny helpers ---
-  const norm = s => (s || '').trim().toLowerCase();
+  // --- helpers ---------------------------------------------------------
+  const INTERACTIVE = 'input,button,select,textarea,canvas,[contenteditable],a[href],[role="button"],[role="slider"]';
+  const AVOID_TAG   = new Set(['HTML','BODY','HEAD','MAIN','NAV','FOOTER']);
   const qAll = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const norm = s => (s || '').trim().toLowerCase();
+  const rectY = el => {
+    const r = el.getBoundingClientRect();
+    return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY, h: r.height };
+  };
 
+  // Find the visual "card" that holds a given heading/control
   function closestCard(el) {
     if (!el) return null;
     let p = el;
@@ -1365,67 +1371,77 @@
       const cs = getComputedStyle(p);
       if (cs.display !== 'inline' && hasControls) return p;
     }
-    return el;
+    return el.parentElement || el;
   }
 
-  function findCustomCard() {
-    // anchor by the "Add Text" button or “Custom Text” heading
-    const addBtn = qAll('button').find(b => /add\s*text/i.test(b.textContent || ''));
-    if (addBtn) return closestCard(addBtn);
-    const maybe = qAll('h1,h2,h3,h4,h5,h6,[role="heading"]').find(h => /custom\s*text/i.test(norm(h.textContent)));
-    return closestCard(maybe);
+  function findCustomTextCard() {
+    // anchor by “Custom Text” heading or the “Add Text” button
+    const head = qAll('h1,h2,h3,h4,h5,h6,[role="heading"]').find(h => /custom\s*text/i.test(norm(h.textContent)));
+    if (head) return closestCard(head);
+    const addBtn = qAll('button').find(b => /add\s*text/i.test(norm(b.textContent)));
+    return closestCard(addBtn);
   }
 
   function findOverlaysCard() {
-    // anchor by "Overlays" heading or the "Choose Files" control
     const head = qAll('h1,h2,h3,h4,h5,h6,[role="heading"]').find(h => /overlays/i.test(norm(h.textContent)));
     if (head) return closestCard(head);
-    const chooser = qAll('button,input[type="file"]').find(el =>
-      /choose\s*files?/i.test(el.textContent || el.value || '')
-    );
+    const chooser = qAll('button,input[type="file"]').find(el => /choose\s*files?/i.test((el.textContent || el.value || '')));
     return closestCard(chooser);
   }
 
-  function measureTop(el)  { const r = el.getBoundingClientRect(); return r.top + window.scrollY; }
-  function measureBot(el)  { const r = el.getBoundingClientRect(); return r.bottom + window.scrollY; }
-
-  function pullUp() {
-    const custom   = findCustomCard();
+  function removeTallSpacerBetween() {
+    const custom   = findCustomTextCard();
     const overlays = findOverlaysCard();
     if (!custom || !overlays || custom === overlays) return;
 
-    // Nice small margins for mobile
-    custom.style.marginBottom   = '12px';
-    overlays.style.marginTop    = '';        // we’ll set it below
-    overlays.style.position     = 'relative'; // safe for negative margin
-    overlays.style.zIndex       = '0';       // keep in normal layer flow
+    // Keep a small breathing space
+    custom.style.marginBottom = '12px';
+    overlays.style.marginTop  = '12px';
 
-    // put overlays after custom if it isn’t already
-    try { if (overlays.previousElementSibling !== custom) custom.after(overlays); } catch {}
+    const cY = rectY(custom);
+    const oY = rectY(overlays);
+    if (oY.top <= cY.bottom) return; // already touching or overlapping
 
-    // compute the actual empty gap
-    const gap = Math.round(measureTop(overlays) - measureBot(custom));
-    // if there’s a big gap, pull Overlays up by that amount (leave 12px breathing room)
-    if (gap > 16) {
-      overlays.style.marginTop = `${-(gap - 12)}px`;
-    } else {
-      overlays.style.marginTop = '12px';
+    // Scan every visible element; pick the biggest non‑interactive block between them
+    const all = Array.from(document.body.getElementsByTagName('*'));
+    const candidates = [];
+    for (const el of all) {
+      if (!(el instanceof HTMLElement)) continue;
+      if (AVOID_TAG.has(el.tagName)) continue;
+      if (el.hasAttribute('data-ra-gap-fixed')) continue;
+
+      const r = el.getBoundingClientRect();
+      if (r.height < 40) continue;                       // ignore tiny stuff
+      const top = r.top + window.scrollY;
+      const bot = r.bottom + window.scrollY;
+
+      // Fully between the two cards?
+      if (top >= cY.bottom - 2 && bot <= oY.top + 2) {
+        const hasUI = el.querySelector(INTERACTIVE);
+        const text  = norm(el.textContent);
+        const looksLikeCard = /overlays|custom\s*text/i.test(text);
+        if (!hasUI && !looksLikeCard) {
+          candidates.push({ h: r.height, el });
+        }
+      }
+    }
+
+    // Hide the largest culprit (and a second one if present)
+    candidates.sort((a, b) => b.h - a.h);
+    const toHide = candidates.slice(0, 2).map(x => x.el);
+    for (const el of toHide) {
+      el.setAttribute('data-ra-gap-fixed', '');
+      el.style.setProperty('display', 'none', 'important');
+      el.style.setProperty('height',  '0',    'important');
+      el.style.setProperty('margin',  '0',    'important');
+      el.style.setProperty('padding', '0',    'important');
+      el.style.setProperty('border',  '0',    'important');
     }
   }
 
-  const kick = () => requestAnimationFrame(pullUp);
-  // initial + keep it updated
+  // Run now and whenever the page mutates/resizes
+  const kick = () => requestAnimationFrame(removeTallSpacerBetween);
   kick();
-  window.addEventListener('resize', kick);
+  window.addEventListener('resize', kick, { passive: true });
   new MutationObserver(kick).observe(document.body, { childList: true, subtree: true });
-
-  // tiny CSS guard (mobile only)
-  const style = document.createElement('style');
-  style.textContent = `
-    @media ${MQ} {
-      /* just ensure the two cards sit close on phones */
-      .ra-mobile-tight { margin-top: 12px !important; margin-bottom: 12px !important; }
-    }
-  `;
-  document.head.appendChild(style);
 })();
