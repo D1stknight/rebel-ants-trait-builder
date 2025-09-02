@@ -1340,30 +1340,42 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ========== RA_mobile_close_gap_v8_reparentHard (MOBILE ONLY) ==========
-   Goal: Remove the empty space between “Custom Text” and “Overlays” on phones.
-   Method: On mobile, find the Custom Text card and the Overlays card and
-           physically move Overlays to sit right after Custom Text in the DOM.
-           Then tighten spacing; also hide any large full‑width filler that
-           might be sitting between them.
-   Desktop: Unchanged (code runs only when max-width <= 920px).
-   Revert:  Delete this whole block.
-   ===================================================================== */
+/* ========== RA_mobile_close_gap_v12_scanBand (MOBILE ONLY) ==========
+   Fix: big empty space between “Custom Text” and “Overlays” on phones.
+   1) Moves Overlays right after Custom Text.
+   2) Scans the vertical band between them and collapses any tall, non‑interactive
+      filler elements (no inputs/buttons/links/canvas inside).
+   Desktop remains untouched. Revert by deleting this whole block.
+   ==================================================================== */
 (() => {
-  const MQ = '(max-width: 920px)';        // phones & small tablets only
+  const MQ = '(max-width: 920px)';                 // phones & small tablets
   if (!window.matchMedia(MQ).matches) return;
-  if (window.__RA_MOBILE_GAP_V8__) return; // run once
-  window.__RA_MOBILE_GAP_V8__ = true;
+  if (window.__RA_MOBILE_GAP_V12__) return;        // run once
+  window.__RA_MOBILE_GAP_V12__ = true;
 
-  // ---------- small helpers ----------
-  const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  // ---------- helpers ----------
+  const qAll = (sel, root=document) => Array.from(root.querySelectorAll(sel));
   const norm = s => (s || '').trim().toLowerCase();
   const textOf = el => norm(el?.textContent || '');
 
+  const hasInteractive = (el) =>
+    !!el.querySelector('input,select,textarea,button,a[href],[role="button"],[role="slider"],canvas');
+
+  const closestCard = (el) => {
+    if (!el) return null;
+    let p = el;
+    for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
+      const cs = p instanceof HTMLElement ? getComputedStyle(p) : null;
+      if (!cs) break;
+      const controls = p.querySelectorAll('input,button,select,textarea,canvas,[role="slider"],[role="button"]');
+      if (cs.display !== 'inline' && controls.length >= 1) return p;
+    }
+    return el;
+  };
+
   const findHeadingLike = (labels) => {
     const wants = labels.map(norm);
-    // look through headings and common section containers
-    const nodes = $all('h1,h2,h3,h4,h5,h6,legend,[role="heading"],section,div');
+    const nodes = qAll('h1,h2,h3,h4,h5,h6,legend,[role="heading"],section,div');
     for (const el of nodes) {
       const t = textOf(el);
       if (!t) continue;
@@ -1372,53 +1384,69 @@
     return null;
   };
 
-  const closestCard = (el) => {
-    if (!el) return null;
-    let p = el;
-    for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
-      const style = p instanceof HTMLElement ? getComputedStyle(p) : null;
-      const controls = p?.querySelectorAll('input,button,select,textarea,canvas,[role="slider"],[role="button"]');
-      if (style && style.display !== 'inline' && controls && controls.length >= 2) return p;
-    }
-    return el;
-  };
-
   const findCustomCard = () => {
-    const addBtn = $all('button').find(b => /add\s*text/i.test(b.textContent));
+    const addBtn = qAll('button').find(b => /add\s*text/i.test(b.textContent));
     if (addBtn) return closestCard(addBtn);
     const h = findHeadingLike(['custom text']);
     return closestCard(h);
   };
 
   const findOverlaysCard = () => {
-    // try section header first
     let h = findHeadingLike(['overlays', 'published overlays', 'embedded permanents']);
     if (h) return closestCard(h);
-    // fallback: the “Choose Files” control inside overlays
-    const chooser = $all('button,input[type="file"]').find(el =>
+    const chooser = qAll('button,input[type="file"]').find(el =>
       /choose\s*files?/i.test(el.textContent || el.value || '')
     );
     return closestCard(chooser);
   };
 
-  function tightenSpacing(custom, overlays) {
+  const rectPage = (el) => {
+    const r = el.getBoundingClientRect();
+    return { t: r.top + window.scrollY, b: r.bottom + window.scrollY, h: r.height };
+  };
+
+  // Move Overlays after Custom Text and tighten margins
+  function ensureOrderAndTighten(custom, overlays) {
     if (!custom || !overlays) return;
-    // ensure minimal gap after reparent
-    custom.style.marginBottom = '12px';
-    overlays.style.marginTop  = '12px';
+    try {
+      if (overlays.previousElementSibling !== custom) {
+        custom.after(overlays); // detach & insert right after Custom Text
+      }
+      custom.style.marginBottom = '12px';
+      overlays.style.marginTop  = '12px';
+    } catch {}
+  }
 
-    // If a big full‑width filler still sits between them, hide it
-    const rectC = custom.getBoundingClientRect();
-    const rectO = overlays.getBoundingClientRect();
-    const midY  = (rectC.bottom + rectO.top) / 2;
+  // Scan the vertical band between the two cards and collapse any large, non-interactive filler
+  function collapseBand(custom, overlays) {
+    if (!custom || !overlays) return;
+    const rc = rectPage(custom);
+    const ro = rectPage(overlays);
+    const band = ro.t - rc.b;
+    if (band <= 20) return; // already tight
 
-    const candidates = document.elementsFromPoint(window.innerWidth / 2, midY);
-    candidates.forEach(el => {
-      if (!(el instanceof HTMLElement)) return;
-      if (el.contains(custom) || el.contains(overlays) || custom.contains(el) || overlays.contains(el)) return;
+    const seen = new Set();
+    const sampleXs = [window.innerWidth * 0.25, window.innerWidth * 0.5, window.innerWidth * 0.75];
+    for (let y = rc.b + 10; y < ro.t - 10; y += 32) {
+      for (const x of sampleXs) {
+        const els = document.elementsFromPoint(x, y);
+        els.forEach(el => {
+          if (!(el instanceof HTMLElement)) return;
+          if (custom.contains(el) || overlays.contains(el) || el.contains(custom) || el.contains(overlays)) return;
+          if (seen.has(el)) return;
+          seen.add(el);
+        });
+      }
+    }
+
+    seen.forEach(el => {
+      // Ignore fixed UI (like the little floating menu button)
+      const cs = getComputedStyle(el);
+      if (cs.position === 'fixed' || cs.visibility === 'hidden' || cs.display === 'none') return;
+
+      // Collapse only large, non-interactive blocks
       const r = el.getBoundingClientRect();
-      // collapse only big, wide, non-fixed blocks (likely the “empty band”)
-      if (r.height > 40 && r.width > window.innerWidth * 0.6 && getComputedStyle(el).position !== 'fixed') {
+      if (r.height > 40 && r.width > window.innerWidth * 0.5 && !hasInteractive(el)) {
         el.setAttribute('data-ra-gap-collapsed', '1');
         Object.assign(el.style, {
           display:   'none',
@@ -1431,36 +1459,21 @@
     });
   }
 
-  function reparent() {
+  function run() {
     const custom   = findCustomCard();
     const overlays = findOverlaysCard();
     if (!custom || !overlays) return;
-
-    // If Overlays is not immediately after Custom Text (or there's a big gap),
-    // move it right after Custom Text—regardless of its original parent.
-    const rectC = custom.getBoundingClientRect();
-    const rectO = overlays.getBoundingClientRect();
-    const farApart = (rectO.top - rectC.bottom) > 40;
-    const notAdjacent = overlays.previousElementSibling !== custom;
-
-    if (farApart || notAdjacent) {
-      try {
-        custom.after(overlays);   // detach & insert after Custom Text
-      } catch {}
-    }
-
-    tightenSpacing(custom, overlays);
+    ensureOrderAndTighten(custom, overlays);
+    collapseBand(custom, overlays);
   }
 
-  const kick = () => requestAnimationFrame(reparent);
+  // initial + keep it sticky on updates/orientation
+  const kick = () => requestAnimationFrame(run);
   kick();
-
-  // keep it sticky across client-side updates/orientation changes
-  const mo = new MutationObserver(kick);
-  mo.observe(document.body, { childList: true, subtree: true });
+  new MutationObserver(kick).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('resize', kick);
 
-  // safety CSS for any collapsed filler we mark
+  // safety CSS for any collapsed filler
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
