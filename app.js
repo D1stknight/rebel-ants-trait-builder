@@ -1487,3 +1487,75 @@
     injectButton();
   }
 })();
+
+/* ================= RA_FONT_PICKER_CLEAN_V1 =================
+   Shows friendly names in the font dropdown while keeping
+   correct CSS font stacks as the actual values.
+   Works for #fontFamily (Custom Text). If you also have an
+   #idFontFamily picker for the token ID, it will apply there too.
+   ========================================================== */
+(function RA_FONT_PICKER_CLEAN_V1(){
+  const FONTS = [
+    { name: 'Impact',            stack: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
+    { name: 'Arial Black',       stack: "'Arial Black', Gadget, sans-serif" },
+    { name: 'Arial',             stack: "Arial, Helvetica, sans-serif" },
+    { name: 'Helvetica Neue',    stack: "'Helvetica Neue', Helvetica, Arial, sans-serif" },
+    { name: 'Verdana',           stack: "Verdana, Geneva, sans-serif" },
+    { name: 'Tahoma',            stack: "Tahoma, Geneva, sans-serif" },
+    { name: 'Trebuchet MS',      stack: "'Trebuchet MS', Helvetica, sans-serif" },
+    { name: 'Georgia',           stack: "Georgia, 'Times New Roman', serif" },
+    { name: 'Times New Roman',   stack: "'Times New Roman', Times, serif" },
+    { name: 'Palatino',          stack: "Palatino, 'Palatino Linotype', serif" },
+    { name: 'Garamond',          stack: "Garamond, Baskerville, 'Baskerville Old Face', 'Times New Roman', serif" },
+    { name: 'Optima',            stack: "Optima, Segoe, 'Segoe UI', Candara, Calibri, Arial, sans-serif" },
+    { name: 'Century Gothic',    stack: "'Century Gothic', AppleGothic, sans-serif" },
+    { name: 'Gill Sans',         stack: "'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" },
+    { name: 'Avenir',            stack: "Avenir, 'Avenir Next', 'Segoe UI', sans-serif" },
+    { name: 'Copperplate',       stack: "Copperplate, 'Copperplate Gothic Light', fantasy" },
+    { name: 'Papyrus',           stack: "Papyrus, fantasy" },
+    { name: 'Brush Script MT',   stack: "'Brush Script MT', cursive" },
+    { name: 'Lucida Sans',       stack: "'Lucida Sans Unicode','Lucida Grande', sans-serif" },
+    { name: 'Lucida Console',    stack: "'Lucida Console', Monaco, monospace" },
+    { name: 'Consolas',          stack: "Consolas, 'Lucida Console', Monaco, monospace" },
+    { name: 'Courier',           stack: "Courier, 'Courier New', monospace" },
+    { name: 'Menlo',             stack: "Menlo, Monaco, Consolas, 'Courier New', monospace" },
+    { name: 'System UI',         stack: "system-ui, -apple-system, 'Segoe UI', Roboto, Arial" }
+  ];
+
+  function applyToPicker(el){
+    if (!el) return;
+
+    // keep current value if it matches one of our stacks
+    const current = (el.value || '').trim();
+    const keep = FONTS.some(f => f.stack === current) ? current : null;
+
+    // only repopulate if it's a <select> (so we keep existing listeners)
+    if (el.tagName.toLowerCase() === 'select'){
+      el.innerHTML = '';
+      FONTS.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.stack;          // what fabric uses
+        opt.textContent = f.name;     // what user sees
+        el.appendChild(opt);
+      });
+      el.value = keep || FONTS[0].stack;
+
+      // fire a change so the canvas updates if needed
+      try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_) {}
+    } else {
+      // if it’s an <input>, just ensure it has a sane default stack
+      if (!keep) el.value = FONTS[0].stack;
+    }
+  }
+
+  function run(){
+    applyToPicker(document.getElementById('fontFamily'));   // Custom Text font
+    applyToPicker(document.getElementById('idFontFamily')); // (optional) Token ID font, if present
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run, { once:true });
+  } else {
+    run();
+  }
+})();
