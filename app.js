@@ -1339,3 +1339,86 @@
   document.head.appendChild(style);
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
+
+/* ================= RA_mobile_compact_gap_v1 (MOBILE ONLY) =================
+   Purpose: Tighten/kill the small empty spacer between "Custom Text" and
+            "Overlays" on phones, without touching desktop or exports.
+   - Keeps canvas in normal page flow
+   - No input focus shenanigans (keyboard stays up)
+   ======================================================================= */
+(() => {
+  const MQ = '(max-width: 920px)';
+  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V1__) return;
+  window.__RA_MOBILE_GAP_V1__ = true;
+
+  const $$ = (sel, r = document) => Array.from(r.querySelectorAll(sel));
+
+  function findCardByHeading(text) {
+    const needle = text.toLowerCase();
+    for (const el of $$('h1,h2,h3,div,section')) {
+      const t = (el.textContent || '').trim().toLowerCase();
+      if (t.startsWith(needle)) {
+        // climb to a panel-like container
+        let p = el.closest('.card, section, div') || el.parentElement;
+        while (p && p.parentElement && p.offsetHeight < 60) p = p.parentElement;
+        return p || el;
+      }
+    }
+    return null;
+  }
+
+  function squashGap() {
+    const custom = findCardByHeading('custom text');
+    const overlays = findCardByHeading('overlays');
+    if (!custom || !overlays) return;
+
+    // tighten card margins
+    custom.style.marginBottom = '12px';
+    overlays.style.marginTop  = '12px';
+
+    // remove stray spacer(s) between them (empty/visual-only rows)
+    let cur = custom.nextElementSibling;
+    let guard = 0;
+    while (cur && cur !== overlays && guard++ < 10) {
+      const h  = cur.getBoundingClientRect().height;
+      const cs = getComputedStyle(cur);
+      const looksSpacer = h < 40 || !(cur.textContent || '').trim();
+      const isChecker   = (cs.backgroundImage || '').includes('linear-gradient')
+                       || (cs.backgroundImage || '').includes('repeating');
+
+      if (looksSpacer || isChecker) {
+        cur.style.display = 'none';
+        cur.style.height  = '0px';
+        cur.style.margin  = '0';
+        cur.style.padding = '0';
+        cur.setAttribute('data-ra-hidden-gap', '1');
+      }
+      cur = cur.nextElementSibling;
+    }
+  }
+
+  // Keep tidy as DOM mutates
+  const mo = new MutationObserver(() => squashGap());
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => squashGap(), { once: true });
+  } else {
+    squashGap();
+  }
+
+  // Minimal CSS (mobile only) to make hidden gap rows fully collapse
+  const style = document.createElement('style');
+  style.textContent = `
+    @media ${MQ} {
+      [data-ra-hidden-gap="1"] {
+        display: none !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+})();
+ /* ================= END RA_mobile_compact_gap_v1 (MOBILE ONLY) ================= */
