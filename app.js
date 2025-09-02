@@ -1340,47 +1340,71 @@
 })();
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
-/* ============ RA_mobile_compact_gap_v5_force — MOBILE ONLY ============
-   Purpose: On phones, put "Overlays" directly under "Custom Text" and
-            eliminate the large blank strip by collapsing ALL siblings
-            between those two panels. Desktop is untouched.
-   How:     Text-based location + MutationObserver. Safe to remove.
+/* ============ RA_mobile_compact_gap_v6_scan — MOBILE ONLY ============
+   Goal: On phones, remove the large empty strip by collapsing ANY element
+         that sits between the “Custom Text” card and the “Overlays” card.
+         Works even if those cards are in different parents.
+   Safe: Desktop untouched. Easy to remove (delete this block).
    ==================================================================== */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V5_FORCE__) return;
-  window.__RA_MOBILE_GAP_V5_FORCE__ = true;
+  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_GAP_V6_SCAN__) return;
+  window.__RA_MOBILE_GAP_V6_SCAN__ = true;
 
-  // ---------- helpers ----------
+  // ---------- tiny utils ----------
   const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
-  const t    = (el) => (el && (el.textContent || '') || '').trim().toLowerCase();
+  const txt  = el => (el && (el.textContent || '')).trim().toLowerCase();
 
-  // Find a header-ish element by text
   const findHeading = (needles) => {
     const wants = needles.map(s => s.toLowerCase());
-    // broaden the net a bit
+    // look across common heading-ish tags & labeled containers
     const nodes = $all('h1,h2,h3,h4,h5,h6,legend,section,div,[role="heading"]');
     for (const el of nodes) {
-      const txt = t(el);
-      if (!txt) continue;
-      if (wants.some(w => txt.includes(w))) return el;
+      const t = txt(el);
+      if (!t) continue;
+      if (wants.some(w => t.includes(w))) return el;
     }
     return null;
   };
 
-  // Climb to a card/panel wrapper that actually contains the section
-  const cardFromHeading = (h) => {
-    if (!h) return null;
-    let p = h;
+  const cardFrom = (el) => {
+    if (!el) return null;
+    // climb to a wrapper that behaves like a “card” (has multiple controls)
+    let p = el;
     for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
-      // a "card" typically contains a few controls
-      const controls = p ? p.querySelectorAll('input,button,select,textarea,canvas,[role="slider"],[role="button"]') : [];
-      if (controls && controls.length >= 2) return p;
+      const hasControls = p && p.querySelectorAll(
+        'input,button,select,textarea,canvas,[role="slider"],[role="button"]'
+      ).length >= 2;
+      if (hasControls) return p;
     }
-    return h; // fallback
+    return el;
   };
 
-  // Hide an element like a spacer
+  const findCustomCard = () => {
+    const addBtn = $all('button').find(b => /add\s*text/i.test(b.textContent));
+    if (addBtn) return cardFrom(addBtn);
+    const h = findHeading(['custom text']);
+    return cardFrom(h);
+  };
+
+  const findOverlaysCard = () => {
+    const h = findHeading(['overlays']) || findHeading(['embedded permanents']);
+    let card = cardFrom(h);
+    if (!card) {
+      const chooser = $all('button,input[type="file"]').find(el =>
+        /choose\s*files?/i.test(el.textContent || el.value || '')
+      );
+      if (chooser) card = cardFrom(chooser);
+    }
+    return card;
+  };
+
+  // order helpers
+  const isBefore = (a, b) =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const isAfter = (a, b) =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_PRECEDING);
+
   const collapse = (el) => {
     if (!el || el.hasAttribute('data-ra-gap-collapsed')) return;
     el.setAttribute('data-ra-gap-collapsed', '1');
@@ -1392,58 +1416,48 @@
     });
   };
 
-  function applyOnce() {
-    // locate the two sections (be tolerant with headings)
-    const hCustom   = findHeading(['custom text']);
-    const hOverlays = findHeading(['overlays']) || findHeading(['embedded permanents']);
+  function squashGap() {
+    const customCard   = findCustomCard();
+    const overlaysCard = findOverlaysCard();
+    if (!customCard || !overlaysCard) return;
 
-    if (!hCustom || !hOverlays) return;
-
-    const customCard   = cardFromHeading(hCustom);
-    const overlaysCard = cardFromHeading(hOverlays);
-    if (!customCard || !overlaysCard || !customCard.parentNode) return;
-
+    // Put Overlays right after Custom Text in the same parent, if possible
     const parent = customCard.parentNode;
-
-    // Ensure both cards share the same parent so siblings are linear
-    if (overlaysCard.parentNode !== parent) {
-      parent.insertBefore(overlaysCard, customCard.nextSibling);
+    if (overlaysCard.parentNode !== parent && parent) {
+      try { parent.insertBefore(overlaysCard, customCard.nextSibling); } catch {}
+    } else if (customCard.nextElementSibling !== overlaysCard) {
+      try { parent.insertBefore(overlaysCard, customCard.nextElementSibling); } catch {}
     }
 
-    // Force "Overlays" to be immediately after "Custom Text"
-    if (customCard.nextElementSibling !== overlaysCard) {
-      parent.insertBefore(overlaysCard, customCard.nextElementSibling);
+    // Scan the whole document and collapse anything between the two cards
+    const all = $all('body *');
+    for (const el of all) {
+      if (!(el instanceof HTMLElement)) continue;
+      if (customCard.contains(el) || overlaysCard.contains(el)) continue;
+      if (!isBefore(customCard, el) || !isBefore(el, overlaysCard)) continue; // el must be between
+      const cs = getComputedStyle(el);
+      if (cs.position === 'fixed' || cs.position === 'sticky') continue; // don’t kill floating UI
+      const rect = el.getBoundingClientRect();
+      if (rect.height < 48 || rect.width < 48) continue; // small elements are fine
+      // Skip obvious content containers (safety)
+      if (el.querySelector('input,button,select,textarea,canvas,[role="slider"],[role="button"],a')) continue;
+      collapse(el);
     }
 
-    // **Strong step**: collapse EVERYTHING between them
-    let node = customCard.nextSibling;
-    let guard = 0;
-    while (node && node !== overlaysCard && guard++ < 50) {
-      const next = node.nextSibling;
-      if (node.nodeType === 1) {
-        collapse(node);
-      } else {
-        // text/comment nodes — remove to be thorough
-        try { parent.removeChild(node); } catch {}
-      }
-      node = next;
-    }
-
-    // small, neat spacing
+    // Tidy spacing
     customCard.style.marginBottom = '12px';
     overlaysCard.style.marginTop  = '12px';
   }
 
-  // run now + keep it sticky across re-renders
-  const kick = () => requestAnimationFrame(applyOnce);
+  // Run now & keep it sticky across re-renders
+  const kick = () => requestAnimationFrame(squashGap);
   kick();
-
   const mo = new MutationObserver(kick);
   mo.observe(document.body, { childList: true, subtree: true });
 
-  // safety CSS (mobile only)
-  const css = document.createElement('style');
-  css.textContent = `
+  // safety CSS
+  const style = document.createElement('style');
+  style.textContent = `
     @media ${MQ} {
       [data-ra-gap-collapsed="1"] {
         display: none !important;
@@ -1453,5 +1467,5 @@
       }
     }
   `;
-  document.head.appendChild(css);
+  document.head.appendChild(style);
 })();
