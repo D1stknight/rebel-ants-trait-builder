@@ -1213,188 +1213,129 @@
   kick();
 })();
 
-/* =========================  RA_mobile_fit_and_flow_v15  =========================
-   Mobile-only helpers:
-   - Fits the token image to the visible canvas on first paint (no flicker).
-   - Removes the mid-page “empty space” spacer if one exists.
-   - Never binds to input events (so the keyboard won’t dismiss).
-   - Runs only on small screens; desktop is left alone.
-   ============================================================================== */
+/* ====================== RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) ======================
+   What it does:
+   • Fits the drawing to your phone screen using CSS (view-only) — exports stay perfect.
+   • Keeps the canvas in the normal page flow (not floating).
+   • Removes the mid-page empty checkerboard strip if it appears.
+   • Never touches desktop.
+   • Never grabs focus (keyboard won’t dismiss while typing the token).
+   ====================================================================== */
 (() => {
-  // ---- Guard: mobile only, once ----------------------------------------------
-  const isMobile = window.matchMedia('(max-width: 920px)').matches;
-  if (!isMobile || window.__RA_MOBILE_FIT_FLOW_V15__) return;
-  window.__RA_MOBILE_FIT_FLOW_V15__ = true;
+  const MOBILE_Q = '(max-width: 920px)';
+  if (!window.matchMedia(MOBILE_Q).matches || window.__RA_MOBILE_CSS_FIT_V2__) return;
+  window.__RA_MOBILE_CSS_FIT_V2__ = true;
 
-  // ---- Tiny DOM helpers -------------------------------------------------------
-  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
-  const $  = (sel, root=document) => root.querySelector(sel);
+  // small helpers
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  const  $ = (s,r=document)=>r.querySelector(s);
 
-  // Wait until the main canvas exists
-  function whenCanvasReady(cb) {
-    const tryNow = () => {
-      const c = findStageCanvas();
-      if (c) { cb(c); return true; }
-      return false;
-    };
-    if (tryNow()) return;
-    const mo = new MutationObserver(() => { if (tryNow()) mo.disconnect(); });
-    mo.observe(document.documentElement, {childList:true, subtree:true});
-  }
-
-  // Find the biggest <canvas> on the page (Konva/Fabric usually creates a few)
   function findStageCanvas() {
     const all = $$('canvas');
     if (!all.length) return null;
-    // pick the widest canvas (the drawing stage is always the largest)
-    return all.reduce((a,b) => (b.width > (a?.width||0) ? b : a), null);
+    // pick the intrinsically largest canvas — that’s the drawing stage
+    return all.reduce((a,b)=> (b.width > (a?.width||0) ? b : a), null);
   }
 
-  // Find the card that contains the Canvas zoom controls (minus, % label, plus)
-  function findCanvasControls() {
-    // Heuristic: a section/card that contains the word "Canvas" and a % text
-    const cards = $$('section,div');
-    for (const card of cards) {
-      const text = (card.innerText || '').toLowerCase();
-      if (!text.includes('canvas')) continue;
-      const hasPercent = /\d+\s*%/.test(text);
-      const hasMinus   = $$('button', card).some(b => b.textContent.trim() === '-' );
-      const hasPlus    = $$('button', card).some(b => b.textContent.trim() === '+' );
-      if (hasPercent && (hasMinus || hasPlus)) return card;
-    }
-    return null;
-  }
+  function cssFit() {
+    const stage = findStageCanvas();
+    if (!stage) return;
 
-  // Read the current zoom percent shown next to +/- (fallback to 100)
-  function readZoomPercent(ctrl) {
-    const pctNode = $$('*', ctrl).find(n => /\d+\s*%/.test(n.textContent || ''));
-    if (!pctNode) return 100;
-    const m = pctNode.textContent.match(/(\d+)\s*%/);
-    return m ? parseInt(m[1], 10) : 100;
-  }
+    // the element we’ll size in-flow (usually the stage’s container)
+    const wrap = stage.parentElement || stage;
 
-  // Click +/- to reach a target percent (works with 1%, 5% or 10% step UIs)
-  function setZoomPercent(ctrl, target) {
-    target = Math.max(10, Math.min(100, Math.round(target))); // clamp
-    const minus = $$('button', ctrl).find(b => b.textContent.trim() === '-' );
-    const plus  = $$('button', ctrl).find(b => b.textContent.trim() === '+' );
-    if (!minus || !plus) return;
+    // intrinsic drawing size (used by export)
+    const W = Math.max(1, stage.width);
+    const H = Math.max(1, stage.height);
 
-    // Step until we’re within 1% of target (with a safety cap)
-    let safety = 80;
-    const tick = () => {
-      let cur = readZoomPercent(ctrl);
-      if (Math.abs(cur - target) <= 1 || --safety <= 0) return;
-      (cur > target ? minus : plus).click();
-      // queue next micro-step; small delay prevents flicker/race with the app’s state
-      setTimeout(tick, 12);
-    };
-    tick();
-  }
+    // available width inside the page (center it, keep some breathing room)
+    const host = wrap.parentElement || document.body;
+    const hostW = Math.max(320, host.clientWidth || window.innerWidth);
+    const sidePad = 28;                      // approximate padding of the layout
+    const targetW = Math.min(W, hostW - sidePad);
+    const scale   = Math.min(1, targetW / W);
+    const dW      = Math.round(W * scale);
+    const dH      = Math.round(H * scale);
 
-  // Compute the fit percent so the full image is visible horizontally on mobile
-  function computeFitPercent(stageCanvas) {
-    const host = stageCanvas.parentElement || document.body;
-    const hostW = Math.max(1, host.clientWidth || window.innerWidth);
-    const px    = Math.max(1, stageCanvas.width); // intrinsic canvas pixels
-    const pct   = Math.min(100, Math.floor((hostW / px) * 100));
-    return pct;
-  }
+    // ✅ View-only sizing: set CSS width/height (do NOT change canvas.width/height)
+    //    This keeps exports crisp and full-size with no white borders.
+    wrap.style.width     = dW + 'px';
+    wrap.style.height    = dH + 'px';
+    wrap.style.maxWidth  = '100%';
+    wrap.style.margin    = '0 auto 16px auto';
+    wrap.style.position  = 'relative';
 
-  // Arm a one-shot "fit after load" without touching inputs (no keyboard jump)
-  function armFitOnce() {
-    // Prevent multiple runs that cause “flicker”
-    if (window.__RA_FIT_ARMED__) return;
-    window.__RA_FIT_ARMED__ = true;
-
-    // We run shortly after the app finishes painting the loaded image
-    // A tiny chain of timeouts is the most reliable & flicker-free on mobile Safari
-    setTimeout(() => {
-      whenCanvasReady((stage) => {
-        const ctrl = findCanvasControls();
-        if (!ctrl) { window.__RA_FIT_ARMED__ = false; return; }
-        const fit = computeFitPercent(stage);
-        // If the UI thinks it is 100% but the stage won’t fully fit, correct it
-        setZoomPercent(ctrl, fit);
-        // Disarm so subsequent UI mutations don’t re-trigger flicker
-        setTimeout(() => { window.__RA_FIT_ARMED__ = false; }, 180);
-      });
-    }, 80);
-  }
-
-  // Bind ONLY to clicks that actually trigger a load (never to input typing)
-  function bindLoadButtons() {
-    // “Load” & “Load by Token” buttons inside the Rebel Ant card
-    const maybeCards = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
-    const loadBtns = [];
-    for (const card of maybeCards) {
-      for (const b of $$('button', card)) {
-        const t = (b.textContent || '').toLowerCase().trim();
-        if (t === 'load' || t === 'load by token' || t === 'clear upload') loadBtns.push(b);
-      }
-      // Also file input change counts as a load
-      const file = $('input[type="file"]', card);
-      if (file && !file.__raBound) {
-        file.__raBound = true;
-        file.addEventListener('change', armFitOnce, {passive:true});
-      }
-    }
-    loadBtns.forEach(b => {
-      if (b.__raBound) return;
-      b.__raBound = true;
-      b.addEventListener('click', armFitOnce, {passive:true});
+    // If the stage container holds multiple canvases (scene/hit), size them all
+    $$('.', wrap); // no-op line to keep older minifiers happy
+    $$('canvas', wrap).forEach(c => {
+      c.style.width    = dW + 'px';
+      c.style.height   = dH + 'px';
+      c.style.maxWidth = '100%';
+      c.style.display  = 'block';
     });
-  }
 
-  // Remove any leftover mobile spacer/gap rows that sometimes appear in the middle
-  function killMidGaps() {
-    const suspects = $$('[data-ra-flow-gap], .ra-flow-gap, .canvas-gap, .checkerboard-row');
-    suspects.forEach(el => {
-      // Only remove if it looks visually empty or is just a thin checker strip
-      const h = el.getBoundingClientRect().height;
-      if (h < 8 || !el.innerText.trim()) {
+    // Collapse any stray checkerboard strip just above/below the canvas block
+    [wrap.previousElementSibling, wrap.nextElementSibling].forEach(el => {
+      if (!el) return;
+      const cs = getComputedStyle(el);
+      const isCheckerBG =
+        (cs.backgroundImage || '').includes('linear-gradient') ||
+        (cs.backgroundImage || '').includes('repeating');
+      const looksEmpty = el.getBoundingClientRect().height < 12 || !(el.textContent||'').trim();
+      if (isCheckerBG || looksEmpty) {
         el.style.display = 'none';
-        el.style.height = '0px';
-        el.style.padding = '0';
+        el.style.height  = '0px';
         el.style.margin  = '0';
+        el.style.padding = '0';
+        el.setAttribute('data-ra-hidden-gap','1');
       }
     });
   }
 
-  // Initial wiring + observers (mobile only)
-  const boot = () => {
-    bindLoadButtons();
-    killMidGaps();
-
-    // In case the app hot-swaps the Canvas card/layout, keep bindings fresh
-    const mo = new MutationObserver(() => {
-      bindLoadButtons();
-      killMidGaps();
+  // Trigger a fit after real “load” actions (not on typing, so the keyboard stays up)
+  function bindLoadTriggers() {
+    const raCards = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
+    raCards.forEach(card => {
+      $$('button', card).forEach(btn => {
+        const t = (btn.textContent||'').toLowerCase().trim();
+        if (t === 'load' || t === 'load by token' || t === 'clear upload') {
+          if (!btn.__raFitBound) {
+            btn.__raFitBound = true;
+            btn.addEventListener('click', () => setTimeout(cssFit, 60), {passive:true});
+          }
+        }
+      });
+      const file = $('input[type="file"]', card);
+      if (file && !file.__raFitBound) {
+        file.__raFitBound = true;
+        file.addEventListener('change', () => setTimeout(cssFit, 60), {passive:true});
+      }
     });
-    mo.observe(document.body, {childList:true, subtree:true});
-  };
+  }
 
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    boot();
+  // Keep things tidy as the app mutates
+  const mo = new MutationObserver(() => { bindLoadTriggers(); cssFit(); });
+  mo.observe(document.documentElement, {childList:true, subtree:true});
+
+  // Recompute on orientation/resize
+  window.addEventListener('resize', () => { if (window.matchMedia(MOBILE_Q).matches) cssFit(); }, {passive:true});
+  window.addEventListener('orientationchange', () => setTimeout(cssFit, 150), {passive:true});
+
+  // Initial pass
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { bindLoadTriggers(); cssFit(); }, {once:true});
   } else {
-    window.addEventListener('DOMContentLoaded', boot, {once:true});
+    bindLoadTriggers(); cssFit();
   }
 
-  // Minimal CSS nudge for mobile flow only (does not affect desktop)
-  const css = `
-    @media (max-width: 920px) {
-      /* Collapse any stray checkerboard strip/flow gap rows */
-      [data-ra-flow-gap], .ra-flow-gap, .canvas-gap, .checkerboard-row {
-        height: 0 !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important;
-        overflow: hidden !important; border: 0 !important;
-      }
-      /* Keep the canvas area tidy top/bottom in the normal page flow */
-      canvas { image-rendering: -webkit-optimize-contrast; }
+  // Minimal CSS for mobile only
+  const style = document.createElement('style');
+  style.textContent = `
+    @media ${MOBILE_Q} {
+      /* Kill any mid-page spacer/strip if it sneaks back in */
+      [data-ra-hidden-gap="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
     }
   `;
-  const style = document.createElement('style');
-  style.id = 'ra-mobile-fit-flow-v15';
-  style.textContent = css;
   document.head.appendChild(style);
 })();
- /* ======================  END RA_mobile_fit_and_flow_v15  ====================== */
+ /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
