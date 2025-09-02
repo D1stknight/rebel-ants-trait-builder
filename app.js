@@ -1212,3 +1212,94 @@
   // first run
   kick();
 })();
+
+/* ============================================================
+   RA_mobile_initial_fit_V12
+   Purpose: On MOBILE ONLY, set initial canvas zoom to "fit"
+   so the first render isn't oversized (e.g., ~56% for 700px).
+   Desktop behavior is untouched.
+   Safe to remove by deleting this whole block.
+   ============================================================ */
+(() => {
+  const mq = window.matchMedia('(max-width: 900px)'); // mobile & small tablets
+  if (!mq.matches) return; // do nothing on desktop
+
+  function fitMobileZoom() {
+    try {
+      // 1) Read current canvas size in px (defaults to 700 if not found)
+      const pxField =
+        document.querySelector('[data-canvas-size]') ||
+        document.querySelector('#canvas-size') ||
+        // fallback: first number input inside the "Canvas" panel
+        Array.from(document.querySelectorAll('section,div'))
+          .find(n => /canvas/i.test(n.textContent || ''))
+          ?.querySelector('input[type="number"]');
+
+      const canvasPx = Math.max(
+        64,
+        parseInt(pxField?.value ?? '700', 10) || 700
+      );
+
+      // 2) Compute available width for the canvas inside the flow
+      const host =
+        document.querySelector('[data-canvas-host]') ||
+        document.querySelector('[data-role="canvas-host"]') ||
+        document.querySelector('[data-ra-canvas]') ||
+        document.querySelector('main') || document.body;
+
+      // a little breathing room
+      const available = Math.max(280, (host?.clientWidth || window.innerWidth) - 32);
+
+      // 3) Compute the percent that fits (clamped 45–100%)
+      const fitPercent = Math.max(45, Math.min(100, Math.round((available / canvasPx) * 100)));
+
+      // 4) Prefer an official setter if your app exposes it
+      if (typeof window.raSetZoom === 'function') {
+        window.raSetZoom(fitPercent);
+        return;
+      }
+
+      // 5) Try to update the zoom control like a user action (if present)
+      const zoomInput = Array.from(document.querySelectorAll('input'))
+        .find(el => {
+          const label = (el.getAttribute('aria-label') || '').toLowerCase();
+          const text = (el.closest('section,div')?.textContent || '').toLowerCase();
+          return label.includes('zoom') || (text.includes('canvas') && (/%$/.test(el.value) || el.type === 'number'));
+        });
+
+      if (zoomInput) {
+        // If the control expects a raw number (e.g., 56) or a "%", try both.
+        const tryValues = [`${fitPercent}%`, String(fitPercent)];
+        for (const v of tryValues) {
+          zoomInput.value = v;
+          zoomInput.dispatchEvent(new Event('input', { bubbles: true }));
+          zoomInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return;
+      }
+
+      // 6) Last-resort: scale the stage element for the initial paint only
+      const stage =
+        document.querySelector('#ra-stage') ||
+        document.querySelector('.konvajs-content') ||
+        document.querySelector('canvas');
+
+      if (stage && !stage.hasAttribute('data-mobile-initial-fit')) {
+        stage.style.transformOrigin = 'top center';
+        stage.style.transform = `scale(${fitPercent / 100})`;
+        stage.setAttribute('data-mobile-initial-fit', String(fitPercent));
+      }
+    } catch {
+      /* swallow — never break desktop or the app */
+    }
+  }
+
+  // Run on first paint and re-run on resize/rotation
+  const kick = () => requestAnimationFrame(() => setTimeout(fitMobileZoom, 0));
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', kick, { once: true });
+  } else {
+    kick();
+  }
+  window.addEventListener('resize', () => setTimeout(fitMobileZoom, 120), { passive: true });
+})();
