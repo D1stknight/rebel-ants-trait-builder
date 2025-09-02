@@ -1057,46 +1057,49 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* ==== RA_MOBILE_DOCK_v13 — Mobile-only: dock canvas into page flow, scale & lock base ==== */
+/* ==== RA_MOBILE_FLOW_v15 — Phones only: dock canvas (with checkerboard) into page flow ==== */
 (() => {
-  const STYLE_ID = 'ra-mobile-dock-v13';
-  const DOCK_ID  = 'raMobileDock_v13';
+  const STYLE_ID = 'ra-mobile-flow-v15';
+  const DOCK_ID  = 'raMobileDock_v15';
 
-  // Don’t double-apply if already present
   if (document.getElementById(STYLE_ID)) return;
 
-  // ---------- CSS: phones only ----------
+  // ---------- CSS (phones only) ----------
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
   @media (max-width: 768px){
-    /* The dock sits IN THE FLOW above "Rebel Ant" */
+    /* The dock lives IN THE FLOW (not fixed). It sits above the "Rebel Ant" card. */
     #${DOCK_ID}{
       position: relative !important;
-      width: min(92vw, 92vh, 640px) !important; /* fits portrait & landscape */
-      aspect-ratio: 1 / 1 !important;          /* square canvas */
+      width: min(92vw, 660px) !important;
+      aspect-ratio: 1 / 1 !important;          /* square stage */
       margin: 12px auto 18px !important;
       border-radius: 16px !important;
       overflow: hidden !important;
       box-shadow: 0 0 0 1px rgba(255,255,255,.08),
-                  inset 0 0 0 1px rgba(0,0,0,.5) !important;
-
-      /* Checkerboard BACKGROUND lives here (no stray strip) */
-      background:
-        conic-gradient(#0f1319 0 25%, #141922 0 50%) 0 0/16px 16px repeat !important;
+                  inset 0 0 0 1px rgba(0,0,0,.55) !important;
+      /* Checkerboard background is part of the dock, so it never separates */
+      background: conic-gradient(#0f1319 0 25%, #141922 0 50%) 0 0/16px 16px repeat !important;
+      z-index: 0 !important;
     }
-
-    /* Fill the dock with the stage/canvas */
-    #${DOCK_ID} > .raStageFill{
+    #${DOCK_ID} .raStageFill{
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
       height: 100% !important;
     }
-
-    /* Make whatever container Konva is using fill the dock */
-    #${DOCK_ID} .konvajs-content,
-    #${DOCK_ID} .canvas-container,
+    /* Ensure the entire original stage wrapper fills the dock */
+    #${DOCK_ID} .raStageFill > *{
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
+      z-index: 1 !important; /* above checkerboard background */
+    }
+    /* Make all canvases inside fill and prevent their own sizing from fighting ours */
     #${DOCK_ID} canvas{
       position: absolute !important;
       inset: 0 !important;
@@ -1104,127 +1107,181 @@
       height: 100% !important;
       max-width: 100% !important;
       max-height: 100% !important;
+      touch-action: none !important; /* stop pinch zoom scrolling the page */
     }
 
-    /* Remove the old spacer/gap some builds created */
-    #ra-canvas-dock-space, .ra-canvas-gap, [data-ra-gap]{
-      display: none !important; height: 0 !important; min-height: 0 !important; margin: 0 !important;
-    }
+    /* Any leftover gap placeholder where the canvas used to live — collapse it */
+    [data-ra-gap], #ra-canvas-dock-space, .ra-canvas-gap{ display:none !important; height:0!important; min-height:0!important; margin:0!important; padding:0!important; }
 
-    /* Hide any stray checkerboard elements not in our dock */
+    /* Kill stray checkerboard elements that are NOT inside our dock (prevents the “moving strip”). */
     .checkerboard, [data-checkerboard], .bg-grid, .grid-bg{
       display: none !important;
+    }
+    #${DOCK_ID} .checkerboard, #${DOCK_ID} [data-checkerboard], #${DOCK_ID} .bg-grid, #${DOCK_ID} .grid-bg{
+      display: block !important;   /* only allow inside the dock if present */
+      position: absolute !important;
+      inset: 0 !important;
+    }
+  }
+
+  /* Landscape phones: height is the limiter; size by vh to avoid overflow */
+  @media (max-width: 768px) and (orientation: landscape){
+    #${DOCK_ID}{
+      width: min(80vh, 92vw, 700px) !important;
+      margin: 8px auto 14px !important;
     }
   }`;
   document.head.appendChild(style);
 
-  // ---------- Helpers ----------
+  // ---------- Utilities ----------
   const isPhone = () => window.matchMedia('(max-width: 768px)').matches;
 
-  function getLargestCanvas(){
-    const canvases = Array.from(document.querySelectorAll('canvas'));
-    if (!canvases.length) return null;
-    return canvases.reduce((a,c) => (c.width*c.height > (a?.width||0)*(a?.height||0) ? c : a), null);
+  /** pick the largest visible <canvas> as the "stage" */
+  function getMainCanvas(){
+    const list = Array.from(document.querySelectorAll('canvas')).filter(c => c.offsetParent !== null);
+    if (!list.length) return null;
+    return list.reduce((a,c) => (c.width*c.height > (a?.width||0)*(a?.height||0) ? c : a), null);
   }
 
-  function findRebelAntCard(){
-    // Try headings that read "Rebel Ant"
-    const heads = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,legend,.card-title,.section-title'));
-    const hit = heads.find(el => /rebel\s*ant/i.test(el.textContent || ''));
-    if (hit) return hit.closest('section, .card, .panel, .box, .container, div');
-    // Fallback: look for the "Load" button area (Upload/URL card)
-    const loadBtn = Array.from(document.querySelectorAll('button, input[type="button"], a')).find(el => /load/i.test((el.textContent || el.value || '')));
-    if (loadBtn) return loadBtn.closest('section, .card, .panel, .box, .container, div');
-    // Last resort: main app container
-    return document.querySelector('main') || document.getElementById('__next') || document.body;
+  /** find the host wrapper that contains both the canvas and any frame/checkerboard */
+  function findHost(canvas){
+    if (!canvas) return null;
+    let node = canvas, host = canvas, steps = 0;
+    while (node && node !== document.body && steps < 7){
+      const cs = getComputedStyle(node);
+      const bg = (cs.backgroundImage || '') + (cs.background || '');
+      const area = node.clientWidth * node.clientHeight;
+      const hostArea = host.clientWidth * host.clientHeight;
+
+      // prefer a wrapper that already looks like the framed box
+      if (/gradient|checker|grid|repeat/i.test(bg) || (parseFloat(cs.borderRadius||'0') >= 8)){
+        host = node;
+      }
+      // or a bigger block container
+      if (area > hostArea && cs.display !== 'inline'){
+        host = node;
+      }
+      node = node.parentElement; steps++;
+    }
+    return host || canvas.parentElement;
+  }
+
+  function zeroOut(el){
+    if (!el) return;
+    el.style.minHeight='0'; el.style.height='0'; el.style.padding='0'; el.style.margin='0';
+    el.style.border='0'; el.style.overflow='hidden'; el.style.display='block';
+    el.setAttribute('data-ra-gap','1');
   }
 
   // ---------- Dock / Restore ----------
   function dockIntoFlow(){
     if (!isPhone()) { restore(); return; }
 
-    const mainCanvas = getLargestCanvas();
+    const mainCanvas = getMainCanvas();
     if (!mainCanvas) return;
 
-    // Stage container (Konva wraps a DIV around the canvas)
-    const stageBox = mainCanvas.closest('.konvajs-content, .canvas-container, [data-ra-stage]') || mainCanvas.parentElement;
-    if (!stageBox) return;
+    // choose the wrapper that includes checkerboard + canvas
+    const host = findHost(mainCanvas);
+    if (!host) return;
 
-    // Store original location once (so desktop can restore)
-    if (!stageBox.dataset.raOrigParent) {
-      stageBox.dataset.raOrigParent = '1';
-      stageBox.__raOrigParent = stageBox.parentNode;
-      stageBox.__raOrigNext   = stageBox.nextSibling;
-      stageBox.__raOrigStyle  = stageBox.getAttribute('style') || '';
+    // Remember original position once (for desktop restore)
+    if (!host.dataset.raOrig){
+      host.dataset.raOrig = '1';
+      host.__raOrigParent = host.parentNode;
+      host.__raOrigNext   = host.nextSibling;
+      host.__raOrigStyle  = host.getAttribute('style') || '';
     }
 
-    // Create the dock above the "Rebel Ant" card
+    // Create the dock above the "Rebel Ant" box
     let dock = document.getElementById(DOCK_ID);
     if (!dock){
       dock = document.createElement('div');
       dock.id = DOCK_ID;
-      const card = findRebelAntCard();
-      card?.parentNode?.insertBefore(dock, card) || document.body.prepend(dock);
-    }
 
-    // Inner filler for absolute children, while dock itself remains in flow
-    let fill = dock.querySelector('.raStageFill');
-    if (!fill){
-      fill = document.createElement('div');
+      // Find the "Rebel Ant" card to insert before it
+      const title = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,legend,.card-title,.section-title'))
+                    .find(el => /rebel\s*ant/i.test(el.textContent||''));
+      const card  = title?.closest('section, .card, .panel, .box, .container, div')
+                   || Array.from(document.querySelectorAll('button, input, a'))
+                         .find(el => /load/i.test((el.textContent||el.value||'')))?.closest('section, .card, .panel, .box, .container, div')
+                   || document.querySelector('main') || document.getElementById('__next') || document.body;
+
+      card.parentNode.insertBefore(dock, card);
+
+      const fill = document.createElement('div');
       fill.className = 'raStageFill';
       dock.appendChild(fill);
     }
+    const fill = dock.querySelector('.raStageFill');
 
-    // Move the stageBox into the dock
-    if (stageBox.parentNode !== fill) {
-      fill.appendChild(stageBox);
+    // Move the ENTIRE host (so checkerboard cannot “escape”) into the dock
+    if (host.parentNode !== fill){
+      fill.appendChild(host);
     }
 
-    // Ensure it fills the dock (mobile only)
-    stageBox.style.position = 'absolute';
-    stageBox.style.inset    = '0';
-    stageBox.style.width    = '100%';
-    stageBox.style.height   = '100%';
+    // Ensure host fills the dock and no nested fixed/sticky boxes remain
+    host.style.position = 'absolute';
+    host.style.inset    = '0';
+    host.style.width    = '100%';
+    host.style.height   = '100%';
+    host.style.maxWidth = '100%';
+    host.style.maxHeight= '100%';
+    host.style.zIndex   = '1';
 
-    // Lock base image from panning/zooming on mobile
-    try {
-      if (window.stage && typeof window.stage.draggable === 'function') {
+    // Any nested fixed/sticky checkerboards inside host → force to absolute so they can't float
+    Array.from(host.querySelectorAll('*')).forEach(n => {
+      const cs = getComputedStyle(n);
+      const bg = (cs.backgroundImage || '') + (cs.background || '');
+      if ((/gradient|checker|grid|repeat/i.test(bg)) && (cs.position === 'fixed' || cs.position === 'sticky')){
+        n.style.position = 'absolute';
+        n.style.inset = '0';
+      }
+    });
+
+    // Collapse the place where the host used to live (removes the big middle gap)
+    if (host.__raOrigParent && host.__raOrigParent !== document.body){
+      // if that parent is empty now or only has zero-size children -> collapse
+      const children = Array.from(host.__raOrigParent.children);
+      const nonZero  = children.filter(ch => ch !== host && (ch.offsetWidth>0 || ch.offsetHeight>0));
+      if (nonZero.length === 0) zeroOut(host.__raOrigParent);
+    }
+
+    // Lock stage panning (base image immovable) on phones; overlays/text still draggable
+    try{
+      if (window.stage && typeof window.stage.draggable === 'function'){
         window.stage.draggable(false);
       }
-    } catch(_) {}
-    const prevent = e => e.preventDefault();
-    dock.addEventListener('wheel', prevent, {passive:false});
-    dock.addEventListener('gesturestart', prevent, {passive:false});
-    dock.addEventListener('gesturechange', prevent, {passive:false});
-    dock.addEventListener('gestureend', prevent, {passive:false});
+    }catch(e){}
   }
 
   function restore(){
-    // Put the stage back where it was (for desktop)
     const dock = document.getElementById(DOCK_ID);
-    const stageBox = dock?.querySelector('.raStageFill > *');
-    if (stageBox && stageBox.__raOrigParent){
-      try {
-        if (stageBox.__raOrigNext && stageBox.__raOrigNext.parentNode === stageBox.__raOrigParent) {
-          stageBox.__raOrigParent.insertBefore(stageBox, stageBox.__raOrigNext);
+    const host = dock?.querySelector('.raStageFill > *');
+    if (host && host.__raOrigParent){
+      try{
+        if (host.__raOrigNext && host.__raOrigNext.parentNode === host.__raOrigParent){
+          host.__raOrigParent.insertBefore(host, host.__raOrigNext);
         } else {
-          stageBox.__raOrigParent.appendChild(stageBox);
+          host.__raOrigParent.appendChild(host);
         }
-      } catch(_) {
-        (document.querySelector('main') || document.body).appendChild(stageBox);
+      }catch(_){
+        (document.querySelector('main') || document.body).appendChild(host);
       }
-      stageBox.setAttribute('style', stageBox.__raOrigStyle || '');
+      host.setAttribute('style', host.__raOrigStyle || '');
     }
     dock?.remove();
   }
 
-  // ---------- Run ----------
-  const go = () => dockIntoFlow();
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', go);
+  // Run now + on future mutations (token loads often recreate the canvas)
+  const run = () => dockIntoFlow();
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', run, {once:true});
   } else {
-    go();
+    run();
   }
-  window.addEventListener('resize', go);
-  window.addEventListener('orientationchange', go);
+  window.addEventListener('resize', run);
+  window.addEventListener('orientationchange', run);
+
+  const mo = new MutationObserver(() => run());
+  mo.observe(document.documentElement, {childList:true, subtree:true});
 })();
