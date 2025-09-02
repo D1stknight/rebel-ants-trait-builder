@@ -1057,40 +1057,30 @@
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
-/* ===========================
-   RA_MOBILE_FLOW_v27  (mobile only)
-   - Puts the canvas in normal page flow ABOVE the "Rebel Ant" card
-   - Scales to fit phone (portrait & landscape)
-   - Checkerboard sits behind the canvas
-   - Removes stray checkerboard strips / gaps
-   - Desktop untouched (runs only when max-width ≤ 900px)
-   =========================== */
+/* =========================================
+   RA_MOBILE_FLOW_v28  — MOBILE ONLY (≤900px)
+   - Canvas sits IN THE PAGE FLOW as the first box above “Rebel Ant”
+   - Hides the old stage container (kills rogue checkerboard)
+   - Proper Konva scaling (stage.scale + content size) so overlays drag correctly
+   - Desktop untouched (code is gated by max-width:900px)
+   ========================================= */
 (() => {
-  // You can tweak these two numbers if you want the canvas a bit smaller/larger on phones.
-  const MAX_W = 620;       // max width in px on phones
-  const VW   = 92;         // % of viewport width on phones
-
   const CSS = `
     @media (max-width: 900px){
       #ra-mobile-stage-host{
-        order:-1;           /* appear before controls */
-        width:100%;
-        display:flex;
-        justify-content:center;
-        margin: 12px 0 8px;
+        order:-1; width:100%;
+        display:flex; justify-content:center;
+        margin:12px 0 8px;
       }
       #ra-mobile-stage-frame{
-        width: clamp(280px, ${VW}vw, ${MAX_W}px);
-        aspect-ratio: 1 / 1;          /* square */
+        width: min(92vw, 620px);
+        aspect-ratio: 1 / 1;
         position: relative;
         border-radius: 12px;
         overflow: hidden;
       }
       #ra-mobile-checker{
-        position: absolute; inset: 0;
-        border-radius: inherit;
-        pointer-events: none;
-        /* subtle checkerboard */
+        position:absolute; inset:0; border-radius:inherit; pointer-events:none;
         background-image:
           linear-gradient(45deg, rgba(0,0,0,.35) 25%, transparent 25%),
           linear-gradient(-45deg, rgba(0,0,0,.35) 25%, transparent 25%),
@@ -1099,116 +1089,126 @@
         background-size: 24px 24px;
         background-position: 0 0, 0 12px, 12px -12px, -12px 0px;
       }
-      /* Make whatever the renderer uses (Konva wrapper or a plain <canvas>) fill the frame */
+      /* Don’t CSS-scale the Konva wrapper; we size it numerically from JS */
       #ra-mobile-stage-frame > .konvajs-content,
       #ra-mobile-stage-frame > canvas{
-        position: absolute !important;
-        inset: 0 !important;
-        width: 100% !important;
-        height: 100% !important;
-        border-radius: inherit;
+        position:absolute; top:0; left:0; border-radius:inherit;
       }
-      /* Kill any old floaters/fixed canvases on mobile */
-      .ra-canvas-floater,
-      [data-ra-role="stage-floater"]{
-        position: static !important;
-        top:auto !important;left:auto !important;right:auto !important;bottom:auto !important;
-        z-index: auto !important;
-      }
+      /* Kill any old floaters on mobile */
+      .ra-canvas-floater,[data-ra-role="stage-floater"]{ display:none !important; }
     }`;
-
   const mq = window.matchMedia('(max-width: 900px)');
+
   let applied = false;
-  let styleEl, host, frame;
+  let styleEl, host, frame, checker, live, origRoot, origRootDisplay;
 
-  function el(q){ return document.querySelector(q); }
-  function els(q){ return Array.from(document.querySelectorAll(q)); }
+  function $(q){ return document.querySelector(q); }
+  function $$(q){ return Array.from(document.querySelectorAll(q)); }
 
-  function findStageRoot(){
-    // Prefer the parent of Konva’s wrapper if present, else the parent of the first canvas inside the app
-    const konva = el('.konvajs-content');
-    if (konva && konva.parentElement) return konva.parentElement;
-    const c = el('#app canvas, .app canvas, main canvas');
-    return c ? c.parentElement : null;
+  function findLive(){
+    // Konva wrapper or plain canvas (whichever is used)
+    return $('.konvajs-content') || $('#app canvas, .app canvas, main canvas');
   }
-
   function findUploadCard(){
-    // Find the card with heading "Rebel Ant"
-    const h = els('h1,h2,h3').find(n => /rebel\s*ant/i.test(n.textContent||''));
+    const h = $$('h1,h2,h3').find(n => /rebel\s*ant/i.test(n.textContent||''));
     return h ? (h.closest('.card, .panel, section, form, div') || h.parentElement) : null;
   }
 
-  function hideRogueCheckers(){
-    // Hide stray checkerboards from older attempts (but not our own)
-    els('.checkerboard, [data-checker], [data-bg="checker"], .bg-checker')
-      .forEach(n => { if (n.id !== 'ra-mobile-checker') n.style.display = 'none'; });
+  function fitStageIntoFrame(){
+    if (!mq.matches || !window.stage || !frame) return;
+    try{
+      const baseW = window.stage.width();
+      const baseH = window.stage.height();
+      const side  = Math.max(baseW, baseH) || 1024;
+      const target = frame.clientWidth;           // square frame
+
+      // Scale the stage (Konva math, not CSS)
+      const scale = target / side;
+      window.stage.scale({ x: scale, y: scale });
+      window.stage.position({ x: 0, y: 0 });
+
+      // Make the DOM wrapper’s box match the visible size (keeps hit-testing correct)
+      const content = window.stage.getContent();  // .konvajs-content
+      content.style.width  = `${target}px`;
+      content.style.height = `${target}px`;
+
+      window.stage.batchDraw();
+    }catch(e){}
   }
 
   function apply(){
-    const stageRoot = findStageRoot();
-    if (!mq.matches){
-      // Desktop/tablet width: clean up and bail
-      if (applied){
-        try{
-          const live = frame?.querySelector('.konvajs-content, canvas');
-          if (live && stageRoot) stageRoot.appendChild(live);
-          host?.remove();
-          styleEl?.remove();
-        }catch{}
-        applied = false; host = frame = styleEl = null;
-      }
-      return;
-    }
+    if (!mq.matches || applied) return;
 
-    if (!stageRoot || applied) return;
+    live = findLive();
+    if (!live) return; // wait until canvas exists
 
-    // Inject CSS once
-    styleEl = document.createElement('style');
-    styleEl.id = 'ra-mobile-flow-css';
-    styleEl.textContent = CSS;
-    document.head.appendChild(styleEl);
+    origRoot = live.parentElement;     // this is the old checkerboard container
+    if (!origRoot) return;
 
-    // Build our in-flow host (first box above "Rebel Ant")
+    // build our in-flow host
     host = document.createElement('div');
     host.id = 'ra-mobile-stage-host';
-
     frame = document.createElement('div');
     frame.id = 'ra-mobile-stage-frame';
-
-    const checker = document.createElement('div');
+    checker = document.createElement('div');
     checker.id = 'ra-mobile-checker';
+    frame.appendChild(checker);
+    host.appendChild(frame);
 
-    // Move the live drawing surface into our frame
-    const live = stageRoot.querySelector('.konvajs-content, canvas');
-    if (live){
-      frame.appendChild(checker);
-      frame.appendChild(live);
-      host.appendChild(frame);
-    }else{
-      return; // nothing to move
-    }
-
-    // Insert right before the "Rebel Ant" card so it’s the first box
+    // insert BEFORE "Rebel Ant" card so it’s the first box
     const card = findUploadCard();
-    const container = card?.parentElement || el('#app') || document.body;
-    if (card) container.insertBefore(host, card);
-    else container.prepend(host);
+    const container = card?.parentElement || document.body;
+    if (card) container.insertBefore(host, card); else container.prepend(host);
 
-    // Keep base image from panning/zooming on mobile (overlays remain interactive)
-    try{
-      if (window.stage && typeof window.stage.draggable === 'function') window.stage.draggable(false);
-      if (window.stage && typeof window.stage.scale === 'function') window.stage.scale({x:1, y:1});
-    }catch{}
+    // move live canvas into our frame
+    frame.appendChild(live);
 
-    hideRogueCheckers();
+    // hide the old checkerboard container (this is the rogue strip you saw)
+    origRootDisplay = origRoot.style.display;
+    origRoot.style.display = 'none';
+
+    // stop stage panning (base image stays put); overlays remain draggable
+    try { window.stage?.draggable(false); } catch(e){}
+
+    // size correctly now and on rotate/resize
+    fitStageIntoFrame();
+
     applied = true;
   }
 
-  // Run & re‑run when orientation changes
-  requestAnimationFrame(apply);
-  window.addEventListener('orientationchange', () => { 
-    // re-run fresh on rotation
+  function cleanup(){
+    if (!applied) return;
+    try{
+      if (live && origRoot) origRoot.appendChild(live);
+      if (origRoot) origRoot.style.display = origRootDisplay || '';
+      host?.remove();
+    }catch(e){}
     applied = false;
-    apply();
-  }, {passive:true});
+  }
+
+  // — wiring —
+  function kick(){
+    if (mq.matches){ apply(); fitStageIntoFrame(); }
+    else { cleanup(); }
+  }
+
+  // inject CSS once
+  styleEl = document.getElementById('ra-mobile-flow-css-v28');
+  if (!styleEl){
+    styleEl = document.createElement('style');
+    styleEl.id = 'ra-mobile-flow-css-v28';
+    styleEl.textContent = CSS;
+    document.head.appendChild(styleEl);
+  }
+
+  // react to DOM changes (token loads later)
+  const mo = new MutationObserver(() => { if (mq.matches && !applied) apply(); });
+  mo.observe(document.documentElement, { childList:true, subtree:true });
+
+  window.addEventListener('resize', fitStageIntoFrame, {passive:true});
+  window.addEventListener('orientationchange', () => setTimeout(fitStageIntoFrame, 200), {passive:true});
+  mq.addEventListener?.('change', () => kick());
+
+  // first run
+  kick();
 })();
