@@ -1214,121 +1214,119 @@
 })();
 
 /* =========================================================
-   RA_mobile_fit_on_load_v13
-   Purpose: On mobile, auto-set zoom so the whole image fits
-   whenever a token loads or the canvas px changes.
-   Desktop: No-Op.
-   Safe to paste at the very end of app.js/App.jsx.
+   RA_mobile_fit_on_load_v14_noflicker
+   Mobile only. Auto-fit image on load / px change without flicker.
+   It briefly hides the Canvas card, sets the zoom instantly,
+   then shows it again. Desktop is untouched.
    ========================================================= */
 (() => {
   if (typeof window === 'undefined') return;
-  if (document.documentElement.hasAttribute('data-ra-fit-mobile-patched')) return;
-  document.documentElement.setAttribute('data-ra-fit-mobile-patched', '1');
+  if (document.documentElement.hasAttribute('data-ra-fit-mobile-v14')) return;
+  document.documentElement.setAttribute('data-ra-fit-mobile-v14', '1');
 
-  // --- helpers --------------------------------------------------------------
+  // ----- knobs -------------------------------------------------------------
+  const HIDE_MS = 200;           // how long the canvas card stays hidden while we snap zoom
+  const MIN_PCT = 30, MAX_PCT = 100; // clamp for mobile zoom
+  const MOBILE_WIDTH = 1024;     // treat <= this width as mobile/tablet
+
+  // ----- utils -------------------------------------------------------------
   const isMobile = () =>
     window.matchMedia('(pointer: coarse)').matches ||
-    window.matchMedia('(max-width: 1024px)').matches;
+    window.matchMedia(`(max-width: ${MOBILE_WIDTH}px)`).matches;
 
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
-  const byText = (root, tag, text) =>
-    Array.from(root.querySelectorAll(tag)).find(
-      el => (el.textContent || '').trim().toLowerCase() === text.toLowerCase()
-    );
-
-  // Find the "Canvas" card (the one that contains "Size (px)")
-  function findCanvasCard() {
+  const findCanvasCard = () => {
     const all = Array.from(document.querySelectorAll('section,div,article'));
-    return all.find(
-      el =>
-        /canvas/i.test(el.textContent || '') &&
-        /size\s*\(px\)/i.test(el.textContent || '')
-    );
-  }
+    return all.find(el =>
+      /canvas/i.test(el.textContent || '') && /size\s*\(px\)/i.test(el.textContent || '')
+    ) || null;
+  };
 
-  // Inside the Canvas card, find zoom controls and the px input
   function findZoomControls() {
     const card = findCanvasCard();
     if (!card) return {};
     const buttons = Array.from(card.querySelectorAll('button'));
-    const minus = buttons.find(
-      b =>
-        b.textContent?.trim() === '-' ||
-        /minus/i.test(b.getAttribute('aria-label') || '')
+    const minus = buttons.find(b =>
+      b.textContent?.trim() === '-' || /minus/i.test(b.getAttribute('aria-label') || '')
     );
-    const plus = buttons.find(
-      b =>
-        b.textContent?.trim() === '+' ||
-        /plus/i.test(b.getAttribute('aria-label') || '')
+    const plus = buttons.find(b =>
+      b.textContent?.trim() === '+' || /plus/i.test(b.getAttribute('aria-label') || '')
     );
-
-    // "% display" can be a button/span/input depending on your build
     const pctEl =
       Array.from(card.querySelectorAll('button,span,input')).find(el =>
         /%/.test((el.textContent || el.value || '').trim())
       ) || null;
-
-    // Canvas px input (numeric)
     const pxInput = Array.from(card.querySelectorAll('input')).find(inp => {
       const t = (inp.type || '').toLowerCase();
       return t === 'number' || inp.inputMode === 'numeric';
     });
-
     return { card, minus, plus, pctEl, pxInput };
   }
 
-  function readPct(pctEl) {
+  const readPct = (pctEl) => {
     const raw = (pctEl?.textContent || pctEl?.value || '100').replace(/[^\d]/g, '');
     const n = parseInt(raw, 10);
     return Number.isFinite(n) ? n : 100;
-  }
+  };
 
-  // Determine step (5% / 10% / etc) by probing a single +
-  function detectStep(ctrls) {
+  const detectStep = (ctrls) => {
     if (!ctrls.plus || !ctrls.minus || !ctrls.pctEl) return 5;
     const before = readPct(ctrls.pctEl);
     ctrls.plus.click();
     const after = readPct(ctrls.pctEl);
     const step = clamp(after - before, 1, 25);
-    // Undo what we clicked
+    // undo one click
     for (let i = 0; i < step; i++) ctrls.minus.click();
     return step || 5;
-  }
+  };
 
-  // Set zoom by clicking +/- so app state stays correct
-  function setZoomViaUI(targetPct, ctrls) {
+  // Click +/- instantly (tight loop) so state updates, but no visual stepping.
+  // Returns an estimate of settle time for safety.
+  const setZoomViaUI = (targetPct, ctrls) => {
     const { plus, minus, pctEl } = ctrls;
-    if (!plus || !minus || !pctEl) return;
+    if (!plus || !minus || !pctEl) return 0;
+    targetPct = clamp(Math.round(targetPct), MIN_PCT, MAX_PCT);
 
-    targetPct = clamp(Math.round(targetPct), 25, 100);
     const step = detectStep(ctrls);
     let current = readPct(pctEl);
-
-    // Compute how many clicks (rounded to nearest step)
     const clicks = Math.round((targetPct - current) / step);
+    if (clicks === 0) return 0;
     const btn = clicks > 0 ? plus : minus;
     const total = Math.abs(clicks);
 
-    // Click in a tight loop (non-blocking)
-    let i = 0;
-    const timer = setInterval(() => {
-      btn.click();
-      i += 1;
-      if (i >= total) clearInterval(timer);
-    }, 0);
-  }
+    // Single-tick dispatch: no intervals, no visible stepping
+    for (let i = 0; i < total; i++) btn.click();
+    return Math.max(80, total * 8); // small buffer for React state to settle
+  };
 
-  // Compute a "fit to width" zoom for phones
-  function computeFitPct(px, hostWidth) {
-    const padding = 24; // rough horizontal padding inside your layout
-    const available = clamp((hostWidth || window.innerWidth) - padding * 2, 200, 2000);
+  const computeFitPct = (px, hostWidth) => {
+    const padding = 24; // horizontal padding inside your layout on mobile
+    const available = clamp((hostWidth || window.innerWidth) - padding * 2, 200, 4000);
     const raw = (available / px) * 100;
-    return clamp(Math.floor(raw), 30, 100);
-  }
+    return clamp(Math.floor(raw), MIN_PCT, MAX_PCT);
+  };
 
-  // Main: fit on mobile
-  const fitOnMobile = () => {
+  // Hide/show the Canvas card to prevent flicker
+  let pendingRestore = null;
+  const preHideCanvas = () => {
+    if (!isMobile()) return;
+    const ctrls = findZoomControls();
+    if (!ctrls.card) return;
+    if (pendingRestore) { pendingRestore(); pendingRestore = null; }
+    const card = ctrls.card;
+    const prevVis = card.style.visibility;
+    const prevOp  = card.style.opacity;
+    card.style.visibility = 'hidden';
+    card.style.opacity = '0';
+    pendingRestore = () => {
+      card.style.visibility = prevVis || '';
+      card.style.opacity = prevOp || '';
+      pendingRestore = null;
+    };
+  };
+
+  const fitOnMobileNoFlicker = () => {
     if (!isMobile()) return;
 
     const ctrls = findZoomControls();
@@ -1341,52 +1339,53 @@
       if (Number.isFinite(v) && v > 0) canvasPx = v;
     }
 
-    // width to fit against (Canvas card width or viewport)
     const hostWidth = ctrls.card.clientWidth || window.innerWidth;
     const targetPct = computeFitPct(canvasPx, hostWidth);
 
-    setZoomViaUI(targetPct, ctrls);
+    // snap zoom while hidden, then show
+    const settle = setZoomViaUI(targetPct, ctrls);
+    const restore = pendingRestore; // capture (may be null)
+    pendingRestore = null;
+    setTimeout(() => { restore && restore(); }, Math.max(HIDE_MS, settle));
   };
 
-  // --- triggers -------------------------------------------------------------
-  // Throttle so we don't spam during rapid DOM churn
-  let t = 0;
-  const kick = () => {
+  // ---- triggers ------------------------------------------------------------
+  let kickTimer = 0;
+  const kick = (delay = 150) => {
     if (!isMobile()) return;
-    clearTimeout(t);
-    t = setTimeout(fitOnMobile, 120);
+    clearTimeout(kickTimer);
+    kickTimer = setTimeout(fitOnMobileNoFlicker, delay);
   };
 
-  // Run when the app finishes mounting
-  window.addEventListener('load', kick);
-  window.addEventListener('resize', kick);
-  window.addEventListener('orientationchange', kick);
+  // On page load / resize / rotate
+  window.addEventListener('load', () => kick(0));
+  window.addEventListener('resize', () => kick(120));
+  window.addEventListener('orientationchange', () => kick(180));
 
-  // Run after user clicks "Load" or "Load by Token"
+  // Before "Load" or "Load by Token", hide; after, fit & show
   document.addEventListener('click', (ev) => {
     const el = ev.target;
     if (!(el instanceof HTMLElement)) return;
     const txt = (el.textContent || '').trim().toLowerCase();
     if (txt === 'load' || txt === 'load by token') {
-      setTimeout(kick, 250); // give the image a moment to mount
+      preHideCanvas();         // prevent the 100% initial flash
+      setTimeout(() => kick(80), 250); // give the image a moment to mount
     }
   }, true);
 
-  // Run if the Canvas px field changes
+  // If Canvas px changes, refit (no flicker)
   document.addEventListener('input', (ev) => {
     const el = ev.target;
     if (!(el instanceof HTMLInputElement)) return;
-    if (/^\d+$/.test(el.value || '')) {
-      // Heuristic: when a numeric input inside the Canvas card changes
-      const card = findCanvasCard();
-      if (card && card.contains(el)) kick();
+    if (!/^\d+$/.test(el.value || '')) return;
+    const card = findCanvasCard();
+    if (card && card.contains(el)) {
+      preHideCanvas();
+      kick(80);
     }
   }, true);
 
-  // Safety: if the UI re-renders, try once more
-  const mo = new MutationObserver(() => kick());
+  // If the UI re-renders after load, refit once
+  const mo = new MutationObserver(() => kick(100));
   mo.observe(document.body, { childList: true, subtree: true });
-
-  // Optional manual hook for testing in console:
-  window.raFitToScreenMobile = fitOnMobile;
 })();
