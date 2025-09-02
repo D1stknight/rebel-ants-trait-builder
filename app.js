@@ -1559,3 +1559,147 @@
     run();
   }
 })();
+
+/* ================= RA_FONT_PICKER_PREVIEW_V2 =================
+   - Clean labels in the font dropdown (no long stacks shown).
+   - Each option is styled with its font (works in most desktop browsers).
+   - Live preview box below the picker updates instantly.
+   - Applies to #fontFamily (Custom Text) and, if present, #idFontFamily.
+   ============================================================ */
+(function RA_FONT_PICKER_PREVIEW_V2(){
+  // Curated, cross‑platform stacks (Mac + Windows + Linux fallbacks).
+  // Add/remove families freely; the dropdown will rebuild automatically.
+  const FONTS = [
+    { name:'Impact',              stack:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
+    { name:'Arial Black',         stack:"'Arial Black', Gadget, sans-serif" },
+    { name:'Arial',               stack:"Arial, Helvetica, sans-serif" },
+    { name:'Helvetica Neue',      stack:"'Helvetica Neue', Helvetica, Arial, sans-serif" },
+    { name:'Verdana',             stack:"Verdana, Geneva, sans-serif" },
+    { name:'Tahoma',              stack:"Tahoma, Geneva, sans-serif" },
+    { name:'Trebuchet MS',        stack:"'Trebuchet MS', Helvetica, sans-serif" },
+    { name:'Segoe UI',            stack:"'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" },
+    { name:'Calibri',             stack:"Calibri, Candara, Segoe, 'Segoe UI', Optima, Arial, sans-serif" },
+    { name:'Optima',              stack:"Optima, Segoe, 'Segoe UI', Candara, Calibri, Arial, sans-serif" },
+    { name:'Avenir',              stack:"Avenir, 'Avenir Next', 'Segoe UI', sans-serif" },
+    { name:'Futura',              stack:"Futura, 'Century Gothic', 'Gill Sans', Arial, sans-serif" },
+    { name:'Gill Sans',           stack:"'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" },
+    { name:'Century Gothic',      stack:"'Century Gothic', AppleGothic, sans-serif" },
+
+    { name:'Georgia',             stack:"Georgia, 'Times New Roman', serif" },
+    { name:'Times New Roman',     stack:"'Times New Roman', Times, serif" },
+    { name:'Baskerville',         stack:"Baskerville, 'Baskerville Old Face', Garamond, 'Times New Roman', serif" },
+    { name:'Garamond',            stack:"Garamond, Baskerville, 'Baskerville Old Face', 'Times New Roman', serif" },
+    { name:'Palatino',            stack:"Palatino, 'Palatino Linotype', 'Book Antiqua', serif" },
+    { name:'Didot',               stack:"Didot, 'Bodoni 72', 'Bodoni MT', 'Times New Roman', serif" },
+    { name:'Rockwell',            stack:"Rockwell, 'Courier New', Georgia, serif" },
+
+    { name:'Courier New',         stack:"'Courier New', Courier, monospace" },
+    { name:'Menlo',               stack:"Menlo, Monaco, Consolas, 'Courier New', monospace" },
+    { name:'Consolas',            stack:"Consolas, 'Lucida Console', Monaco, monospace" },
+    { name:'Lucida Console',      stack:"'Lucida Console', Monaco, monospace" },
+
+    { name:'Copperplate',         stack:"Copperplate, 'Copperplate Gothic Light', fantasy" },
+    { name:'Papyrus',             stack:"Papyrus, fantasy" },
+    { name:'Brush Script MT',     stack:"'Brush Script MT', cursive" },
+    { name:'Comic Sans MS',       stack:"'Comic Sans MS', 'Comic Sans', Chalkboard, cursive" },
+
+    // System UI stack for a clean, modern default on any platform:
+    { name:'System UI',           stack:"system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" }
+  ];
+
+  const PICKER_IDS = ['fontFamily', 'idFontFamily']; // second one is optional in your UI
+
+  function ensurePreviewBelow(picker, id){
+    const prevId = 'raPreview_' + id;
+    let box = document.getElementById(prevId);
+    if (!box) {
+      box = document.createElement('div');
+      box.id = prevId;
+      box.style.cssText = [
+        'margin-top:6px',
+        'padding:8px 10px',
+        'border:1px solid #2a2a2e',
+        'border-radius:8px',
+        'background:#111319',
+        'color:#e7e7ea',
+        'font-size:15px',
+        'line-height:1.35',
+        'letter-spacing:.1px'
+      ].join(';');
+      const label = document.createElement('div');
+      label.textContent = 'Preview';
+      label.style.cssText = 'font-size:11px;opacity:.65;margin-bottom:4px';
+      const text = document.createElement('div');
+      text.className = 'raPreviewText';
+      text.textContent = 'AaBbCc 1234  #RebelAnts';
+      box.appendChild(label);
+      box.appendChild(text);
+      // insert right after the picker
+      picker.parentNode.insertBefore(box, picker.nextSibling);
+    }
+    return box.querySelector('.raPreviewText');
+  }
+
+  function repopulateSelect(selectEl, id){
+    // Preserve previously selected stack if it exists
+    const current = (selectEl.value || '').trim();
+
+    // Clear & rebuild options
+    selectEl.innerHTML = '';
+    FONTS.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.stack;         // what Fabric/text actually uses
+      opt.textContent = f.name;    // what the user sees
+      // Live preview in dropdown (supported in most desktop browsers)
+      opt.style.fontFamily = f.stack;
+      opt.style.fontSize   = '14px';
+      selectEl.appendChild(opt);
+    });
+
+    // Keep selection if still available, otherwise default to first
+    const found = FONTS.find(f => f.stack === current);
+    selectEl.value = found ? found.stack : FONTS[0].stack;
+
+    // Preview box under the picker
+    const previewText = ensurePreviewBelow(selectEl, id);
+    const updatePreview = () => {
+      previewText.style.fontFamily = selectEl.value || FONTS[0].stack;
+      // text already set; we just switch the font
+    };
+
+    // Wire once
+    if (!selectEl.__raFontPreviewBound){
+      selectEl.addEventListener('change', updatePreview);
+      selectEl.addEventListener('input',  updatePreview);
+      selectEl.__raFontPreviewBound = true;
+    }
+    updatePreview();
+  }
+
+  function apply(){
+    PICKER_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el || el.__raFontPreviewV2) return;
+      el.__raFontPreviewV2 = true;
+
+      if (el.tagName.toLowerCase() === 'select'){
+        repopulateSelect(el, id);
+      } else {
+        // If your UI uses an <input> for fonts, just attach a preview box
+        const previewText = ensurePreviewBelow(el, id);
+        const update = () => { previewText.style.fontFamily = el.value || FONTS[0].stack; };
+        el.addEventListener('input', update);
+        el.addEventListener('change', update);
+        update();
+      }
+    });
+  }
+
+  // Run now and watch for UI re-renders (defensive)
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply, { once:true });
+  } else {
+    apply();
+  }
+  new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
+})();
