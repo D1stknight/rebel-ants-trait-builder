@@ -1341,90 +1341,121 @@
  /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
 /* =========================================
-   RA_MOBILE_CLOSE_GAP_PULLUP_v2 — MOBILE ONLY (≤920px)
-   - Forces "Overlays" to sit right under "Custom Text"
-   - Collapses in‑between spacer blocks
-   - If a parent still holds height, pulls Overlays up with a safe negative margin
-   - Desktop remains untouched
+   RA_MOBILE_GAP_FINAL_V3 — MOBILE ONLY (≤920px)
+   Fixes the mid-page gap by:
+   • removing the fixed-canvas ghost (#raCanvasGhost)
+   • reverting fixed styles on the canvas card
+   • collapsing any remaining blocks between “Custom Text” and “Overlays”
+   Desktop is untouched.
    ========================================= */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!matchMedia(MQ).matches || window.__RA_GAP_PULLUP_V2__) return;
-  window.__RA_GAP_PULLUP_V2__ = true;
+  if (window.__RA_MOBILE_GAP_V3__) return;
+  window.__RA_MOBILE_GAP_V3__ = true;
 
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
   const  $ = (s, r=document) => r.querySelector(s);
 
-  function cardFromHeading(rx){
-    const h = $$('h1,h2,h3,h4').find(n => rx.test((n.textContent || '').trim().toLowerCase()));
-    if (!h) return null;
-    // choose the nearest “card-like” container; fall back to the parent
-    return h.closest('.card,section,article,form,div') || h.parentElement;
-  }
+  // Undo the old fixed-canvas behavior on mobile
+  function killGhostAndUnfix(){
+    if (!matchMedia(MQ).matches) return;
 
-  function hardCollapseBetween(a, b){
-    if (!a || !b) return;
-    let cur = a.nextElementSibling;
-    while (cur && cur !== b){
-      cur.style.setProperty('display','none','important');
-      cur.style.setProperty('height','0','important');
-      cur.style.setProperty('margin','0','important');
-      cur.style.setProperty('padding','0','important');
-      cur.setAttribute('data-ra-gap-collapsed','1');
-      cur = cur.nextElementSibling;
+    // Remove any spacer ghosts inserted by the old fixed-canvas patch
+    $$('#raCanvasGhost').forEach(el => { try { el.remove(); } catch(_){} });
+
+    // If the canvas card was set to position:fixed, revert it
+    const c = document.getElementById('c');
+    if (c){
+      const card = c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
+      if (card){
+        const st = getComputedStyle(card);
+        if (st.position === 'fixed' || card.style.position === 'fixed'){
+          card.style.position = 'relative';
+          ['left','top','right','bottom','width','transform','zIndex','margin']
+            .forEach(k => card.style.removeProperty(k));
+        }
+      }
     }
   }
 
-  function pullUp(){
+  // Find the containing “card” for a heading
+  function cardFromHeading(rx){
+    const h = $$('h1,h2,h3,h4').find(n => rx.test((n.textContent||'').trim().toLowerCase()));
+    return h ? (h.closest('.card, section, article, form, div') || h.parentElement) : null;
+  }
+
+  // Lowest common ancestor of two nodes
+  function lca(a,b){
+    const seen = new Set();
+    for (let x=a; x; x=x.parentElement) seen.add(x);
+    for (let y=b; y; y=y.parentElement) if (seen.has(y)) return y;
+    return document.body;
+  }
+
+  function closeGap(){
     if (!matchMedia(MQ).matches) return;
 
-    // locate cards
+    killGhostAndUnfix();
+
     const ct = cardFromHeading(/custom\s*text/);
     const ov = cardFromHeading(/overlays/);
     if (!ct || !ov) return;
 
-    // 1) collapse any obvious in-between spacer nodes
-    hardCollapseBetween(ct, ov);
+    // First pass: collapse direct siblings between the two cards
+    let cur = ct.nextElementSibling;
+    while (cur && cur !== ov){
+      if (!ct.contains(cur) && !ov.contains(cur)){
+        cur.setAttribute('data-ra-gap-cut','1');
+        cur.style.setProperty('display','none','important');
+        cur.style.setProperty('height','0','important');
+        cur.style.setProperty('margin','0','important');
+        cur.style.setProperty('padding','0','important');
+      }
+      cur = cur.nextElementSibling;
+    }
 
-    // 2) measure remaining visual gap; if still large, pull overlays up
-    requestAnimationFrame(() => {
-      const rCT = ct.getBoundingClientRect();
-      const rOV = ov.getBoundingClientRect();
-      const gap = Math.round(rOV.top - rCT.bottom);
+    // Second pass: robust collapse within their common ancestor region
+    const root = lca(ct, ov);
+    const ctBottom = ct.getBoundingClientRect().bottom + window.scrollY;
+    const ovTop    = ov.getBoundingClientRect().top    + window.scrollY;
 
-      if (gap > 24) {                    // clearly a void
-        const delta = gap - 12;          // leave ~12px spacing
-        ov.style.setProperty('margin-top', `-${delta}px`, 'important');
-        ov.style.setProperty('position', 'relative', 'important');
-        ov.style.setProperty('z-index', '2', 'important');
-      } else {
-        // normal spacing → remove any previous tweak
-        ov.style.removeProperty('margin-top');
-        ov.style.removeProperty('position');
-        ov.style.removeProperty('z-index');
+    $$('div,section,article', root).forEach(el => {
+      if (ct.contains(el) || ov.contains(el)) return;
+      const r = el.getBoundingClientRect();
+      const top = r.top + window.scrollY, bot = r.bottom + window.scrollY;
+      if (r.height > 18 && top >= ctBottom - 4 && bot <= ovTop + 4){
+        el.setAttribute('data-ra-gap-cut','1');
+        el.style.setProperty('display','none','important');
+        el.style.setProperty('height','0','important');
+        el.style.setProperty('margin','0','important');
+        el.style.setProperty('padding','0','important');
       }
     });
+
+    // Keep a small, consistent spacing
+    ov.style.setProperty('margin-top','12px','important');
   }
 
-  // keep tidy on DOM mutations & viewport changes
-  const mo = new MutationObserver(pullUp);
-  mo.observe(document.body, { childList:true, subtree:true });
-  window.addEventListener('resize', pullUp, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(pullUp, 150), { passive:true });
+  // Observe changes and keep fixing
+  const mo = new MutationObserver(closeGap);
+  mo.observe(document.documentElement, { childList:true, subtree:true });
+  window.addEventListener('resize', closeGap, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(closeGap,150), { passive:true });
 
-  // clean up known ghosts if they reappear (mobile only)
-  ['#raCanvasGhost', '.ra-canvas-floater', '[data-ra-role="stage-floater"]', '[data-ra-hidden-gap="1"]']
-    .forEach(sel => $$(sel).forEach(el => { try { el.remove(); } catch(_) {} }));
-
-  // small CSS backstop
+  // Backstop CSS on mobile
   const style = document.createElement('style');
   style.textContent = `
     @media ${MQ} {
-      [data-ra-gap-collapsed="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+      #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+      [data-ra-gap-cut="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
     }
   `;
   document.head.appendChild(style);
 
-  // first run
-  pullUp();
+  // First run
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', closeGap, { once:true });
+  } else {
+    closeGap();
+  }
 })();
