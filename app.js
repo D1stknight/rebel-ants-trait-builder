@@ -1056,3 +1056,1011 @@
   new MutationObserver(wire).observe(document.body, { childList:true, subtree:true });
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
+
+/* =========================================
+   RA_MOBILE_FLOW_v28  — MOBILE ONLY (≤900px)
+   - Canvas sits IN THE PAGE FLOW as the first box above “Rebel Ant”
+   - Hides the old stage container (kills rogue checkerboard)
+   - Proper Konva scaling (stage.scale + content size) so overlays drag correctly
+   - Desktop untouched (code is gated by max-width:900px)
+   ========================================= */
+(() => {
+  const CSS = `
+    @media (max-width: 900px){
+      #ra-mobile-stage-host{
+        order:-1; width:100%;
+        display:flex; justify-content:center;
+        margin:12px 0 8px;
+      }
+      #ra-mobile-stage-frame{
+        width: min(92vw, 620px);
+        aspect-ratio: 1 / 1;
+        position: relative;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      #ra-mobile-checker{
+        position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+        background-image:
+          linear-gradient(45deg, rgba(0,0,0,.35) 25%, transparent 25%),
+          linear-gradient(-45deg, rgba(0,0,0,.35) 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, rgba(0,0,0,.35) 75%),
+          linear-gradient(-45deg, transparent 75%, rgba(0,0,0,.35) 75%);
+        background-size: 24px 24px;
+        background-position: 0 0, 0 12px, 12px -12px, -12px 0px;
+      }
+      /* Don’t CSS-scale the Konva wrapper; we size it numerically from JS */
+      #ra-mobile-stage-frame > .konvajs-content,
+      #ra-mobile-stage-frame > canvas{
+        position:absolute; top:0; left:0; border-radius:inherit;
+      }
+      /* Kill any old floaters on mobile */
+      .ra-canvas-floater,[data-ra-role="stage-floater"]{ display:none !important; }
+    }`;
+  const mq = window.matchMedia('(max-width: 900px)');
+
+  let applied = false;
+  let styleEl, host, frame, checker, live, origRoot, origRootDisplay;
+
+  function $(q){ return document.querySelector(q); }
+  function $$(q){ return Array.from(document.querySelectorAll(q)); }
+
+  function findLive(){
+    // Konva wrapper or plain canvas (whichever is used)
+    return $('.konvajs-content') || $('#app canvas, .app canvas, main canvas');
+  }
+  function findUploadCard(){
+    const h = $$('h1,h2,h3').find(n => /rebel\s*ant/i.test(n.textContent||''));
+    return h ? (h.closest('.card, .panel, section, form, div') || h.parentElement) : null;
+  }
+
+  function fitStageIntoFrame(){
+    if (!mq.matches || !window.stage || !frame) return;
+    try{
+      const baseW = window.stage.width();
+      const baseH = window.stage.height();
+      const side  = Math.max(baseW, baseH) || 1024;
+      const target = frame.clientWidth;           // square frame
+
+      // Scale the stage (Konva math, not CSS)
+      const scale = target / side;
+      window.stage.scale({ x: scale, y: scale });
+      window.stage.position({ x: 0, y: 0 });
+
+      // Make the DOM wrapper’s box match the visible size (keeps hit-testing correct)
+      const content = window.stage.getContent();  // .konvajs-content
+      content.style.width  = `${target}px`;
+      content.style.height = `${target}px`;
+
+      window.stage.batchDraw();
+    }catch(e){}
+  }
+
+  function apply(){
+    if (!mq.matches || applied) return;
+
+    live = findLive();
+    if (!live) return; // wait until canvas exists
+
+    origRoot = live.parentElement;     // this is the old checkerboard container
+    if (!origRoot) return;
+
+    // build our in-flow host
+    host = document.createElement('div');
+    host.id = 'ra-mobile-stage-host';
+    frame = document.createElement('div');
+    frame.id = 'ra-mobile-stage-frame';
+    checker = document.createElement('div');
+    checker.id = 'ra-mobile-checker';
+    frame.appendChild(checker);
+    host.appendChild(frame);
+
+    // insert BEFORE "Rebel Ant" card so it’s the first box
+    const card = findUploadCard();
+    const container = card?.parentElement || document.body;
+    if (card) container.insertBefore(host, card); else container.prepend(host);
+
+    // move live canvas into our frame
+    frame.appendChild(live);
+
+    // hide the old checkerboard container (this is the rogue strip you saw)
+    origRootDisplay = origRoot.style.display;
+    origRoot.style.display = 'none';
+
+    // stop stage panning (base image stays put); overlays remain draggable
+    try { window.stage?.draggable(false); } catch(e){}
+
+    // size correctly now and on rotate/resize
+    fitStageIntoFrame();
+
+    applied = true;
+  }
+
+  function cleanup(){
+    if (!applied) return;
+    try{
+      if (live && origRoot) origRoot.appendChild(live);
+      if (origRoot) origRoot.style.display = origRootDisplay || '';
+      host?.remove();
+    }catch(e){}
+    applied = false;
+  }
+
+  // — wiring —
+  function kick(){
+    if (mq.matches){ apply(); fitStageIntoFrame(); }
+    else { cleanup(); }
+  }
+
+  // inject CSS once
+  styleEl = document.getElementById('ra-mobile-flow-css-v28');
+  if (!styleEl){
+    styleEl = document.createElement('style');
+    styleEl.id = 'ra-mobile-flow-css-v28';
+    styleEl.textContent = CSS;
+    document.head.appendChild(styleEl);
+  }
+
+  // react to DOM changes (token loads later)
+  const mo = new MutationObserver(() => { if (mq.matches && !applied) apply(); });
+  mo.observe(document.documentElement, { childList:true, subtree:true });
+
+  window.addEventListener('resize', fitStageIntoFrame, {passive:true});
+  window.addEventListener('orientationchange', () => setTimeout(fitStageIntoFrame, 200), {passive:true});
+  mq.addEventListener?.('change', () => kick());
+
+  // first run
+  kick();
+})();
+
+/* ====================== RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) ======================
+   What it does:
+   • Fits the drawing to your phone screen using CSS (view-only) — exports stay perfect.
+   • Keeps the canvas in the normal page flow (not floating).
+   • Removes the mid-page empty checkerboard strip if it appears.
+   • Never touches desktop.
+   • Never grabs focus (keyboard won’t dismiss while typing the token).
+   ====================================================================== */
+(() => {
+  const MOBILE_Q = '(max-width: 920px)';
+  if (!window.matchMedia(MOBILE_Q).matches || window.__RA_MOBILE_CSS_FIT_V2__) return;
+  window.__RA_MOBILE_CSS_FIT_V2__ = true;
+
+  // small helpers
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  const  $ = (s,r=document)=>r.querySelector(s);
+
+  function findStageCanvas() {
+    const all = $$('canvas');
+    if (!all.length) return null;
+    // pick the intrinsically largest canvas — that’s the drawing stage
+    return all.reduce((a,b)=> (b.width > (a?.width||0) ? b : a), null);
+  }
+
+  function cssFit() {
+    const stage = findStageCanvas();
+    if (!stage) return;
+
+    // the element we’ll size in-flow (usually the stage’s container)
+    const wrap = stage.parentElement || stage;
+
+    // intrinsic drawing size (used by export)
+    const W = Math.max(1, stage.width);
+    const H = Math.max(1, stage.height);
+
+    // available width inside the page (center it, keep some breathing room)
+    const host = wrap.parentElement || document.body;
+    const hostW = Math.max(320, host.clientWidth || window.innerWidth);
+    const sidePad = 28;                      // approximate padding of the layout
+    const targetW = Math.min(W, hostW - sidePad);
+    const scale   = Math.min(1, targetW / W);
+    const dW      = Math.round(W * scale);
+    const dH      = Math.round(H * scale);
+
+    // ✅ View-only sizing: set CSS width/height (do NOT change canvas.width/height)
+    //    This keeps exports crisp and full-size with no white borders.
+    wrap.style.width     = dW + 'px';
+    wrap.style.height    = dH + 'px';
+    wrap.style.maxWidth  = '100%';
+    wrap.style.margin    = '0 auto 16px auto';
+    wrap.style.position  = 'relative';
+
+    // If the stage container holds multiple canvases (scene/hit), size them all
+    $$('.', wrap); // no-op line to keep older minifiers happy
+    $$('canvas', wrap).forEach(c => {
+      c.style.width    = dW + 'px';
+      c.style.height   = dH + 'px';
+      c.style.maxWidth = '100%';
+      c.style.display  = 'block';
+    });
+
+    // Collapse any stray checkerboard strip just above/below the canvas block
+    [wrap.previousElementSibling, wrap.nextElementSibling].forEach(el => {
+      if (!el) return;
+      const cs = getComputedStyle(el);
+      const isCheckerBG =
+        (cs.backgroundImage || '').includes('linear-gradient') ||
+        (cs.backgroundImage || '').includes('repeating');
+      const looksEmpty = el.getBoundingClientRect().height < 12 || !(el.textContent||'').trim();
+      if (isCheckerBG || looksEmpty) {
+        el.style.display = 'none';
+        el.style.height  = '0px';
+        el.style.margin  = '0';
+        el.style.padding = '0';
+        el.setAttribute('data-ra-hidden-gap','1');
+      }
+    });
+  }
+
+  // Trigger a fit after real “load” actions (not on typing, so the keyboard stays up)
+  function bindLoadTriggers() {
+    const raCards = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
+    raCards.forEach(card => {
+      $$('button', card).forEach(btn => {
+        const t = (btn.textContent||'').toLowerCase().trim();
+        if (t === 'load' || t === 'load by token' || t === 'clear upload') {
+          if (!btn.__raFitBound) {
+            btn.__raFitBound = true;
+            btn.addEventListener('click', () => setTimeout(cssFit, 60), {passive:true});
+          }
+        }
+      });
+      const file = $('input[type="file"]', card);
+      if (file && !file.__raFitBound) {
+        file.__raFitBound = true;
+        file.addEventListener('change', () => setTimeout(cssFit, 60), {passive:true});
+      }
+    });
+  }
+
+  // Keep things tidy as the app mutates
+  const mo = new MutationObserver(() => { bindLoadTriggers(); cssFit(); });
+  mo.observe(document.documentElement, {childList:true, subtree:true});
+
+  // Recompute on orientation/resize
+  window.addEventListener('resize', () => { if (window.matchMedia(MOBILE_Q).matches) cssFit(); }, {passive:true});
+  window.addEventListener('orientationchange', () => setTimeout(cssFit, 150), {passive:true});
+
+  // Initial pass
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { bindLoadTriggers(); cssFit(); }, {once:true});
+  } else {
+    bindLoadTriggers(); cssFit();
+  }
+
+  // Minimal CSS for mobile only
+  const style = document.createElement('style');
+  style.textContent = `
+    @media ${MOBILE_Q} {
+      /* Kill any mid-page spacer/strip if it sneaks back in */
+      [data-ra-hidden-gap="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+    }
+  `;
+  document.head.appendChild(style);
+})();
+ /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
+
+/* ==================== RA_AI_QUOTE_v1 — “✨ Inspire me” (motivational quotes) ====================
+   What this adds:
+   • A button “✨ Inspire me” near your Custom Text controls
+   • Each click adds (or replaces) a motivational quote on the canvas
+   • Quotes are varied and avoid recent repeats (remembers 40 recent in localStorage)
+   • Text is centered, wrapped to 80% of canvas width, with a readable outline
+   • Uses your existing text controls (font, size, color, stroke) after insertion
+   ============================================================================================== */
+(() => {
+  const RECENT_KEY = 'ra_ai_quotes_recent_v1';
+
+  // ——— Small helpers ———
+  const $  = (sel, r=document) => r.querySelector(sel);
+  const $$ = (sel, r=document) => Array.from(r.querySelectorAll(sel));
+
+  function getRecent() {
+    try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch (_) { return []; }
+  }
+  function pushRecent(q) {
+    const arr = getRecent();
+    arr.unshift(String(q).trim());
+    // keep only the latest 40 unique
+    const seen = new Set();
+    const dedup = [];
+    for (const s of arr) { if (!seen.has(s)) { seen.add(s); dedup.push(s); } }
+    dedup.length = Math.min(dedup.length, 40);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(dedup)); } catch (_) {}
+  }
+
+  // ——— Quote generator (lightweight, but varied) ———
+  const COMMANDS = [
+    "Keep going", "Stay hungry", "Trust the process", "Outwork yesterday",
+    "Start before you're ready", "Consistency compounds", "Progress over perfection",
+    "Ship it", "Make it simple", "Play the long game", "No zero days",
+    "Bet on yourself", "Stay curious", "Do the hard things", "Win the morning",
+    "Keep showing up", "Build in public", "One brick at a time", "Move with purpose",
+    "Be relentlessly resourceful", "Protect your momentum", "Take the stairs",
+    "Create then iterate", "Make it a habit", "Focus beats talent",
+    "Earn it daily", "Start now", "Prove it", "Own your time", "Small steps, big moves"
+  ];
+  const TAILS = [
+    "small steps add up", "momentum beats perfect", "discipline is freedom",
+    "tiny wins compound", "results love consistency", "courage over comfort",
+    "1% better every day", "clarity comes from action", "done beats perfect",
+    "practice makes progress", "keep the promise to yourself", "get uncomfortable",
+    "dreams need deadlines", "start messy", "execute loudly",
+    "be patient and persistent", "aim for better, not easy", "work the plan",
+    "prove it with work", "show up for yourself", "stack your wins",
+    "build the streak", "trust your future self", "act like it matters",
+    "make room for greatness", "keep it moving", "focus and finish",
+    "make today count", "finish strong", "do one more rep"
+  ];
+  const SEPS = [" — ", " · ", " — ", ": "]; // weighted toward em‑dash
+
+  function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+  function makeQuote(attempt=0){
+    const q = `${pick(COMMANDS)}${pick(SEPS)}${pick(TAILS)}.`;
+    const recent = getRecent();
+    if (!recent.includes(q)) return q;
+    // Try a few times to avoid an immediate repeat
+    return attempt < 60 ? makeQuote(attempt+1) : q;
+  }
+
+  // ——— Drop (or replace) quote on Fabric canvas ———
+  function addOrReplaceQuote(){
+    const c = window.canvas;
+    if (!c || !window.fabric) { alert('Canvas not ready'); return; }
+
+    const quote = makeQuote();
+    const cw = c.getWidth(), ch = c.getHeight();
+    const width = Math.round(cw * 0.84);
+
+    // Size scales with canvas (feels right across 700/900/1024/1200)
+    const defaultSize = Math.round(Math.max(28, Math.min(64, cw * 0.055)));
+
+    // Prefer the current UI controls if present (so user style is respected)
+    const family = ($('#fontFamily')||{}).value || "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif";
+    const size   = parseInt(($('#fontSize')||{}).value||defaultSize, 10);
+    const fill   = ($('#fontColor')||{}).value || "#ffffff";
+    const stroke = ($('#strokeColor')||{}).value || "#000000";
+    const swidth = parseInt(($('#strokeWidth')||{}).value||"2", 10);
+
+    // If a custom text is selected, replace its contents; otherwise add a new one
+    const active = c.getActiveObject();
+    if (active && active._kind === 'customText') {
+      active.text = quote;
+      active.setCoords();
+      c.requestRenderAll();
+      pushRecent(quote);
+      return;
+    }
+
+    const tb = new fabric.Textbox(quote, {
+      left: cw/2, top: ch/2,
+      originX: "center", originY: "center",
+      width, textAlign: "center",
+      fontFamily: family,
+      fontSize: size,
+      fill, stroke, strokeWidth: swidth,
+      editable: true
+    });
+    tb._kind = 'customText';
+    tb._raAiQuote = true;
+
+    c.add(tb).setActiveObject(tb);
+    // Keep token ID label on top if you use it
+    try { if (typeof window.bringInterfaceToFront === 'function') window.bringInterfaceToFront(); } catch(_){}
+    c.requestRenderAll();
+    pushRecent(quote);
+  }
+
+  // ——— Inject the “✨ Inspire me” button into your existing UI ———
+  function injectButton(){
+    if (document.getElementById('raAiQuoteBtn')) return;
+
+    // Try to place it next to your existing "Add" custom text button if present
+    let anchor = document.getElementById('addCustomText');
+    if (!anchor) {
+      // Fall back to placing after the custom text input/textarea or in the same panel
+      anchor = document.getElementById('customText') ||
+               $$('input,textarea,button').find(b => /custom\s*text/i.test((b.id||b.textContent||'')));
+    }
+    if (!anchor) { setTimeout(injectButton, 300); return; }
+
+    const btn = document.createElement('button');
+    btn.id = 'raAiQuoteBtn';
+    btn.textContent = '✨ Inspire me';
+    btn.className = 'btn';
+    btn.style.marginLeft = '8px';
+    btn.style.cursor = 'pointer';
+
+    // If your buttons use a "small" variant, mirror it
+    if (anchor.classList.contains('small')) btn.classList.add('small');
+
+    btn.addEventListener('click', addOrReplaceQuote);
+    // Insert right after the anchor button/input
+    anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+  }
+
+  // Boot once DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', injectButton, { once:true });
+  } else {
+    injectButton();
+  }
+})();
+
+/* ================= RA_FONT_PICKER_CLEAN_V1 =================
+   Shows friendly names in the font dropdown while keeping
+   correct CSS font stacks as the actual values.
+   Works for #fontFamily (Custom Text). If you also have an
+   #idFontFamily picker for the token ID, it will apply there too.
+   ========================================================== */
+(function RA_FONT_PICKER_CLEAN_V1(){
+  const FONTS = [
+    { name: 'Impact',            stack: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
+    { name: 'Arial Black',       stack: "'Arial Black', Gadget, sans-serif" },
+    { name: 'Arial',             stack: "Arial, Helvetica, sans-serif" },
+    { name: 'Helvetica Neue',    stack: "'Helvetica Neue', Helvetica, Arial, sans-serif" },
+    { name: 'Verdana',           stack: "Verdana, Geneva, sans-serif" },
+    { name: 'Tahoma',            stack: "Tahoma, Geneva, sans-serif" },
+    { name: 'Trebuchet MS',      stack: "'Trebuchet MS', Helvetica, sans-serif" },
+    { name: 'Georgia',           stack: "Georgia, 'Times New Roman', serif" },
+    { name: 'Times New Roman',   stack: "'Times New Roman', Times, serif" },
+    { name: 'Palatino',          stack: "Palatino, 'Palatino Linotype', serif" },
+    { name: 'Garamond',          stack: "Garamond, Baskerville, 'Baskerville Old Face', 'Times New Roman', serif" },
+    { name: 'Optima',            stack: "Optima, Segoe, 'Segoe UI', Candara, Calibri, Arial, sans-serif" },
+    { name: 'Century Gothic',    stack: "'Century Gothic', AppleGothic, sans-serif" },
+    { name: 'Gill Sans',         stack: "'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" },
+    { name: 'Avenir',            stack: "Avenir, 'Avenir Next', 'Segoe UI', sans-serif" },
+    { name: 'Copperplate',       stack: "Copperplate, 'Copperplate Gothic Light', fantasy" },
+    { name: 'Papyrus',           stack: "Papyrus, fantasy" },
+    { name: 'Brush Script MT',   stack: "'Brush Script MT', cursive" },
+    { name: 'Lucida Sans',       stack: "'Lucida Sans Unicode','Lucida Grande', sans-serif" },
+    { name: 'Lucida Console',    stack: "'Lucida Console', Monaco, monospace" },
+    { name: 'Consolas',          stack: "Consolas, 'Lucida Console', Monaco, monospace" },
+    { name: 'Courier',           stack: "Courier, 'Courier New', monospace" },
+    { name: 'Menlo',             stack: "Menlo, Monaco, Consolas, 'Courier New', monospace" },
+    { name: 'System UI',         stack: "system-ui, -apple-system, 'Segoe UI', Roboto, Arial" }
+  ];
+
+  function applyToPicker(el){
+    if (!el) return;
+
+    // keep current value if it matches one of our stacks
+    const current = (el.value || '').trim();
+    const keep = FONTS.some(f => f.stack === current) ? current : null;
+
+    // only repopulate if it's a <select> (so we keep existing listeners)
+    if (el.tagName.toLowerCase() === 'select'){
+      el.innerHTML = '';
+      FONTS.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.stack;          // what fabric uses
+        opt.textContent = f.name;     // what user sees
+        el.appendChild(opt);
+      });
+      el.value = keep || FONTS[0].stack;
+
+      // fire a change so the canvas updates if needed
+      try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_) {}
+    } else {
+      // if it’s an <input>, just ensure it has a sane default stack
+      if (!keep) el.value = FONTS[0].stack;
+    }
+  }
+
+  function run(){
+    applyToPicker(document.getElementById('fontFamily'));   // Custom Text font
+    applyToPicker(document.getElementById('idFontFamily')); // (optional) Token ID font, if present
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run, { once:true });
+  } else {
+    run();
+  }
+})();
+
+/* ================= RA_FONT_PICKER_PREVIEW_V2 =================
+   - Clean labels in the font dropdown (no long stacks shown).
+   - Each option is styled with its font (works in most desktop browsers).
+   - Live preview box below the picker updates instantly.
+   - Applies to #fontFamily (Custom Text) and, if present, #idFontFamily.
+   ============================================================ */
+(function RA_FONT_PICKER_PREVIEW_V2(){
+  // Curated, cross‑platform stacks (Mac + Windows + Linux fallbacks).
+  // Add/remove families freely; the dropdown will rebuild automatically.
+  const FONTS = [
+    { name:'Impact',              stack:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
+    { name:'Arial Black',         stack:"'Arial Black', Gadget, sans-serif" },
+    { name:'Arial',               stack:"Arial, Helvetica, sans-serif" },
+    { name:'Helvetica Neue',      stack:"'Helvetica Neue', Helvetica, Arial, sans-serif" },
+    { name:'Verdana',             stack:"Verdana, Geneva, sans-serif" },
+    { name:'Tahoma',              stack:"Tahoma, Geneva, sans-serif" },
+    { name:'Trebuchet MS',        stack:"'Trebuchet MS', Helvetica, sans-serif" },
+    { name:'Segoe UI',            stack:"'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" },
+    { name:'Calibri',             stack:"Calibri, Candara, Segoe, 'Segoe UI', Optima, Arial, sans-serif" },
+    { name:'Optima',              stack:"Optima, Segoe, 'Segoe UI', Candara, Calibri, Arial, sans-serif" },
+    { name:'Avenir',              stack:"Avenir, 'Avenir Next', 'Segoe UI', sans-serif" },
+    { name:'Futura',              stack:"Futura, 'Century Gothic', 'Gill Sans', Arial, sans-serif" },
+    { name:'Gill Sans',           stack:"'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" },
+    { name:'Century Gothic',      stack:"'Century Gothic', AppleGothic, sans-serif" },
+
+    { name:'Georgia',             stack:"Georgia, 'Times New Roman', serif" },
+    { name:'Times New Roman',     stack:"'Times New Roman', Times, serif" },
+    { name:'Baskerville',         stack:"Baskerville, 'Baskerville Old Face', Garamond, 'Times New Roman', serif" },
+    { name:'Garamond',            stack:"Garamond, Baskerville, 'Baskerville Old Face', 'Times New Roman', serif" },
+    { name:'Palatino',            stack:"Palatino, 'Palatino Linotype', 'Book Antiqua', serif" },
+    { name:'Didot',               stack:"Didot, 'Bodoni 72', 'Bodoni MT', 'Times New Roman', serif" },
+    { name:'Rockwell',            stack:"Rockwell, 'Courier New', Georgia, serif" },
+
+    { name:'Courier New',         stack:"'Courier New', Courier, monospace" },
+    { name:'Menlo',               stack:"Menlo, Monaco, Consolas, 'Courier New', monospace" },
+    { name:'Consolas',            stack:"Consolas, 'Lucida Console', Monaco, monospace" },
+    { name:'Lucida Console',      stack:"'Lucida Console', Monaco, monospace" },
+
+    { name:'Copperplate',         stack:"Copperplate, 'Copperplate Gothic Light', fantasy" },
+    { name:'Papyrus',             stack:"Papyrus, fantasy" },
+    { name:'Brush Script MT',     stack:"'Brush Script MT', cursive" },
+    { name:'Comic Sans MS',       stack:"'Comic Sans MS', 'Comic Sans', Chalkboard, cursive" },
+
+    // System UI stack for a clean, modern default on any platform:
+    { name:'System UI',           stack:"system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" }
+  ];
+
+  const PICKER_IDS = ['fontFamily', 'idFontFamily']; // second one is optional in your UI
+
+  function ensurePreviewBelow(picker, id){
+    const prevId = 'raPreview_' + id;
+    let box = document.getElementById(prevId);
+    if (!box) {
+      box = document.createElement('div');
+      box.id = prevId;
+      box.style.cssText = [
+        'margin-top:6px',
+        'padding:8px 10px',
+        'border:1px solid #2a2a2e',
+        'border-radius:8px',
+        'background:#111319',
+        'color:#e7e7ea',
+        'font-size:15px',
+        'line-height:1.35',
+        'letter-spacing:.1px'
+      ].join(';');
+      const label = document.createElement('div');
+      label.textContent = 'Preview';
+      label.style.cssText = 'font-size:11px;opacity:.65;margin-bottom:4px';
+      const text = document.createElement('div');
+      text.className = 'raPreviewText';
+      text.textContent = 'AaBbCc 1234  #RebelAnts';
+      box.appendChild(label);
+      box.appendChild(text);
+      // insert right after the picker
+      picker.parentNode.insertBefore(box, picker.nextSibling);
+    }
+    return box.querySelector('.raPreviewText');
+  }
+
+  function repopulateSelect(selectEl, id){
+    // Preserve previously selected stack if it exists
+    const current = (selectEl.value || '').trim();
+
+    // Clear & rebuild options
+    selectEl.innerHTML = '';
+    FONTS.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.stack;         // what Fabric/text actually uses
+      opt.textContent = f.name;    // what the user sees
+      // Live preview in dropdown (supported in most desktop browsers)
+      opt.style.fontFamily = f.stack;
+      opt.style.fontSize   = '14px';
+      selectEl.appendChild(opt);
+    });
+
+    // Keep selection if still available, otherwise default to first
+    const found = FONTS.find(f => f.stack === current);
+    selectEl.value = found ? found.stack : FONTS[0].stack;
+
+    // Preview box under the picker
+    const previewText = ensurePreviewBelow(selectEl, id);
+    const updatePreview = () => {
+      previewText.style.fontFamily = selectEl.value || FONTS[0].stack;
+      // text already set; we just switch the font
+    };
+
+    // Wire once
+    if (!selectEl.__raFontPreviewBound){
+      selectEl.addEventListener('change', updatePreview);
+      selectEl.addEventListener('input',  updatePreview);
+      selectEl.__raFontPreviewBound = true;
+    }
+    updatePreview();
+  }
+
+  function apply(){
+    PICKER_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el || el.__raFontPreviewV2) return;
+      el.__raFontPreviewV2 = true;
+
+      if (el.tagName.toLowerCase() === 'select'){
+        repopulateSelect(el, id);
+      } else {
+        // If your UI uses an <input> for fonts, just attach a preview box
+        const previewText = ensurePreviewBelow(el, id);
+        const update = () => { previewText.style.fontFamily = el.value || FONTS[0].stack; };
+        el.addEventListener('input', update);
+        el.addEventListener('change', update);
+        update();
+      }
+    });
+  }
+
+  // Run now and watch for UI re-renders (defensive)
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply, { once:true });
+  } else {
+    apply();
+  }
+  new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
+})();
+
+/* ============================ RA_WEBFONTS_LAZY_V1 ============================
+   Adds Google web fonts to the existing font picker (and keeps live preview).
+   - Injects a single Google Fonts CSS with many families (weights included).
+   - Appends a <optgroup label="Web fonts"> to #fontFamily / #idFontFamily.
+   - When you select a web font, waits for it to load, then re-renders Fabric.
+   ========================================================================= */
+(function RA_WEBFONTS_LAZY_V1(){
+  // Configure your web fonts here (Google "family=" spec on the right)
+  const WEB_FONTS = [
+    { name:'Inter',             google:'Inter:wght@400;600;700' },
+    { name:'Roboto',            google:'Roboto:wght@400;500;700' },
+    { name:'Poppins',           google:'Poppins:wght@400;600;700' },
+    { name:'Montserrat',        google:'Montserrat:wght@400;600;700' },
+    { name:'Lato',              google:'Lato:wght@400;700' },
+    { name:'Raleway',           google:'Raleway:wght@400;600;700' },
+    { name:'Oswald',            google:'Oswald:wght@400;600;700' },
+    { name:'Nunito',            google:'Nunito:wght@400;600;800' },
+    { name:'Source Sans 3',     google:'Source+Sans+3:wght@400;600;700' },
+    { name:'Merriweather',      google:'Merriweather:wght@400;700' },
+    { name:'Playfair Display',  google:'Playfair+Display:wght@400;700' },
+    { name:'Abril Fatface',     google:'Abril+Fatface' },
+    { name:'Bebas Neue',        google:'Bebas+Neue' },
+    { name:'Dancing Script',    google:'Dancing+Script:wght@400;600' },
+    { name:'Pacifico',          google:'Pacifico' },
+    { name:'Inconsolata',       google:'Inconsolata:wght@400;700' },
+    { name:'Fira Code',         google:'Fira+Code:wght@400;600' },
+    { name:'JetBrains Mono',    google:'JetBrains+Mono:wght@400;700' }
+  ];
+
+  const PICKERS = ['fontFamily','idFontFamily'];  // #idFontFamily is optional in your UI
+
+  // -------- load Google Fonts CSS once
+  function injectCssOnce(){
+    if (document.getElementById('raWebFontsCSS')) return;
+    const fam = WEB_FONTS.map(f => 'family=' + f.google).join('&');
+    const href = 'https://fonts.googleapis.com/css2?' + fam + '&display=swap';
+
+    // Preconnect (nice to have)
+    if (!document.querySelector('link[rel="preconnect"][href*="fonts.gstatic"]')){
+      const pre1 = document.createElement('link');
+      pre1.rel = 'preconnect'; pre1.href = 'https://fonts.gstatic.com'; pre1.crossOrigin = 'anonymous';
+      document.head.appendChild(pre1);
+    }
+    if (!document.querySelector('link[rel="preconnect"][href*="fonts.googleapis"]')){
+      const pre2 = document.createElement('link');
+      pre2.rel = 'preconnect'; pre2.href = 'https://fonts.googleapis.com';
+      document.head.appendChild(pre2);
+    }
+
+    const link = document.createElement('link');
+    link.id = 'raWebFontsCSS';
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+
+    // After CSS parses & fonts load, nudge Fabric so metrics refresh
+    const nudge = () => { try { window.canvas && window.canvas.requestRenderAll(); } catch(_){} };
+    (document.fonts && document.fonts.ready ? document.fonts.ready.then(nudge) : Promise.resolve().then(nudge));
+  }
+
+  // Get a readable CSS stack for a given family (with sensible fallbacks)
+  function stackFor(family){
+    return `"${family}", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif`;
+  }
+
+  // Extract first family name from a stack (handles quotes)
+  function firstFamily(stack){
+    if (!stack) return '';
+    const m = stack.match(/^["']?([^"',]+(?:\s[^"',]+)?)["']?/);
+    return (m && m[1]) ? m[1].trim() : stack.split(',')[0].trim().replace(/^["']|["']$/g,'');
+  }
+
+  // Append an <optgroup> with all web fonts to a <select>
+  function extendPicker(select){
+    if (!select || select.tagName.toLowerCase() !== 'select') return;
+    if (select.querySelector('optgroup[label="Web fonts"]')) return; // already extended
+
+    const og = document.createElement('optgroup');
+    og.label = 'Web fonts';
+    WEB_FONTS.forEach(f => {
+      const opt = document.createElement('option');
+      opt.textContent = f.name;
+      opt.value = stackFor(f.name);
+      // style option with its own font (desktop browsers)
+      opt.style.fontFamily = opt.value;
+      opt.style.fontSize = '14px';
+      og.appendChild(opt);
+    });
+    select.appendChild(og);
+
+    // When a web font is chosen, wait for it to load then redraw Fabric
+    if (!select.__raWebFontsBound){
+      const onChange = async () => {
+        const fam = firstFamily(select.value);
+        try {
+          if (document.fonts && fam) { await document.fonts.load(`48px "${fam}"`); }
+        } catch(_){}
+        try { window.canvas && window.canvas.requestRenderAll(); } catch(_){}
+      };
+      select.addEventListener('change', onChange);
+      select.addEventListener('input', onChange);
+      select.__raWebFontsBound = true;
+    }
+  }
+
+  function apply(){
+    injectCssOnce();
+    PICKERS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) extendPicker(el);
+    });
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', apply, {once:true});
+  } else {
+    apply();
+  }
+  new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
+})();
+
+/* ====================== RA_ANIMATE_PREVIEW_VIDEO_V1 =========================
+   Adds a tiny Animate UI (Export card) + 3 motion styles + video export.
+   - No servers/keys. Records the canvas with MediaRecorder.
+   - Works on desktop + mobile (falls back to preview if codec unsupported).
+   - Does not change your layout; runs only when a base image exists.
+   ========================================================================== */
+(function RA_ANIMATE_PREVIEW_VIDEO_V1(){
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // ---- UI -----------------------------------------------------------------
+  function ensureUI(){
+    if (document.getElementById('raAnimRow')) return true;
+    const h3 = Array.from(document.querySelectorAll('h3'))
+      .find(h => /export/i.test((h.textContent||'').trim()));
+    const card = h3 ? h3.parentElement : null;
+    if (!card) return false;
+
+    const row = document.createElement('div');
+    row.id = 'raAnimRow';
+    row.style.cssText = 'margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center';
+
+    row.innerHTML = `
+      <div style="font-weight:600;opacity:.85">Animate (beta)</div>
+      <select id="raAnimStyle" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
+        <option value="ken">Cinematic (Ken Burns)</option>
+        <option value="parallax">Parallax</option>
+        <option value="sway">Sway</option>
+      </select>
+      <select id="raAnimDur" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
+        <option value="3">3s</option>
+        <option value="5" selected>5s</option>
+        <option value="8">8s</option>
+      </select>
+      <button id="raAnimPreview" class="btn small">Preview</button>
+      <button id="raAnimMake" class="btn small">Make video</button>
+      <span id="raAnimStatus" style="opacity:.7;font-size:12px;margin-left:6px;"></span>
+    `;
+    card.appendChild(row);
+
+    document.getElementById('raAnimPreview').onclick = () => run({record:false});
+    document.getElementById('raAnimMake').onclick    = () => run({record:true});
+
+    return true;
+  }
+
+  // ---- helpers -------------------------------------------------------------
+  function baseAndOverlays(c){
+    const objs = c.getObjects() || [];
+    const bg   = objs.find(o => o._isBgRect || o._isBg || o._isBackground);
+    const base = objs.find(o => o._isBase);
+    const overlays = objs.filter(o => o._kind === 'overlay');
+    const others   = objs.filter(o => o !== bg && o !== base && o._kind !== 'overlay');
+    return { bg, base, overlays, others, all: objs };
+  }
+
+  function snapState(objs){
+    return objs.map(o => ({
+      o,
+      left: o.left || 0,
+      top:  o.top  || 0,
+      sx:   o.scaleX || 1,
+      sy:   o.scaleY || 1,
+      ang:  o.angle  || 0
+    }));
+  }
+  function restoreState(state, c){
+    state.forEach(s=>{
+      try{
+        s.o.left   = s.left;
+        s.o.top    = s.top;
+        s.o.scaleX = s.sx;
+        s.o.scaleY = s.sy;
+        s.o.angle  = s.ang;
+        s.o.setCoords && s.o.setCoords();
+      }catch(_){}
+    });
+    try{ c.requestRenderAll(); }catch(_){}
+  }
+
+  // cubic ease in/out (pleasant, not too sharp)
+  function ease(t){ return (t<0.5) ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2; }
+  const lerp = (a,b,t)=> a + (b-a)*t;
+
+  // pick the best mime the browser can record
+  function pickMime(){
+    const m = window.MediaRecorder;
+    if (!m) return '';
+    const list = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/mp4' // Safari may support this
+    ];
+    return list.find(type => m.isTypeSupported ? m.isTypeSupported(type) : true) || '';
+  }
+
+  // ---- animation core ------------------------------------------------------
+  async function run({record}){
+    const c = C(); const st = document.getElementById('raAnimStatus');
+    if (!c){ st && (st.textContent = 'Canvas not ready.'); return; }
+
+    // Require a base image
+    const { base, overlays, all } = baseAndOverlays(c);
+    if (!base){ st && (st.textContent = 'Load an image first.'); return; }
+
+    // UI params
+    const styleSel = document.getElementById('raAnimStyle');
+    const durSel   = document.getElementById('raAnimDur');
+    const style    = styleSel ? styleSel.value : 'ken';
+    const duration = Math.max(1, parseInt(durSel ? durSel.value : '5', 10));
+
+    // Snapshot & prep
+    const state = snapState(all);
+    const wasActive = c.getActiveObject && c.getActiveObject();
+    c.discardActiveObject && c.discardActiveObject();
+    c.selection = false;
+
+    // for recording
+    let rec, chunks=[], url='';
+    if (record){
+      const fps = 30;
+      const mime = pickMime();
+      const stream = (c.lowerCanvasEl && c.lowerCanvasEl.captureStream)
+        ? c.lowerCanvasEl.captureStream(fps)
+        : c.upperCanvasEl.captureStream ? c.upperCanvasEl.captureStream(fps) : null;
+
+      if (stream && window.MediaRecorder && mime){
+        try{
+          rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
+          rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+          rec.start(200); // collect in small chunks
+        }catch(_){}
+      }
+      st && (st.textContent = 'Recording…');
+    }else{
+      st && (st.textContent = 'Playing…');
+    }
+
+    // Params per style
+    const cw = c.getWidth(), ch = c.getHeight();
+    const start = performance.now(), D = duration * 1000;
+    const maxShift = Math.round(Math.min(cw,ch) * 0.05);   // ~5% canvas
+    const swayDeg  = 3;                                    // small rotation
+    const kenScale = 1.07;                                 // 7% zoom
+
+    function tick(now){
+      const t = Math.min(1, (now - start) / D);
+      const e = ease(t);
+
+      // Reset to snapshot, then apply offsets at this frame
+      restoreState(state, c);
+
+      try{
+        if (style === 'ken'){
+          // zoom base slightly + drift from TL -> center
+          const dx = lerp(-maxShift, 0, e), dy = lerp(-maxShift, 0, e);
+          base.left = (base.left||0) + dx; base.top = (base.top||0) + dy;
+          base.scaleX *= lerp(1, kenScale, e);
+          base.scaleY *= lerp(1, kenScale, e);
+          base.setCoords && base.setCoords();
+
+          // overlays drift at smaller rate so it feels layered
+          overlays.forEach((o,i)=>{
+            const f = 0.5 + i*0.08;
+            o.left = (o.left||0) + dx * 0.6 * f;
+            o.top  = (o.top ||0) + dy * 0.6 * f;
+            o.setCoords && o.setCoords();
+          });
+        }
+        else if (style === 'parallax'){
+          // overlays move in opposing directions based on index
+          overlays.forEach((o,i)=>{
+            const dir = (i%2===0) ? 1 : -1;
+            const amp = maxShift * (0.4 + i*0.06);
+            o.left = (o.left||0) + dir * (e * amp * 0.8);
+            o.top  = (o.top ||0) + dir * (e * amp * 0.5);
+            o.setCoords && o.setCoords();
+          });
+          // tiny base drift so it doesn't feel static
+          base.left = (base.left||0) + lerp(0, maxShift*0.25, e);
+          base.top  = (base.top ||0) + lerp(0, maxShift*0.15, e);
+          base.setCoords && base.setCoords();
+        }
+        else if (style === 'sway'){
+          // gentle scale breathe + small rotation back & forth
+          const s = 1 + 0.02*Math.sin(e*Math.PI);          // +2% at mid
+          base.scaleX *= s; base.scaleY *= s;
+          base.angle = lerp(0, swayDeg, Math.sin(e*Math.PI));
+          base.setCoords && base.setCoords();
+          overlays.forEach((o,i)=>{
+            const a = swayDeg*(i%3===0?1:-1)*0.6;
+            o.angle = lerp(0, a, Math.sin(e*Math.PI));
+            o.setCoords && o.setCoords();
+          });
+        }
+      }catch(_){}
+
+      try{ c.requestRenderAll(); }catch(_){}
+
+      if (t < 1){
+        requestAnimationFrame(tick);
+      }else{
+        // end
+        if (rec){
+          rec.onstop = ()=>{
+            try{
+              const blob = new Blob(chunks, { type: rec.mimeType });
+              url = URL.createObjectURL(blob);
+              // auto download
+              const ext = /mp4/i.test(rec.mimeType) ? 'mp4' : 'webm';
+              const a = document.createElement('a');
+              a.href = url; a.download = `rebel-ant-anim.${ext}`;
+              document.body.appendChild(a); a.click(); a.remove();
+              st && (st.textContent = `Saved ${ext.toUpperCase()} ✓`);
+            }catch(_){ st && (st.textContent = 'Recording finished.'); }
+            // restore canvas exactly as it was
+            restoreState(state, c);
+            if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
+          };
+          try{ rec.stop(); }catch(_){}
+        }else{
+          // just a preview—restore canvas
+          restoreState(state, c);
+          if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
+          st && (st.textContent = 'Done ✓');
+          setTimeout(()=>{ st && (st.textContent=''); }, 900);
+        }
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function boot(){
+    ensureUI();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+  new MutationObserver(boot).observe(document.documentElement, {childList:true, subtree:true});
+})();
