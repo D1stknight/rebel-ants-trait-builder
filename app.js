@@ -2548,33 +2548,33 @@
 })();
 
 /* ==========================================================
-   RA_UNDO_REDO_AND_DRAFT_V3  — intuitive, grouped history
-   - Single timeline with pointer (like Figma/Photoshop)
-   - Gestures grouped: one Undo reverses a full drag/scale/rotate
-   - Keyboard nudges grouped (arrows) and Delete/Backspace captured
-   - Wraps toolbar clicks (Center/Flip/Lock/Clear…) as pre+post
-   - Captures style changes + canvas size changes
-   - Shows counts: Undo (N), Redo (M), and "History i / total"
-   - Save Draft / Restore Draft unchanged (localStorage)
-   - No layout changes; desktop/mobile visuals untouched
+   RA_UNDO_REDO_AND_DRAFT_V4 — stable, intuitive Undo/Redo
+   Fixes: no-ops during Undo, broken Redo (caused by events firing while restoring)
+   How:
+     • "Mute while restoring" so object:added/removed do NOT create new snapshots.
+     • Single timeline with pointer (Undo/Redo step exactly one).
+     • Gestures grouped (drag/scale/rotate = 1 step).
+     • Arrow-key nudges grouped; Delete/Backspace captured.
+     • Coalesced auto-snapshots for add/remove (no spam).
+     • Shows counts: Undo (N), Redo (M), and History i / total.
+     • Save Draft / Restore Draft unchanged.
+   Does not change desktop/mobile layout or export.
    ========================================================== */
 (() => {
-  if (window.__RA_HISTORY_V3__) return;
-  window.__RA_HISTORY_V3__ = true;
+  if (window.__RA_HISTORY_V4__) return;
+  window.__RA_HISTORY_V4__ = true;
 
-  // ------------ settings ------------
-  const MAX_STEPS = 80;              // how many snapshots we keep
+  // ---------- config ----------
+  const MAX_STEPS = 80;
   const DRAFT_KEY = 'ra_draft_v1';
 
   // Buttons we wrap as atomic actions (pre+post)
   const CLICK_ACTION_IDS = new Set([
-    // selection ops
-    'raCenterH','raCenterV','raCenterHV','bringFront','sendBack','flipX','flipY',
+    'raCenterH','raCenterV','raCenterHV',
+    'bringFront','sendBack','flipX','flipY',
     'lock','unlockAll','duplicate','delete','clearAllOverlays',
-    // base/canvas
     'clearBase','clearCanvas','addCustomText','deleteTokenId'
   ]);
-
   // Controls that change styles/values
   const CHANGE_ACTION_IDS = new Set([
     'opacity','blendMode',
@@ -2582,21 +2582,33 @@
     'fontFamily','fontSize','fontColor','strokeColor','strokeWidth'
   ]);
 
-  // ------------ shorthands ------------
+  // ---------- shorthands ----------
   const $  = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
   const defer = (fn, ms=0) => setTimeout(fn, ms);
 
-  // ------------ state ------------
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // ---------- state ----------
   let c = null;
-  let history = [];        // array of JSON strings
-  let index   = -1;        // pointer to current state ( -1 = not initialized )
-  let gesture = { active:false, baseline:null, moved:false, kind:'' };
+  let history = [];
+  let index   = -1;
+
+  // guards to stop history while restoring or batching
+  let MUTE = 0;                      // >0 = ignore all history pushes
+  const muteBegin  = () => { MUTE++; };
+  const muteEnd    = () => { if (MUTE>0) MUTE--; };
+  const isMuted    = () => MUTE > 0;
+
+  // gesture and keyboard grouping
+  let gesture = { active:false, baseline:null, moved:false };
   let keyNudge = { active:false, baseline:null, moved:false };
 
-  // ------------ UI ------------
-  let ui = {};  // { undoBtn, redoBtn, saveBtn, loadBtn, clrBtn, info }
+  // coalesce rapid add/remove bursts
+  let pendingAuto = null;
+
+  // ---------- UI ----------
+  let ui = {}; // undoBtn, redoBtn, saveBtn, loadBtn, clrBtn, info
 
   function injectUI(){
     if ($('#raHistoryRow')) return;
@@ -2646,11 +2658,10 @@
     const redoCount = canRedo ? (history.length - 1 - index) : 0;
     if (ui.undoBtn) ui.undoBtn.textContent = `Undo (${undoCount})`;
     if (ui.redoBtn) ui.redoBtn.textContent = `Redo (${redoCount})`;
-    if (ui.info)    ui.info.textContent    = `History ${ index + 1 } / ${ history.length }` + (msg ? ` • ${msg}` : '');
+    if (ui.info)    ui.info.textContent    = `History ${ index + 1 } / ${ history.length }${msg ? ' • ' + msg : ''}`;
   }
 
-  // ------------ serialization ------------
-  // Include custom fields so watermarks/base locks survive
+  // ---------- serialization ----------
   const EXTRA_PROPS = [
     '_kind','_isBase','_isBgRect','raWM','raPos',
     'selectable','evented','hasControls',
@@ -2669,43 +2680,52 @@
 
   function restore(jsonStr, label=''){
     if (!c || !jsonStr) return;
-    let data;
-    try { data = JSON.parse(jsonStr); } catch(_) { return; }
 
-    c.loadFromJSON(data, () => {
-      // size + viewport
-      if (data.__w && data.__h) { c.setWidth(data.__w); c.setHeight(data.__h); }
-      if (Array.isArray(data.__vt)) { c.setViewportTransform(data.__vt); } else { c.setViewportTransform([1,0,0,1,0,0]); }
+    // *** CRITICAL FIX: mute all event‑driven snapshots while we restore ***
+    muteBegin();
+    try{
+      c.loadFromJSON(JSON.parse(jsonStr), () => {
+        try{
+          const data = JSON.parse(jsonStr);
+          if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
+          if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt); else c.setViewportTransform([1,0,0,1,0,0]);
 
-      // keep base object non‑interactive
-      const objs = c.getObjects();
-      const base = objs.find(o => o._isBase);
-      if (base){
-        Object.assign(base, {
-          selectable:false, evented:false, hasControls:false,
-          lockMovementX:true, lockMovementY:true,
-          lockScalingX:true, lockScalingY:true, lockRotation:true
-        });
-        try { c.sendToBack(base); } catch(_) {}
-      }
-      // ensure the background rect is in back
-      const bg = objs.find(o => o._isBgRect);
-      if (bg) { try { c.sendToBack(bg); } catch(_) {} }
+          // keep base & bg non‑interactive/back
+          const objs = c.getObjects();
+          const base = objs.find(o => o._isBase);
+          const bg   = objs.find(o => o._isBgRect);
+          if (base){
+            Object.assign(base, {
+              selectable:false, evented:false, hasControls:false,
+              lockMovementX:true, lockMovementY:true,
+              lockScalingX:true, lockScalingY:true, lockRotation:true
+            });
+            try{ c.sendToBack(base); }catch(_){}
+          }
+          if (bg){ try{ c.sendToBack(bg); }catch(_){}
 
-      c.discardActiveObject();
-      c.requestRenderAll();
+          c.discardActiveObject();
+          c.requestRenderAll();
+        } finally {
+          muteEnd();             // re‑enable history AFTER the canvas reflects the state
+          refreshUI(label);
+        }
+      });
+    } catch(_) {
+      muteEnd();
       refreshUI(label);
-    });
+    }
   }
 
-  // ------------ timeline ops ------------
+  // ---------- timeline ops ----------
   function pushState(jsonStr, label=''){
-    if (!jsonStr) return;
-    // If we undid to the middle, drop everything after the pointer.
+    if (!jsonStr || isMuted()) return;
+
+    // if we undid into the middle, drop the tail
     if (index < history.length - 1) {
       history = history.slice(0, index + 1);
     }
-    // de‑dupe against current
+    // de‑dupe
     if (history.length && history[index] === jsonStr){
       refreshUI(label); return;
     }
@@ -2715,16 +2735,11 @@
     refreshUI(label);
   }
 
-  function pushCurrent(label=''){
-    const j = serialize();
-    pushState(j, label);
-  }
+  function pushCurrent(label=''){ pushState(serialize(), label); }
 
   function pushPair(pre, post, label=''){
     if (!pre || !post || pre === post) { refreshUI(label); return; }
-    // If we’re not already at 'pre', insert it (so a single Undo lands there)
-    const at = history[index] || null;
-    if (at !== pre) pushState(pre, label ? label + ' (pre)' : '');
+    if (history[index] !== pre) pushState(pre, label ? label + ' (pre)' : '');
     pushState(post, label || '');
   }
 
@@ -2740,7 +2755,7 @@
     restore(history[index], 'Redo');
   }
 
-  // ------------ draft ------------
+  // ---------- draft ----------
   function saveDraft(){
     if (index < 0) return;
     try { localStorage.setItem(DRAFT_KEY, history[index]); refreshUI('Draft saved'); }
@@ -2748,19 +2763,18 @@
   }
   function restoreDraft(){
     const j = localStorage.getItem(DRAFT_KEY);
-    if (!j) { refreshUI('No draft'); return; }
+    if (!j){ refreshUI('No draft'); return; }
     history = [j]; index = 0;
     restore(j, 'Draft restored');
   }
   function clearDraft(){ localStorage.removeItem(DRAFT_KEY); refreshUI('Draft cleared'); }
 
-  // ------------ event wiring ------------
-  function beginGesture(kind='move'){
+  // ---------- grouping helpers ----------
+  function beginGesture(){
     if (!c || gesture.active) return;
     gesture.active   = true;
     gesture.baseline = serialize();
     gesture.moved    = false;
-    gesture.kind     = kind;
   }
   function markGestureMoved(){ if (gesture.active) gesture.moved = true; }
   function endGesture(){
@@ -2788,15 +2802,26 @@
     if (keyNudge.moved) pushPair(pre, post, 'Nudge');
   }
 
-  function wireFabric(){
-    // atomics (add/remove) → single snapshot
-    c.on('object:added',   () => defer(()=>pushCurrent('Add'), 0));
-    c.on('object:removed', () => defer(()=>pushCurrent('Remove'), 0));
+  // ---------- coalesced auto snapshots ----------
+  function autoSnapshot(label){
+    if (isMuted()) return;
+    if (pendingAuto) return;       // already scheduled — collapse a burst
+    pendingAuto = setTimeout(() => {
+      pendingAuto = null;
+      if (!isMuted()) pushCurrent(label);
+    }, 30);
+  }
 
-    // gesture grouping for drag/scale/rotate
+  // ---------- wiring ----------
+  function wireFabric(){
+    // Add/remove → coalesced snapshots (but ignore while restoring)
+    c.on('object:added',   () => { if (!isMuted()) autoSnapshot('Add'); });
+    c.on('object:removed', () => { if (!isMuted()) autoSnapshot('Remove'); });
+
+    // Gesture grouping
     c.on('mouse:down', (e) => {
       const o = e?.target;
-      if (o && !o._isBgRect && !o._isBase) beginGesture('transform');
+      if (o && !o._isBgRect && !o._isBase) beginGesture();
     });
     c.on('object:moving',   markGestureMoved);
     c.on('object:scaling',  markGestureMoved);
@@ -2818,16 +2843,15 @@
         e.preventDefault(); redo(); return;
       }
 
-      // Arrow nudges: start group
+      // Arrow nudges: group until keyup
       if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(key)) {
         if (!keyNudge.active) beginKeyNudge();
         markKeyNudge();
       }
 
-      // Delete / Backspace: capture as pre+post
+      // Delete / Backspace → capture as one step (pre on keydown, post on keyup)
       if (key === 'Delete' || key === 'Backspace') {
-        // capture pre in capture phase; post will exist on keyup
-        if (!keyNudge.active) beginKeyNudge();  // reuse same mechanism
+        if (!keyNudge.active) beginKeyNudge(); // reuse same mechanism
       }
     }, true);
 
@@ -2835,7 +2859,6 @@
       const tag = (e.target && e.target.tagName || '').toLowerCase();
       if (/^(input|textarea|select)$/.test(tag) || e.target?.isContentEditable) return;
 
-      // Finish nudge grouping or delete
       if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace'].includes(e.key)) {
         defer(endKeyNudge, 0);
       }
@@ -2843,7 +2866,7 @@
   }
 
   function wireControls(){
-    // Wrap important clicks as pre+post
+    // Atomic toolbar clicks → pre+post
     document.addEventListener('click', (e)=>{
       const el = e.target && e.target.closest && e.target.closest('button, a');
       if (!el) return;
@@ -2869,8 +2892,8 @@
     }, true);
 
     // Canvas size changes (wrap existing function if present)
-    if (!window.__raSetSizePatchedV3 && typeof window.setCanvasSize === 'function'){
-      window.__raSetSizePatchedV3 = true;
+    if (!window.__raSetSizePatchedV4 && typeof window.setCanvasSize === 'function'){
+      window.__raSetSizePatchedV4 = true;
       const prev = window.setCanvasSize;
       window.setCanvasSize = function(n){
         const pre = serialize();
@@ -2890,13 +2913,13 @@
     wireKeyboard();
     wireControls();
 
-    // Baseline: wait a tick to ensure background + initial size exist
+    // Baseline snapshot (after canvas is fully ready)
     defer(() => {
       const j = serialize();
       history = j ? [j] : [];
-      index   = j ? 0 : -1;
+      index   = j ? 0   : -1;
       refreshUI('Init');
-    }, 60);
+    }, 80);
   }
 
   if (document.readyState === 'loading') {
