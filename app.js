@@ -2546,3 +2546,286 @@
     removeTempFabricWM
   });
 })();
+
+/* ==========================================================
+   RA_UNDO_REDO_AND_DRAFT_V1
+   - Adds Undo/Redo (buttons + Cmd/Ctrl+Z / +Shift+Z)
+   - Optional Save Draft / Restore Draft (local browser only)
+   - Never touches layout; attaches a small History row under your controls
+   - Does NOT change desktop or mobile behavior
+   ========================================================== */
+(() => {
+  const MAX_STEPS = 50;
+  const DRAFT_KEY = 'ra_draft_v1';
+
+  let c = null;                 // fabric canvas
+  let undo = [];                // stack of JSON strings
+  let redo = [];
+  let applying = false;         // guard while restoring
+  let ui = {};                  // buttons/labels
+
+  // ---------- helpers ----------
+  function C() {
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+  function $(sel, root=document){ return root.querySelector(sel); }
+  function $all(sel, root=document){ return Array.from(root.querySelectorAll(sel)); }
+  function now() { return new Date().toLocaleTimeString(); }
+
+  // Snapshot: store all objects EXCEPT any background rect
+  function snapshot(label='') {
+    if (!c || applying) return;
+
+    // objects in z-order (bottom -> top)
+    const objs = c.getObjects().filter(o => !o._isBgRect);
+    const payload = objs.map(o => o.toObject([
+      '_kind','_isBase','raWM','raPos',
+      'selectable','evented','hasControls',
+      'lockMovementX','lockMovementY','lockScalingX','lockScalingY','lockRotation',
+      'globalCompositeOperation','opacity','flipX','flipY'
+    ]));
+
+    const state = {
+      size: { w: c.getWidth(), h: c.getHeight() },
+      items: payload
+    };
+    const j = JSON.stringify(state);
+    // ignore duplicate consecutive states
+    if (undo.length && undo[undo.length-1] === j) return;
+
+    undo.push(j);
+    if (undo.length > MAX_STEPS) undo.shift();
+    // new edit kills redo chain
+    redo.length = 0;
+    refreshUI(label && `Saved: ${label} @ ${now()}`);
+  }
+
+  // Recreate a non-selectable background rect
+  function ensureBgRect(w, h) {
+    // try to find one first
+    const found = c.getObjects().find(o => o._isBgRect);
+    if (found) {
+      found.set({ width:w, height:h, left:0, top:0 });
+      c.sendToBack(found);
+      return;
+    }
+    const bg = new fabric.Rect({
+      left: 0, top: 0, width: w, height: h,
+      fill: '#0d0e13',
+      selectable: false, evented: false, hasControls: false
+    });
+    bg._isBgRect = true;
+    c.add(bg);
+    c.sendToBack(bg);
+  }
+
+  // Lock the base image/group again (non-movable)
+  function relockBaseIfAny() {
+    const objs = c.getObjects().filter(o => !o._isBgRect);
+    if (!objs.length) return;
+    // Base is usually the bottom-most non-bg object
+    const base = objs[0];
+    base._isBase = true;
+    base.selectable = false;
+    base.evented = false;
+    base.hasControls = false;
+    base.lockMovementX = true;
+    base.lockMovementY = true;
+    base.lockScalingX  = true;
+    base.lockScalingY  = true;
+    base.lockRotation  = true;
+    try { c.sendToBack(base); } catch(_){}
+  }
+
+  function applyState(j, label='') {
+    if (!c || !j) return;
+    let state;
+    try { state = JSON.parse(j); } catch(_) { return; }
+
+    applying = true;
+    try {
+      // reset canvas size
+      const w = Math.max(1, state.size?.w || c.getWidth());
+      const h = Math.max(1, state.size?.h || c.getHeight());
+      c.setWidth(w); c.setHeight(h);
+
+      // clear everything
+      c.getObjects().slice().forEach(o => c.remove(o));
+
+      // background back in
+      ensureBgRect(w, h);
+
+      // rebuild other objects in order
+      fabric.util.enlivenObjects(state.items || [], (objects) => {
+        objects.forEach(o => c.add(o));
+        relockBaseIfAny();
+        c.discardActiveObject();
+        c.setViewportTransform([1,0,0,1,0,0]);
+        c.requestRenderAll();
+        refreshUI(label && `${label} @ ${now()}`);
+      });
+    } finally {
+      applying = false;
+    }
+  }
+
+  function doUndo() {
+    if (undo.length < 2) return;
+    // move current → redo, apply previous
+    const cur = undo.pop();
+    const prev = undo[undo.length - 1];
+    redo.push(cur);
+    applyState(prev, 'Undo');
+    refreshUI();
+  }
+  function doRedo() {
+    if (!redo.length) return;
+    const next = redo.pop();
+    undo.push(next);
+    applyState(next, 'Redo');
+    refreshUI();
+  }
+
+  function saveDraft() {
+    if (!undo.length) return;
+    try {
+      localStorage.setItem(DRAFT_KEY, undo[undo.length-1]);
+      refreshUI('Draft saved');
+    } catch(_) {
+      refreshUI('Draft save failed (storage full?)');
+    }
+  }
+  function restoreDraft() {
+    const j = localStorage.getItem(DRAFT_KEY);
+    if (!j) { refreshUI('No draft found'); return; }
+    // applying a draft starts a new undo chain
+    undo.length = 0; redo.length = 0;
+    undo.push(j);
+    applyState(j, 'Draft restored');
+    refreshUI();
+  }
+  function clearDraft() {
+    localStorage.removeItem(DRAFT_KEY);
+    refreshUI('Draft cleared');
+  }
+
+  // ---------- UI ----------
+  function injectUI() {
+    if ($('#raHistoryRow')) return;
+
+    // Find a reasonable spot (under the "Selection" panel if present; otherwise under the first .card)
+    const holder =
+      $all('h3').find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode ||
+      $all('.card,.panel,section,main,div').find(x => $all('h3', x).length)?.parentNode ||
+      document.body;
+
+    const row = document.createElement('div');
+    row.id = 'raHistoryRow';
+    row.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
+
+    function mkBtn(id, label) {
+      const b = document.createElement('button');
+      b.id = id;
+      b.textContent = label;
+      b.className = 'btn small';
+      b.style.minWidth = '64px';
+      b.style.opacity = '0.95';
+      return b;
+    }
+
+    const undoBtn = mkBtn('raUndoBtn','Undo');
+    const redoBtn = mkBtn('raRedoBtn','Redo');
+    const saveBtn = mkBtn('raSaveDraftBtn','Save Draft');
+    const loadBtn = mkBtn('raLoadDraftBtn','Restore Draft');
+    const clrBtn  = mkBtn('raClearDraftBtn','×');
+
+    const info = document.createElement('div');
+    info.id = 'raHistInfo';
+    info.style.cssText = 'font-size:11px;opacity:.65';
+
+    row.appendChild(undoBtn);
+    row.appendChild(redoBtn);
+    row.appendChild(saveBtn);
+    row.appendChild(loadBtn);
+    row.appendChild(clrBtn);
+    row.appendChild(info);
+
+    holder.appendChild(row);
+
+    ui = { undoBtn, redoBtn, saveBtn, loadBtn, clrBtn, info };
+
+    undoBtn.onclick = doUndo;
+    redoBtn.onclick = doRedo;
+    saveBtn.onclick = saveDraft;
+    loadBtn.onclick = restoreDraft;
+    clrBtn.title = 'Clear stored draft';
+    clrBtn.onclick = clearDraft;
+
+    refreshUI('History ready');
+  }
+
+  function refreshUI(msg='') {
+    if (!ui.undoBtn) return;
+    ui.undoBtn.disabled = undo.length < 2;
+    ui.redoBtn.disabled = redo.length < 1;
+    ui.loadBtn.disabled = !localStorage.getItem(DRAFT_KEY);
+    if (msg) ui.info.textContent = msg;
+  }
+
+  // ---------- wiring ----------
+  function wireShortcuts() {
+    document.addEventListener('keydown', (e) => {
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (e.target && (e.target.isContentEditable || /^(input|textarea|select)$/.test(tag))) return;
+
+      const mod = (e.metaKey || e.ctrlKey);
+      if (!mod) return;
+
+      // Undo: Cmd/Ctrl+Z (no Shift)
+      if (e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault(); doUndo();
+      }
+      // Redo: Cmd/Ctrl+Shift+Z (or Ctrl+Y on Windows, optional)
+      if ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y') {
+        e.preventDefault(); doRedo();
+      }
+    });
+  }
+
+  function wireChangeListeners() {
+    // Capture typical edit events
+    ['object:added','object:modified','object:removed'].forEach(ev => {
+      c.on(ev, () => snapshot());
+    });
+
+    // Hook canvas size changes if your app calls window.setCanvasSize
+    if (!window.__raSetSizePatched && typeof window.setCanvasSize === 'function') {
+      window.__raSetSizePatched = true;
+      const prev = window.setCanvasSize;
+      window.setCanvasSize = function(n){
+        const out = prev.apply(this, arguments);
+        snapshot('Resize');
+        return out;
+      };
+    }
+  }
+
+  function boot() {
+    c = C();
+    if (!c) { setTimeout(boot, 120); return; }
+
+    injectUI();
+    wireShortcuts();
+    wireChangeListeners();
+
+    // Initial baseline
+    snapshot('Initial');
+    refreshUI();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
