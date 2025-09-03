@@ -2803,3 +2803,235 @@
     ensureDock();
   }
 })();
+
+/* ==========================================================
+   RA_MOBILE_PARITY_PLUS_GAPFIX_V1  — MOBILE ONLY (≤920px)
+   What this adds:
+   • A compact “Selected Tools” row under the canvas on mobile:
+       Delete · Duplicate · Bring to front · Send to back
+       Flip X · Flip Y · Lock/Unlock · Opacity slider
+   • Tight, readable mobile spacing (no layout jump; desktop untouched)
+   • Kills the empty spacer/gap blocks between feature cards on mobile
+   ========================================================== */
+(() => {
+  const MQ = '(max-width: 920px)';
+  if (!window.matchMedia(MQ).matches) return; // desktop untouched
+
+  // ---------- CSS (mobile only) ----------
+  (function injectCSS(){
+    if (document.getElementById('ra-mobile-parity-css')) return;
+    const css = document.createElement('style');
+    css.id = 'ra-mobile-parity-css';
+    css.textContent = `
+      @media ${MQ} {
+        /* Make cards tighter on mobile without breaking desktop styles */
+        h3 { margin: 10px 0 8px 0 !important; }
+        .card, .panel, .box, section, main .card-like {
+          margin: 8px 0 !important;
+          padding: 10px 12px !important;
+        }
+        /* Overlay grids: fewer columns so tiles are usable on phones */
+        #overlayGrid, #ra2ShelfGrid {
+          grid-template-columns: repeat(3, 1fr) !important;
+          gap: 8px !important;
+        }
+        /* Selected Tools row style */
+        #raMobileTools {
+          margin: 8px 0 12px 0;
+          padding: 8px;
+          border: 1px solid #23242a;
+          background: #0f1116;
+          color: #e7e7ea;
+          border-radius: 10px;
+        }
+        #raMobileTools .row {
+          display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+        }
+        #raMobileTools button {
+          appearance: none; border: 1px solid #2a2c34; background: #151821; color: #e7e7ea;
+          padding: 6px 8px; border-radius: 8px; font-size: 13px; line-height: 1;
+        }
+        #raMobileTools button:disabled { opacity: .45; }
+        #raMobileTools label { font-size: 12px; opacity: .85; display:flex; align-items:center; gap:6px; }
+        #raMobileTools input[type="range"]{ width: 130px; }
+        /* If a rogue spacer sneaks back in, nuke it */
+        [data-ra-gap="kill"] { display: none !important; height: 0 !important; margin: 0 !important; padding: 0 !important; }
+      }
+    `;
+    document.head.appendChild(css);
+  })();
+
+  // ---------- Utilities ----------
+  const $ = (s, r=document)=>r.querySelector(s);
+  const C = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Try to find the visible canvas container (our “frame” to anchor tools under)
+  function findCanvasFrame(){
+    // Preferred: the mobile frame if present
+    const mobileFrame = document.getElementById('ra-mobile-stage-frame');
+    if (mobileFrame) return mobileFrame;
+    // Otherwise: the canvas itself or its parent
+    const el = document.getElementById('c') || $('canvas');
+    return el ? (el.parentElement || el) : null;
+  }
+
+  // ---------- Selected Tools row (mobile) ----------
+  function ensureMobileTools(){
+    if (!window.matchMedia(MQ).matches) return;
+    if ($('#raMobileTools')) return;
+
+    const frame = findCanvasFrame();
+    if (!frame || !frame.parentElement) return;
+
+    const tools = document.createElement('div');
+    tools.id = 'raMobileTools';
+    tools.innerHTML = `
+      <div class="row">
+        <strong style="margin-right:6px;">Selected</strong>
+        <button id="raMDel"   title="Delete">🗑 Delete</button>
+        <button id="raMDup"   title="Duplicate">⧉ Duplicate</button>
+        <button id="raMFront" title="Bring to front">⬆ Front</button>
+        <button id="raMBack"  title="Send to back">⬇ Back</button>
+        <button id="raMFlipX" title="Flip horizontally">⇋ Flip X</button>
+        <button id="raMFlipY" title="Flip vertically">⇵ Flip Y</button>
+        <button id="raMLock"  title="Lock / unlock">🔒 Lock</button>
+        <label>Opacity <input id="raMOp" type="range" min="0" max="1" step="0.01" value="1"></label>
+        <span id="raMHint" style="font-size:11px;opacity:.7;"></span>
+      </div>
+    `;
+
+    // Insert immediately after the canvas frame so it stays in the flow
+    frame.insertAdjacentElement('afterend', tools);
+
+    // Wire actions (use Fabric directly so we don’t depend on other IDs)
+    const c = C();
+    function getSel(){ const o=c?.getActiveObject?.(); return o || null; }
+    function isProtected(o){ return !!(o && (o._isBase || o._isBgRect || o === window.backgroundRect)); }
+
+    function reorder(dir){
+      const o = getSel(); if (!o) return;
+      const objs = c.getObjects();
+      const bases = objs.filter(x=>x._isBase);
+      const baseTopIdx = Math.max(-1, ...bases.map(b=>objs.indexOf(b)));
+      if (dir==='front'){
+        c.bringToFront(o);
+      } else {
+        c.sendToBack(o);
+        // never go under base/background
+        const idx = objs.indexOf(o);
+        if (idx <= baseTopIdx) c.moveTo(o, baseTopIdx+1);
+      }
+      c.requestRenderAll();
+    }
+
+    $('#raMDel').onclick = ()=>{
+      const o=getSel(); if (!o || isProtected(o)) return;
+      c.remove(o); c.discardActiveObject(); c.requestRenderAll(); refresh();
+    };
+    $('#raMDup').onclick = ()=>{
+      const o=getSel(); if (!o) return;
+      try{ o.clone(cl=>{ cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 }); c.add(cl).setActiveObject(cl); c.requestRenderAll(); refresh(); }); }catch(_){}
+    };
+    $('#raMFront').onclick = ()=> reorder('front');
+    $('#raMBack').onclick  = ()=> reorder('back');
+    $('#raMFlipX').onclick = ()=>{ const o=getSel(); if(!o) return; o.set('flipX', !o.flipX); o.setCoords(); c.requestRenderAll(); };
+    $('#raMFlipY').onclick = ()=>{ const o=getSel(); if(!o) return; o.set('flipY', !o.flipY); o.setCoords(); c.requestRenderAll(); };
+    $('#raMLock').onclick  = ()=>{
+      const o=getSel(); if(!o) return;
+      const lock = !(o.lockMovementX && o.lockMovementY && o.lockScalingX && o.lockScalingY && o.lockRotation && o.hasControls===false && o.selectable===false);
+      o.set({
+        selectable: !lock, evented: !lock, hasControls: !lock,
+        lockMovementX: lock, lockMovementY: lock,
+        lockScalingX:  lock, lockScalingY:  lock,
+        lockRotation:  lock
+      });
+      c.setActiveObject(o); c.requestRenderAll(); refresh();
+    };
+    $('#raMOp').oninput  = (e)=>{ const o=getSel(); if(!o) return; o.set('opacity', parseFloat(e.target.value||'1')); c.requestRenderAll(); };
+
+    function refresh(){
+      const o = getSel();
+      const has = !!o;
+      const prot = isProtected(o);
+      $('#raMDel').disabled   = !has || prot;
+      $('#raMDup').disabled   = !has;
+      $('#raMFront').disabled = !has;
+      $('#raMBack').disabled  = !has;
+      $('#raMFlipX').disabled = !has;
+      $('#raMFlipY').disabled = !has;
+      $('#raMLock').disabled  = !has;
+      const op = $('#raMOp');
+      if (has && typeof o.opacity === 'number'){ op.value = String(o.opacity); op.disabled = false; }
+      else { op.value = '1'; op.disabled = !has; }
+      // Hint label
+      const hint = $('#raMHint');
+      if (!has) hint.textContent = 'Tap an overlay or text to edit';
+      else if (prot) hint.textContent = 'Base image is locked (not deletable)';
+      else hint.textContent = '';
+    }
+
+    // Keep row in sync with selection changes
+    if (c) {
+      c.on('selection:created', refresh);
+      c.on('selection:updated', refresh);
+      c.on('selection:cleared', refresh);
+      c.on('object:modified',   refresh);
+    }
+
+    // Initial state
+    refresh();
+  }
+
+  // ---------- Gap killer (mobile): remove empty spacers between cards ----------
+  function killMobileGaps(){
+    if (!window.matchMedia(MQ).matches) return;
+
+    // Heuristic: collapse block-level siblings between our known cards if they’re empty visual spacers
+    const headers = Array.from(document.querySelectorAll('h3'));
+    if (!headers.length) return;
+
+    // Find the "Overlays" and "Custom Text" card containers if present
+    const hOver = headers.find(h => /overlays/i.test((h.textContent||'').trim()));
+    const hText = headers.find(h => /custom\s*text/i.test((h.textContent||'').trim()));
+    if (hOver && hText) {
+      const cardA = hOver.closest('.card, .panel, section, div') || hOver.parentElement;
+      const cardB = hText.closest('.card, .panel, section, div') || hText.parentElement;
+      if (cardA && cardB && cardA !== cardB) {
+        // Walk siblings from A to B (exclusive) and hide empty spacer blocks
+        let p = cardA.nextElementSibling;
+        while (p && p !== cardB) {
+          const cs = getComputedStyle(p);
+          const hasControls = p.querySelector('button, input, select, textarea, canvas, img, video');
+          const hasText = (p.textContent||'').trim().length > 0;
+          const looksChecker = (cs.backgroundImage||'').includes('linear-gradient');
+          const tallEmpty = p.getBoundingClientRect().height > 20;
+
+          // Spacers we can safely kill: no controls, no text, visually tall or a checker texture
+          if (!hasControls && !hasText && (tallEmpty || looksChecker)) {
+            p.setAttribute('data-ra-gap','kill');
+          }
+          p = p.nextElementSibling;
+        }
+      }
+    }
+  }
+
+  // ---------- Boot / observers ----------
+  function boot(){
+    ensureMobileTools();
+    killMobileGaps();
+  }
+
+  const mo = new MutationObserver(() => { boot(); });
+  mo.observe(document.documentElement, { childList:true, subtree:true });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+
+  // Re-run on resize/orientation changes
+  window.addEventListener('resize', boot, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(boot, 150), { passive:true });
+})();
