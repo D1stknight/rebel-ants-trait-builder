@@ -1825,242 +1825,981 @@
   new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
 })();
 
-/* ====================== RA_ANIMATE_PREVIEW_VIDEO_V1 =========================
-   Adds a tiny Animate UI (Export card) + 3 motion styles + video export.
-   - No servers/keys. Records the canvas with MediaRecorder.
-   - Works on desktop + mobile (falls back to preview if codec unsupported).
-   - Does not change your layout; runs only when a base image exists.
-   ========================================================================== */
-(function RA_ANIMATE_PREVIEW_VIDEO_V1(){
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+/* ==========================================================
+   RA_MAKE_VIDEO_TOKEN_ONLY_V1
+   - Adds a bottom "Video (token-only)" panel.
+   - Records a short WebM using an offscreen canvas (no layout changes).
+   - Works only when the base image is a token (no watermark group).
+   - Desktop & mobile safe. No changes to your Fabric canvas state.
+   ========================================================== */
+(() => {
+  // ---------- Small helpers ----------
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const easeInOut = t => t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
 
-  // ---- UI -----------------------------------------------------------------
+  function getFabricCanvas() {
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = $('canvas.lower-canvas') || $('canvas.upper-canvas') || $('canvas');
+    if (!el) return null;
+    // Try to find its Fabric instance
+    for (const k in window) {
+      try {
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') return v;
+      } catch(_) {}
+    }
+    return null;
+  }
+
+  // Find the current base object and decide if it’s a token image (no corner stamps).
+  function baseIsToken() {
+    const c = getFabricCanvas();
+    if (!c) return false;
+    const base = (c.getObjects() || []).find(o => o && o._isBase === true);
+    if (!base) return false;
+    // Non-token path in your code builds a Group with two watermark children (raWM:true).
+    // Token path uses a plain Image (no watermark group).
+    if (base.type === 'image') return true;         // token (no watermarks)
+    if (base.type === 'group') {
+      const kids = (base._objects || []);
+      const hasStamp = kids.some(k => k && (k.raWM || k._isWatermark || k.raPos));
+      return !hasStamp; // if somehow no stamps, treat as token; but normally stamps exist
+    }
+    return false;
+  }
+
+  // Try to read a token id for naming (optional)
+  function currentTokenId() {
+    const box = $('#tokenIdDisplay') || $('#tokenIdInput');
+    const raw = (box && (box.value || box.textContent) || '').trim();
+    if (!raw) return '';
+    const n = parseInt(raw.replace(/[^0-9]/g,''), 10);
+    return Number.isFinite(n) ? String(n) : '';
+  }
+
+  // Snapshot the Fabric canvas as a high-quality PNG DataURL.
+  // We upscale if needed to meet target size (multiplier capped to 3× for safety).
+  function snapshotCanvasPNG(targetSide=720) {
+    const c = getFabricCanvas();
+    if (!c) throw new Error('Canvas not ready');
+    const cw = c.getWidth(), ch = c.getHeight();
+    const side = Math.max(cw, ch) || 1024;
+    const mul = clamp(targetSide / side, 0.25, 3);
+    // toDataURL ignores selection handles; exports clean artwork
+    return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
+  }
+
+  function chooseMimeType() {
+    const candidates = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ];
+    for (const m of candidates) {
+      if (MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return ''; // no support
+  }
+
+  // Draw a Ken Burns style frame
+  function drawKenBurns(ctx, img, tNorm, res, mode) {
+    const W = img.naturalWidth  || img.width;
+    const H = img.naturalHeight || img.height;
+    // Base "cover" scale so the square video is fully covered
+    const cover = Math.max(res / W, res / H);
+
+    // Style profiles
+    const zoomIn  = { z0: 1.05, z1: 1.20, pan: 'none' };
+    const zoomOut = { z0: 1.20, z1: 1.05, pan: 'none' };
+    const panLR   = { z0: 1.12, z1: 1.12, pan: 'lr' };
+    const panTB   = { z0: 1.12, z1: 1.12, pan: 'tb' };
+    const drift   = { z0: 1.10, z1: 1.18, pan: 'diag' };
+
+    const prof = ({in:zoomIn,out:zoomOut,lr:panLR,tb:panTB,drift:drift})[mode] || zoomIn;
+
+    const e = easeInOut(tNorm);
+    const zoom = prof.z0 + (prof.z1 - prof.z0) * e; // smooth zoom
+
+    // Allowed pan range to keep image covering the square after scaling
+    const scaledW = W * cover * zoom;
+    const scaledH = H * cover * zoom;
+    const maxX = Math.max(0, (scaledW - res) / 2);
+    const maxY = Math.max(0, (scaledH - res) / 2);
+
+    let shiftX = 0, shiftY = 0;
+    if (prof.pan === 'lr')   shiftX = -maxX + 2*maxX*e;
+    if (prof.pan === 'tb')   shiftY = -maxY + 2*maxY*e;
+    if (prof.pan === 'diag') { shiftX = -maxX + 2*maxX*e; shiftY =  maxY - 2*maxY*e; }
+
+    ctx.save();
+    ctx.clearRect(0,0,res,res);
+    ctx.translate(res/2 + shiftX, res/2 + shiftY);
+    ctx.scale(cover*zoom, cover*zoom);
+    ctx.drawImage(img, -W/2, -H/2);
+    ctx.restore();
+  }
+
+  async function makeVideo({style='in', seconds=5, size=720, statusEl, linkEl, buttonEl}) {
+    // Gate: token only
+    if (!baseIsToken()) {
+      if (statusEl) statusEl.textContent = 'Token-only: load a token image first.';
+      return;
+    }
+
+    // Snapshot once (clean export of canvas content)
+    let dataURL;
+    try {
+      if (statusEl) statusEl.textContent = 'Preparing snapshot…';
+      dataURL = snapshotCanvasPNG(size);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Snapshot blocked (CORS). Use images with CORS headers/same-origin.';
+      return;
+    }
+
+    // Build offscreen canvas for animation + recording
+    const res = parseInt(size, 10) || 720;
+    const fps = 30;
+    const totalFrames = Math.max(10, Math.round(seconds * fps));
+
+    const off = document.createElement('canvas');
+    off.width = res; off.height = res;
+    const ctx = off.getContext('2d', { alpha: false });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    const img = new Image();
+    img.src = dataURL;
+    await new Promise((r, j) => { img.onload = r; img.onerror = j; });
+
+    // Setup MediaRecorder
+    const mime = chooseMimeType();
+    if (!mime) {
+      if (statusEl) statusEl.textContent = 'This browser cannot record WebM (try Chrome/Edge).';
+      return;
+    }
+    const stream = off.captureStream(fps);
+    const chunks = [];
+    const rec = new MediaRecorder(stream, {
+      mimeType: mime,
+      videoBitsPerSecond: res >= 1024 ? 7_000_000 : (res >= 720 ? 5_000_000 : 3_500_000)
+    });
+    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    const doneP = new Promise(resolve => { rec.onstop = resolve; });
+
+    // Animate & record
+    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = 'Rendering…'; }
+    if (statusEl) statusEl.textContent = 'Rendering video…';
+
+    rec.start();
+    const t0 = performance.now();
+    let f = 0;
+
+    const modes = { 'Zoom In':'in', 'Zoom Out':'out', 'Pan L→R':'lr', 'Pan T→B':'tb', 'Drift':'drift' };
+    const modeKey = modes[style] || style;
+
+    // Frame loop
+    function frameLoop(now) {
+      const t = Math.min(1, (now - t0) / (seconds * 1000));
+      drawKenBurns(ctx, img, t, res, modeKey);
+      f++;
+      if (t < 1) {
+        requestAnimationFrame(frameLoop);
+      } else {
+        // Pad a couple of frames at the end for encoders that like a tail
+        setTimeout(() => rec.stop(), 60);
+      }
+    }
+    requestAnimationFrame(frameLoop);
+
+    await doneP;
+
+    // Build blob + link
+    const blob = new Blob(chunks, { type: mime });
+    const url = URL.createObjectURL(blob);
+
+    const tid = currentTokenId();
+    const niceName = `rebel-ant${tid?`-token-${tid}`:''}-${modeKey}-${res}.webm`;
+
+    if (linkEl) {
+      linkEl.href = url;
+      linkEl.download = niceName;
+      linkEl.style.display = 'inline-block';
+      linkEl.textContent = `Download ${niceName}`;
+    }
+    if (statusEl) statusEl.textContent = `Done (${Math.round(blob.size/1024)} KB).`;
+
+    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = 'Make Video (Token Only)'; }
+  }
+
+  // ---------- UI Panel ----------
+  function ensurePanel() {
+    if ($('#raVideoPanel')) return $('#raVideoPanel');
+
+    // Try to place under an "Animate" or "Animation" section if it exists; else append to the main content.
+    const anchorCard =
+      $$('h3,h2').find(h => /animate|animation/i.test((h.textContent||'').toLowerCase()))?.parentElement
+      || $('main') || $('.content') || document.body;
+
+    const pane = document.createElement('section');
+    pane.id = 'raVideoPanel';
+    pane.style.cssText = 'margin:16px 0 28px 0;border:1px solid #222;border-radius:12px;background:#0d0e13;color:#e7e7ea;padding:12px';
+    pane.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <h3 style="margin:0;font:600 14px/1.2 -apple-system,Segoe UI,Roboto,Arial">Video (token‑only)</h3>
+        <span id="raVMsg" style="font:12px/1.2 -apple-system,Segoe UI,Roboto,Arial;opacity:.75"></span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <label style="font-size:12px;opacity:.9">Style
+          <select id="raVStyle" class="input" style="margin-left:6px">
+            <option>Zoom In</option>
+            <option>Zoom Out</option>
+            <option>Pan L→R</option>
+            <option>Pan T→B</option>
+            <option selected>Drift</option>
+          </select>
+        </label>
+        <label style="font-size:12px;opacity:.9">Duration
+          <select id="raVDur" class="input" style="margin-left:6px">
+            <option>3</option>
+            <option selected>5</option>
+            <option>8</option>
+          </select> s
+        </label>
+        <label style="font-size:12px;opacity:.9">Size
+          <select id="raVRes" class="input" style="margin-left:6px">
+            <option>512</option>
+            <option selected>720</option>
+            <option>1024</option>
+          </select> px
+        </label>
+        <button id="raVMake" class="btn" style="margin-left:auto;background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:8px 12px;cursor:pointer">Make Video (Token Only)</button>
+        <a id="raVDown" href="#" download style="display:none;margin-left:8px;font-size:12px;text-decoration:underline">Download</a>
+      </div>
+      <div style="margin-top:8px;font-size:11px;opacity:.65">Tip: Works when your base image was loaded by <em>Token</em>. PNG/URL uploads are blocked from video on purpose.</div>
+    `;
+    anchorCard.appendChild(pane);
+
+    // Wire button
+    const makeBtn = $('#raVMake', pane);
+    const msg     = $('#raVMsg', pane);
+    const downLn  = $('#raVDown', pane);
+    makeBtn.addEventListener('click', async () => {
+      downLn.style.display = 'none';
+      if (!baseIsToken()) {
+        msg.textContent = 'Token-only: load a token image first.';
+        return;
+      }
+      const style = ($('#raVStyle', pane)?.value || 'Drift');
+      const secs  = parseInt(($('#raVDur', pane)?.value || '5'), 10);
+      const size  = parseInt(($('#raVRes', pane)?.value || '720'), 10);
+      await makeVideo({ style, seconds: secs, size, statusEl: msg, linkEl: downLn, buttonEl: makeBtn });
+    });
+
+    // Live gate hint: update the message whenever canvas mutates (cheap observer)
+    const c = getFabricCanvas();
+    if (c && !c.__raVideoGateWired) {
+      c.__raVideoGateWired = true;
+      c.on('object:added',   () => { if ($('#raVideoPanel')) $('#raVMsg').textContent = ''; });
+      c.on('object:removed', () => { if ($('#raVideoPanel')) $('#raVMsg').textContent = ''; });
+    }
+
+    return pane;
+  }
+
+  // Boot after DOM is ready
+  function boot() {
+    try { ensurePanel(); } catch(_) {}
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, {once:true});
+  } else {
+    boot();
+  }
+})();
+
+/* ==========================================================
+   RA_WATERMARK_SWITCH_FOUNDATION_V1  — add-only, safe no-op
+   What this gives you:
+   • One switch to turn ON watermarking for the "Make Video" flow (later).
+   • Safe preloading of the watermark as a dataURL (avoids CORS issues).
+   • Works with your existing token‑gated video flow.
+   • Does nothing until you flip enableVideoWM to true.
+
+   How to enable later (ONE change):
+   1) In CONFIG below, change enableVideoWM: false  →  true
+   2) Done. No other code edits needed.
+
+   Optional: override watermark via ?wm=https://…/your.png (same as images)
+   ========================================================== */
+(() => {
+  if (window.__RA_WM_BOOTED__) return;
+  window.__RA_WM_BOOTED__ = true;
+
+  // ---------- CONFIG (flip these later if you want the watermark) ----------
+  const CONFIG = {
+    enableVideoWM: false,       // ← flip to true when you want watermark in videos
+    wmWidthRatio: 0.12,         // each corner stamp is 12% of the canvas width
+    marginRatio:  0.02          // ~2% margin from edges
+  };
+
+  // ---------- Watermark loader (robust + CORS-safe) ----------
+  const queryWM = new URLSearchParams(location.search).get('wm');
+  const candidates = [
+    queryWM,                             // highest priority if provided
+    '/assets/watermark.png?v=wm10',      // your current primary
+    '/watermark.png?v=wm10'              // fallback
+  ].filter(Boolean);
+
+  const STATE = {
+    url: null,
+    img: null,        // HTMLImageElement (decoded from dataURL)
+    dataURL: null     // dataURL of the watermark (same-origin safe)
+  };
+
+  async function fetchAsDataURL(url){
+    const r = await fetch(url, { cache:'no-store', mode:'cors' });
+    if (!r.ok) throw new Error('fetch failed');
+    const b = await r.blob();
+    return await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(b);
+    });
+  }
+
+  async function loadWatermark(){
+    for (const u of candidates){
+      try{
+        const data = await fetchAsDataURL(u);
+        const img  = await new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im);
+          im.onerror = rej;
+          im.crossOrigin = 'anonymous';
+          im.src = data;
+        });
+        STATE.url = u; STATE.img = img; STATE.dataURL = data;
+        return true;
+      }catch(_){/* try next */}
+    }
+    return false;
+  }
+
+  function wmBox(w, h){
+    const wmW = Math.max(16, Math.round(w * CONFIG.wmWidthRatio));
+    const wmH = Math.round(STATE.img.height * (wmW / STATE.img.width));
+    const m   = Math.max(6,  Math.round(w * CONFIG.marginRatio));
+    return { wmW, wmH, m };
+  }
+
+  // Expose a tiny helper if we ever need to paint on a 2D canvas directly (not used today)
+  function paintWMOnCtx(ctx, w, h){
+    if (!STATE.img) return;
+    const { wmW, wmH, m } = wmBox(w, h);
+    try {
+      // TL
+      ctx.drawImage(STATE.img, m, m, wmW, wmH);
+      // BR
+      ctx.drawImage(STATE.img, w - m - wmW, h - m - wmH, wmW, wmH);
+    } catch(_){}
+  }
+
+  // ---------- Fabric helpers: add/remove TEMP watermark objects on the live canvas ----------
+  function baseIsToken(){
+    const c = window.canvas; if (!c) return false;
+    const base = (c.getObjects()||[]).find(o => o._isBase);
+    if (!base) return false;
+    // In your app: token base = plain Image; upload base = Group (image + 2 small stamps)
+    return (base.type === 'image');
+  }
+
+  function addTempFabricWM(){
+    const c = window.canvas;
+    if (!c || !window.fabric || !STATE.img) return null;
+
+    const cw = c.getWidth(), ch = c.getHeight();
+    const { wmW, wmH, m } = wmBox(cw, ch);
+
+    // Create two watermark images
+    const tl = new fabric.Image(STATE.img, {
+      left: m, top: m, selectable: false, evented: false
+    });
+    const br = new fabric.Image(STATE.img, {
+      left: cw - m - wmW, top: ch - m - wmH, selectable: false, evented: false
+    });
+    const sX = wmW / STATE.img.width, sY = wmH / STATE.img.height;
+    tl.scaleX = sX; tl.scaleY = sY;
+    br.scaleX = sX; br.scaleY = sY;
+
+    // Tag them so we can cleanly remove later
+    tl._raTmpWM = br._raTmpWM = true;
+
+    c.add(tl); c.add(br); c.requestRenderAll();
+    return [tl, br];
+  }
+
+  function removeTempFabricWM(){
+    const c = window.canvas; if (!c) return;
+    (c.getObjects()||[]).filter(o => o._raTmpWM).forEach(o => c.remove(o));
+    c.requestRenderAll();
+  }
+
+  // ---------- Gentle hook for "Make Video" button (no-op until you flip the switch) ----------
+  async function ensureWMReady(){ if (!STATE.img) await loadWatermark(); }
+
+  function waitForVideoDone(timeoutMs=60000){
+    return new Promise(resolve => {
+      const obs = new MutationObserver(() => {
+        // heuristic: look for a .webm download link or a status that says done
+        const link = document.querySelector('a[download$=".webm"], a[href$=".webm"]');
+        const stat = document.getElementById('raAnimStatus');
+        if (link || /done|saved|complete/i.test((stat?.textContent||'').toLowerCase())){
+          try{ obs.disconnect(); }catch(_){}
+          resolve();
+        }
+      });
+      obs.observe(document.body, { childList:true, subtree:true, characterData:true });
+      setTimeout(() => { try{ obs.disconnect(); }catch(_){}
+        resolve();
+      }, timeoutMs);
+    });
+  }
+
+  function hookMakeVideoButton(){
+    if (!CONFIG.enableVideoWM) return; // ← stays dormant until you flip the switch
+
+    // Intercept clicks on any button/link that looks like "Make Video"
+    const labels = ['make video','render video','animate','make preview','create video'];
+    document.addEventListener('click', async (e) => {
+      const el = e.target && e.target.closest && e.target.closest('button, a');
+      if (!el) return;
+
+      const t = (el.textContent || el.value || '').toLowerCase().trim();
+      if (!labels.some(k => t.includes(k))) return;   // not our button
+      if (!window.canvas) return;
+      if (!baseIsToken()) return;                      // keep token‑gated semantics
+
+      // Prepare watermark image
+      await ensureWMReady();
+      if (!STATE.img) return; // nothing to add
+
+      // Add temp WM objects, let the app's own handler run, then remove when done
+      addTempFabricWM();          // we do NOT preventDefault; original click proceeds
+      waitForVideoDone(60000).then(removeTempFabricWM);
+    }, true); // capture=true so we add WM before the app starts recording frames
+  }
+
+  // Boot
+  hookMakeVideoButton();
+
+  // Expose tiny API for future use (optional)
+  window.raWatermark = Object.freeze({
+    options: CONFIG,
+    url: () => STATE.url,
+    dataURL: () => STATE.dataURL,
+    img: () => STATE.img,
+    ready: ensureWMReady,
+    paintOnCtx: paintWMOnCtx,
+    addTempFabricWM,
+    removeTempFabricWM
+  });
+})();
+
+/* ==========================================================
+   RA_UNDO_REDO_SAFE_MINI_V1
+   • Super‑safe: never restores anything unless you click Undo/Redo.
+   • Records snapshots after edits only (add/move/scale/rotate/remove).
+   • Coalesces bursts (clear / multi‑adds) into one step.
+   • Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Ctrl+Y) wired.
+   • If your old Undo/Redo buttons exist, it uses them.
+     If not, it adds a small row under “Selection”.
+   • Does NOT touch desktop/mobile layout or exports.
+   ========================================================== */
+(() => {
+  if (window.__RA_UNDO_SAFE_V1__) return;
+  window.__RA_UNDO_SAFE_V1__ = true;
+
+  const MAX = 60;
+  const DRAFT_KEY = 'ra_draft_v1';
+
+  const $  = (s, r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+  const defer = (fn, ms=0)=>setTimeout(fn, ms);
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  let c;
+  let history = [];
+  let idx = -1;
+
+  // mute while restoring so we don't create snapshots during loadFromJSON
+  let MUTE = 0;
+  const isMuted = () => MUTE > 0;
+
+  const EXTRA = [
+    '_kind','_isBase','_isBgRect','raWM','raPos',
+    'selectable','evented','hasControls',
+    'lockMovementX','lockMovementY','lockScalingX','lockScalingY','lockRotation',
+    'globalCompositeOperation','opacity','flipX','flipY'
+  ];
+
+  function serialize(){
+    if (!c || isMuted()) return null;
+    const j = c.toJSON(EXTRA);
+    j.__w  = c.getWidth();
+    j.__h  = c.getHeight();
+    j.__vt = c.viewportTransform || [1,0,0,1,0,0];
+    return JSON.stringify(j);
+  }
+
+  function restore(jsonStr, label=''){
+    if (!c || !jsonStr) return;
+    MUTE++;
+    try{
+      const data = JSON.parse(jsonStr);
+      c.loadFromJSON(data, () => {
+        try{
+          if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
+          if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
+
+          // keep base/bg not selectable
+          c.getObjects().forEach(o=>{
+            if (o._isBase){
+              o.selectable=false; o.evented=false; o.hasControls=false;
+              o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+            }
+          });
+
+          c.requestRenderAll();
+        } finally {
+          MUTE--;
+          refresh(label);
+        }
+      });
+    } catch(_){
+      MUTE--; refresh(label);
+    }
+  }
+
+  function push(label=''){
+    const s = serialize(); if (!s) return;
+    // if we undid into the middle, drop the tail
+    if (idx < history.length - 1) history = history.slice(0, idx + 1);
+    if (history[idx] === s) { refresh(label); return; }
+    history.push(s);
+    if (history.length > MAX) history.shift();
+    idx = history.length - 1;
+    refresh(label);
+  }
+
+  function undo(){ if (idx <= 0) return; idx -= 1; restore(history[idx], 'Undo'); }
+  function redo(){ if (idx >= history.length - 1) return; idx += 1; restore(history[idx], 'Redo'); }
+
+  // ---------- UI ----------
+  let ui = {};
   function ensureUI(){
-    if (document.getElementById('raAnimRow')) return true;
-    const h3 = Array.from(document.querySelectorAll('h3'))
-      .find(h => /export/i.test((h.textContent||'').trim()));
-    const card = h3 ? h3.parentElement : null;
-    if (!card) return false;
+    // If your previous buttons exist, wire them
+    const existing = {
+      undo: $('#raUndoBtn'),
+      redo: $('#raRedoBtn'),
+      save: $('#raSaveDraftBtn'),
+      load: $('#raLoadDraftBtn'),
+      clr : $('#raClearDraftBtn'),
+      info: $('#raHistInfo')
+    };
+    if (existing.undo || existing.redo) {
+      ui = existing;
+      if (ui.undo) ui.undo.onclick = undo;
+      if (ui.redo) ui.redo.onclick = redo;
+      if (ui.save) ui.save.onclick = saveDraft;
+      if (ui.load) ui.load.onclick = restoreDraft;
+      if (ui.clr)  ui.clr.onclick  = ()=>{ localStorage.removeItem(DRAFT_KEY); refresh('Draft cleared'); };
+      return;
+    }
+
+    // Else add a tiny row under “Selection”
+    const holder =
+      $$('h3').find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode
+      || document.body;
 
     const row = document.createElement('div');
-    row.id = 'raAnimRow';
-    row.style.cssText = 'margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center';
+    row.id = 'raHistoryRow';
+    row.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
 
-    row.innerHTML = `
-      <div style="font-weight:600;opacity:.85">Animate (beta)</div>
-      <select id="raAnimStyle" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
-        <option value="ken">Cinematic (Ken Burns)</option>
-        <option value="parallax">Parallax</option>
-        <option value="sway">Sway</option>
-      </select>
-      <select id="raAnimDur" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
-        <option value="3">3s</option>
-        <option value="5" selected>5s</option>
-        <option value="8">8s</option>
-      </select>
-      <button id="raAnimPreview" class="btn small">Preview</button>
-      <button id="raAnimMake" class="btn small">Make video</button>
-      <span id="raAnimStatus" style="opacity:.7;font-size:12px;margin-left:6px;"></span>
-    `;
-    card.appendChild(row);
+    const mk = (id, txt)=>{ const b=document.createElement('button'); b.id=id; b.textContent=txt; b.className='btn small'; return b; };
+    const undoB = mk('raUndoBtn','Undo (0)');
+    const redoB = mk('raRedoBtn','Redo (0)');
+    const saveB = mk('raSaveDraftBtn','Save Draft');
+    const loadB = mk('raLoadDraftBtn','Restore Draft');
+    const clrB  = mk('raClearDraftBtn','×');
 
-    document.getElementById('raAnimPreview').onclick = () => run({record:false});
-    document.getElementById('raAnimMake').onclick    = () => run({record:true});
+    const info = document.createElement('div');
+    info.id='raHistInfo'; info.style.cssText='font-size:11px;opacity:.65';
 
-    return true;
+    row.append(undoB, redoB, saveB, loadB, clrB, info);
+    holder.appendChild(row);
+
+    ui = {undo:undoB, redo:redoB, save:saveB, load:loadB, clr:clrB, info};
+    undoB.onclick = undo; redoB.onclick = redo;
+    saveB.onclick = saveDraft; loadB.onclick = restoreDraft;
+    clrB.onclick  = ()=>{ localStorage.removeItem(DRAFT_KEY); refresh('Draft cleared'); };
   }
 
-  // ---- helpers -------------------------------------------------------------
-  function baseAndOverlays(c){
-    const objs = c.getObjects() || [];
-    const bg   = objs.find(o => o._isBgRect || o._isBg || o._isBackground);
-    const base = objs.find(o => o._isBase);
-    const overlays = objs.filter(o => o._kind === 'overlay');
-    const others   = objs.filter(o => o !== bg && o !== base && o._kind !== 'overlay');
-    return { bg, base, overlays, others, all: objs };
-  }
-
-  function snapState(objs){
-    return objs.map(o => ({
-      o,
-      left: o.left || 0,
-      top:  o.top  || 0,
-      sx:   o.scaleX || 1,
-      sy:   o.scaleY || 1,
-      ang:  o.angle  || 0
-    }));
-  }
-  function restoreState(state, c){
-    state.forEach(s=>{
-      try{
-        s.o.left   = s.left;
-        s.o.top    = s.top;
-        s.o.scaleX = s.sx;
-        s.o.scaleY = s.sy;
-        s.o.angle  = s.ang;
-        s.o.setCoords && s.o.setCoords();
-      }catch(_){}
-    });
-    try{ c.requestRenderAll(); }catch(_){}
-  }
-
-  // cubic ease in/out (pleasant, not too sharp)
-  function ease(t){ return (t<0.5) ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2; }
-  const lerp = (a,b,t)=> a + (b-a)*t;
-
-  // pick the best mime the browser can record
-  function pickMime(){
-    const m = window.MediaRecorder;
-    if (!m) return '';
-    const list = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4' // Safari may support this
-    ];
-    return list.find(type => m.isTypeSupported ? m.isTypeSupported(type) : true) || '';
-  }
-
-  // ---- animation core ------------------------------------------------------
-  async function run({record}){
-    const c = C(); const st = document.getElementById('raAnimStatus');
-    if (!c){ st && (st.textContent = 'Canvas not ready.'); return; }
-
-    // Require a base image
-    const { base, overlays, all } = baseAndOverlays(c);
-    if (!base){ st && (st.textContent = 'Load an image first.'); return; }
-
-    // UI params
-    const styleSel = document.getElementById('raAnimStyle');
-    const durSel   = document.getElementById('raAnimDur');
-    const style    = styleSel ? styleSel.value : 'ken';
-    const duration = Math.max(1, parseInt(durSel ? durSel.value : '5', 10));
-
-    // Snapshot & prep
-    const state = snapState(all);
-    const wasActive = c.getActiveObject && c.getActiveObject();
-    c.discardActiveObject && c.discardActiveObject();
-    c.selection = false;
-
-    // for recording
-    let rec, chunks=[], url='';
-    if (record){
-      const fps = 30;
-      const mime = pickMime();
-      const stream = (c.lowerCanvasEl && c.lowerCanvasEl.captureStream)
-        ? c.lowerCanvasEl.captureStream(fps)
-        : c.upperCanvasEl.captureStream ? c.upperCanvasEl.captureStream(fps) : null;
-
-      if (stream && window.MediaRecorder && mime){
-        try{
-          rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
-          rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-          rec.start(200); // collect in small chunks
-        }catch(_){}
-      }
-      st && (st.textContent = 'Recording…');
-    }else{
-      st && (st.textContent = 'Playing…');
-    }
-
-    // Params per style
-    const cw = c.getWidth(), ch = c.getHeight();
-    const start = performance.now(), D = duration * 1000;
-    const maxShift = Math.round(Math.min(cw,ch) * 0.05);   // ~5% canvas
-    const swayDeg  = 3;                                    // small rotation
-    const kenScale = 1.07;                                 // 7% zoom
-
-    function tick(now){
-      const t = Math.min(1, (now - start) / D);
-      const e = ease(t);
-
-      // Reset to snapshot, then apply offsets at this frame
-      restoreState(state, c);
-
-      try{
-        if (style === 'ken'){
-          // zoom base slightly + drift from TL -> center
-          const dx = lerp(-maxShift, 0, e), dy = lerp(-maxShift, 0, e);
-          base.left = (base.left||0) + dx; base.top = (base.top||0) + dy;
-          base.scaleX *= lerp(1, kenScale, e);
-          base.scaleY *= lerp(1, kenScale, e);
-          base.setCoords && base.setCoords();
-
-          // overlays drift at smaller rate so it feels layered
-          overlays.forEach((o,i)=>{
-            const f = 0.5 + i*0.08;
-            o.left = (o.left||0) + dx * 0.6 * f;
-            o.top  = (o.top ||0) + dy * 0.6 * f;
-            o.setCoords && o.setCoords();
-          });
-        }
-        else if (style === 'parallax'){
-          // overlays move in opposing directions based on index
-          overlays.forEach((o,i)=>{
-            const dir = (i%2===0) ? 1 : -1;
-            const amp = maxShift * (0.4 + i*0.06);
-            o.left = (o.left||0) + dir * (e * amp * 0.8);
-            o.top  = (o.top ||0) + dir * (e * amp * 0.5);
-            o.setCoords && o.setCoords();
-          });
-          // tiny base drift so it doesn't feel static
-          base.left = (base.left||0) + lerp(0, maxShift*0.25, e);
-          base.top  = (base.top ||0) + lerp(0, maxShift*0.15, e);
-          base.setCoords && base.setCoords();
-        }
-        else if (style === 'sway'){
-          // gentle scale breathe + small rotation back & forth
-          const s = 1 + 0.02*Math.sin(e*Math.PI);          // +2% at mid
-          base.scaleX *= s; base.scaleY *= s;
-          base.angle = lerp(0, swayDeg, Math.sin(e*Math.PI));
-          base.setCoords && base.setCoords();
-          overlays.forEach((o,i)=>{
-            const a = swayDeg*(i%3===0?1:-1)*0.6;
-            o.angle = lerp(0, a, Math.sin(e*Math.PI));
-            o.setCoords && o.setCoords();
-          });
-        }
-      }catch(_){}
-
-      try{ c.requestRenderAll(); }catch(_){}
-
-      if (t < 1){
-        requestAnimationFrame(tick);
-      }else{
-        // end
-        if (rec){
-          rec.onstop = ()=>{
-            try{
-              const blob = new Blob(chunks, { type: rec.mimeType });
-              url = URL.createObjectURL(blob);
-              // auto download
-              const ext = /mp4/i.test(rec.mimeType) ? 'mp4' : 'webm';
-              const a = document.createElement('a');
-              a.href = url; a.download = `rebel-ant-anim.${ext}`;
-              document.body.appendChild(a); a.click(); a.remove();
-              st && (st.textContent = `Saved ${ext.toUpperCase()} ✓`);
-            }catch(_){ st && (st.textContent = 'Recording finished.'); }
-            // restore canvas exactly as it was
-            restoreState(state, c);
-            if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
-          };
-          try{ rec.stop(); }catch(_){}
-        }else{
-          // just a preview—restore canvas
-          restoreState(state, c);
-          if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
-          st && (st.textContent = 'Done ✓');
-          setTimeout(()=>{ st && (st.textContent=''); }, 900);
-        }
-      }
-    }
-    requestAnimationFrame(tick);
-  }
-
-  function boot(){
+  function refresh(msg=''){
     ensureUI();
+    const canUndo = idx > 0;
+    const canRedo = idx >= 0 && idx < history.length - 1;
+    if (ui.undo) ui.undo.disabled = !canUndo;
+    if (ui.redo) ui.redo.disabled = !canRedo;
+    if (ui.load) ui.load.disabled = !localStorage.getItem(DRAFT_KEY);
+
+    if (ui.undo) ui.undo.textContent = `Undo (${canUndo ? idx : 0})`;
+    if (ui.redo) ui.redo.textContent = `Redo (${canRedo ? (history.length - 1 - idx) : 0})`;
+    if (ui.info) ui.info.textContent = `History ${ idx + 1 } / ${ history.length }${msg ? ' • ' + msg : ''}`;
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
-  else boot();
-  new MutationObserver(boot).observe(document.documentElement, {childList:true, subtree:true});
+
+  // ---------- Draft ----------
+  function saveDraft(){ if (idx>=0){ try{ localStorage.setItem(DRAFT_KEY, history[idx]); refresh('Draft saved'); }catch(_){ refresh('Draft failed'); } } }
+  function restoreDraft(){
+    const j = localStorage.getItem(DRAFT_KEY);
+    if (!j) return refresh('No draft');
+    history = [j]; idx = 0; restore(j, 'Draft restored');
+  }
+
+  // ---------- Wiring (non‑invasive) ----------
+  let burstTimer = null;
+  function schedulePush(label){ if (isMuted()) return; if (burstTimer) return; burstTimer = setTimeout(()=>{ burstTimer=null; push(label); }, 40); }
+
+  function wire(){
+    c = C(); if (!c) return defer(wire, 120);
+    ensureUI();
+
+    // Take a baseline snapshot a moment after the app finishes initial setup
+    defer(()=>{ push('Init'); }, 150);
+
+    // Fabric events — safe, view‑only recording
+    c.on('object:modified', ()=> schedulePush('Edit'));
+    c.on('object:added',    (e)=>{ const o=e?.target; if (o && o._isBgRect) return; schedulePush('Add'); });
+    c.on('object:removed',  ()=> schedulePush('Remove'));
+
+    // Keyboard shortcuts (ignore when typing)
+    document.addEventListener('keydown', (e)=>{
+      const tag=(e.target&&e.target.tagName||'').toLowerCase();
+      if (/^(input|textarea|select)$/.test(tag) || e.target?.isContentEditable) return;
+      if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); }
+      else if (((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z' && e.shiftKey) ||
+               ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='y')){ e.preventDefault(); redo(); }
+    });
+
+    // Canvas size dropdown → one snapshot around resize operations
+    const sizeEl = document.getElementById('canvasSize');
+    if (sizeEl && !sizeEl.__raHistBound){
+      sizeEl.__raHistBound = true;
+      sizeEl.addEventListener('change', ()=> schedulePush('Resize'));
+    }
+
+    refresh('Ready');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, {once:true});
+  } else {
+    wire();
+  }
+})();
+
+/* ==========================================================
+   RA_ANIMATE_PREVIEW_VIDEO_V3
+   • Presets for: Everything (viewport), Base only, Overlays only.
+   • Overlay presets now work even if "Everything" is selected (we auto-scope).
+   • Bigger, clearer overlay motions; normalized slide distances (work on any size).
+   • Added a chooseable Easing (Quad/Sine/Cubic/Back/Expo/Linear).
+   • Preview safe: state restored; undo/redo not spammed.
+   • Desktop/mobile layout untouched.
+   ========================================================== */
+(() => {
+  if (window.__RA_ANIM_V3__) return; window.__RA_ANIM_V3__ = true;
+
+  const $  = (s, r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // ---------- Easings ----------
+  const EASE = {
+    linear: t => t,
+    ioQuad: t => t<0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2,
+    ioSine: t => -(Math.cos(Math.PI*t)-1)/2,
+    ioCubic: t => t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2,
+    ioBack: t => { const c1=1.70158, c2=c1*1.525; return t<0.5
+      ? (Math.pow(2*t,2)*((c2+1)*2*t - c2))/2
+      : (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2; },
+    ioExpo: t => t===0?0 : t===1?1 : (t<0.5 ? Math.pow(2,20*t-10)/2 : (2 - Math.pow(2,-20*t+10))/2)
+  };
+
+  // ---------- Presets ----------
+  // kind:'viewport' => whole scene via viewport (Everything).
+  // kind:'overlays' => only overlays/text/token label (works even if What: Everything is selected).
+  // kind:'base'     => base image only.
+  // Viewport params: z (zoom), x/y (normalized pan: -0.1..+0.1).
+  // Overlay/Base params: s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized to W/H).
+  const PRESETS = [
+    // — Viewport / Everything —
+    {id:'kb_in_ur',  name:'Ken Burns — in ↗',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
+    {id:'kb_in_ul',  name:'Ken Burns — in ↖',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y:-0.06}},
+    {id:'kb_in_dr',  name:'Ken Burns — in ↘',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y: 0.06}},
+    {id:'kb_in_dl',  name:'Ken Burns — in ↙',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y: 0.06}},
+    {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
+    {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
+    {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
+    {id:'pan_left',  name:'Pan left (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x: 0.06,y:0.00}, to:{z:1.00,x:-0.06,y:0.00}},
+    {id:'pan_right', name:'Pan right (slow)',   kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:-0.06,y:0.00}, to:{z:1.00,x: 0.06,y:0.00}},
+    {id:'zoom_in',   name:'Zoom in (gentle)',   kind:'viewport', ease:'ioCubic', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.15,x: 0.00,y: 0.00}},
+    {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
+
+    // — Overlays only —
+    {id:'ov_pop',     name:'Overlays pop (scale)',           kind:'overlays', ease:'ioBack', from:{s:0.90},            to:{s:1.00}},
+    {id:'ov_slide_up',name:'Overlays slide up',              kind:'overlays', ease:'ioSine', from:{dyN:0.14},          to:{dyN:0.00}},
+    {id:'ov_slide_dn',name:'Overlays slide down',            kind:'overlays', ease:'ioSine', from:{dyN:-0.14},         to:{dyN:0.00}},
+    {id:'ov_slide_l', name:'Overlays slide in ←',            kind:'overlays', ease:'ioSine', from:{dxN:-0.18},         to:{dxN:0.00}},
+    {id:'ov_slide_r', name:'Overlays slide in →',            kind:'overlays', ease:'ioSine', from:{dxN: 0.18},         to:{dxN:0.00}},
+    {id:'ov_fade',    name:'Overlays fade in',               kind:'overlays', ease:'ioCubic',from:{alpha:0.00},        to:{alpha:1.00}},
+    {id:'ov_wiggle',  name:'Overlays tiny rotate',           kind:'overlays', ease:'ioSine', from:{rot:-5},            to:{rot:0}},
+    {id:'ov_pop_big', name:'Overlays big pop (stronger)',    kind:'overlays', ease:'ioBack', from:{s:0.85},            to:{s:1.00}},
+
+    // — Base only (optional fun) —
+    {id:'base_nudge', name:'Base nudge (gentle zoom in)',     kind:'base',     ease:'ioSine', from:{s:1.00},          to:{s:1.06}},
+    {id:'base_slide', name:'Base slide right a bit',          kind:'base',     ease:'ioQuad', from:{dxN:-0.06},       to:{dxN:0.00}}
+  ];
+
+  // ---------- UI dock ----------
+  function ensureDock(){
+    let dock = $('#raAnimDock');
+    if (dock) return dock;
+
+    const host = $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode || document.body;
+    dock = document.createElement('div');
+    dock.id = 'raAnimDock';
+    dock.style.cssText = 'margin:16px 0;padding:12px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea';
+    dock.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <strong>Animate</strong>
+        <label style="display:flex;gap:6px;align-items:center">
+          What:
+          <select id="raAnimScope">
+            <option value="all">Everything</option>
+            <option value="base">Base only</option>
+            <option value="overlays">Overlays only</option>
+          </select>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          Preset:
+          <select id="raAnimPreset"></select>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          Easing:
+          <select id="raAnimEase">
+            <option value="ioSine">Smooth (Sine)</option>
+            <option value="ioQuad">Natural (Quad)</option>
+            <option value="ioCubic">Rounded (Cubic)</option>
+            <option value="ioBack">Bounce-back</option>
+            <option value="ioExpo">Snappy (Expo)</option>
+            <option value="linear">Linear</option>
+          </select>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" style="width:60px">s
+        </label>
+        <button id="raAnimPreview" class="btn small">Preview</button>
+        <button id="raAnimExport"  class="btn small">Export video</button>
+        <span id="raAnimMsg" style="font-size:12px;opacity:.75;"></span>
+      </div>
+      <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+    `;
+    host.appendChild(dock);
+
+    // Fill presets
+    const sel = $('#raAnimPreset', dock);
+    PRESETS.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
+
+    // Events
+    $('#raAnimPreview', dock).onclick = ()=> run(false);
+    $('#raAnimExport',  dock).onclick = ()=> run(true);
+    $('#raAnimPreset',  dock).onchange = () => {
+      const id = $('#raAnimPreset').value;
+      const p  = PRESETS.find(x=>x.id===id);
+      if (!p) return;
+      // If user has Everything/Base but picked an overlay preset, auto-scope to overlays.
+      const scopeEl = $('#raAnimScope');
+      if (p.kind==='overlays' && scopeEl.value!=='overlays') {
+        scopeEl.value = 'overlays';
+        msg('Preset targets overlays → switched "What" to Overlays.');
+      }
+      // Prefer preset’s ease if it has one
+      if (p.ease) $('#raAnimEase').value = p.ease;
+    };
+
+    return dock;
+  }
+
+  function msg(t){
+    const m = $('#raAnimMsg');
+    if (!m) return;
+    m.textContent = t||'';
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2000);
+  }
+
+  // ---------- Helpers ----------
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const lerp=(a,b,t)=>a+(b-a)*t;
+
+  function findBaseObjs(c){ return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect); }
+  function findOverlayObjs(c){
+    // overlays + custom text + tokenId label; exclude base/background
+    return (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase && (o._kind==='overlay' || o._kind==='customText' || o._kind==='tokenId'));
+  }
+
+  // ---------- Core ----------
+  let running=false;
+  async function run(record){
+    const c=C(); if(!c){ alert('Canvas not ready'); return; }
+    if (running) return;
+
+    ensureDock();
+    const scopeEl = $('#raAnimScope');
+    const presetEl= $('#raAnimPreset');
+    const easeEl  = $('#raAnimEase');
+    const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
+    const dur     = Math.round(durSec*1000);
+
+    const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
+    const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
+    let   scope   = scopeEl?.value || 'all';
+
+    // Auto-scope overlays if user picked an overlay preset
+    if (preset.kind==='overlays') scope = 'overlays';
+
+    const baseObjs    = findBaseObjs(c);
+    const overlayObjs = findOverlayObjs(c);
+
+    if (scope==='base' && baseObjs.length===0){ msg('Load an image first'); return; }
+    if (scope==='overlays' && overlayObjs.length===0){ msg('Add an overlay or text first'); return; }
+
+    running=true; msg(record?'Recording…':'Playing…');
+
+    // Save state
+    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
+    const active = c.getActiveObject(); c.discardActiveObject(); c.requestRenderAll();
+
+    // Snapshots
+    const snap = new Map();
+    const store = o => snap.set(o, { left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity });
+
+    const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
+
+    let targets = [];
+    if (preset.kind==='viewport' && scope==='all'){
+      targets = []; // viewport only
+    } else if (scope==='base'){
+      baseObjs.forEach(store); targets = baseObjs.slice();
+    } else if (scope==='overlays'){
+      overlayObjs.forEach(store); targets = overlayObjs.slice();
+    }
+
+    // Recording (optional)
+    let rec, chunks=[];
+    if (record){
+      try{
+        const stream = (c.lowerCanvasEl || c.upperCanvasEl).captureStream(30);
+        rec = new MediaRecorder(stream, { mimeType:'video/webm;codecs=vp9' });
+        rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
+        rec.start();
+      }catch(_){ msg('Recording not supported'); }
+    }
+
+    const t0 = performance.now(); let rafId=0;
+
+    function applyViewport(z,xN,yN){
+      const e = (1 - z) * cx + xN * W;
+      const f = (1 - z) * cy + yN * H;
+      c.setViewportTransform([z,0,0,z, e, f]);
+    }
+
+    function step(now){
+      const raw = clamp((now - t0)/dur, 0, 1);
+      const t   = ease(raw);
+
+      if (preset.kind==='viewport' && scope==='all'){
+        const z  = lerp(preset.from.z, preset.to.z, t);
+        const xn = lerp(preset.from.x, preset.to.x, t);
+        const yn = lerp(preset.from.y, preset.to.y, t);
+        applyViewport(z, xn, yn);
+      } else {
+        const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
+        const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
+        const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
+
+        const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
+        const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
+        const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
+        const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
+
+        const dpx = dx + dxN*W;
+        const dpy = dy + dyN*H;
+
+        const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
+        const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
+        const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
+
+        targets.forEach(o=>{
+          const o0 = snap.get(o); if(!o0) return;
+          o.scaleX = o0.scaleX * s;
+          o.scaleY = o0.scaleY * s;
+          o.left   = o0.left + dpx;
+          o.top    = o0.top  + dpy;
+          if (hasRot)   o.angle   = o0.angle + rot;
+          if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
+          o.setCoords();
+        });
+      }
+
+      c.requestRenderAll();
+      if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
+    }
+
+    function finish(){
+      cancelAnimationFrame(rafId);
+      if (rec){
+        try{
+          rec.onstop = ()=>{
+            const blob = new Blob(chunks, {type:'video/webm'});
+            const url  = URL.createObjectURL(blob);
+            const vid  = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
+            msg('Done. Use the video menu to download.');
+          };
+          rec.stop();
+        }catch(_){}
+      } else {
+        msg('Done');
+      }
+      try { c.setViewportTransform(vt0); } catch(_){}
+      targets.forEach(o=>{
+        const s = snap.get(o); if(!s) return;
+        o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
+        o.setCoords();
+      });
+      if (active) try{ c.setActiveObject(active); }catch(_){}
+      c.requestRenderAll();
+      running=false;
+    }
+
+    requestAnimationFrame(step);
+  }
+
+  // Build UI now/when ready
+  if (document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', ensureDock, {once:true});
+  } else {
+    ensureDock();
+  }
 })();
