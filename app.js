@@ -2510,41 +2510,74 @@
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V2
-   • Animates base + overlays together (Everything), or Base only, or Overlays only.
-   • Adds presets: Ken Burns, pans, zooms, overlay pop/slide.
-   • Uses viewport transform for “Everything” (safe, no object edits).
-   • Preview only by default; if you previously had video export via captureStream,
-     the Export button here will use the same approach.
-   • Desktop/mobile untouched. Undo/Redo history not spammed.
+   RA_ANIMATE_PREVIEW_VIDEO_V3
+   • Presets for: Everything (viewport), Base only, Overlays only.
+   • Overlay presets now work even if "Everything" is selected (we auto-scope).
+   • Bigger, clearer overlay motions; normalized slide distances (work on any size).
+   • Added a chooseable Easing (Quad/Sine/Cubic/Back/Expo/Linear).
+   • Preview safe: state restored; undo/redo not spammed.
+   • Desktop/mobile layout untouched.
    ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V2__) return; window.__RA_ANIM_V2__ = true;
+  if (window.__RA_ANIM_V3__) return; window.__RA_ANIM_V3__ = true;
 
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // -------- Presets (viewport = whole scene; overlays/base = object transforms) ------
+  // ---------- Easings ----------
+  const EASE = {
+    linear: t => t,
+    ioQuad: t => t<0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2,
+    ioSine: t => -(Math.cos(Math.PI*t)-1)/2,
+    ioCubic: t => t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2,
+    ioBack: t => { const c1=1.70158, c2=c1*1.525; return t<0.5
+      ? (Math.pow(2*t,2)*((c2+1)*2*t - c2))/2
+      : (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2; },
+    ioExpo: t => t===0?0 : t===1?1 : (t<0.5 ? Math.pow(2,20*t-10)/2 : (2 - Math.pow(2,-20*t+10))/2)
+  };
+
+  // ---------- Presets ----------
+  // kind:'viewport' => whole scene via viewport (Everything).
+  // kind:'overlays' => only overlays/text/token label (works even if What: Everything is selected).
+  // kind:'base'     => base image only.
+  // Viewport params: z (zoom), x/y (normalized pan: -0.1..+0.1).
+  // Overlay/Base params: s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized to W/H).
   const PRESETS = [
-    {id:'kb_in_ur',   name:'Ken Burns — zoom in + pan up-right', kind:'viewport', from:{z:1.00,x:0.00,y:0.00}, to:{z:1.18,x:-0.06,y:-0.06}},
-    {id:'kb_out_dl',  name:'Ken Burns — zoom out + pan down-left',kind:'viewport', from:{z:1.15,x:-0.08,y:-0.08}, to:{z:1.00,x:0.00,y:0.00}},
-    {id:'pan_up',     name:'Pan up (slow)',                        kind:'viewport', from:{z:1.00,x:0.00,y:0.05},   to:{z:1.00,x:0.00,y:-0.05}},
-    {id:'pan_right',  name:'Pan right (slow)',                     kind:'viewport', from:{z:1.00,x:-0.05,y:0.00},  to:{z:1.00,x:0.05,y:0.00}},
-    {id:'zoom_in',    name:'Zoom in (gentle)',                     kind:'viewport', from:{z:1.00,x:0.00,y:0.00},   to:{z:1.15,x:0.00,y:0.00}},
-    {id:'zoom_out',   name:'Zoom out (gentle)',                    kind:'viewport', from:{z:1.12,x:0.00,y:0.00},   to:{z:1.00,x:0.00,y:0.00}},
-    {id:'overlay_pop',name:'Overlays pop (scale)',                 kind:'overlays', from:{s:0.94},                 to:{s:1.00}},
-    {id:'overlay_up', name:'Overlays slide up',                    kind:'overlays', from:{dy:14},                  to:{dy:0}}
+    // — Viewport / Everything —
+    {id:'kb_in_ur',  name:'Ken Burns — in ↗',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
+    {id:'kb_in_ul',  name:'Ken Burns — in ↖',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y:-0.06}},
+    {id:'kb_in_dr',  name:'Ken Burns — in ↘',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y: 0.06}},
+    {id:'kb_in_dl',  name:'Ken Burns — in ↙',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y: 0.06}},
+    {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
+    {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
+    {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
+    {id:'pan_left',  name:'Pan left (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x: 0.06,y:0.00}, to:{z:1.00,x:-0.06,y:0.00}},
+    {id:'pan_right', name:'Pan right (slow)',   kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:-0.06,y:0.00}, to:{z:1.00,x: 0.06,y:0.00}},
+    {id:'zoom_in',   name:'Zoom in (gentle)',   kind:'viewport', ease:'ioCubic', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.15,x: 0.00,y: 0.00}},
+    {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
+
+    // — Overlays only —
+    {id:'ov_pop',     name:'Overlays pop (scale)',           kind:'overlays', ease:'ioBack', from:{s:0.90},            to:{s:1.00}},
+    {id:'ov_slide_up',name:'Overlays slide up',              kind:'overlays', ease:'ioSine', from:{dyN:0.14},          to:{dyN:0.00}},
+    {id:'ov_slide_dn',name:'Overlays slide down',            kind:'overlays', ease:'ioSine', from:{dyN:-0.14},         to:{dyN:0.00}},
+    {id:'ov_slide_l', name:'Overlays slide in ←',            kind:'overlays', ease:'ioSine', from:{dxN:-0.18},         to:{dxN:0.00}},
+    {id:'ov_slide_r', name:'Overlays slide in →',            kind:'overlays', ease:'ioSine', from:{dxN: 0.18},         to:{dxN:0.00}},
+    {id:'ov_fade',    name:'Overlays fade in',               kind:'overlays', ease:'ioCubic',from:{alpha:0.00},        to:{alpha:1.00}},
+    {id:'ov_wiggle',  name:'Overlays tiny rotate',           kind:'overlays', ease:'ioSine', from:{rot:-5},            to:{rot:0}},
+    {id:'ov_pop_big', name:'Overlays big pop (stronger)',    kind:'overlays', ease:'ioBack', from:{s:0.85},            to:{s:1.00}},
+
+    // — Base only (optional fun) —
+    {id:'base_nudge', name:'Base nudge (gentle zoom in)',     kind:'base',     ease:'ioSine', from:{s:1.00},          to:{s:1.06}},
+    {id:'base_slide', name:'Base slide right a bit',          kind:'base',     ease:'ioQuad', from:{dxN:-0.06},       to:{dxN:0.00}}
   ];
 
-  // ---------- UI dock (reuse if present, else create) ----------
+  // ---------- UI dock ----------
   function ensureDock(){
     let dock = $('#raAnimDock');
     if (dock) return dock;
 
-    // host: try to append near the Export section; else bottom of body
-    const exportHost = $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode || document.body;
-
+    const host = $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode || document.body;
     dock = document.createElement('div');
     dock.id = 'raAnimDock';
     dock.style.cssText = 'margin:16px 0;padding:12px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea';
@@ -2564,6 +2597,17 @@
           <select id="raAnimPreset"></select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
+          Easing:
+          <select id="raAnimEase">
+            <option value="ioSine">Smooth (Sine)</option>
+            <option value="ioQuad">Natural (Quad)</option>
+            <option value="ioCubic">Rounded (Cubic)</option>
+            <option value="ioBack">Bounce-back</option>
+            <option value="ioExpo">Snappy (Expo)</option>
+            <option value="linear">Linear</option>
+          </select>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
           Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" style="width:60px">s
         </label>
         <button id="raAnimPreview" class="btn small">Preview</button>
@@ -2572,188 +2616,188 @@
       </div>
       <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
     `;
-    exportHost.appendChild(dock);
+    host.appendChild(dock);
 
-    // fill presets
+    // Fill presets
     const sel = $('#raAnimPreset', dock);
-    PRESETS.forEach(p=>{
-      const o=document.createElement('option');
-      o.value=p.id; o.textContent=p.name; sel.appendChild(o);
-    });
+    PRESETS.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
 
+    // Events
     $('#raAnimPreview', dock).onclick = ()=> run(false);
     $('#raAnimExport',  dock).onclick = ()=> run(true);
+    $('#raAnimPreset',  dock).onchange = () => {
+      const id = $('#raAnimPreset').value;
+      const p  = PRESETS.find(x=>x.id===id);
+      if (!p) return;
+      // If user has Everything/Base but picked an overlay preset, auto-scope to overlays.
+      const scopeEl = $('#raAnimScope');
+      if (p.kind==='overlays' && scopeEl.value!=='overlays') {
+        scopeEl.value = 'overlays';
+        msg('Preset targets overlays → switched "What" to Overlays.');
+      }
+      // Prefer preset’s ease if it has one
+      if (p.ease) $('#raAnimEase').value = p.ease;
+    };
 
     return dock;
   }
 
-  // ---------- Helpers ----------
-  const clamp = (v, a, b)=>Math.max(a, Math.min(b, v));
-  const lerp  = (a, b, t)=>a + (b - a) * t;
-  function easeInOutQuad(t){ return t<0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2; }
-
-  function findBaseObjects(c){
-    return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect);
-  }
-  function findOverlayObjects(c, scope){
-    // overlays + texts + tokenid; exclude base + bg
-    return (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase && (scope!=='overlays' || (o._kind==='overlay' || o._kind==='customText' || o._kind==='tokenId')));
-  }
-
   function msg(t){
-    const m = $('#raAnimMsg'); if (m){ m.textContent = t||''; setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent='';}, 2000); }
+    const m = $('#raAnimMsg');
+    if (!m) return;
+    m.textContent = t||'';
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2000);
   }
 
-  // ---------- Core animation ----------
-  let running = false;
+  // ---------- Helpers ----------
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const lerp=(a,b,t)=>a+(b-a)*t;
+
+  function findBaseObjs(c){ return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect); }
+  function findOverlayObjs(c){
+    // overlays + custom text + tokenId label; exclude base/background
+    return (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase && (o._kind==='overlay' || o._kind==='customText' || o._kind==='tokenId'));
+  }
+
+  // ---------- Core ----------
+  let running=false;
   async function run(record){
-    const c = C(); if (!c){ alert('Canvas not ready'); return; }
+    const c=C(); if(!c){ alert('Canvas not ready'); return; }
     if (running) return;
 
     ensureDock();
-    const scope = ($('#raAnimScope')?.value) || 'all';
-    const presetId = ($('#raAnimPreset')?.value) || PRESETS[0].id;
-    const preset = PRESETS.find(p=>p.id===presetId) || PRESETS[0];
-    const durSec = clamp(parseFloat($('#raAnimDur')?.value||'6'), 2, 20);
-    const dur = Math.round(durSec*1000);
+    const scopeEl = $('#raAnimScope');
+    const presetEl= $('#raAnimPreset');
+    const easeEl  = $('#raAnimEase');
+    const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
+    const dur     = Math.round(durSec*1000);
 
-    // choose targets
-    const baseObjs = findBaseObjects(c);
-    const overlayObjs = findOverlayObjects(c, 'overlays');
+    const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
+    const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
+    let   scope   = scopeEl?.value || 'all';
+
+    // Auto-scope overlays if user picked an overlay preset
+    if (preset.kind==='overlays') scope = 'overlays';
+
+    const baseObjs    = findBaseObjs(c);
+    const overlayObjs = findOverlayObjs(c);
+
     if (scope==='base' && baseObjs.length===0){ msg('Load an image first'); return; }
-    if (scope==='overlays' && overlayObjs.length===0){ msg('Add an overlay first'); return; }
+    if (scope==='overlays' && overlayObjs.length===0){ msg('Add an overlay or text first'); return; }
 
-    running = true;
-    msg(record ? 'Recording…' : 'Playing…');
+    running=true; msg(record?'Recording…':'Playing…');
 
     // Save state
     const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-    const active = c.getActiveObject();
-    c.discardActiveObject();
-    c.requestRenderAll();
+    const active = c.getActiveObject(); c.discardActiveObject(); c.requestRenderAll();
 
-    // Store originals so we can restore cleanly
+    // Snapshots
     const snap = new Map();
-    const store = o=>{
-      snap.set(o, {
-        left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity
-      });
-    };
+    const store = o => snap.set(o, { left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity });
 
-    const W = c.getWidth(), H = c.getHeight(), cx = W/2, cy = H/2;
+    const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
 
     let targets = [];
     if (preset.kind==='viewport' && scope==='all'){
-      // whole-scene animation via viewport
-      targets = [];
+      targets = []; // viewport only
     } else if (scope==='base'){
       baseObjs.forEach(store); targets = baseObjs.slice();
     } else if (scope==='overlays'){
       overlayObjs.forEach(store); targets = overlayObjs.slice();
-    } else {
-      // default to whole scene (everything)
     }
 
-    // Recorder (if requested)
+    // Recording (optional)
     let rec, chunks=[];
     if (record){
       try{
         const stream = (c.lowerCanvasEl || c.upperCanvasEl).captureStream(30);
-        rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+        rec = new MediaRecorder(stream, { mimeType:'video/webm;codecs=vp9' });
         rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
         rec.start();
       }catch(_){ msg('Recording not supported'); }
     }
 
-    const t0 = performance.now();
-    let rafId = 0;
+    const t0 = performance.now(); let rafId=0;
 
-    function applyViewport(z,xNorm,yNorm){
-      // Centered zoom with normalized pans
-      const e = (1 - z) * cx + xNorm * W;   // tx
-      const f = (1 - z) * cy + yNorm * H;   // ty
+    function applyViewport(z,xN,yN){
+      const e = (1 - z) * cx + xN * W;
+      const f = (1 - z) * cy + yN * H;
       c.setViewportTransform([z,0,0,z, e, f]);
     }
 
     function step(now){
       const raw = clamp((now - t0)/dur, 0, 1);
-      const t = easeInOutQuad(raw);
+      const t   = ease(raw);
 
       if (preset.kind==='viewport' && scope==='all'){
         const z  = lerp(preset.from.z, preset.to.z, t);
         const xn = lerp(preset.from.x, preset.to.x, t);
         const yn = lerp(preset.from.y, preset.to.y, t);
         applyViewport(z, xn, yn);
-      } else if (scope==='base'){
-        // scale/pan base only
-        const s  = (preset.from?.z!=null && preset.to?.z!=null) ? lerp(preset.from.z, preset.to.z, t) : 1.0;
-        const dx = (preset.from?.x!=null && preset.to?.x!=null) ? lerp(preset.from.x, preset.to.x, t) * W : 0;
-        const dy = (preset.from?.y!=null && preset.to?.y!=null) ? lerp(preset.from.y, preset.to.y, t) * H : 0;
+      } else {
+        const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
+        const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
+        const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
+
+        const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
+        const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
+        const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
+        const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
+
+        const dpx = dx + dxN*W;
+        const dpy = dy + dyN*H;
+
+        const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
+        const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
+        const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
+
         targets.forEach(o=>{
-          const o0 = snap.get(o); if (!o0) return;
+          const o0 = snap.get(o); if(!o0) return;
           o.scaleX = o0.scaleX * s;
           o.scaleY = o0.scaleY * s;
-          o.left   = o0.left + dx;
-          o.top    = o0.top  + dy;
-          o.setCoords();
-        });
-      } else if (scope==='overlays'){
-        const s   = (preset.from?.s!=null && preset.to?.s!=null) ? lerp(preset.from.s, preset.to.s, t) : 1.0;
-        const dyy = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy, preset.to.dy, t) : 0;
-        targets.forEach(o=>{
-          const o0 = snap.get(o); if (!o0) return;
-          o.scaleX = o0.scaleX * s;
-          o.scaleY = o0.scaleY * s;
-          o.top    = o0.top + dyy;
+          o.left   = o0.left + dpx;
+          o.top    = o0.top  + dpy;
+          if (hasRot)   o.angle   = o0.angle + rot;
+          if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
           o.setCoords();
         });
       }
 
       c.requestRenderAll();
-
-      if (raw < 1){
-        rafId = requestAnimationFrame(step);
-      } else {
-        finish();
-      }
+      if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
     }
 
     function finish(){
       cancelAnimationFrame(rafId);
-
-      // Stop recorder
       if (rec){
         try{
           rec.onstop = ()=>{
             const blob = new Blob(chunks, {type:'video/webm'});
-            const url = URL.createObjectURL(blob);
-            const vid = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
-            msg('Done. You can download from the video menu.');
+            const url  = URL.createObjectURL(blob);
+            const vid  = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
+            msg('Done. Use the video menu to download.');
           };
           rec.stop();
         }catch(_){}
-      }else{
+      } else {
         msg('Done');
       }
-
-      // Restore state
       try { c.setViewportTransform(vt0); } catch(_){}
       targets.forEach(o=>{
-        const s = snap.get(o); if (!s) return;
+        const s = snap.get(o); if(!s) return;
         o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
         o.setCoords();
       });
       if (active) try{ c.setActiveObject(active); }catch(_){}
       c.requestRenderAll();
-      running = false;
+      running=false;
     }
 
-    // Start
     requestAnimationFrame(step);
   }
 
-  // Build UI once DOM is ready
-  if (document.readyState === 'loading'){
+  // Build UI now/when ready
+  if (document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded', ensureDock, {once:true});
   } else {
     ensureDock();
