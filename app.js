@@ -2548,127 +2548,56 @@
 })();
 
 /* ==========================================================
-   RA_UNDO_REDO_AND_DRAFT_V2  — robust history
-   - Fixes Undo/Redo by capturing more edit paths:
-     • object add/remove/modify, mouse-up after drags
-     • toolbar buttons (Center/Flip/Lock/Clear/etc.)
-     • keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
-     • style/format changes (opacity, blend, token text style)
+   RA_UNDO_REDO_AND_DRAFT_V3  — intuitive, grouped history
+   - Single timeline with pointer (like Figma/Photoshop)
+   - Gestures grouped: one Undo reverses a full drag/scale/rotate
+   - Keyboard nudges grouped (arrows) and Delete/Backspace captured
+   - Wraps toolbar clicks (Center/Flip/Lock/Clear…) as pre+post
+   - Captures style changes + canvas size changes
+   - Shows counts: Undo (N), Redo (M), and "History i / total"
    - Save Draft / Restore Draft unchanged (localStorage)
    - No layout changes; desktop/mobile visuals untouched
    ========================================================== */
 (() => {
-  if (window.__RA_HISTORY_V2__) return;
-  window.__RA_HISTORY_V2__ = true;
+  if (window.__RA_HISTORY_V3__) return;
+  window.__RA_HISTORY_V3__ = true;
 
-  const MAX_STEPS = 60;
+  // ------------ settings ------------
+  const MAX_STEPS = 80;              // how many snapshots we keep
   const DRAFT_KEY = 'ra_draft_v1';
-  const IDS_TO_SNAPSHOT_ON_CLICK = new Set([
+
+  // Buttons we wrap as atomic actions (pre+post)
+  const CLICK_ACTION_IDS = new Set([
     // selection ops
     'raCenterH','raCenterV','raCenterHV','bringFront','sendBack','flipX','flipY',
     'lock','unlockAll','duplicate','delete','clearAllOverlays',
     // base/canvas
     'clearBase','clearCanvas','addCustomText','deleteTokenId'
   ]);
-  const IDS_TO_SNAPSHOT_ON_CHANGE = new Set([
-    'opacity','blendMode','idFormat','idSize','idColor','idStrokeColor','idStrokeWidth'
+
+  // Controls that change styles/values
+  const CHANGE_ACTION_IDS = new Set([
+    'opacity','blendMode',
+    'idFormat','idSize','idColor','idStrokeColor','idStrokeWidth',
+    'fontFamily','fontSize','fontColor','strokeColor','strokeWidth'
   ]);
-  let c=null, undo=[], redo=[], applying=false, ui={};
-  let keyMoveArmed = false; // track arrow-based nudges
 
-  // ------------- helpers -------------
-  const $ = (s, r=document)=>r.querySelector(s);
-  const $$= (s, r=document)=>Array.from(r.querySelectorAll(s));
+  // ------------ shorthands ------------
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-  const deb = (fn, ms=100)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
-  function now(){ return new Date().toLocaleTimeString(); }
+  const defer = (fn, ms=0) => setTimeout(fn, ms);
 
-  function ensureBgRect(w,h){
-    const bg = (c.getObjects()||[]).find(o=>o._isBgRect);
-    if (bg){ bg.set({left:0,top:0,width:w,height:h}); c.sendToBack(bg); return; }
-    const rect=new fabric.Rect({ left:0,top:0,width:w,height:h, fill:'#0d0e13',
-      selectable:false,evented:false,hasControls:false });
-    rect._isBgRect = true; c.add(rect); c.sendToBack(rect);
-  }
-  function relockBaseIfAny(){
-    const objs=c.getObjects().filter(o=>!o._isBgRect);
-    if(!objs.length) return;
-    const base=objs[0];
-    Object.assign(base,{
-      _isBase:true, selectable:false,evented:false,hasControls:false,
-      lockMovementX:true, lockMovementY:true, lockScalingX:true, lockScalingY:true, lockRotation:true
-    });
-    try{ c.sendToBack(base); }catch(_){}
-  }
+  // ------------ state ------------
+  let c = null;
+  let history = [];        // array of JSON strings
+  let index   = -1;        // pointer to current state ( -1 = not initialized )
+  let gesture = { active:false, baseline:null, moved:false, kind:'' };
+  let keyNudge = { active:false, baseline:null, moved:false };
 
-  // snapshot current canvas (excluding bg) into undo stack
-  function snapshot(label=''){
-    if(!c||applying) return;
-    const objs = c.getObjects().filter(o=>!o._isBgRect);
-    const payload = objs.map(o => o.toObject([
-      '_kind','_isBase','raWM','raPos',
-      'selectable','evented','hasControls',
-      'lockMovementX','lockMovementY','lockScalingX','lockScalingY','lockRotation',
-      'globalCompositeOperation','opacity','flipX','flipY'
-    ]));
-    const state = { size:{w:c.getWidth(), h:c.getHeight()}, items:payload };
-    const j = JSON.stringify(state);
-    if (undo.length && undo[undo.length-1] === j) return;      // dedupe
-    undo.push(j); if (undo.length>MAX_STEPS) undo.shift();
-    redo.length = 0;                                            // new branch
-    refreshUI(label && `Saved: ${label} @ ${now()}`);
-  }
-  const snapshotSoon = deb(()=>snapshot(), 120);
+  // ------------ UI ------------
+  let ui = {};  // { undoBtn, redoBtn, saveBtn, loadBtn, clrBtn, info }
 
-  function applyState(json, label=''){
-    if(!c||!json) return;
-    let state; try{ state=JSON.parse(json); }catch(_){ return; }
-    applying = true;
-    try{
-      const w = Math.max(1, state.size?.w || c.getWidth());
-      const h = Math.max(1, state.size?.h || c.getHeight());
-      c.setWidth(w); c.setHeight(h);
-      c.getObjects().slice().forEach(o=>c.remove(o));
-      ensureBgRect(w,h);
-      fabric.util.enlivenObjects(state.items||[], (objects)=>{
-        objects.forEach(o=>c.add(o));
-        relockBaseIfAny();
-        c.discardActiveObject();
-        c.setViewportTransform([1,0,0,1,0,0]);
-        c.requestRenderAll();
-        refreshUI(label && `${label} @ ${now()}`);
-      });
-    } finally { applying = false; }
-  }
-
-  function doUndo(){
-    if (undo.length < 2) return;
-    const cur = undo.pop();
-    const prev = undo[undo.length-1];
-    redo.push(cur);
-    applyState(prev, 'Undo');
-  }
-  function doRedo(){
-    if (!redo.length) return;
-    const next = redo.pop();
-    undo.push(next);
-    applyState(next, 'Redo');
-  }
-
-  function saveDraft(){
-    if(!undo.length) return;
-    try{ localStorage.setItem(DRAFT_KEY, undo[undo.length-1]); refreshUI('Draft saved'); }
-    catch(_){ refreshUI('Draft save failed'); }
-  }
-  function restoreDraft(){
-    const j = localStorage.getItem(DRAFT_KEY);
-    if(!j){ refreshUI('No draft'); return; }
-    undo.length = 0; redo.length = 0; undo.push(j);
-    applyState(j, 'Draft restored');
-  }
-  function clearDraft(){ localStorage.removeItem(DRAFT_KEY); refreshUI('Draft cleared'); }
-
-  // ------------- UI row -------------
   function injectUI(){
     if ($('#raHistoryRow')) return;
     const holder =
@@ -2679,124 +2608,299 @@
     row.id = 'raHistoryRow';
     row.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
 
-    function mkBtn(id, text){
+    const mkBtn = (id, text) => {
       const b = document.createElement('button');
-      b.id=id; b.textContent=text; b.className='btn small';
-      b.style.minWidth='64px'; b.style.opacity='0.95';
+      b.id = id; b.textContent = text; b.className = 'btn small';
+      b.style.minWidth = '82px'; b.style.opacity = '0.95';
       return b;
-    }
-    const undoBtn = mkBtn('raUndoBtn','Undo');
-    const redoBtn = mkBtn('raRedoBtn','Redo');
+    };
+
+    const undoBtn = mkBtn('raUndoBtn','Undo (0)');
+    const redoBtn = mkBtn('raRedoBtn','Redo (0)');
     const saveBtn = mkBtn('raSaveDraftBtn','Save Draft');
     const loadBtn = mkBtn('raLoadDraftBtn','Restore Draft');
     const clrBtn  = mkBtn('raClearDraftBtn','×');
 
     const info = document.createElement('div');
-    info.id='raHistInfo'; info.style.cssText='font-size:11px;opacity:.65';
+    info.id='raHistInfo';
+    info.style.cssText='font-size:11px;opacity:.65';
 
     row.append(undoBtn, redoBtn, saveBtn, loadBtn, clrBtn, info);
     holder.appendChild(row);
 
-    ui = {undoBtn,redoBtn,saveBtn,loadBtn,clrBtn,info};
-    undoBtn.onclick=doUndo; redoBtn.onclick=doRedo;
-    saveBtn.onclick=saveDraft; loadBtn.onclick=restoreDraft;
-    clrBtn.title='Clear stored draft'; clrBtn.onclick=clearDraft;
+    ui = {undoBtn, redoBtn, saveBtn, loadBtn, clrBtn, info};
+    undoBtn.onclick = undo; redoBtn.onclick = redo;
+    saveBtn.onclick = saveDraft; loadBtn.onclick = restoreDraft;
+    clrBtn.title = 'Clear stored draft'; clrBtn.onclick = clearDraft;
     refreshUI('History ready');
   }
+
   function refreshUI(msg=''){
-    if(!ui.undoBtn) return;
-    ui.undoBtn.disabled = undo.length < 2;
-    ui.redoBtn.disabled = redo.length < 1;
-    ui.loadBtn.disabled = !localStorage.getItem(DRAFT_KEY);
-    if(msg) ui.info.textContent = msg;
+    const canUndo = index > 0;
+    const canRedo = index >= 0 && index < history.length - 1;
+    if (ui.undoBtn) ui.undoBtn.disabled = !canUndo;
+    if (ui.redoBtn) ui.redoBtn.disabled = !canRedo;
+    if (ui.loadBtn) ui.loadBtn.disabled = !localStorage.getItem(DRAFT_KEY);
+
+    const undoCount = index > 0 ? index : 0;
+    const redoCount = canRedo ? (history.length - 1 - index) : 0;
+    if (ui.undoBtn) ui.undoBtn.textContent = `Undo (${undoCount})`;
+    if (ui.redoBtn) ui.redoBtn.textContent = `Redo (${redoCount})`;
+    if (ui.info)    ui.info.textContent    = `History ${ index + 1 } / ${ history.length }` + (msg ? ` • ${msg}` : '');
   }
 
-  // ------------- wiring -------------
-  function wireCanvasListeners(){
-    // Core fabric events (interactive edits)
-    ['object:added','object:removed','object:modified','path:created'].forEach(ev=>{
-      c.on(ev, ()=> snapshotSoon());
+  // ------------ serialization ------------
+  // Include custom fields so watermarks/base locks survive
+  const EXTRA_PROPS = [
+    '_kind','_isBase','_isBgRect','raWM','raPos',
+    'selectable','evented','hasControls',
+    'lockMovementX','lockMovementY','lockScalingX','lockScalingY','lockRotation',
+    'globalCompositeOperation','opacity','flipX','flipY'
+  ];
+
+  function serialize(){
+    if (!c) return null;
+    const json = c.toJSON(EXTRA_PROPS);
+    json.__w = c.getWidth();
+    json.__h = c.getHeight();
+    json.__vt = c.viewportTransform || [1,0,0,1,0,0];
+    return JSON.stringify(json);
+  }
+
+  function restore(jsonStr, label=''){
+    if (!c || !jsonStr) return;
+    let data;
+    try { data = JSON.parse(jsonStr); } catch(_) { return; }
+
+    c.loadFromJSON(data, () => {
+      // size + viewport
+      if (data.__w && data.__h) { c.setWidth(data.__w); c.setHeight(data.__h); }
+      if (Array.isArray(data.__vt)) { c.setViewportTransform(data.__vt); } else { c.setViewportTransform([1,0,0,1,0,0]); }
+
+      // keep base object non‑interactive
+      const objs = c.getObjects();
+      const base = objs.find(o => o._isBase);
+      if (base){
+        Object.assign(base, {
+          selectable:false, evented:false, hasControls:false,
+          lockMovementX:true, lockMovementY:true,
+          lockScalingX:true, lockScalingY:true, lockRotation:true
+        });
+        try { c.sendToBack(base); } catch(_) {}
+      }
+      // ensure the background rect is in back
+      const bg = objs.find(o => o._isBgRect);
+      if (bg) { try { c.sendToBack(bg); } catch(_) {} }
+
+      c.discardActiveObject();
+      c.requestRenderAll();
+      refreshUI(label);
     });
-    // After drags/scales/rotates end
-    c.on('mouse:up', ()=> snapshotSoon());
   }
 
-  function wireKeyboardListeners(){
+  // ------------ timeline ops ------------
+  function pushState(jsonStr, label=''){
+    if (!jsonStr) return;
+    // If we undid to the middle, drop everything after the pointer.
+    if (index < history.length - 1) {
+      history = history.slice(0, index + 1);
+    }
+    // de‑dupe against current
+    if (history.length && history[index] === jsonStr){
+      refreshUI(label); return;
+    }
+    history.push(jsonStr);
+    if (history.length > MAX_STEPS) history.shift();
+    index = history.length - 1;
+    refreshUI(label);
+  }
+
+  function pushCurrent(label=''){
+    const j = serialize();
+    pushState(j, label);
+  }
+
+  function pushPair(pre, post, label=''){
+    if (!pre || !post || pre === post) { refreshUI(label); return; }
+    // If we’re not already at 'pre', insert it (so a single Undo lands there)
+    const at = history[index] || null;
+    if (at !== pre) pushState(pre, label ? label + ' (pre)' : '');
+    pushState(post, label || '');
+  }
+
+  function undo(){
+    if (index <= 0) return;
+    index -= 1;
+    restore(history[index], 'Undo');
+  }
+
+  function redo(){
+    if (index >= history.length - 1) return;
+    index += 1;
+    restore(history[index], 'Redo');
+  }
+
+  // ------------ draft ------------
+  function saveDraft(){
+    if (index < 0) return;
+    try { localStorage.setItem(DRAFT_KEY, history[index]); refreshUI('Draft saved'); }
+    catch(_) { refreshUI('Draft failed'); }
+  }
+  function restoreDraft(){
+    const j = localStorage.getItem(DRAFT_KEY);
+    if (!j) { refreshUI('No draft'); return; }
+    history = [j]; index = 0;
+    restore(j, 'Draft restored');
+  }
+  function clearDraft(){ localStorage.removeItem(DRAFT_KEY); refreshUI('Draft cleared'); }
+
+  // ------------ event wiring ------------
+  function beginGesture(kind='move'){
+    if (!c || gesture.active) return;
+    gesture.active   = true;
+    gesture.baseline = serialize();
+    gesture.moved    = false;
+    gesture.kind     = kind;
+  }
+  function markGestureMoved(){ if (gesture.active) gesture.moved = true; }
+  function endGesture(){
+    if (!c || !gesture.active) return;
+    const post = serialize();
+    const pre  = gesture.baseline;
+    gesture.active = false;
+    gesture.baseline = null;
+    if (gesture.moved) pushPair(pre, post, 'Edit');
+  }
+
+  function beginKeyNudge(){
+    if (!c || keyNudge.active) return;
+    keyNudge.active   = true;
+    keyNudge.baseline = serialize();
+    keyNudge.moved    = false;
+  }
+  function markKeyNudge(){ if (keyNudge.active) keyNudge.moved = true; }
+  function endKeyNudge(){
+    if (!c || !keyNudge.active) return;
+    const post = serialize();
+    const pre  = keyNudge.baseline;
+    keyNudge.active = false;
+    keyNudge.baseline = null;
+    if (keyNudge.moved) pushPair(pre, post, 'Nudge');
+  }
+
+  function wireFabric(){
+    // atomics (add/remove) → single snapshot
+    c.on('object:added',   () => defer(()=>pushCurrent('Add'), 0));
+    c.on('object:removed', () => defer(()=>pushCurrent('Remove'), 0));
+
+    // gesture grouping for drag/scale/rotate
+    c.on('mouse:down', (e) => {
+      const o = e?.target;
+      if (o && !o._isBgRect && !o._isBase) beginGesture('transform');
+    });
+    c.on('object:moving',   markGestureMoved);
+    c.on('object:scaling',  markGestureMoved);
+    c.on('object:rotating', markGestureMoved);
+    c.on('mouse:up', endGesture);
+  }
+
+  function wireKeyboard(){
     document.addEventListener('keydown', (e)=>{
-      const tag=(e.target&&e.target.tagName||'').toLowerCase();
-      if (e.target && (e.target.isContentEditable || /^(input|textarea|select)$/.test(tag))) return;
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (/^(input|textarea|select)$/.test(tag) || e.target?.isContentEditable) return;
 
-      const o = c.getActiveObject?.();
       const mod = (e.metaKey || e.ctrlKey);
+      const key = e.key;
 
-      // Undo/Redo (like editors)
-      if (mod && e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); doUndo(); return; }
-      if ((mod && e.key.toLowerCase()==='z' && e.shiftKey) || (mod && e.key.toLowerCase()==='y')){
-        e.preventDefault(); doRedo(); return;
+      // Undo / Redo
+      if (mod && key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); return; }
+      if ((mod && key.toLowerCase()==='z' && e.shiftKey) || (mod && key.toLowerCase()==='y')){
+        e.preventDefault(); redo(); return;
       }
 
-      // Arrow nudges → mark to snapshot on keyup
-      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key) && o){
-        keyMoveArmed = true;
+      // Arrow nudges: start group
+      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(key)) {
+        if (!keyNudge.active) beginKeyNudge();
+        markKeyNudge();
       }
-    });
+
+      // Delete / Backspace: capture as pre+post
+      if (key === 'Delete' || key === 'Backspace') {
+        // capture pre in capture phase; post will exist on keyup
+        if (!keyNudge.active) beginKeyNudge();  // reuse same mechanism
+      }
+    }, true);
+
     document.addEventListener('keyup', (e)=>{
-      const tag=(e.target&&e.target.tagName||'').toLowerCase();
-      if (e.target && (e.target.isContentEditable || /^(input|textarea|select)$/.test(tag))) return;
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (/^(input|textarea|select)$/.test(tag) || e.target?.isContentEditable) return;
 
-      if (['Delete','Backspace','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){
-        // allow the app’s own handlers to run first, then snapshot
-        setTimeout(()=>{ if (e.key.startsWith('Arrow') ? keyMoveArmed : true){ snapshot(); keyMoveArmed=false; }}, 0);
+      // Finish nudge grouping or delete
+      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace'].includes(e.key)) {
+        defer(endKeyNudge, 0);
       }
-    });
+    }, true);
   }
 
-  function wireControlListeners(){
-    // Click‑based controls
+  function wireControls(){
+    // Wrap important clicks as pre+post
     document.addEventListener('click', (e)=>{
       const el = e.target && e.target.closest && e.target.closest('button, a');
       if (!el) return;
       const id = el.id || '';
-      if (IDS_TO_SNAPSHOT_ON_CLICK.has(id)) {
-        setTimeout(()=>snapshot(), 0);
-      }
+      if (!CLICK_ACTION_IDS.has(id)) return;
+
+      const pre = serialize();
+      defer(() => {
+        const post = serialize();
+        pushPair(pre, post, 'Action');
+      }, 0);
     }, true);
 
-    // Change‑based controls (sliders, selects)
+    // Style/value changes
     document.addEventListener('change', (e)=>{
-      const el = e.target;
-      if (!el || !el.id) return;
-      if (IDS_TO_SNAPSHOT_ON_CHANGE.has(el.id)) {
-        setTimeout(()=>snapshot(), 0);
-      }
+      const id = e.target?.id || '';
+      if (!CHANGE_ACTION_IDS.has(id)) return;
+      const pre = serialize();
+      defer(() => {
+        const post = serialize();
+        pushPair(pre, post, 'Style');
+      }, 0);
     }, true);
 
-    // Canvas size changes via global setCanvasSize
-    if (!window.__raSetSizePatchedV2 && typeof window.setCanvasSize === 'function'){
-      window.__raSetSizePatchedV2 = true;
+    // Canvas size changes (wrap existing function if present)
+    if (!window.__raSetSizePatchedV3 && typeof window.setCanvasSize === 'function'){
+      window.__raSetSizePatchedV3 = true;
       const prev = window.setCanvasSize;
       window.setCanvasSize = function(n){
-        const out = prev.apply(this, arguments);
-        snapshot('Resize');
-        return out;
+        const pre = serialize();
+        const ret = prev.apply(this, arguments);
+        const post = serialize();
+        pushPair(pre, post, 'Resize');
+        return ret;
       };
     }
   }
 
   function boot(){
-    c = C(); if (!c){ setTimeout(boot, 120); return; }
+    c = C();
+    if (!c) { defer(boot, 120); return; }
     injectUI();
-    wireCanvasListeners();
-    wireKeyboardListeners();
-    wireControlListeners();
+    wireFabric();
+    wireKeyboard();
+    wireControls();
 
-    // Baseline state so Undo has somewhere to go back to
-    snapshot('Initial');
-    refreshUI();
+    // Baseline: wait a tick to ensure background + initial size exist
+    defer(() => {
+      const j = serialize();
+      history = j ? [j] : [];
+      index   = j ? 0 : -1;
+      refreshUI('Init');
+    }, 60);
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
   } else {
     boot();
   }
