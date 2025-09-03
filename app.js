@@ -2064,3 +2064,191 @@
   else boot();
   new MutationObserver(boot).observe(document.documentElement, {childList:true, subtree:true});
 })();
+
+/* ==========================================================
+   RA_WATERMARK_SWITCH_FOUNDATION_V1  — add-only, safe no-op
+   What this gives you:
+   • One switch to turn ON watermarking for the "Make Video" flow (later).
+   • Safe preloading of the watermark as a dataURL (avoids CORS issues).
+   • Works with your existing token‑gated video flow.
+   • Does nothing until you flip enableVideoWM to true.
+
+   How to enable later (ONE change):
+   1) In CONFIG below, change enableVideoWM: false  →  true
+   2) Done. No other code edits needed.
+
+   Optional: override watermark via ?wm=https://…/your.png (same as images)
+   ========================================================== */
+(() => {
+  if (window.__RA_WM_BOOTED__) return;
+  window.__RA_WM_BOOTED__ = true;
+
+  // ---------- CONFIG (flip these later if you want the watermark) ----------
+  const CONFIG = {
+    enableVideoWM: false,       // ← flip to true when you want watermark in videos
+    wmWidthRatio: 0.12,         // each corner stamp is 12% of the canvas width
+    marginRatio:  0.02          // ~2% margin from edges
+  };
+
+  // ---------- Watermark loader (robust + CORS-safe) ----------
+  const queryWM = new URLSearchParams(location.search).get('wm');
+  const candidates = [
+    queryWM,                             // highest priority if provided
+    '/assets/watermark.png?v=wm10',      // your current primary
+    '/watermark.png?v=wm10'              // fallback
+  ].filter(Boolean);
+
+  const STATE = {
+    url: null,
+    img: null,        // HTMLImageElement (decoded from dataURL)
+    dataURL: null     // dataURL of the watermark (same-origin safe)
+  };
+
+  async function fetchAsDataURL(url){
+    const r = await fetch(url, { cache:'no-store', mode:'cors' });
+    if (!r.ok) throw new Error('fetch failed');
+    const b = await r.blob();
+    return await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(b);
+    });
+  }
+
+  async function loadWatermark(){
+    for (const u of candidates){
+      try{
+        const data = await fetchAsDataURL(u);
+        const img  = await new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im);
+          im.onerror = rej;
+          im.crossOrigin = 'anonymous';
+          im.src = data;
+        });
+        STATE.url = u; STATE.img = img; STATE.dataURL = data;
+        return true;
+      }catch(_){/* try next */}
+    }
+    return false;
+  }
+
+  function wmBox(w, h){
+    const wmW = Math.max(16, Math.round(w * CONFIG.wmWidthRatio));
+    const wmH = Math.round(STATE.img.height * (wmW / STATE.img.width));
+    const m   = Math.max(6,  Math.round(w * CONFIG.marginRatio));
+    return { wmW, wmH, m };
+  }
+
+  // Expose a tiny helper if we ever need to paint on a 2D canvas directly (not used today)
+  function paintWMOnCtx(ctx, w, h){
+    if (!STATE.img) return;
+    const { wmW, wmH, m } = wmBox(w, h);
+    try {
+      // TL
+      ctx.drawImage(STATE.img, m, m, wmW, wmH);
+      // BR
+      ctx.drawImage(STATE.img, w - m - wmW, h - m - wmH, wmW, wmH);
+    } catch(_){}
+  }
+
+  // ---------- Fabric helpers: add/remove TEMP watermark objects on the live canvas ----------
+  function baseIsToken(){
+    const c = window.canvas; if (!c) return false;
+    const base = (c.getObjects()||[]).find(o => o._isBase);
+    if (!base) return false;
+    // In your app: token base = plain Image; upload base = Group (image + 2 small stamps)
+    return (base.type === 'image');
+  }
+
+  function addTempFabricWM(){
+    const c = window.canvas;
+    if (!c || !window.fabric || !STATE.img) return null;
+
+    const cw = c.getWidth(), ch = c.getHeight();
+    const { wmW, wmH, m } = wmBox(cw, ch);
+
+    // Create two watermark images
+    const tl = new fabric.Image(STATE.img, {
+      left: m, top: m, selectable: false, evented: false
+    });
+    const br = new fabric.Image(STATE.img, {
+      left: cw - m - wmW, top: ch - m - wmH, selectable: false, evented: false
+    });
+    const sX = wmW / STATE.img.width, sY = wmH / STATE.img.height;
+    tl.scaleX = sX; tl.scaleY = sY;
+    br.scaleX = sX; br.scaleY = sY;
+
+    // Tag them so we can cleanly remove later
+    tl._raTmpWM = br._raTmpWM = true;
+
+    c.add(tl); c.add(br); c.requestRenderAll();
+    return [tl, br];
+  }
+
+  function removeTempFabricWM(){
+    const c = window.canvas; if (!c) return;
+    (c.getObjects()||[]).filter(o => o._raTmpWM).forEach(o => c.remove(o));
+    c.requestRenderAll();
+  }
+
+  // ---------- Gentle hook for "Make Video" button (no-op until you flip the switch) ----------
+  async function ensureWMReady(){ if (!STATE.img) await loadWatermark(); }
+
+  function waitForVideoDone(timeoutMs=60000){
+    return new Promise(resolve => {
+      const obs = new MutationObserver(() => {
+        // heuristic: look for a .webm download link or a status that says done
+        const link = document.querySelector('a[download$=".webm"], a[href$=".webm"]');
+        const stat = document.getElementById('raAnimStatus');
+        if (link || /done|saved|complete/i.test((stat?.textContent||'').toLowerCase())){
+          try{ obs.disconnect(); }catch(_){}
+          resolve();
+        }
+      });
+      obs.observe(document.body, { childList:true, subtree:true, characterData:true });
+      setTimeout(() => { try{ obs.disconnect(); }catch(_){}
+        resolve();
+      }, timeoutMs);
+    });
+  }
+
+  function hookMakeVideoButton(){
+    if (!CONFIG.enableVideoWM) return; // ← stays dormant until you flip the switch
+
+    // Intercept clicks on any button/link that looks like "Make Video"
+    const labels = ['make video','render video','animate','make preview','create video'];
+    document.addEventListener('click', async (e) => {
+      const el = e.target && e.target.closest && e.target.closest('button, a');
+      if (!el) return;
+
+      const t = (el.textContent || el.value || '').toLowerCase().trim();
+      if (!labels.some(k => t.includes(k))) return;   // not our button
+      if (!window.canvas) return;
+      if (!baseIsToken()) return;                      // keep token‑gated semantics
+
+      // Prepare watermark image
+      await ensureWMReady();
+      if (!STATE.img) return; // nothing to add
+
+      // Add temp WM objects, let the app's own handler run, then remove when done
+      addTempFabricWM();          // we do NOT preventDefault; original click proceeds
+      waitForVideoDone(60000).then(removeTempFabricWM);
+    }, true); // capture=true so we add WM before the app starts recording frames
+  }
+
+  // Boot
+  hookMakeVideoButton();
+
+  // Expose tiny API for future use (optional)
+  window.raWatermark = Object.freeze({
+    options: CONFIG,
+    url: () => STATE.url,
+    dataURL: () => STATE.dataURL,
+    img: () => STATE.img,
+    ready: ensureWMReady,
+    paintOnCtx: paintWMOnCtx,
+    addTempFabricWM,
+    removeTempFabricWM
+  });
+})();
