@@ -1825,246 +1825,6 @@
   new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
 })();
 
-/* ====================== RA_ANIMATE_PREVIEW_VIDEO_V1 =========================
-   Adds a tiny Animate UI (Export card) + 3 motion styles + video export.
-   - No servers/keys. Records the canvas with MediaRecorder.
-   - Works on desktop + mobile (falls back to preview if codec unsupported).
-   - Does not change your layout; runs only when a base image exists.
-   ========================================================================== */
-(function RA_ANIMATE_PREVIEW_VIDEO_V1(){
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-
-  // ---- UI -----------------------------------------------------------------
-  function ensureUI(){
-    if (document.getElementById('raAnimRow')) return true;
-    const h3 = Array.from(document.querySelectorAll('h3'))
-      .find(h => /export/i.test((h.textContent||'').trim()));
-    const card = h3 ? h3.parentElement : null;
-    if (!card) return false;
-
-    const row = document.createElement('div');
-    row.id = 'raAnimRow';
-    row.style.cssText = 'margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center';
-
-    row.innerHTML = `
-      <div style="font-weight:600;opacity:.85">Animate (beta)</div>
-      <select id="raAnimStyle" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
-        <option value="ken">Cinematic (Ken Burns)</option>
-        <option value="parallax">Parallax</option>
-        <option value="sway">Sway</option>
-      </select>
-      <select id="raAnimDur" class="btn small" style="padding:6px 8px;border-radius:8px;background:#17181e;border:1px solid #2a2b31;color:#e7e7ea">
-        <option value="3">3s</option>
-        <option value="5" selected>5s</option>
-        <option value="8">8s</option>
-      </select>
-      <button id="raAnimPreview" class="btn small">Preview</button>
-      <button id="raAnimMake" class="btn small">Make video</button>
-      <span id="raAnimStatus" style="opacity:.7;font-size:12px;margin-left:6px;"></span>
-    `;
-    card.appendChild(row);
-
-    document.getElementById('raAnimPreview').onclick = () => run({record:false});
-    document.getElementById('raAnimMake').onclick    = () => run({record:true});
-
-    return true;
-  }
-
-  // ---- helpers -------------------------------------------------------------
-  function baseAndOverlays(c){
-    const objs = c.getObjects() || [];
-    const bg   = objs.find(o => o._isBgRect || o._isBg || o._isBackground);
-    const base = objs.find(o => o._isBase);
-    const overlays = objs.filter(o => o._kind === 'overlay');
-    const others   = objs.filter(o => o !== bg && o !== base && o._kind !== 'overlay');
-    return { bg, base, overlays, others, all: objs };
-  }
-
-  function snapState(objs){
-    return objs.map(o => ({
-      o,
-      left: o.left || 0,
-      top:  o.top  || 0,
-      sx:   o.scaleX || 1,
-      sy:   o.scaleY || 1,
-      ang:  o.angle  || 0
-    }));
-  }
-  function restoreState(state, c){
-    state.forEach(s=>{
-      try{
-        s.o.left   = s.left;
-        s.o.top    = s.top;
-        s.o.scaleX = s.sx;
-        s.o.scaleY = s.sy;
-        s.o.angle  = s.ang;
-        s.o.setCoords && s.o.setCoords();
-      }catch(_){}
-    });
-    try{ c.requestRenderAll(); }catch(_){}
-  }
-
-  // cubic ease in/out (pleasant, not too sharp)
-  function ease(t){ return (t<0.5) ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2; }
-  const lerp = (a,b,t)=> a + (b-a)*t;
-
-  // pick the best mime the browser can record
-  function pickMime(){
-    const m = window.MediaRecorder;
-    if (!m) return '';
-    const list = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4' // Safari may support this
-    ];
-    return list.find(type => m.isTypeSupported ? m.isTypeSupported(type) : true) || '';
-  }
-
-  // ---- animation core ------------------------------------------------------
-  async function run({record}){
-    const c = C(); const st = document.getElementById('raAnimStatus');
-    if (!c){ st && (st.textContent = 'Canvas not ready.'); return; }
-
-    // Require a base image
-    const { base, overlays, all } = baseAndOverlays(c);
-    if (!base){ st && (st.textContent = 'Load an image first.'); return; }
-
-    // UI params
-    const styleSel = document.getElementById('raAnimStyle');
-    const durSel   = document.getElementById('raAnimDur');
-    const style    = styleSel ? styleSel.value : 'ken';
-    const duration = Math.max(1, parseInt(durSel ? durSel.value : '5', 10));
-
-    // Snapshot & prep
-    const state = snapState(all);
-    const wasActive = c.getActiveObject && c.getActiveObject();
-    c.discardActiveObject && c.discardActiveObject();
-    c.selection = false;
-
-    // for recording
-    let rec, chunks=[], url='';
-    if (record){
-      const fps = 30;
-      const mime = pickMime();
-      const stream = (c.lowerCanvasEl && c.lowerCanvasEl.captureStream)
-        ? c.lowerCanvasEl.captureStream(fps)
-        : c.upperCanvasEl.captureStream ? c.upperCanvasEl.captureStream(fps) : null;
-
-      if (stream && window.MediaRecorder && mime){
-        try{
-          rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
-          rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-          rec.start(200); // collect in small chunks
-        }catch(_){}
-      }
-      st && (st.textContent = 'Recording…');
-    }else{
-      st && (st.textContent = 'Playing…');
-    }
-
-    // Params per style
-    const cw = c.getWidth(), ch = c.getHeight();
-    const start = performance.now(), D = duration * 1000;
-    const maxShift = Math.round(Math.min(cw,ch) * 0.05);   // ~5% canvas
-    const swayDeg  = 3;                                    // small rotation
-    const kenScale = 1.07;                                 // 7% zoom
-
-    function tick(now){
-      const t = Math.min(1, (now - start) / D);
-      const e = ease(t);
-
-      // Reset to snapshot, then apply offsets at this frame
-      restoreState(state, c);
-
-      try{
-        if (style === 'ken'){
-          // zoom base slightly + drift from TL -> center
-          const dx = lerp(-maxShift, 0, e), dy = lerp(-maxShift, 0, e);
-          base.left = (base.left||0) + dx; base.top = (base.top||0) + dy;
-          base.scaleX *= lerp(1, kenScale, e);
-          base.scaleY *= lerp(1, kenScale, e);
-          base.setCoords && base.setCoords();
-
-          // overlays drift at smaller rate so it feels layered
-          overlays.forEach((o,i)=>{
-            const f = 0.5 + i*0.08;
-            o.left = (o.left||0) + dx * 0.6 * f;
-            o.top  = (o.top ||0) + dy * 0.6 * f;
-            o.setCoords && o.setCoords();
-          });
-        }
-        else if (style === 'parallax'){
-          // overlays move in opposing directions based on index
-          overlays.forEach((o,i)=>{
-            const dir = (i%2===0) ? 1 : -1;
-            const amp = maxShift * (0.4 + i*0.06);
-            o.left = (o.left||0) + dir * (e * amp * 0.8);
-            o.top  = (o.top ||0) + dir * (e * amp * 0.5);
-            o.setCoords && o.setCoords();
-          });
-          // tiny base drift so it doesn't feel static
-          base.left = (base.left||0) + lerp(0, maxShift*0.25, e);
-          base.top  = (base.top ||0) + lerp(0, maxShift*0.15, e);
-          base.setCoords && base.setCoords();
-        }
-        else if (style === 'sway'){
-          // gentle scale breathe + small rotation back & forth
-          const s = 1 + 0.02*Math.sin(e*Math.PI);          // +2% at mid
-          base.scaleX *= s; base.scaleY *= s;
-          base.angle = lerp(0, swayDeg, Math.sin(e*Math.PI));
-          base.setCoords && base.setCoords();
-          overlays.forEach((o,i)=>{
-            const a = swayDeg*(i%3===0?1:-1)*0.6;
-            o.angle = lerp(0, a, Math.sin(e*Math.PI));
-            o.setCoords && o.setCoords();
-          });
-        }
-      }catch(_){}
-
-      try{ c.requestRenderAll(); }catch(_){}
-
-      if (t < 1){
-        requestAnimationFrame(tick);
-      }else{
-        // end
-        if (rec){
-          rec.onstop = ()=>{
-            try{
-              const blob = new Blob(chunks, { type: rec.mimeType });
-              url = URL.createObjectURL(blob);
-              // auto download
-              const ext = /mp4/i.test(rec.mimeType) ? 'mp4' : 'webm';
-              const a = document.createElement('a');
-              a.href = url; a.download = `rebel-ant-anim.${ext}`;
-              document.body.appendChild(a); a.click(); a.remove();
-              st && (st.textContent = `Saved ${ext.toUpperCase()} ✓`);
-            }catch(_){ st && (st.textContent = 'Recording finished.'); }
-            // restore canvas exactly as it was
-            restoreState(state, c);
-            if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
-          };
-          try{ rec.stop(); }catch(_){}
-        }else{
-          // just a preview—restore canvas
-          restoreState(state, c);
-          if (wasActive) try{ c.setActiveObject(wasActive); }catch(_){}
-          st && (st.textContent = 'Done ✓');
-          setTimeout(()=>{ st && (st.textContent=''); }, 900);
-        }
-      }
-    }
-    requestAnimationFrame(tick);
-  }
-
-  function boot(){
-    ensureUI();
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
-  else boot();
-  new MutationObserver(boot).observe(document.documentElement, {childList:true, subtree:true});
-})();
-
 /* ==========================================================
    RA_MAKE_VIDEO_TOKEN_ONLY_V1
    - Adds a bottom "Video (token-only)" panel.
@@ -2746,5 +2506,256 @@
     document.addEventListener('DOMContentLoaded', wire, {once:true});
   } else {
     wire();
+  }
+})();
+
+/* ==========================================================
+   RA_ANIMATE_PREVIEW_VIDEO_V2
+   • Animates base + overlays together (Everything), or Base only, or Overlays only.
+   • Adds presets: Ken Burns, pans, zooms, overlay pop/slide.
+   • Uses viewport transform for “Everything” (safe, no object edits).
+   • Preview only by default; if you previously had video export via captureStream,
+     the Export button here will use the same approach.
+   • Desktop/mobile untouched. Undo/Redo history not spammed.
+   ========================================================== */
+(() => {
+  if (window.__RA_ANIM_V2__) return; window.__RA_ANIM_V2__ = true;
+
+  const $  = (s, r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // -------- Presets (viewport = whole scene; overlays/base = object transforms) ------
+  const PRESETS = [
+    {id:'kb_in_ur',   name:'Ken Burns — zoom in + pan up-right', kind:'viewport', from:{z:1.00,x:0.00,y:0.00}, to:{z:1.18,x:-0.06,y:-0.06}},
+    {id:'kb_out_dl',  name:'Ken Burns — zoom out + pan down-left',kind:'viewport', from:{z:1.15,x:-0.08,y:-0.08}, to:{z:1.00,x:0.00,y:0.00}},
+    {id:'pan_up',     name:'Pan up (slow)',                        kind:'viewport', from:{z:1.00,x:0.00,y:0.05},   to:{z:1.00,x:0.00,y:-0.05}},
+    {id:'pan_right',  name:'Pan right (slow)',                     kind:'viewport', from:{z:1.00,x:-0.05,y:0.00},  to:{z:1.00,x:0.05,y:0.00}},
+    {id:'zoom_in',    name:'Zoom in (gentle)',                     kind:'viewport', from:{z:1.00,x:0.00,y:0.00},   to:{z:1.15,x:0.00,y:0.00}},
+    {id:'zoom_out',   name:'Zoom out (gentle)',                    kind:'viewport', from:{z:1.12,x:0.00,y:0.00},   to:{z:1.00,x:0.00,y:0.00}},
+    {id:'overlay_pop',name:'Overlays pop (scale)',                 kind:'overlays', from:{s:0.94},                 to:{s:1.00}},
+    {id:'overlay_up', name:'Overlays slide up',                    kind:'overlays', from:{dy:14},                  to:{dy:0}}
+  ];
+
+  // ---------- UI dock (reuse if present, else create) ----------
+  function ensureDock(){
+    let dock = $('#raAnimDock');
+    if (dock) return dock;
+
+    // host: try to append near the Export section; else bottom of body
+    const exportHost = $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode || document.body;
+
+    dock = document.createElement('div');
+    dock.id = 'raAnimDock';
+    dock.style.cssText = 'margin:16px 0;padding:12px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea';
+    dock.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <strong>Animate</strong>
+        <label style="display:flex;gap:6px;align-items:center">
+          What:
+          <select id="raAnimScope">
+            <option value="all">Everything</option>
+            <option value="base">Base only</option>
+            <option value="overlays">Overlays only</option>
+          </select>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          Preset:
+          <select id="raAnimPreset"></select>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" style="width:60px">s
+        </label>
+        <button id="raAnimPreview" class="btn small">Preview</button>
+        <button id="raAnimExport"  class="btn small">Export video</button>
+        <span id="raAnimMsg" style="font-size:12px;opacity:.75;"></span>
+      </div>
+      <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+    `;
+    exportHost.appendChild(dock);
+
+    // fill presets
+    const sel = $('#raAnimPreset', dock);
+    PRESETS.forEach(p=>{
+      const o=document.createElement('option');
+      o.value=p.id; o.textContent=p.name; sel.appendChild(o);
+    });
+
+    $('#raAnimPreview', dock).onclick = ()=> run(false);
+    $('#raAnimExport',  dock).onclick = ()=> run(true);
+
+    return dock;
+  }
+
+  // ---------- Helpers ----------
+  const clamp = (v, a, b)=>Math.max(a, Math.min(b, v));
+  const lerp  = (a, b, t)=>a + (b - a) * t;
+  function easeInOutQuad(t){ return t<0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2; }
+
+  function findBaseObjects(c){
+    return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect);
+  }
+  function findOverlayObjects(c, scope){
+    // overlays + texts + tokenid; exclude base + bg
+    return (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase && (scope!=='overlays' || (o._kind==='overlay' || o._kind==='customText' || o._kind==='tokenId')));
+  }
+
+  function msg(t){
+    const m = $('#raAnimMsg'); if (m){ m.textContent = t||''; setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent='';}, 2000); }
+  }
+
+  // ---------- Core animation ----------
+  let running = false;
+  async function run(record){
+    const c = C(); if (!c){ alert('Canvas not ready'); return; }
+    if (running) return;
+
+    ensureDock();
+    const scope = ($('#raAnimScope')?.value) || 'all';
+    const presetId = ($('#raAnimPreset')?.value) || PRESETS[0].id;
+    const preset = PRESETS.find(p=>p.id===presetId) || PRESETS[0];
+    const durSec = clamp(parseFloat($('#raAnimDur')?.value||'6'), 2, 20);
+    const dur = Math.round(durSec*1000);
+
+    // choose targets
+    const baseObjs = findBaseObjects(c);
+    const overlayObjs = findOverlayObjects(c, 'overlays');
+    if (scope==='base' && baseObjs.length===0){ msg('Load an image first'); return; }
+    if (scope==='overlays' && overlayObjs.length===0){ msg('Add an overlay first'); return; }
+
+    running = true;
+    msg(record ? 'Recording…' : 'Playing…');
+
+    // Save state
+    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
+    const active = c.getActiveObject();
+    c.discardActiveObject();
+    c.requestRenderAll();
+
+    // Store originals so we can restore cleanly
+    const snap = new Map();
+    const store = o=>{
+      snap.set(o, {
+        left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity
+      });
+    };
+
+    const W = c.getWidth(), H = c.getHeight(), cx = W/2, cy = H/2;
+
+    let targets = [];
+    if (preset.kind==='viewport' && scope==='all'){
+      // whole-scene animation via viewport
+      targets = [];
+    } else if (scope==='base'){
+      baseObjs.forEach(store); targets = baseObjs.slice();
+    } else if (scope==='overlays'){
+      overlayObjs.forEach(store); targets = overlayObjs.slice();
+    } else {
+      // default to whole scene (everything)
+    }
+
+    // Recorder (if requested)
+    let rec, chunks=[];
+    if (record){
+      try{
+        const stream = (c.lowerCanvasEl || c.upperCanvasEl).captureStream(30);
+        rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+        rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
+        rec.start();
+      }catch(_){ msg('Recording not supported'); }
+    }
+
+    const t0 = performance.now();
+    let rafId = 0;
+
+    function applyViewport(z,xNorm,yNorm){
+      // Centered zoom with normalized pans
+      const e = (1 - z) * cx + xNorm * W;   // tx
+      const f = (1 - z) * cy + yNorm * H;   // ty
+      c.setViewportTransform([z,0,0,z, e, f]);
+    }
+
+    function step(now){
+      const raw = clamp((now - t0)/dur, 0, 1);
+      const t = easeInOutQuad(raw);
+
+      if (preset.kind==='viewport' && scope==='all'){
+        const z  = lerp(preset.from.z, preset.to.z, t);
+        const xn = lerp(preset.from.x, preset.to.x, t);
+        const yn = lerp(preset.from.y, preset.to.y, t);
+        applyViewport(z, xn, yn);
+      } else if (scope==='base'){
+        // scale/pan base only
+        const s  = (preset.from?.z!=null && preset.to?.z!=null) ? lerp(preset.from.z, preset.to.z, t) : 1.0;
+        const dx = (preset.from?.x!=null && preset.to?.x!=null) ? lerp(preset.from.x, preset.to.x, t) * W : 0;
+        const dy = (preset.from?.y!=null && preset.to?.y!=null) ? lerp(preset.from.y, preset.to.y, t) * H : 0;
+        targets.forEach(o=>{
+          const o0 = snap.get(o); if (!o0) return;
+          o.scaleX = o0.scaleX * s;
+          o.scaleY = o0.scaleY * s;
+          o.left   = o0.left + dx;
+          o.top    = o0.top  + dy;
+          o.setCoords();
+        });
+      } else if (scope==='overlays'){
+        const s   = (preset.from?.s!=null && preset.to?.s!=null) ? lerp(preset.from.s, preset.to.s, t) : 1.0;
+        const dyy = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy, preset.to.dy, t) : 0;
+        targets.forEach(o=>{
+          const o0 = snap.get(o); if (!o0) return;
+          o.scaleX = o0.scaleX * s;
+          o.scaleY = o0.scaleY * s;
+          o.top    = o0.top + dyy;
+          o.setCoords();
+        });
+      }
+
+      c.requestRenderAll();
+
+      if (raw < 1){
+        rafId = requestAnimationFrame(step);
+      } else {
+        finish();
+      }
+    }
+
+    function finish(){
+      cancelAnimationFrame(rafId);
+
+      // Stop recorder
+      if (rec){
+        try{
+          rec.onstop = ()=>{
+            const blob = new Blob(chunks, {type:'video/webm'});
+            const url = URL.createObjectURL(blob);
+            const vid = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
+            msg('Done. You can download from the video menu.');
+          };
+          rec.stop();
+        }catch(_){}
+      }else{
+        msg('Done');
+      }
+
+      // Restore state
+      try { c.setViewportTransform(vt0); } catch(_){}
+      targets.forEach(o=>{
+        const s = snap.get(o); if (!s) return;
+        o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
+        o.setCoords();
+      });
+      if (active) try{ c.setActiveObject(active); }catch(_){}
+      c.requestRenderAll();
+      running = false;
+    }
+
+    // Start
+    requestAnimationFrame(step);
+  }
+
+  // Build UI once DOM is ready
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', ensureDock, {once:true});
+  } else {
+    ensureDock();
   }
 })();
