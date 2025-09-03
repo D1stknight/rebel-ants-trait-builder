@@ -2547,3 +2547,204 @@
   });
 })();
 
+/* ==========================================================
+   RA_UNDO_REDO_SAFE_MINI_V1
+   • Super‑safe: never restores anything unless you click Undo/Redo.
+   • Records snapshots after edits only (add/move/scale/rotate/remove).
+   • Coalesces bursts (clear / multi‑adds) into one step.
+   • Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Ctrl+Y) wired.
+   • If your old Undo/Redo buttons exist, it uses them.
+     If not, it adds a small row under “Selection”.
+   • Does NOT touch desktop/mobile layout or exports.
+   ========================================================== */
+(() => {
+  if (window.__RA_UNDO_SAFE_V1__) return;
+  window.__RA_UNDO_SAFE_V1__ = true;
+
+  const MAX = 60;
+  const DRAFT_KEY = 'ra_draft_v1';
+
+  const $  = (s, r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+  const defer = (fn, ms=0)=>setTimeout(fn, ms);
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  let c;
+  let history = [];
+  let idx = -1;
+
+  // mute while restoring so we don't create snapshots during loadFromJSON
+  let MUTE = 0;
+  const isMuted = () => MUTE > 0;
+
+  const EXTRA = [
+    '_kind','_isBase','_isBgRect','raWM','raPos',
+    'selectable','evented','hasControls',
+    'lockMovementX','lockMovementY','lockScalingX','lockScalingY','lockRotation',
+    'globalCompositeOperation','opacity','flipX','flipY'
+  ];
+
+  function serialize(){
+    if (!c || isMuted()) return null;
+    const j = c.toJSON(EXTRA);
+    j.__w  = c.getWidth();
+    j.__h  = c.getHeight();
+    j.__vt = c.viewportTransform || [1,0,0,1,0,0];
+    return JSON.stringify(j);
+  }
+
+  function restore(jsonStr, label=''){
+    if (!c || !jsonStr) return;
+    MUTE++;
+    try{
+      const data = JSON.parse(jsonStr);
+      c.loadFromJSON(data, () => {
+        try{
+          if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
+          if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
+
+          // keep base/bg not selectable
+          c.getObjects().forEach(o=>{
+            if (o._isBase){
+              o.selectable=false; o.evented=false; o.hasControls=false;
+              o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+            }
+          });
+
+          c.requestRenderAll();
+        } finally {
+          MUTE--;
+          refresh(label);
+        }
+      });
+    } catch(_){
+      MUTE--; refresh(label);
+    }
+  }
+
+  function push(label=''){
+    const s = serialize(); if (!s) return;
+    // if we undid into the middle, drop the tail
+    if (idx < history.length - 1) history = history.slice(0, idx + 1);
+    if (history[idx] === s) { refresh(label); return; }
+    history.push(s);
+    if (history.length > MAX) history.shift();
+    idx = history.length - 1;
+    refresh(label);
+  }
+
+  function undo(){ if (idx <= 0) return; idx -= 1; restore(history[idx], 'Undo'); }
+  function redo(){ if (idx >= history.length - 1) return; idx += 1; restore(history[idx], 'Redo'); }
+
+  // ---------- UI ----------
+  let ui = {};
+  function ensureUI(){
+    // If your previous buttons exist, wire them
+    const existing = {
+      undo: $('#raUndoBtn'),
+      redo: $('#raRedoBtn'),
+      save: $('#raSaveDraftBtn'),
+      load: $('#raLoadDraftBtn'),
+      clr : $('#raClearDraftBtn'),
+      info: $('#raHistInfo')
+    };
+    if (existing.undo || existing.redo) {
+      ui = existing;
+      if (ui.undo) ui.undo.onclick = undo;
+      if (ui.redo) ui.redo.onclick = redo;
+      if (ui.save) ui.save.onclick = saveDraft;
+      if (ui.load) ui.load.onclick = restoreDraft;
+      if (ui.clr)  ui.clr.onclick  = ()=>{ localStorage.removeItem(DRAFT_KEY); refresh('Draft cleared'); };
+      return;
+    }
+
+    // Else add a tiny row under “Selection”
+    const holder =
+      $$('h3').find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode
+      || document.body;
+
+    const row = document.createElement('div');
+    row.id = 'raHistoryRow';
+    row.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
+
+    const mk = (id, txt)=>{ const b=document.createElement('button'); b.id=id; b.textContent=txt; b.className='btn small'; return b; };
+    const undoB = mk('raUndoBtn','Undo (0)');
+    const redoB = mk('raRedoBtn','Redo (0)');
+    const saveB = mk('raSaveDraftBtn','Save Draft');
+    const loadB = mk('raLoadDraftBtn','Restore Draft');
+    const clrB  = mk('raClearDraftBtn','×');
+
+    const info = document.createElement('div');
+    info.id='raHistInfo'; info.style.cssText='font-size:11px;opacity:.65';
+
+    row.append(undoB, redoB, saveB, loadB, clrB, info);
+    holder.appendChild(row);
+
+    ui = {undo:undoB, redo:redoB, save:saveB, load:loadB, clr:clrB, info};
+    undoB.onclick = undo; redoB.onclick = redo;
+    saveB.onclick = saveDraft; loadB.onclick = restoreDraft;
+    clrB.onclick  = ()=>{ localStorage.removeItem(DRAFT_KEY); refresh('Draft cleared'); };
+  }
+
+  function refresh(msg=''){
+    ensureUI();
+    const canUndo = idx > 0;
+    const canRedo = idx >= 0 && idx < history.length - 1;
+    if (ui.undo) ui.undo.disabled = !canUndo;
+    if (ui.redo) ui.redo.disabled = !canRedo;
+    if (ui.load) ui.load.disabled = !localStorage.getItem(DRAFT_KEY);
+
+    if (ui.undo) ui.undo.textContent = `Undo (${canUndo ? idx : 0})`;
+    if (ui.redo) ui.redo.textContent = `Redo (${canRedo ? (history.length - 1 - idx) : 0})`;
+    if (ui.info) ui.info.textContent = `History ${ idx + 1 } / ${ history.length }${msg ? ' • ' + msg : ''}`;
+  }
+
+  // ---------- Draft ----------
+  function saveDraft(){ if (idx>=0){ try{ localStorage.setItem(DRAFT_KEY, history[idx]); refresh('Draft saved'); }catch(_){ refresh('Draft failed'); } } }
+  function restoreDraft(){
+    const j = localStorage.getItem(DRAFT_KEY);
+    if (!j) return refresh('No draft');
+    history = [j]; idx = 0; restore(j, 'Draft restored');
+  }
+
+  // ---------- Wiring (non‑invasive) ----------
+  let burstTimer = null;
+  function schedulePush(label){ if (isMuted()) return; if (burstTimer) return; burstTimer = setTimeout(()=>{ burstTimer=null; push(label); }, 40); }
+
+  function wire(){
+    c = C(); if (!c) return defer(wire, 120);
+    ensureUI();
+
+    // Take a baseline snapshot a moment after the app finishes initial setup
+    defer(()=>{ push('Init'); }, 150);
+
+    // Fabric events — safe, view‑only recording
+    c.on('object:modified', ()=> schedulePush('Edit'));
+    c.on('object:added',    (e)=>{ const o=e?.target; if (o && o._isBgRect) return; schedulePush('Add'); });
+    c.on('object:removed',  ()=> schedulePush('Remove'));
+
+    // Keyboard shortcuts (ignore when typing)
+    document.addEventListener('keydown', (e)=>{
+      const tag=(e.target&&e.target.tagName||'').toLowerCase();
+      if (/^(input|textarea|select)$/.test(tag) || e.target?.isContentEditable) return;
+      if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); }
+      else if (((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z' && e.shiftKey) ||
+               ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='y')){ e.preventDefault(); redo(); }
+    });
+
+    // Canvas size dropdown → one snapshot around resize operations
+    const sizeEl = document.getElementById('canvasSize');
+    if (sizeEl && !sizeEl.__raHistBound){
+      sizeEl.__raHistBound = true;
+      sizeEl.addEventListener('change', ()=> schedulePush('Resize'));
+    }
+
+    refresh('Ready');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, {once:true});
+  } else {
+    wire();
+  }
+})();
