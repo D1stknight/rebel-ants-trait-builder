@@ -3577,18 +3577,15 @@
 })();
 
 /* ==========================================================
-   RA_SMART_GUIDES_AND_RULERS_V1
-   • Smart guides: live center/edge guide lines while moving/scaling/rotating.
-   • Rulers: top + left rulers aligned to your canvas card (DOM overlay).
-   • Zero impact on exports (guides are drawn on the top context; rulers are DOM).
-   • No changes to your undo/redo. No desktop/mobile layout changes.
-   • Adds tiny toggles next to your Snap/Center row.
+   RA_SMART_GUIDES_AND_RULERS_V2
+   • Smart guides now visible: we draw in SCREEN PIXELS with viewport+retina math.
+   • Faint center crosshair is always shown when Guides=On (so you see it immediately).
+   • Rulers unchanged (DOM overlay). No impact on exports or undo/redo.
    ========================================================== */
 (() => {
-  if (window.__RA_GUIDES_RULERS_V1__) return;
-  window.__RA_GUIDES_RULERS_V1__ = true;
+  if (window.__RA_GUIDES_RULERS_V2__) return;
+  window.__RA_GUIDES_RULERS_V2__ = true;
 
-  // ---------- helpers ----------
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
 
@@ -3599,19 +3596,17 @@
   }
   const isMobile = () => window.matchMedia('(max-width: 900px)').matches;
 
-  // ---------- state ----------
-  const state = {
+  const S = {
     guidesOn: true,
-    rulersOn: !isMobile(),   // start rulers visible on desktop, off by default on small phones
-    tol: 8,                  // snap/guide tolerance (px)
-    lines: null,             // [{x1,y1,x2,y2,type}]
+    rulersOn: !isMobile(),
+    tolPx: 10,             // tolerance in screen pixels
+    linesPx: null          // [{x1,y1,x2,y2,kind}]
   };
 
-  // ---------- UI toggles (reuse your Snap row if present) ----------
+  // -------- UI toggles (reuse your Snap row if present) --------
   function ensureToggles(){
     let row = $('#raSnapRow');
     if (!row){
-      // fall back: place under “Selection” box like your other mini-rows
       const holder =
         $$('h3').find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode
         || document.body;
@@ -3620,114 +3615,163 @@
       row.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
       holder.appendChild(row);
     }
-    // add buttons only if not there
     if (!$('#raGuidesToggle')){
       const b = document.createElement('button');
-      b.id='raGuidesToggle'; b.className='btn small';
-      b.style.minWidth='96px';
+      b.id='raGuidesToggle'; b.className='btn small'; b.style.minWidth='96px';
+      b.onclick = ()=>{ S.guidesOn = !S.guidesOn; b.textContent='Guides: ' + (S.guidesOn?'On':'Off'); clearTop(); drawTop(); };
       row.appendChild(b);
-      b.onclick = () => { state.guidesOn = !state.guidesOn; b.textContent = 'Guides: ' + (state.guidesOn?'On':'Off'); clearTop(); drawTop(); };
     }
     if (!$('#raRulersToggle')){
       const b = document.createElement('button');
-      b.id='raRulersToggle'; b.className='btn small';
-      b.style.minWidth='96px';
+      b.id='raRulersToggle'; b.className='btn small'; b.style.minWidth='96px';
+      b.onclick = ()=>{ S.rulersOn = !S.rulersOn; b.textContent='Rulers: ' + (S.rulersOn?'On':'Off'); placeRulers(); };
       row.appendChild(b);
-      b.onclick = () => { state.rulersOn = !state.rulersOn; b.textContent = 'Rulers: ' + (state.rulersOn?'On':'Off'); placeRulers(); };
     }
-    $('#raGuidesToggle').textContent = 'Guides: ' + (state.guidesOn?'On':'Off');
-    $('#raRulersToggle').textContent = 'Rulers: ' + (state.rulersOn?'On':'Off');
+    $('#raGuidesToggle').textContent = 'Guides: ' + (S.guidesOn?'On':'Off');
+    $('#raRulersToggle').textContent = 'Rulers: ' + (S.rulersOn?'On':'Off');
   }
 
-  // ---------- smart guides (drawn on the selection/top context) ----------
+  // -------- math helpers (to SCREEN pixels) --------
+  function retina(c){ return (c && c.getRetinaScaling) ? c.getRetinaScaling() : (window.devicePixelRatio||1); }
+  function vpt(c){ return (c && c.viewportTransform) || [1,0,0,1,0,0]; }
+  function toPx(c, x, y){
+    const m = vpt(c), rs = retina(c);
+    return { x: (m[0]*x + m[2]*y + m[4]) * rs, y: (m[1]*x + m[3]*y + m[5]) * rs };
+  }
+  function canvasEdgesPx(c){
+    const tl = toPx(c, 0, 0);
+    const tr = toPx(c, c.getWidth(), 0);
+    const bl = toPx(c, 0, c.getHeight());
+    return { left: tl.x, right: tr.x, top: tl.y, bottom: bl.y,
+             cx: toPx(c, c.getWidth()/2, c.getHeight()/2).x,
+             cy: toPx(c, c.getWidth()/2, c.getHeight()/2).y };
+  }
+  function objExtentsPx(c, o){
+    // prefer accurate rotated extents from o.oCoords (viewport coords → then multiply by retina)
+    try{
+      o.setCoords();
+      const rs = retina(c);
+      const oc = o.oCoords || o.aCoords;
+      if (oc){
+        const xs = [oc.tl.x, oc.tr.x, oc.bl.x, oc.br.x];
+        const ys = [oc.tl.y, oc.tr.y, oc.bl.y, oc.br.y];
+        const xMin = Math.min.apply(null, xs)*rs, xMax = Math.max.apply(null, xs)*rs;
+        const yMin = Math.min.apply(null, ys)*rs, yMax = Math.max.apply(null, ys)*rs;
+        return { xMin, xMax, yMin, yMax, cx:(xMin+xMax)/2, cy:(yMin+yMax)/2 };
+      }
+    }catch(_){}
+    // fallback (ignores rotation)
+    const rs = retina(c);
+    const cp = o.getCenterPoint ? o.getCenterPoint() : { x:o.left||0, y:o.top||0 };
+    const w  = (o.getScaledWidth? o.getScaledWidth() : (o.width||0)*(o.scaleX||1));
+    const h  = (o.getScaledHeight?o.getScaledHeight(): (o.height||0)*(o.scaleY||1));
+    const tl = toPx(c, cp.x - w/2, cp.y - h/2);
+    const br = toPx(c, cp.x + w/2, cp.y + h/2);
+    return { xMin: tl.x*rs, xMax: br.x*rs, yMin: tl.y*rs, yMax: br.y*rs, cx:(tl.x*rs+br.x*rs)/2, cy:(tl.y*rs+br.y*rs)/2 };
+  }
+
+  // -------- draw on top context (SCREEN pixel space, identity transform) --------
   function clearTop(){
     const c = C(); if (!c) return;
     const ctx = c.contextTop; if (!ctx) return;
-    ctx.clearRect(0,0,c.getWidth(), c.getHeight());
+    const w = c.upperCanvasEl.width, h = c.upperCanvasEl.height; // retina pixels
+    ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,w,h);
+    ctx.restore();
   }
-  function drawTop(){
-    const c = C(); if (!c || !state.guidesOn) return;
-    const ctx = c.contextTop; if (!ctx) return;
-    ctx.save();
-    ctx.lineWidth = 1;
-    ctx.setLineDash([6,6]);
 
-    (state.lines||[]).forEach(line=>{
-      ctx.beginPath();
-      ctx.strokeStyle = line.type==='center' ? '#60a5fa' : '#f87171'; // blue center / red edges
-      ctx.moveTo(line.x1, line.y1);
-      ctx.lineTo(line.x2, line.y2);
-      ctx.stroke();
-    });
+  function drawTop(){
+    const c = C(); if (!c || !S.guidesOn) return;
+    const ctx = c.contextTop; if (!ctx) return;
+    const w = c.upperCanvasEl.width, h = c.upperCanvasEl.height;
+    const edges = canvasEdgesPx(c);
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+
+    // faint center crosshair (always visible with Guides=On)
+    ctx.strokeStyle = 'rgba(96,165,250,.35)'; // blue-300 @ 35%
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4,6]);
+    ctx.beginPath();
+    ctx.moveTo(edges.cx, edges.top);   ctx.lineTo(edges.cx, edges.bottom);
+    ctx.moveTo(edges.left, edges.cy);  ctx.lineTo(edges.right, edges.cy);
+    ctx.stroke();
+
+    // dynamic lines (stronger)
+    if (S.linesPx && S.linesPx.length){
+      ctx.strokeStyle = '#60a5fa'; // blue-400
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8,6]);
+      S.linesPx.forEach(L=>{
+        ctx.beginPath();
+        // different color for edge vs center, if you want:
+        if (L.kind==='edge') ctx.strokeStyle = '#f87171'; // red-400 for edges
+        else                 ctx.strokeStyle = '#60a5fa'; // blue for center
+        ctx.moveTo(L.x1, L.y1); ctx.lineTo(L.x2, L.y2);
+        ctx.stroke();
+      });
+    }
 
     ctx.restore();
   }
 
-  function getRect(o){
-    // true,true => account for viewport transform and stroke
-    try { return o.getBoundingRect(true, true); } catch(_) { return {left:o.left||0, top:o.top||0, width:o.width||0, height:o.height||0}; }
-  }
-
-  function computeGuides(target){
+  function computeLinesPx(target){
     const c = C(); if (!c) return [];
-    const cw = c.getWidth(), ch = c.getHeight();
-    const centerX = cw/2, centerY = ch/2;
+    const E = canvasEdgesPx(c);
+    const O = objExtentsPx(c, target);
+    const within = (a,b)=> Math.abs(a-b) <= S.tolPx;
+    const L = [];
 
-    const br = getRect(target);
-    const tCenterX = br.left + br.width/2;
-    const tCenterY = br.top  + br.height/2;
+    // center alignments
+    if (within(O.cx, E.cx)) L.push({ x1: E.cx, y1: E.top, y2: E.bottom, x2: E.cx, kind:'center' });
+    if (within(O.cy, E.cy)) L.push({ x1: E.left, y1: E.cy, x2: E.right, y2: E.cy, kind:'center' });
 
-    const out = [];
-    const within = (a,b)=> Math.abs(a-b) <= state.tol;
+    // edge-to-canvas-edge
+    if (within(O.xMin, E.left))   L.push({ x1: E.left,  y1: E.top,   x2: E.left,  y2: E.bottom, kind:'edge' });
+    if (within(O.xMax, E.right))  L.push({ x1: E.right, y1: E.top,   x2: E.right, y2: E.bottom, kind:'edge' });
+    if (within(O.yMin, E.top))    L.push({ x1: E.left,  y1: E.top,   x2: E.right, y2: E.top,    kind:'edge' });
+    if (within(O.yMax, E.bottom)) L.push({ x1: E.left,  y1: E.bottom,x2: E.right, y2: E.bottom, kind:'edge' });
 
-    // Center guides
-    if (within(tCenterX, centerX)) out.push({x1:centerX, y1:0,   x2:centerX, y2:ch,   type:'center'});
-    if (within(tCenterY, centerY)) out.push({x1:0,       y1:centerY, x2:cw,   y2:centerY, type:'center'});
-
-    // Edge guides to canvas edges
-    if (within(br.left, 0))       out.push({x1:0, y1:0, x2:0, y2:ch, type:'edge'});
-    if (within(br.left+br.width, cw)) out.push({x1:cw, y1:0, x2:cw, y2:ch, type:'edge'});
-    if (within(br.top, 0))        out.push({x1:0, y1:0, x2:cw, y2:0, type:'edge'});
-    if (within(br.top+br.height, ch)) out.push({x1:0, y1:ch, x2:cw, y2:ch, type:'edge'});
-
-    return out;
-  }
+    return L;
+    }
 
   function wireGuides(){
-    const c = C(); if (!c || c.__raGuidesWired) return;
-    c.__raGuidesWired = true;
+    const c = C(); if (!c || c.__raGuidesWiredV2) return;
+    c.__raGuidesWiredV2 = true;
 
-    c.on('object:moving',   e=>{ if (!state.guidesOn || !e?.target) return; state.lines = computeGuides(e.target); clearTop(); drawTop(); });
-    c.on('object:scaling',  e=>{ if (!state.guidesOn || !e?.target) return; state.lines = computeGuides(e.target); clearTop(); drawTop(); });
-    c.on('object:rotating', e=>{ if (!state.guidesOn || !e?.target) return; state.lines = computeGuides(e.target); clearTop(); drawTop(); });
+    const onMove = e => {
+      if (!S.guidesOn) return;
+      const o = e?.target; if (!o || o._isBgRect) return;
+      S.linesPx = computeLinesPx(o);
+      clearTop(); drawTop();
+    };
 
-    // Hide on mouse up/selection cleared
-    c.on('mouse:up', ()=>{ state.lines = null; clearTop(); });
-    c.on('selection:cleared', ()=>{ state.lines = null; clearTop(); });
+    c.on('object:moving',   onMove);
+    c.on('object:scaling',  onMove);
+    c.on('object:rotating', onMove);
 
-    // Redraw top after each render (ensures lines survive when Fabric repaints)
-    c.on('after:render', ()=>{ if (state.lines && state.guidesOn) drawTop(); });
+    c.on('mouse:up', ()=>{ S.linesPx=null; clearTop(); drawTop(); });
+    c.on('selection:cleared', ()=>{ S.linesPx=null; clearTop(); drawTop(); });
+
+    // keep center crosshair on normal renders
+    c.on('after:render', ()=>{ if (S.guidesOn) { clearTop(); drawTop(); } });
   }
 
-  // ---------- rulers (DOM overlay on the canvas card) ----------
+  // -------- rulers (unchanged; DOM overlay) --------
   let topRule=null, leftRule=null, rulerHost=null;
-
   function buildRulers(){
     const card = getCanvasCard(); if (!card) return;
     if (!rulerHost){
       rulerHost = document.createElement('div');
       rulerHost.id = 'raRulerHost';
-      Object.assign(rulerHost.style, {
-        position:'absolute', inset:'0 0 0 0', pointerEvents:'none'
-      });
-      // card must be positioned to anchor absolutely
+      Object.assign(rulerHost.style, { position:'absolute', inset:'0', pointerEvents:'none' });
       const cs = getComputedStyle(card);
       if (cs.position==='static') card.style.position = 'relative';
       card.appendChild(rulerHost);
     }
     if (!topRule){
       topRule = document.createElement('div');
-      topRule.id='raRulerTop';
       Object.assign(topRule.style, {
         position:'absolute', left:'0', top:'0', height:'22px', width:'100%',
         background:'#0f1116', borderBottom:'1px solid #222', pointerEvents:'none',
@@ -3737,7 +3781,6 @@
     }
     if (!leftRule){
       leftRule = document.createElement('div');
-      leftRule.id='raRulerLeft';
       Object.assign(leftRule.style, {
         position:'absolute', left:'0', top:'0', width:'22px', height:'100%',
         background:'#0f1116', borderRight:'1px solid #222', pointerEvents:'none',
@@ -3746,9 +3789,7 @@
       rulerHost.appendChild(leftRule);
     }
   }
-
   function paintRuler(el, horizontal, pixelsPer100){
-    // Tick style using repeating gradients: major every 100, minor every 10
     const minor = pixelsPer100/10;
     if (horizontal){
       el.style.backgroundImage =
@@ -3764,18 +3805,14 @@
       el.style.backgroundSize = `100% ${pixelsPer100}px`;
     }
   }
-
   function placeRulers(){
     buildRulers();
     const c = C(); const card = getCanvasCard();
     if (!c || !card || !topRule || !leftRule) return;
-
-    // show/hide
-    const vis = state.rulersOn ? 'block' : 'none';
+    const vis = S.rulersOn ? 'block' : 'none';
     rulerHost.style.display = vis; topRule.style.display = vis; leftRule.style.display = vis;
-    if (!state.rulersOn) return;
+    if (!S.rulersOn) return;
 
-    // size and align to the visible canvas element
     const rect = (c.upperCanvasEl || c.lowerCanvasEl).getBoundingClientRect();
     const cardRect = card.getBoundingClientRect();
     const offsetLeft = rect.left - cardRect.left;
@@ -3783,38 +3820,37 @@
 
     topRule.style.left = offsetLeft + 'px';
     topRule.style.width= rect.width + 'px';
-
     leftRule.style.top  = offsetTop + 'px';
     leftRule.style.height= rect.height + 'px';
 
-    // scale ticks according to zoom (100 px canvas units per major tick, scaled to screen)
     const z = (c.getZoom && c.getZoom()) || 1;
-    const pixelsPer100 = Math.max(40, 100 * z); // keep readable
-    paintRuler(topRule,  true, pixelsPer100);
+    const pixelsPer100 = Math.max(40, 100 * z);
+    paintRuler(topRule,  true,  pixelsPer100);
     paintRuler(leftRule, false, pixelsPer100);
   }
 
-  // ---------- boot / wiring ----------
+  // -------- boot / wiring --------
   function boot(){
     ensureToggles();
     wireGuides();
     placeRulers();
+    clearTop(); drawTop(); // draw faint center right away when Guides=On
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, {once:true});
-  } else {
-    boot();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
 
-  // keep rulers aligned on common changes
-  window.addEventListener('resize', placeRulers, {passive:true});
-  window.addEventListener('scroll', placeRulers, {passive:true});
-  document.addEventListener('ra:canvas-ready', placeRulers);
-  // If your code replaced setCanvasSize, piggy-back to reposition rulers
-  if (typeof window.setCanvasSize === 'function' && !window.setCanvasSize.__raWrap){
+  window.addEventListener('resize',  ()=>{ placeRulers(); clearTop(); drawTop(); }, {passive:true});
+  window.addEventListener('scroll',  ()=>{ placeRulers(); }, {passive:true});
+  document.addEventListener('ra:canvas-ready', ()=>{ placeRulers(); clearTop(); drawTop(); });
+
+  if (typeof window.setCanvasSize === 'function' && !window.setCanvasSize.__raGuideWrap){
     const orig = window.setCanvasSize;
-    window.setCanvasSize = function(newSize){ const r = orig.apply(this, arguments); try{ placeRulers(); }catch(_){} return r; };
-    window.setCanvasSize.__raWrap = true;
+    window.setCanvasSize = function(newSize){
+      const r = orig.apply(this, arguments);
+      try{ placeRulers(); clearTop(); drawTop(); }catch(_){}
+      return r;
+    };
+    window.setCanvasSize.__raGuideWrap = true;
   }
 })();
