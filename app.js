@@ -2875,3 +2875,324 @@
   } else { hide(); }
   new MutationObserver(hide).observe(document.documentElement, { childList:true, subtree:true });
 })();
+
+/* ==========================================================
+   RA_WATERMARK_CENTERED_WITH_ADMIN_V1  — drop-in, admin-controllable
+   • Centered, faint watermark above everything.
+   • Admin-only controls live inside your existing Admin dock (?admin=1).
+   • Persists settings (localStorage) and updates live.
+   • Replaces tiny corner stamps (optional toggle – default: remove).
+   • Uses preloaded watermark from RA_WATERMARK_SWITCH_FOUNDATION_V1 if present;
+     otherwise falls back to /assets/watermark.png?v=wm10 (respects ?wm=…).
+   ========================================================== */
+(() => {
+  if (window.__RA_WM_CENTERED_ADMIN_V1__) return;
+  window.__RA_WM_CENTERED_ADMIN_V1__ = true;
+
+  // ---------------- CONFIG + STORAGE ----------------
+  const STORE_KEY = 'ra_wm_cfg_v1';
+  const DEF = {
+    enabled: true,
+    applyOnTokens: true,
+    applyOnUploads: true,
+    widthRatio: 0.72,      // watermark spans 72% of canvas width
+    opacity: 0.16,         // 0..1
+    removeCornerStamps: true
+  };
+
+  function readStore() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); }
+    catch(_) { return {}; }
+  }
+  function saveStore(cfg) {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); } catch(_){}
+  }
+
+  // Merge defaults + stored; allow ?nowm=1 to hard-disable
+  const fromStore = readStore();
+  const QUERY_DISABLE = /\bnowm=1\b/i.test(location.search);
+  let CFG = Object.assign({}, DEF, fromStore);
+  if (QUERY_DISABLE) CFG.enabled = false;
+
+  // Expose a tiny API so other patches (or Admin UI) can update and refresh
+  window.raWMConfig = {
+    get: () => Object.assign({}, CFG),
+    set: (partial) => {
+      CFG = Object.assign({}, CFG, partial || {});
+      saveStore(CFG);
+      ensureWM(); // re-apply immediately
+    },
+    reset: () => {
+      CFG = Object.assign({}, DEF);
+      saveStore(CFG);
+      ensureWM();
+    }
+  };
+
+  // ---------------- WATERMARK SOURCE ----------------
+  const queryWM = new URLSearchParams(location.search).get('wm');
+  const FALLBACK_WM = '/assets/watermark.png?v=wm10';
+  let wmDataURL = null, wmObj = null, lastW = 0, lastH = 0;
+
+  async function fetchAsDataURL(url){
+    const r = await fetch(url, { cache:'no-store', mode:'cors' });
+    if (!r.ok) throw new Error('fetch failed');
+    const b = await r.blob();
+    return await new Promise(res => { const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
+  }
+  async function resolveWatermarkDataURL(){
+    // Prefer the preloaded, CORS-safe dataURL if RA_WATERMARK_SWITCH_FOUNDATION_V1 exists
+    if (window.raWatermark && typeof window.raWatermark.ready === 'function'){
+      try { await window.raWatermark.ready(); } catch(_){}
+      const d = window.raWatermark.dataURL && window.raWatermark.dataURL();
+      if (d) return d;
+    }
+    // else use override or fallback
+    const src = queryWM || FALLBACK_WM;
+    try { return await fetchAsDataURL(src); } catch(_){ return null; }
+  }
+
+  // ---------------- FABRIC HANDLE ----------------
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function isTokenBase(){
+    const c = C(); if (!c) return false;
+    const base = (c.getObjects()||[]).find(o => o && o._isBase === true);
+    return !!(base && base.type === 'image'); // token path in your app
+  }
+  function shouldShowWM(){
+    if (!CFG.enabled) return false;
+    const token = isTokenBase();
+    return (token && CFG.applyOnTokens) || (!token && CFG.applyOnUploads);
+  }
+  function stripCornerStamps(){
+    if (!CFG.removeCornerStamps) return;
+    const c = C(); if (!c) return;
+    const removal = (c.getObjects()||[]).filter(o => o && (o.raWM || o._isWatermark));
+    if (removal.length){
+      removal.forEach(o => { try{ c.remove(o); }catch(_){ } });
+      c.requestRenderAll();
+    }
+  }
+
+  function bringWMToTop(){
+    const c = C(); if (!c || !wmObj) return;
+    try { c.bringToFront(wmObj); } catch(_){}
+  }
+  function layoutWM(){
+    const c = C(); if (!c || !wmObj) return;
+    const W = c.getWidth(), H = c.getHeight();
+    if (!W || !H) return;
+
+    // Only recompute scaling when size changes; always keep centered
+    if (W !== lastW || H !== lastH || !wmObj.scaleX || !wmObj.scaleY) {
+      lastW = W; lastH = H;
+      const targetW = Math.max(32, Math.round(W * CFG.widthRatio));
+      const s = targetW / (wmObj.width || targetW);
+      wmObj.set({ scaleX:s, scaleY:s, opacity:CFG.opacity });
+    }
+    wmObj.set({ left: W/2, top: H/2 }); wmObj.setCoords();
+  }
+
+  async function ensureWM(){
+    const c = C(); if (!c) return;
+    stripCornerStamps();
+
+    // Remove if disabled
+    if (!shouldShowWM()){
+      if (wmObj) { try { c.remove(wmObj); wmObj = null; c.requestRenderAll(); } catch(_){ } }
+      return;
+    }
+
+    // Create if missing
+    if (!wmObj){
+      if (!wmDataURL) wmDataURL = await resolveWatermarkDataURL();
+      if (!wmDataURL) return;
+
+      await new Promise(res=>{
+        fabric.Image.fromURL(wmDataURL, img=>{
+          wmObj = img;
+          wmObj._raCenterWM = true;
+          wmObj.selectable = false;
+          wmObj.evented = false;
+          wmObj.hasControls = false;
+          wmObj.hoverCursor = 'default';
+          wmObj.excludeFromExport = false;
+          wmObj.set({ originX:'center', originY:'center', opacity: CFG.opacity });
+          try { c.add(wmObj); } catch(_){}
+          layoutWM(); bringWMToTop();
+          res();
+        });
+      });
+    } else {
+      layoutWM(); bringWMToTop();
+    }
+
+    c.requestRenderAll();
+  }
+
+  // Keep watermark correct while app changes
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+
+    // Initial apply
+    ensureWM();
+
+    if (!c.__raWM_centered_admin_bound){
+      c.__raWM_centered_admin_bound = true;
+      c.on('object:added',    () => { stripCornerStamps(); ensureWM(); });
+      c.on('object:removed',  () => { ensureWM(); });
+      c.on('object:modified', () => { ensureWM(); });
+      c.on('after:render',    () => { layoutWM(); bringWMToTop(); });
+    }
+
+    const el = c.upperCanvasEl || c.lowerCanvasEl;
+    try { new ResizeObserver(()=>{ layoutWM(); bringWMToTop(); }).observe(el); } catch(_){}
+    window.addEventListener('resize', () => { layoutWM(); bringWMToTop(); }, {passive:true});
+    window.addEventListener('orientationchange', () => setTimeout(()=>{ layoutWM(); bringWMToTop(); }, 150), {passive:true});
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+
+  // ---------------- ADMIN UI (only with ?admin=1) ----------------
+  (function adminPanel(){
+    const isAdmin = /\badmin=1\b/i.test(location.search);
+    if (!isAdmin) return;
+
+    function $(s, r=document){ return r.querySelector(s); }
+
+    function ensureDock(){
+      // Prefer the existing admin dock (#raAdminDock2) we installed earlier
+      let dock = $('#raAdminDock2');
+      if (dock) return dock;
+
+      // If not found, create a minimal floating dock
+      dock = document.createElement('div');
+      dock.id = 'raAdminDock2';
+      dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
+      dock.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
+          <strong>Admin</strong>
+          <button id="ra2Hide" style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+        </div>
+        <div id="ra2Body" style="padding:10px 12px;"></div>
+      `;
+      document.body.appendChild(dock);
+      $('#ra2Hide').onclick = ()=>{
+        const b=$('#ra2Body'); const btn=$('#ra2Hide');
+        const h = b.style.display==='none'; b.style.display=h?'block':'none'; btn.textContent=h?'Hide':'Show';
+      };
+      return dock;
+    }
+
+    function buildWMCard(){
+      const dock = ensureDock();
+      const body = $('#ra2Body', dock) || dock;
+      let card = document.getElementById('raWMCard');
+      if (card) return card;
+
+      const cfg = window.raWMConfig.get();
+
+      card = document.createElement('div');
+      card.id = 'raWMCard';
+      card.style.cssText = 'margin-top:10px;border:1px solid #2a2a2e;border-radius:10px;background:#12141b;';
+      card.innerHTML = `
+        <div style="padding:10px 12px;border-bottom:1px solid #20222a;display:flex;justify-content:space-between;align-items:center;">
+          <strong>Watermark</strong>
+          <button id="raWMReset" style="background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:4px 8px;cursor:pointer">Reset</button>
+        </div>
+        <div style="padding:10px 12px;display:grid;gap:10px;">
+          <label style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <span>Enabled</span>
+            <input id="raWMEnable" type="checkbox" ${cfg.enabled?'checked':''}/>
+          </label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:6px">
+              <input id="raWMOnTokens" type="checkbox" ${cfg.applyOnTokens?'checked':''}/> Tokens
+            </label>
+            <label style="display:flex;align-items:center;gap:6px">
+              <input id="raWMOnUploads" type="checkbox" ${cfg.applyOnUploads?'checked':''}/> Uploads
+            </label>
+            <label style="display:flex;align-items:center;gap:6px">
+              <input id="raWMStripCorners" type="checkbox" ${cfg.removeCornerStamps?'checked':''}/> Remove corner stamps
+            </label>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span>Opacity</span>
+              <span id="raWMOpacityVal" style="opacity:.75">${cfg.opacity.toFixed(2)}</span>
+            </div>
+            <input id="raWMOpacity" type="range" min="0" max="0.5" step="0.01" value="${cfg.opacity}" style="width:100%"/>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span>Size (width %)</span>
+              <span id="raWMSizeVal" style="opacity:.75">${Math.round(cfg.widthRatio*100)}%</span>
+            </div>
+            <input id="raWMSize" type="range" min="0.4" max="1.0" step="0.01" value="${cfg.widthRatio}" style="width:100%"/>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button id="raWMSave"  style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Save</button>
+            <button id="raWMApply" style="background:#2a2a2e;border:0;border-radius:8px;color:#ddd;padding:6px 10px;cursor:pointer">Apply</button>
+          </div>
+          <div id="raWMMsg" style="font-size:12px;opacity:.7;"></div>
+        </div>
+      `;
+      body.appendChild(card);
+
+      // Wire interactions
+      const msg = (t)=>{ const el=document.getElementById('raWMMsg'); if(el){ el.textContent=t||''; if(t) setTimeout(()=>{ if(el.textContent===t) el.textContent=''; }, 1200);} };
+
+      const elEnable   = document.getElementById('raWMEnable');
+      const elTok      = document.getElementById('raWMOnTokens');
+      const elUp       = document.getElementById('raWMOnUploads');
+      const elStrip    = document.getElementById('raWMStripCorners');
+      const elOp       = document.getElementById('raWMOpacity');
+      const elOpVal    = document.getElementById('raWMOpacityVal');
+      const elSz       = document.getElementById('raWMSize');
+      const elSzVal    = document.getElementById('raWMSizeVal');
+      const elApply    = document.getElementById('raWMApply');
+      const elSave     = document.getElementById('raWMSave');
+      const elReset    = document.getElementById('raWMReset');
+
+      elOp.addEventListener('input', ()=>{ elOpVal.textContent = parseFloat(elOp.value).toFixed(2); });
+      elSz.addEventListener('input', ()=>{ elSzVal.textContent = Math.round(parseFloat(elSz.value)*100) + '%'; });
+
+      function collect(){
+        return {
+          enabled: !!elEnable.checked,
+          applyOnTokens: !!elTok.checked,
+          applyOnUploads: !!elUp.checked,
+          removeCornerStamps: !!elStrip.checked,
+          opacity: parseFloat(elOp.value)||0,
+          widthRatio: parseFloat(elSz.value)||0.72
+        };
+      }
+
+      elApply.onclick = ()=>{ window.raWMConfig.set(collect()); msg('Applied'); };
+      elSave.onclick  = ()=>{ window.raWMConfig.set(collect()); msg('Saved'); };
+      elReset.onclick = ()=>{ window.raWMConfig.reset(); // refresh UI from defaults
+        const fresh = window.raWMConfig.get();
+        elEnable.checked  = fresh.enabled;
+        elTok.checked     = fresh.applyOnTokens;
+        elUp.checked      = fresh.applyOnUploads;
+        elStrip.checked   = fresh.removeCornerStamps;
+        elOp.value        = fresh.opacity; elOp.dispatchEvent(new Event('input'));
+        elSz.value        = fresh.widthRatio; elSz.dispatchEvent(new Event('input'));
+        msg('Reset'); };
+
+      return card;
+    }
+
+    function boot(){ try { buildWMCard(); } catch(_){ setTimeout(boot, 300); } }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot, {once:true});
+    } else {
+      boot();
+    }
+  })();
+})();
