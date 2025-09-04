@@ -3282,3 +3282,63 @@
     })();
   })();
 })();
+
+/* ==========================================================
+   RA_WM_BASE_RECENTER_FIX_v1
+   Re-centers the base image when base-stamp removal changes
+   the group’s bounds (uploads/URL bases only).
+   ========================================================== */
+(() => {
+  if (window.__RA_WM_BASE_RECENTER_V1__) return;
+  window.__RA_WM_BASE_RECENTER_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function recenterBase(){
+    const c = C(); if (!c) return;
+    const base = (c.getObjects()||[]).find(o => o && o._isBase);
+    if (!base) return;
+
+    // Center it back on the canvas and keep it locked like a base.
+    base.set({
+      originX: 'center',
+      originY: 'center',
+      left: c.getWidth()/2,
+      top:  c.getHeight()/2,
+      selectable: false,
+      evented: false,
+      hasControls: false,
+      lockMovementX: true, lockMovementY: true,
+      lockScalingX:  true, lockScalingY:  true,
+      lockRotation:  true
+    });
+    base.setCoords();
+    try { c.sendToBack(base); } catch(_) {}
+    c.requestRenderAll();
+  }
+
+  // Recenter right after stamps are removed or the base is modified.
+  const c = C();
+  if (c && !c.__raWMBaseRecentreBound){
+    c.__raWMBaseRecentreBound = true;
+    c.on('object:removed',  recenterBase);  // fired when stamp children are removed
+    c.on('object:modified', recenterBase);  // extra safety
+    // In case we toggled the setting and a base group already exists:
+    setTimeout(recenterBase, 60);
+  }
+
+  // If the admin toggle flips “Remove base stamps” on/off, also recentre.
+  if (window.raWMConfig && typeof window.raWMConfig.set === 'function'){
+    const prevSet = window.raWMConfig.set;
+    window.raWMConfig.set = (partial) => {
+      const r = prevSet.call(window.raWMConfig, partial);
+      if (partial && Object.prototype.hasOwnProperty.call(partial, 'removeCornerStampsBase')){
+        setTimeout(recenterBase, 0);
+      }
+      return r;
+    };
+  }
+
+  // Optional manual nudge from console if ever needed:
+  window.__raWM_recenterBase = recenterBase;
+})();
