@@ -2805,175 +2805,189 @@
 })();
 
 /* ==========================================================
-   RA_MOBILE_SHOW_ALL_FEATURES_V3 — MOBILE ONLY (≤920px)
-   What it does:
-   • On phones, stacks ALL the same desktop feature cards under the canvas:
-     - Token/Upload
-     - Custom Text (incl. Inspire Me + full fonts)
-     - Overlays
-     - Selection (incl. Undo/Redo/Save/Restore + ×)
-     - Animate
-     - Export
-   • Moves the real cards (keeps all event handlers, IDs, fonts, etc.)
-   • On desktop again, restores cards to their original places.
-   • Does NOT touch canvas sizing or the ghost/gap (we’ll fix that next).
+   RA_MOBILE_FORCE_SHOW_SECTIONS_V6 — MOBILE ONLY (≤920px)
+   Goal:
+     • Make mobile show the SAME feature panels as desktop, without moving DOM.
+     • Unhide any cards hidden by Tailwind / layout (hidden, md:hidden, display:none).
+     • Force the main grid into a single column on phones.
+     • Desktop untouched.
    ========================================================== */
 (() => {
-  if (window.__RA_MOBILE_SHOW_ALL_FEATURES_V3__) return;
-  window.__RA_MOBILE_SHOW_ALL_FEATURES_V3__ = true;
+  if (window.__RA_MOBILE_FORCE_SHOW_SECTIONS_V6__) return;
+  window.__RA_MOBILE_FORCE_SHOW_SECTIONS_V6__ = true;
 
   const MQ = '(max-width: 920px)';
   const isMobile = () => window.matchMedia(MQ).matches;
 
-  const $  = (s, r=document) => r.querySelector(s);
-  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  // Known control IDs that live inside each card
+  const GROUPS = {
+    token:       ['tokenIdInput','baseUpload','loadToken','loadUrl','clearUpload','baseUrl'],
+    customText:  ['customText','addCustomText','inspireMe','fontFamily','fontSize','fontColor','strokeColor','strokeWidth'],
+    overlays:    ['overlayGrid','overlayUpload','clearOverlayGrid'],
+    selection:   ['duplicate','delete','opacity','blendMode','bringFront','sendBack','flipX','flipY','lock','unlockAll','clearAllOverlays','undoBtn','redoBtn','saveDraftBtn','restoreDraftBtn','raHistoryRow'],
+    animate:     ['raAnimStyle','raAnimDuration','raAnimApply','raAnimPreview','raAnimExport','raAnimate'],
+    exportBox:   ['exportPng','openNewTab','exportMultiplier','exportPreview','manualLink']
+  };
 
-  let stack;                         // the mobile stack container
-  const original = new Map();        // node -> { parent, next }
-
-  function getCanvasCard(){
-    const c = document.getElementById('c') || $('canvas');
-    if (!c) return null;
-    return c.closest('.card, .panel, .box, section, article, main, .content, .canvas-card, .canvas-wrapper') || c.parentElement;
-  }
-
-  function ensureStack(anchorCard){
-    if (stack && document.body.contains(stack)) return stack;
-    stack = document.createElement('div');
-    stack.id = 'raMobileStack';
-    stack.style.margin = '10px 0 16px';
-
-    // Minimal CSS for stacked cards
-    if (!$('#raMobileStackCSS')) {
-      const css = document.createElement('style');
-      css.id = 'raMobileStackCSS';
-      css.textContent = `
-        @media ${MQ} {
-          #raMobileStack > .card, #raMobileStack > .panel, #raMobileStack > .box,
-          #raMobileStack > section, #raMobileStack > article, #raMobileStack > div {
-            width: 100% !important;
-            position: static !important;
-            margin: 10px 0 !important;
-          }
-        }
-      `;
-      document.head.appendChild(css);
-    }
-
-    // Insert after the canvas card so it sits right below it
-    const host = anchorCard?.parentElement || document.body;
-    if (anchorCard?.insertAdjacentElement) anchorCard.insertAdjacentElement('afterend', stack);
-    else host.appendChild(stack);
-    return stack;
-  }
-
-  // Find the outer "card" container for a control element
+  // Utility: climb until we hit a reasonable "card" container
   function findCardFor(el){
     if (!el) return null;
-    const card = el.closest?.('.card, .panel, .box, section, article, main, .content, div');
-    return card || el.parentElement;
-  }
-
-  // Record original position so we can put it back
-  function markOriginal(node){
-    if (!node || original.has(node)) return;
-    original.set(node, { parent: node.parentNode, next: node.nextSibling });
-  }
-
-  // Safe move (no double-move)
-  function moveToStack(node){
-    if (!node || !stack) return;
-    if (stack.contains(node)) return;
-    markOriginal(node);
-    stack.appendChild(node);
-  }
-
-  // Try to locate a card by a set of element IDs (controls we know exist)
-  function cardByIds(ids){
-    for (const id of ids){
-      const el = document.getElementById(id);
-      if (el){
-        const card = findCardFor(el);
-        if (card) return card;
-      }
+    let n = el;
+    for (let i = 0; i < 8 && n; i++) {
+      const cls = (n.className || '').toString();
+      if (
+        /(^|\s)(card|panel|box|content|container|section|wrapper)(\s|$)/i.test(cls) ||
+        ['SECTION','ARTICLE','ASIDE','MAIN'].includes(n.tagName)
+      ) return n;
+      n = n.parentElement;
     }
-    return null;
+    return el.parentElement || el; // fallback
   }
 
-  // Try to locate by section heading text (h2–h5)
-  function cardByHeading(rx){
-    const hdr = $$('h2,h3,h4,h5').find(h => rx.test((h.textContent||'').trim().toLowerCase()));
-    return hdr ? (hdr.closest('.card, .panel, .box, section, article, div') || hdr.parentElement) : null;
-  }
-
-  // Collect cards in the order we want on mobile
-  function collectCards(){
-    const groups = [
-      // Token / Upload box (any of these IDs should exist there)
-      { name:'token', ids:['tokenIdInput','baseUpload','loadToken','loadUrl','clearUpload','baseUrl'], heading:/token|upload|rebel\s*ant/i },
-
-      // Custom Text (ensure we pick up Inspire Me, fonts, etc.)
-      { name:'customText', ids:['customText','addCustomText','inspireMe','fontFamily','fontSize','fontColor','strokeColor','strokeWidth'], heading:/custom\s*text|text/i },
-
-      // Overlays panel
-      { name:'overlays', ids:['overlayGrid','overlayUpload','clearOverlayGrid'], heading:/overlays/i },
-
-      // Selection tools (including history row)
-      { name:'selection', ids:['duplicate','delete','opacity','blendMode','bringFront','sendBack','flipX','flipY','lock','unlockAll','clearAllOverlays','undoBtn','redoBtn','saveDraftBtn','restoreDraftBtn','raHistoryRow'], heading:/selection|history|undo|redo/i },
-
-      // Animate
-      { name:'animate', ids:['raAnimStyle','raAnimDuration','raAnimApply','raAnimPreview','raAnimExport','raAnimate'], heading:/animate|animation/i },
-
-      // Export
-      { name:'export', ids:['exportPng','openNewTab','exportMultiplier','exportPreview','manualLink'], heading:/export/i },
-    ];
-
-    const found = [];
-    for (const g of groups){
-      let card = cardByIds(g.ids);
-      if (!card) card = cardByHeading(g.heading);
-      if (card && !found.includes(card)) found.push(card);
+  // Utility: get all ancestors to body
+  function ancestors(el){
+    const list = [];
+    let n = el;
+    while (n && n !== document.body && n.nodeType === 1) {
+      list.push(n);
+      n = n.parentElement;
     }
-    return found;
+    return list;
   }
 
-  function applyMobile(){
-    const anchor = getCanvasCard();
-    if (!anchor) return;
-    ensureStack(anchor);
-
-    // Gather and move
-    const cards = collectCards();
-    cards.forEach(moveToStack);
-  }
-
-  function restoreDesktop(){
-    // Put everything back exactly where it was
-    original.forEach(({ parent, next }, node) => {
+  // Force-show a node and any hidden ancestor (mobile only)
+  function forceShowChain(node){
+    const HIDE_CLASSES = ['hidden','sm:hidden','md:hidden','lg:hidden','xl:hidden','2xl:hidden','sr-only','collapse'];
+    const chain = ancestors(node);
+    chain.forEach(n => {
       try {
-        if (!parent) return;
-        if (next && next.parentNode === parent) parent.insertBefore(node, next);
-        else parent.appendChild(node);
+        // Remove Tailwind "hidden" classes
+        if (n.classList) HIDE_CLASSES.forEach(c => n.classList.remove(c));
+        // Remove HTML hiding
+        if (n.hasAttribute && n.hasAttribute('hidden')) n.removeAttribute('hidden');
+        if (n.getAttribute && n.getAttribute('aria-hidden') === 'true') n.setAttribute('aria-hidden','false');
+
+        const cs = window.getComputedStyle(n);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) {
+          n.style.setProperty('display', 'block', 'important');
+          n.style.setProperty('visibility', 'visible', 'important');
+          n.style.setProperty('opacity', '1', 'important');
+          // Avoid weird stacking on mobile
+          if (cs.position === 'fixed' || cs.position === 'absolute') {
+            n.style.setProperty('position', 'static', 'important');
+            n.style.removeProperty('top'); n.style.removeProperty('left'); n.style.removeProperty('right'); n.style.removeProperty('bottom');
+          }
+          // In case a max-height:0 collapses it
+          n.style.setProperty('max-height', 'none', 'important');
+          n.style.setProperty('overflow', 'visible', 'important');
+        }
       } catch(_) {}
     });
   }
 
-  function tick(){
-    if (isMobile()) applyMobile();
-    else restoreDesktop();
+  // Find the cards we care about by the controls they contain
+  function collectCards(){
+    const cards = new Set();
+    Object.values(GROUPS).forEach(ids => {
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          const card = findCardFor(el);
+          if (card) cards.add(card);
+        }
+      });
+    });
+    return Array.from(cards);
   }
 
-  // DOM can be dynamic; keep watching
-  const mo = new MutationObserver(() => tick());
+  // Lowest common ancestor for all cards — usually the grid/root we want to collapse to 1 col
+  function lowestCommonAncestor(nodes){
+    if (!nodes.length) return null;
+    const paths = nodes.map(n => [n, ...ancestors(n)]);
+    // Start with first path; find the first element that appears in all paths
+    for (const candidate of paths[0]) {
+      if (paths.every(p => p.includes(candidate))) return candidate;
+    }
+    return null;
+  }
+
+  // Collapse the grid to single column on phones
+  function forceOneColumn(root){
+    if (!root) return;
+    try {
+      const cs = getComputedStyle(root);
+      // Ensure it's a block/grid that stacks naturally
+      if (cs.display.includes('grid')) {
+        root.style.setProperty('grid-template-columns', '1fr', 'important');
+        root.style.setProperty('grid-auto-flow', 'row', 'important');
+        root.style.setProperty('gap', '12px', 'important');
+      } else if (cs.display.includes('flex')) {
+        root.style.setProperty('display', 'block', 'important');
+      } else {
+        root.style.setProperty('display', 'block', 'important');
+      }
+      root.style.setProperty('max-width', '100%', 'important');
+      root.style.setProperty('overflow', 'visible', 'important');
+    } catch(_) {}
+  }
+
+  // Keep the canvas card visible (not floating), but don’t change its working desktop size
+  function normalizeCanvasCard(){
+    const c = document.getElementById('c') || document.querySelector('canvas');
+    if (!c) return;
+    const card = findCardFor(c);
+    if (!card) return;
+    const cs = getComputedStyle(card);
+    if (cs.position === 'fixed' || cs.position === 'absolute') {
+      card.style.setProperty('position', 'relative', 'important');
+      card.style.removeProperty('top'); card.style.removeProperty('left');
+      card.style.removeProperty('right'); card.style.removeProperty('bottom');
+      card.style.removeProperty('transform');
+    }
+    // Make sure it doesn't overlap following cards on mobile
+    card.style.setProperty('z-index', '1', 'important');
+    card.style.setProperty('margin-bottom', '12px', 'important');
+    // Prevent any rogue checkerboard "strip" directly before/after
+    [card.previousElementSibling, card.nextElementSibling].forEach(sib => {
+      if (!sib) return;
+      const bg = (getComputedStyle(sib).backgroundImage || '').toLowerCase();
+      const looksChecker = bg.includes('linear-gradient') || bg.includes('repeating');
+      const dead = (sib.textContent||'').trim()==='' && sib.getBoundingClientRect().height < 16;
+      if (looksChecker || dead) {
+        sib.style.setProperty('display','none','important');
+        sib.style.setProperty('height','0','important');
+        sib.style.setProperty('margin','0','important');
+        sib.style.setProperty('padding','0','important');
+      }
+    });
+  }
+
+  function run(){
+    if (!isMobile()) return;
+
+    // 1) Make sure the canvas card behaves in flow on phones
+    normalizeCanvasCard();
+
+    // 2) Collect all feature cards (by their controls) and force-show them + ancestors
+    const cards = collectCards();
+    cards.forEach(forceShowChain);
+
+    // 3) Collapse their shared container to a single column
+    const root = lowestCommonAncestor(cards);
+    forceOneColumn(root);
+  }
+
+  // Keep it up-to-date as the app mutates (SPA / React)
+  const mo = new MutationObserver(() => { if (isMobile()) run(); });
   mo.observe(document.documentElement, { childList:true, subtree:true });
 
-  window.addEventListener('resize', tick, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(tick, 120), { passive:true });
+  window.addEventListener('resize', () => { if (isMobile()) run(); }, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(() => { if (isMobile()) run(); }, 120), { passive:true });
 
-  // First run
+  // First pass
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => tick(), { once:true });
+    document.addEventListener('DOMContentLoaded', () => run(), { once:true });
   } else {
-    tick();
+    run();
   }
 })();
