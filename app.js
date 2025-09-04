@@ -1213,60 +1213,86 @@
   kick();
 })();
 
-/* ====================== RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) ======================
-   What it does:
-   • Fits the drawing to your phone screen using CSS (view-only) — exports stay perfect.
-   • Keeps the canvas in the normal page flow (not floating).
-   • Removes the mid-page empty checkerboard strip if it appears.
-   • Never touches desktop.
-   • Never grabs focus (keyboard won’t dismiss while typing the token).
+/* ====================== RA_mobile_css_fit_inflow_v3 (MOBILE ONLY) ======================
+   Fixes mobile crash + keeps the drawing in normal page flow.
+   - Removes the bad "$$('.', wrap)" line that crashed Safari.
+   - Fits the stage to the phone width via CSS only (exports stay crisp).
+   - Hides any stray checkerboard strips and the fixed-layout ghost if present.
+   - Never touches desktop.
    ====================================================================== */
 (() => {
-  const MOBILE_Q = '(max-width: 920px)';
-  if (!window.matchMedia(MOBILE_Q).matches || window.__RA_MOBILE_CSS_FIT_V2__) return;
-  window.__RA_MOBILE_CSS_FIT_V2__ = true;
+  const MQ = '(max-width: 920px)';
+  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_CSS_FIT_V3__) return;
+  window.__RA_MOBILE_CSS_FIT_V3__ = true;
 
-  // small helpers
-  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
-  const  $ = (s,r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+  const  $ = (s, r=document)=>r.querySelector(s);
 
-  function findStageCanvas() {
+  function findStageCanvas(){
     const all = $$('canvas');
     if (!all.length) return null;
-    // pick the intrinsically largest canvas — that’s the drawing stage
+    // pick the intrinsically largest canvas — that's the drawing stage
     return all.reduce((a,b)=> (b.width > (a?.width||0) ? b : a), null);
   }
 
-  function cssFit() {
+  function hideGhostsAndStrips(wrap){
+    // Kill the fixed-center “ghost” if it exists (causes the huge blank gap)
+    const ghost = document.getElementById('raCanvasGhost');
+    if (ghost){
+      ghost.style.display = 'none';
+      ghost.style.height  = '0px';
+      ghost.style.margin  = '0';
+      ghost.style.padding = '0';
+      ghost.setAttribute('data-ra-hidden-gap', '1');
+    }
+
+    // Collapse any checkerboard/empty siblings right around the stage block
+    [wrap?.previousElementSibling, wrap?.nextElementSibling].forEach(el => {
+      if (!el) return;
+      const cs = getComputedStyle(el);
+      const looksChecker = (cs.backgroundImage||'').includes('linear-gradient')
+                        || (cs.backgroundImage||'').includes('repeating');
+      const looksEmpty = el.getBoundingClientRect().height < 12 || !(el.textContent||'').trim();
+      if (looksChecker || looksEmpty){
+        el.style.display = 'none';
+        el.style.height  = '0';
+        el.style.margin  = '0';
+        el.style.padding = '0';
+        el.setAttribute('data-ra-hidden-gap', '1');
+      }
+    });
+  }
+
+  function cssFit(){
     const stage = findStageCanvas();
     if (!stage) return;
 
-    // the element we’ll size in-flow (usually the stage’s container)
+    // Usually the stage’s parent div; fall back to the canvas itself
     const wrap = stage.parentElement || stage;
 
-    // intrinsic drawing size (used by export)
+    // Intrinsic render size (used by export)
     const W = Math.max(1, stage.width);
     const H = Math.max(1, stage.height);
 
-    // available width inside the page (center it, keep some breathing room)
-    const host = wrap.parentElement || document.body;
+    // Available width inside page
+    const host  = wrap.parentElement || document.body;
     const hostW = Math.max(320, host.clientWidth || window.innerWidth);
-    const sidePad = 28;                      // approximate padding of the layout
+    const sidePad = 28; // layout breathing room
     const targetW = Math.min(W, hostW - sidePad);
     const scale   = Math.min(1, targetW / W);
     const dW      = Math.round(W * scale);
     const dH      = Math.round(H * scale);
 
-    // ✅ View-only sizing: set CSS width/height (do NOT change canvas.width/height)
-    //    This keeps exports crisp and full-size with no white borders.
-    wrap.style.width     = dW + 'px';
-    wrap.style.height    = dH + 'px';
-    wrap.style.maxWidth  = '100%';
-    wrap.style.margin    = '0 auto 16px auto';
-    wrap.style.position  = 'relative';
+    // View‑only sizing (do NOT change canvas.width/height)
+    Object.assign(wrap.style, {
+      width: dW + 'px',
+      height: dH + 'px',
+      maxWidth: '100%',
+      margin: '0 auto 16px auto',
+      position: 'relative'
+    });
 
-    // If the stage container holds multiple canvases (scene/hit), size them all
-    $$('.', wrap); // no-op line to keep older minifiers happy
+    // If the container holds multiple canvases (scene/hit), size them all
     $$('canvas', wrap).forEach(c => {
       c.style.width    = dW + 'px';
       c.style.height   = dH + 'px';
@@ -1274,71 +1300,52 @@
       c.style.display  = 'block';
     });
 
-    // Collapse any stray checkerboard strip just above/below the canvas block
-    [wrap.previousElementSibling, wrap.nextElementSibling].forEach(el => {
-      if (!el) return;
-      const cs = getComputedStyle(el);
-      const isCheckerBG =
-        (cs.backgroundImage || '').includes('linear-gradient') ||
-        (cs.backgroundImage || '').includes('repeating');
-      const looksEmpty = el.getBoundingClientRect().height < 12 || !(el.textContent||'').trim();
-      if (isCheckerBG || looksEmpty) {
-        el.style.display = 'none';
-        el.style.height  = '0px';
-        el.style.margin  = '0';
-        el.style.padding = '0';
-        el.setAttribute('data-ra-hidden-gap','1');
-      }
-    });
+    hideGhostsAndStrips(wrap);
   }
 
-  // Trigger a fit after real “load” actions (not on typing, so the keyboard stays up)
-  function bindLoadTriggers() {
-    const raCards = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
-    raCards.forEach(card => {
+  function bindLoadTriggers(){
+    // Re-fit after real load actions
+    const cards = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
+    cards.forEach(card => {
       $$('button', card).forEach(btn => {
         const t = (btn.textContent||'').toLowerCase().trim();
-        if (t === 'load' || t === 'load by token' || t === 'clear upload') {
-          if (!btn.__raFitBound) {
+        if (t === 'load' || t === 'load by token' || t === 'clear upload'){
+          if (!btn.__raFitBound){
             btn.__raFitBound = true;
             btn.addEventListener('click', () => setTimeout(cssFit, 60), {passive:true});
           }
         }
       });
       const file = $('input[type="file"]', card);
-      if (file && !file.__raFitBound) {
+      if (file && !file.__raFitBound){
         file.__raFitBound = true;
         file.addEventListener('change', () => setTimeout(cssFit, 60), {passive:true});
       }
     });
   }
 
-  // Keep things tidy as the app mutates
-  const mo = new MutationObserver(() => { bindLoadTriggers(); cssFit(); });
-  mo.observe(document.documentElement, {childList:true, subtree:true});
+  // Observe DOM churns so the fit reapplies if the app re-renders
+  new MutationObserver(() => { bindLoadTriggers(); cssFit(); })
+    .observe(document.documentElement, { childList:true, subtree:true });
 
-  // Recompute on orientation/resize
-  window.addEventListener('resize', () => { if (window.matchMedia(MOBILE_Q).matches) cssFit(); }, {passive:true});
-  window.addEventListener('orientationchange', () => setTimeout(cssFit, 150), {passive:true});
+  window.addEventListener('resize',           () => { if (window.matchMedia(MQ).matches) cssFit(); }, {passive:true});
+  window.addEventListener('orientationchange',() => setTimeout(cssFit, 150), {passive:true});
 
-  // Initial pass
-  if (document.readyState === 'loading') {
+  if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', () => { bindLoadTriggers(); cssFit(); }, {once:true});
   } else {
     bindLoadTriggers(); cssFit();
   }
 
-  // Minimal CSS for mobile only
-  const style = document.createElement('style');
-  style.textContent = `
-    @media ${MOBILE_Q} {
-      /* Kill any mid-page spacer/strip if it sneaks back in */
+  // Minimal CSS (mobile only) to make sure hidden gaps stay hidden
+  const s = document.createElement('style');
+  s.textContent = `
+    @media ${MQ} {
       [data-ra-hidden-gap="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
     }
   `;
-  document.head.appendChild(style);
+  document.head.appendChild(s);
 })();
- /* ==================== END RA_mobile_css_fit_inflow_v2 (MOBILE ONLY) =================== */
 
 /* ==================== RA_AI_QUOTE_v1 — “✨ Inspire me” (motivational quotes) ====================
    What this adds:
@@ -2804,219 +2811,45 @@
   }
 })();
 
-/* ==========================================================
-   RA_MOBILE_PANEL_PORT_V1  (Fabric; mobile only ≤900px)
-   What this does
-   • Stops the floating canvas on phones (removes ghost; puts it back in flow).
-   • Builds a "Mobile Controls" panel under the canvas.
-   • Moves the real desktop cards into that panel so ALL features show on mobile:
-       - Custom Text (+ ✨ Inspire me)
-       - Selection (incl. Undo/Redo row & Snap row)
-       - Overlays (upload grid) + Published Overlays shelf
-       - Animate
-       - Export (Open in New Tab still works)
-       - Video (token-only)
-   • Restores everything back to the desktop layout when width > 900px.
-   • Desktop is never modified.
-   ========================================================== */
+/* ================= RA_DISABLE_FIXED_CANVAS_ON_MOBILE_v1 =================
+   Neutralizes RA_FIXED_CENTER_CANVAS_V1 on mobile only.
+   - Reverts "position:fixed" styles on the canvas card.
+   - Removes #raCanvasGhost spacer that causes the mid‑page blank gap.
+   - Desktop unaffected.
+   ======================================================================= */
 (() => {
-  const MQ = '(max-width: 900px)';
-  if (window.__RA_MOBILE_PANEL_PORT_V1__) return;
-  window.__RA_MOBILE_PANEL_PORT_V1__ = true;
+  const MQ = '(max-width: 920px)';
+  if (!window.matchMedia(MQ).matches) return;
 
-  const $$ = (q, r=document) => Array.from(r.querySelectorAll(q));
-  const $  = (q, r=document) => r.querySelector(q);
-  const inMobile = () => window.matchMedia(MQ).matches;
-
-  let panel = null;
-  const moves = [];            // { node, parent, next }
-  const moved = new WeakSet(); // to avoid double-moving the same card
-
-  // ---------- helpers ----------
   function getCanvasCard(){
-    const c = $('#c');
-    return c ? (c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement) : null;
+    const c = document.getElementById('c');
+    if (!c) return null;
+    return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
   }
-  function unhide(el){
-    if (!el) return;
-    el.hidden = false;
-    el.style.display = 'block';
-    el.style.visibility = 'visible';
-    el.style.maxHeight = 'none';
-    el.style.overflow  = 'visible';
-    try { el.classList.remove('hidden','sm:hidden','md:hidden','lg:hidden'); } catch(_) {}
-    // open details if wrapped
-    el.querySelectorAll('details').forEach(d => d.open = true);
-  }
-  function neutralizeFixedCanvas(){
-    const card = getCanvasCard();
-    if (card){
-      // Give it a stable id so our CSS can defeat inline styles
-      if (!card.id) card.id = 'raMobileCanvasCard';
-      Object.assign(card.style, {
-        position:'static', top:'', left:'', right:'', width:'', transform:'', margin:'0 0 12px 0', zIndex:''
-      });
-    }
+
+  function unfix(){
+    const card  = getCanvasCard();
     const ghost = document.getElementById('raCanvasGhost');
-    if (ghost){ try{ ghost.remove(); } catch(_){ ghost.style.display='none'; } }
-  }
-  function fitCanvasVisually(){
-    // View-only fit so it looks right on phones; exports remain perfect.
-    const all = $$('canvas'); if (!all.length) return;
-    const stage = all.reduce((a,b) => (b.width > (a?.width||0) ? b : a), null);
-    const wrap  = stage?.parentElement?.classList?.contains('canvas-container') ? stage.parentElement
-                 : (stage?.parentElement || stage);
-    if (!wrap) return;
 
-    const target = Math.min(620, Math.floor(window.innerWidth * 0.92));
-    wrap.style.width = target+'px';
-    wrap.style.height = target+'px';
-    wrap.style.margin = '0 auto 12px auto';
-    wrap.style.position = 'relative';
-    $$('canvas', wrap).forEach(cv => {
-      cv.style.width = target+'px';
-      cv.style.height = target+'px';
-      cv.style.maxWidth = '100%';
-      cv.style.display = 'block';
-    });
-
-    // Kill any tiny checkerboard strip just above/below
-    [wrap.previousElementSibling, wrap.nextElementSibling].forEach(el=>{
-      if (!el) return;
-      const bg = (getComputedStyle(el).backgroundImage||'');
-      const tiny = el.getBoundingClientRect().height < 16 || !(el.textContent||'').trim();
-      if (tiny || /linear-gradient|repeating/i.test(bg)){
-        el.style.display='none'; el.style.height='0'; el.style.margin='0'; el.style.padding='0';
-      }
-    });
-  }
-
-  // Build the mobile panel once, under the canvas card
-  function ensurePanel(){
-    if (panel) return panel;
-    const host = getCanvasCard();
-    panel = document.createElement('section');
-    panel.id = 'raMobileControls';
-    panel.style.cssText = [
-      'margin:12px 0 18px 0',
-      'border:1px solid #23242a',
-      'border-radius:12px',
-      'background:#0f1116',
-      'color:#e7e7ea',
-      'padding:12px'
-    ].join(';');
-    panel.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
-        <strong style="font:600 14px/1.2 -apple-system,Segoe UI,Roboto,Arial">Mobile Controls</strong>
-        <span style="font:12px/1.2 -apple-system,Segoe UI,Roboto,Arial;opacity:.7">Same tools as desktop • stacked for phone</span>
-      </div>
-      <div id="raMobileBody" style="display:flex;flex-direction:column;gap:12px"></div>
-    `;
-    (host?.parentNode || document.body).insertBefore(panel, host ? host.nextSibling : null);
-    return panel;
-  }
-
-  // Move the whole card that contains a known anchor id
-  function moveCardById(anchorId){
-    const el = document.getElementById(anchorId);
-    if (!el) return;
-    // Find a reasonable "card" container
-    const card = el.closest('.card, .panel, section, fieldset, .box, [data-card], form, div') || el;
-    if (moved.has(card)) return;
-    moves.push({ node: card, parent: card.parentNode, next: card.nextSibling });
-    moved.add(card);
-    unhide(card);
-    $('#raMobileBody', ensurePanel()).appendChild(card);
-  }
-
-  // If the Konva mobile host exists from older attempts, remove it and restore canvas
-  function killKonvaMobileHost(){
-    const host = document.getElementById('ra-mobile-stage-host');
-    if (!host) return;
-    const cv = host.querySelector('canvas');
-    if (cv){
-      const canvasCard = getCanvasCard() || document.body;
-      const wrap = cv.parentElement?.classList?.contains('canvas-container') ? cv.parentElement : cv;
-      canvasCard.insertBefore(wrap, canvasCard.firstChild);
+    if (ghost){
+      ghost.remove(); // this is the big blank spacer
     }
-    try { host.remove(); } catch(_){ host.style.display='none'; }
-  }
-
-  // Bring all important desktop features into the mobile panel
-  function portAllFeatureCards(){
-    // TEXT (Custom Text + ✨ Inspire me)
-    moveCardById('addCustomText');   // grabs the whole custom-text card
-
-    // SELECTION (and helpers)
-    moveCardById('duplicate');       // brings Selection card
-    moveCardById('raSnapRow');       // snap row (if it lives outside)
-    moveCardById('raHistoryRow');    // undo/redo row (if it lives outside)
-
-    // OVERLAYS
-    moveCardById('overlayUpload');   // upload + grid
-    moveCardById('ra2Shelf');        // Published Overlays shelf
-
-    // ANIMATE (our dock is a self-contained card)
-    moveCardById('raAnimDock');
-
-    // EXPORT
-    moveCardById('exportPng');       // brings export card (Open in New Tab included)
-    moveCardById('openNewTab');
-
-    // VIDEO
-    moveCardById('raVideoPanel');
-  }
-
-  // Return everything to original parents (desktop)
-  function restoreAll(){
-    // Put moved cards back
-    for (let i = moves.length - 1; i >= 0; i--){
-      const { node, parent, next } = moves[i];
-      try { parent.insertBefore(node, next || null); } catch(_){}
+    if (card){
+      Object.assign(card.style, {
+        position:'', zIndex:'', margin:'', left:'', top:'', right:'', transform:'', width:''
+      });
+      // mark so the desktop fixer (if any) won’t reapply while on mobile
+      card.setAttribute('data-ra-mobile-inflow','1');
     }
-    moves.length = 0;
-    moved.clear?.(); // WeakSet can't be cleared straightforwardly; harmless to leave
-    // Remove panel
-    if (panel){ try{ panel.remove(); } catch(_){ panel.style.display='none'; } panel = null; }
   }
 
-  // CSS to defeat inline styles from the fixed-center script & ensure visibility
-  (function injectCSS(){
-    const s = document.createElement('style');
-    s.textContent = `
-      @media ${MQ} {
-        #raMobileCanvasCard {
-          position: static !important;
-          top: auto !important; left: auto !important; right: auto !important;
-          width: auto !important; transform: none !important; margin: 0 0 12px 0 !important; z-index: auto !important;
-        }
-        #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
-        #ra-mobile-stage-host, #ra-mobile-stage-frame, #ra-mobile-checker { display:none !important; }
-        /* If any of our cards were hidden by responsive classes, show them */
-        .hidden, .sm\\:hidden, .md\\:hidden, .lg\\:hidden { display: block !important; }
-      }
-    `;
-    document.head.appendChild(s);
-  })();
+  function run(){ if (window.matchMedia(MQ).matches) unfix(); }
 
-  // Main apply/restore
-  function apply(){
-    if (!inMobile()) { restoreAll(); return; }
-    neutralizeFixedCanvas();
-    killKonvaMobileHost();
-    ensurePanel();
-    portAllFeatureCards();
-    fitCanvasVisually();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', apply, { once:true });
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', run, {once:true});
   } else {
-    apply();
+    run();
   }
-  // Keep it applied as DOM/layout changes
-  new MutationObserver(() => { if (inMobile()) apply(); })
-    .observe(document.documentElement, { childList:true, subtree:true });
-  window.addEventListener('resize', () => { inMobile() ? apply() : restoreAll(); }, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(() => { inMobile() ? apply() : restoreAll(); }, 120), { passive:true });
+  window.addEventListener('resize',           run, {passive:true});
+  window.addEventListener('orientationchange',() => setTimeout(run, 100), {passive:true});
 })();
