@@ -2805,158 +2805,218 @@
 })();
 
 /* ==========================================================
-   RA_MOBILE_DISABLE_FLOAT_AND_UNHIDE_V2 (≤900px, Fabric only)
-   Purpose:
-   • Turn OFF fixed-centering on phones (remove ghost, stop floating canvas).
-   • Neutralize the Konva v28 mobile host (not used by Fabric).
-   • Fit Fabric canvas visually to phone width (view-only).
-   • Unhide all feature panels so mobile sees desktop features.
-   • Desktop remains untouched.
+   RA_MOBILE_PANEL_PORT_V1  (Fabric; mobile only ≤900px)
+   What this does
+   • Stops the floating canvas on phones (removes ghost; puts it back in flow).
+   • Builds a "Mobile Controls" panel under the canvas.
+   • Moves the real desktop cards into that panel so ALL features show on mobile:
+       - Custom Text (+ ✨ Inspire me)
+       - Selection (incl. Undo/Redo row & Snap row)
+       - Overlays (upload grid) + Published Overlays shelf
+       - Animate
+       - Export (Open in New Tab still works)
+       - Video (token-only)
+   • Restores everything back to the desktop layout when width > 900px.
+   • Desktop is never modified.
    ========================================================== */
 (() => {
-  const MQ='(max-width: 900px)';
-  if (!window.matchMedia(MQ).matches) return;
-  if (window.__RA_MBL_KILL_FLOAT_V2__) return;
-  window.__RA_MBL_KILL_FLOAT_V2__=true;
+  const MQ = '(max-width: 900px)';
+  if (window.__RA_MOBILE_PANEL_PORT_V1__) return;
+  window.__RA_MOBILE_PANEL_PORT_V1__ = true;
 
-  const $$=(q,r=document)=>Array.from(r.querySelectorAll(q));
-  const $=(q,r=document)=>r.querySelector(q);
+  const $$ = (q, r=document) => Array.from(r.querySelectorAll(q));
+  const $  = (q, r=document) => r.querySelector(q);
+  const inMobile = () => window.matchMedia(MQ).matches;
 
+  let panel = null;
+  const moves = [];            // { node, parent, next }
+  const moved = new WeakSet(); // to avoid double-moving the same card
+
+  // ---------- helpers ----------
   function getCanvasCard(){
-    const c=$('#c');
+    const c = $('#c');
     return c ? (c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement) : null;
-  }
-  function closestCard(el){
-    return el?.closest?.('.card, .panel, section, form, fieldset, .box, .content, main, div') || null;
   }
   function unhide(el){
     if (!el) return;
-    el.hidden=false;
-    el.style.display='block';
-    el.style.visibility='visible';
-    el.style.maxHeight='none';
-    el.style.overflow='visible';
-    try { el.classList.remove('hidden','sm:hidden','md:hidden','lg:hidden'); } catch(_){}
-    const det=el.closest?.('details'); if(det) det.open=true;
+    el.hidden = false;
+    el.style.display = 'block';
+    el.style.visibility = 'visible';
+    el.style.maxHeight = 'none';
+    el.style.overflow  = 'visible';
+    try { el.classList.remove('hidden','sm:hidden','md:hidden','lg:hidden'); } catch(_) {}
+    // open details if wrapped
+    el.querySelectorAll('details').forEach(d => d.open = true);
   }
-
-  // ---------- CSS overrides (mobile only) ----------
-  (function css(){
-    const s=document.createElement('style');
-    s.textContent = `
-      @media ${MQ}{
-        /* Force canvas card into normal flow; defeat inline fixed styles */
-        #raMobileCanvasCard{
-          position:static !important; top:auto!important; left:auto!important; right:auto!important;
-          width:auto!important; transform:none!important; margin:0 0 12px 0 !important; z-index:auto !important;
-        }
-        /* Kill the ghost spacer */
-        #raCanvasGhost{ display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
-
-        /* Neutralize the Konva mobile host from v28 (Fabric app doesn't use it) */
-        #ra-mobile-stage-host, #ra-mobile-stage-frame, #ra-mobile-checker{ display:none !important; }
-
-        /* Always show our feature blocks if present */
-        #raAnimDock, #raVideoPanel, #raHistoryRow, #ra2Shelf,
-        #overlayGrid, #raSnapRow { display:block !important; visibility:visible !important; }
-      }`;
-    document.head.appendChild(s);
-  })();
-
-  // ---------- Stop the fixed-center behavior on phones ----------
-  function neutralizeFixed(){
-    const card=getCanvasCard();
+  function neutralizeFixedCanvas(){
+    const card = getCanvasCard();
     if (card){
-      if(!card.id) card.id='raMobileCanvasCard';
+      // Give it a stable id so our CSS can defeat inline styles
+      if (!card.id) card.id = 'raMobileCanvasCard';
       Object.assign(card.style, {
         position:'static', top:'', left:'', right:'', width:'', transform:'', margin:'0 0 12px 0', zIndex:''
       });
     }
-    const ghost=document.getElementById('raCanvasGhost');
+    const ghost = document.getElementById('raCanvasGhost');
     if (ghost){ try{ ghost.remove(); } catch(_){ ghost.style.display='none'; } }
   }
-
-  // ---------- If v28 host exists, remove it and restore canvas to card ----------
-  function killMobileStageHost(){
-    const host = document.getElementById('ra-mobile-stage-host');
-    if (host){
-      const cv = host.querySelector('canvas');
-      if (cv){
-        const card=getCanvasCard() || document.body;
-        const wrap = cv.parentElement?.classList?.contains('canvas-container') ? cv.parentElement : cv;
-        card.insertBefore(wrap, card.firstChild);
-      }
-      try { host.remove(); } catch(_) { host.style.display='none'; }
-    }
-    // Unhide any parent that v28 hid with inline display:none
-    $$('[style]').forEach(el=>{
-      const st=(el.getAttribute('style')||'').toLowerCase();
-      if (st.includes('display: none')) el.style.display='';
-    });
-  }
-
-  // ---------- Fit the Fabric stage visually to phone width (view-only) ----------
-  function fitFabric(){
+  function fitCanvasVisually(){
+    // View-only fit so it looks right on phones; exports remain perfect.
     const all = $$('canvas'); if (!all.length) return;
-    const stage = all.reduce((a,b)=> (b.width > (a?.width||0) ? b : a), null);
-    const wrap = stage?.parentElement?.classList?.contains('canvas-container') ? stage.parentElement : (stage?.parentElement || stage);
+    const stage = all.reduce((a,b) => (b.width > (a?.width||0) ? b : a), null);
+    const wrap  = stage?.parentElement?.classList?.contains('canvas-container') ? stage.parentElement
+                 : (stage?.parentElement || stage);
     if (!wrap) return;
 
     const target = Math.min(620, Math.floor(window.innerWidth * 0.92));
-    wrap.style.width  = target + 'px';
-    wrap.style.height = target + 'px';
+    wrap.style.width = target+'px';
+    wrap.style.height = target+'px';
     wrap.style.margin = '0 auto 12px auto';
     wrap.style.position = 'relative';
     $$('canvas', wrap).forEach(cv => {
-      cv.style.width  = target+'px';
+      cv.style.width = target+'px';
       cv.style.height = target+'px';
-      cv.style.maxWidth='100%';
-      cv.style.display='block';
+      cv.style.maxWidth = '100%';
+      cv.style.display = 'block';
     });
 
-    // Hide any tiny checkerboard strip above/below
+    // Kill any tiny checkerboard strip just above/below
     [wrap.previousElementSibling, wrap.nextElementSibling].forEach(el=>{
       if (!el) return;
-      const bg=(getComputedStyle(el).backgroundImage||'');
-      const tiny = el.getBoundingClientRect().height < 18 || !(el.textContent||'').trim();
+      const bg = (getComputedStyle(el).backgroundImage||'');
+      const tiny = el.getBoundingClientRect().height < 16 || !(el.textContent||'').trim();
       if (tiny || /linear-gradient|repeating/i.test(bg)){
         el.style.display='none'; el.style.height='0'; el.style.margin='0'; el.style.padding='0';
       }
     });
   }
 
-  // ---------- Make sure the real panels are visible on mobile ----------
-  function unhideFeatureCards(){
-    const anchors=[
-      '#customText','#addCustomText','#fontFamily','#idFontFamily','#raAiQuoteBtn',
-      '#duplicate','#delete','#opacity','#blendMode','#raSnapRow','#raHistoryRow',
-      '#overlayUpload','#overlayGrid','#ra2Shelf',
-      '#raAnimDock','#exportPng','#openNewTab','#exportMultiplier',
-      '#raVideoPanel'
-    ];
-    anchors.forEach(sel=>{
-      const el=$(sel); if (!el) return;
-      const card=closestCard(el); if (!card) return;
-      unhide(card);
-    });
+  // Build the mobile panel once, under the canvas card
+  function ensurePanel(){
+    if (panel) return panel;
+    const host = getCanvasCard();
+    panel = document.createElement('section');
+    panel.id = 'raMobileControls';
+    panel.style.cssText = [
+      'margin:12px 0 18px 0',
+      'border:1px solid #23242a',
+      'border-radius:12px',
+      'background:#0f1116',
+      'color:#e7e7ea',
+      'padding:12px'
+    ].join(';');
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+        <strong style="font:600 14px/1.2 -apple-system,Segoe UI,Roboto,Arial">Mobile Controls</strong>
+        <span style="font:12px/1.2 -apple-system,Segoe UI,Roboto,Arial;opacity:.7">Same tools as desktop • stacked for phone</span>
+      </div>
+      <div id="raMobileBody" style="display:flex;flex-direction:column;gap:12px"></div>
+    `;
+    (host?.parentNode || document.body).insertBefore(panel, host ? host.nextSibling : null);
+    return panel;
   }
 
+  // Move the whole card that contains a known anchor id
+  function moveCardById(anchorId){
+    const el = document.getElementById(anchorId);
+    if (!el) return;
+    // Find a reasonable "card" container
+    const card = el.closest('.card, .panel, section, fieldset, .box, [data-card], form, div') || el;
+    if (moved.has(card)) return;
+    moves.push({ node: card, parent: card.parentNode, next: card.nextSibling });
+    moved.add(card);
+    unhide(card);
+    $('#raMobileBody', ensurePanel()).appendChild(card);
+  }
+
+  // If the Konva mobile host exists from older attempts, remove it and restore canvas
+  function killKonvaMobileHost(){
+    const host = document.getElementById('ra-mobile-stage-host');
+    if (!host) return;
+    const cv = host.querySelector('canvas');
+    if (cv){
+      const canvasCard = getCanvasCard() || document.body;
+      const wrap = cv.parentElement?.classList?.contains('canvas-container') ? cv.parentElement : cv;
+      canvasCard.insertBefore(wrap, canvasCard.firstChild);
+    }
+    try { host.remove(); } catch(_){ host.style.display='none'; }
+  }
+
+  // Bring all important desktop features into the mobile panel
+  function portAllFeatureCards(){
+    // TEXT (Custom Text + ✨ Inspire me)
+    moveCardById('addCustomText');   // grabs the whole custom-text card
+
+    // SELECTION (and helpers)
+    moveCardById('duplicate');       // brings Selection card
+    moveCardById('raSnapRow');       // snap row (if it lives outside)
+    moveCardById('raHistoryRow');    // undo/redo row (if it lives outside)
+
+    // OVERLAYS
+    moveCardById('overlayUpload');   // upload + grid
+    moveCardById('ra2Shelf');        // Published Overlays shelf
+
+    // ANIMATE (our dock is a self-contained card)
+    moveCardById('raAnimDock');
+
+    // EXPORT
+    moveCardById('exportPng');       // brings export card (Open in New Tab included)
+    moveCardById('openNewTab');
+
+    // VIDEO
+    moveCardById('raVideoPanel');
+  }
+
+  // Return everything to original parents (desktop)
+  function restoreAll(){
+    // Put moved cards back
+    for (let i = moves.length - 1; i >= 0; i--){
+      const { node, parent, next } = moves[i];
+      try { parent.insertBefore(node, next || null); } catch(_){}
+    }
+    moves.length = 0;
+    moved.clear?.(); // WeakSet can't be cleared straightforwardly; harmless to leave
+    // Remove panel
+    if (panel){ try{ panel.remove(); } catch(_){ panel.style.display='none'; } panel = null; }
+  }
+
+  // CSS to defeat inline styles from the fixed-center script & ensure visibility
+  (function injectCSS(){
+    const s = document.createElement('style');
+    s.textContent = `
+      @media ${MQ} {
+        #raMobileCanvasCard {
+          position: static !important;
+          top: auto !important; left: auto !important; right: auto !important;
+          width: auto !important; transform: none !important; margin: 0 0 12px 0 !important; z-index: auto !important;
+        }
+        #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+        #ra-mobile-stage-host, #ra-mobile-stage-frame, #ra-mobile-checker { display:none !important; }
+        /* If any of our cards were hidden by responsive classes, show them */
+        .hidden, .sm\\:hidden, .md\\:hidden, .lg\\:hidden { display: block !important; }
+      }
+    `;
+    document.head.appendChild(s);
+  })();
+
+  // Main apply/restore
   function apply(){
-    neutralizeFixed();
-    killMobileStageHost();
-    fitFabric();
-    unhideFeatureCards();
+    if (!inMobile()) { restoreAll(); return; }
+    neutralizeFixedCanvas();
+    killKonvaMobileHost();
+    ensurePanel();
+    portAllFeatureCards();
+    fitCanvasVisually();
   }
 
-  if (document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', apply, {once:true});
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply, { once:true });
   } else {
     apply();
   }
-
-  // Keep it applied as the UI changes or rotates
-  new MutationObserver(()=>{ if (window.matchMedia(MQ).matches) apply(); })
-    .observe(document.documentElement,{childList:true,subtree:true});
-  window.addEventListener('resize', ()=>{ if (window.matchMedia(MQ).matches) apply(); }, {passive:true});
-  window.addEventListener('orientationchange', ()=> setTimeout(()=>{ if (window.matchMedia(MQ).matches) apply(); }, 120), {passive:true});
+  // Keep it applied as DOM/layout changes
+  new MutationObserver(() => { if (inMobile()) apply(); })
+    .observe(document.documentElement, { childList:true, subtree:true });
+  window.addEventListener('resize', () => { inMobile() ? apply() : restoreAll(); }, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(() => { inMobile() ? apply() : restoreAll(); }, 120), { passive:true });
 })();
