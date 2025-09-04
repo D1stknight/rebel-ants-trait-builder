@@ -2876,3 +2876,221 @@
   new MutationObserver(hide).observe(document.documentElement, { childList:true, subtree:true });
 })();
 
+/* ==========================================================
+   RA_CLEAN_WATERMARK_CENTER_ONLY_V1
+   • Removes ALL corner-stamp groups (base & overlays) automatically.
+   • Keeps one centered watermark layer.
+   • Watermark controls are ADMIN ONLY (?admin=1).
+   • History-safe: if your undo module exposes window.raHist, all
+     internal admin operations are muted so Undo/Redo stays intuitive.
+   ========================================================== */
+(() => {
+  if (window.__RA_CLEAN_WM_V1__) return;
+  window.__RA_CLEAN_WM_V1__ = true;
+
+  // ---------- small helpers ----------
+  const $  = (s, r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+
+  // Undo/Redo mute hooks (no-ops if your undo patch isn't present)
+  if (!window.raHist) window.raHist = { begin:()=>{}, end:()=>{}, wrap: async fn=>await fn() };
+
+  // ---------- state (persisted) ----------
+  const STORE = 'ra_clean_wm_center_v1';
+  const STATE = {
+    enabled: true,
+    opacity: 0.18,
+    sizePct: 0.88,           // watermark target width relative to canvas
+    img: null,               // HTMLImageElement
+    dataURL: null
+  };
+  try { Object.assign(STATE, JSON.parse(localStorage.getItem(STORE)||'{}')); } catch(_){}
+  const save = ()=>{ try { localStorage.setItem(STORE, JSON.stringify({enabled:STATE.enabled,opacity:STATE.opacity,sizePct:STATE.sizePct})); } catch(_){} };
+
+  // Watermark source: keep the same precedence you’ve used
+  const queryWM = new URLSearchParams(location.search).get('wm');
+  const WM_CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
+
+  async function fetchAsDataURL(u){
+    const r = await fetch(u, { cache:'no-store', mode:'cors' });
+    if (!r.ok) throw new Error('fetch failed');
+    const b = await r.blob();
+    return await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
+  }
+  async function ensureWMImage(){
+    if (STATE.img) return true;
+    for (const u of WM_CAND){
+      try{
+        const data = await fetchAsDataURL(u);
+        const im = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.crossOrigin='anonymous'; i.src=data; });
+        STATE.img = im; STATE.dataURL = data; return true;
+      }catch(_){}
+    }
+    return false;
+  }
+
+  // ---------- centered watermark layer ----------
+  function ensureCenteredWM(c){
+    if (!c || !STATE.img) return null;
+    // only show WM if there is a base image at all
+    const hasBase = (c.getObjects()||[]).some(o=>o._isBase && !o._isBgRect);
+    let wm = (c.getObjects()||[]).find(o=>o._raWMCenter);
+    if (!STATE.enabled || !hasBase){
+      if (wm) { c.remove(wm); c.requestRenderAll(); }
+      return null;
+    }
+    if (!wm){
+      wm = new fabric.Image(STATE.img, {
+        originX:'center', originY:'center',
+        left:c.getWidth()/2, top:c.getHeight()/2,
+        selectable:false, evented:false, hasControls:false,
+        _raWMCenter:true, _raSys:true
+      });
+      c.add(wm);
+    }
+    const targetW = clamp(Math.round(c.getWidth()*STATE.sizePct), 16, c.getWidth()*1.25);
+    const s = targetW / (STATE.img.width||targetW);
+    wm.scaleX = s; wm.scaleY = s;
+    wm.opacity = clamp(STATE.opacity, 0, 1);
+    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
+    wm.setCoords();
+    c.bringToFront(wm);
+    return wm;
+  }
+
+  // ---------- corner-stamp removal (base & overlays) ----------
+  let REPLACING = 0;
+
+  function groupHasStamps(g){
+    if (!g || g.type!=='group') return false;
+    const kids=g._objects||[];
+    return kids.some(k=> k && (k._isWatermark || k.raWM || k.raPos));
+  }
+
+  function unwrapGroupPreservingLook(c, g, role){
+    // role: 'base' or 'overlay'
+    const kids=g._objects||[];
+    const img = kids.find(k=>k.type==='image' && !(k._isWatermark||k.raWM||k.raPos));
+    if (!img) return;
+
+    REPLACING++; window.raHist.begin();
+    try{
+      img.clone(cl=>{
+        const ctr = g.getCenterPoint();
+        const angle = (g.angle||0) + (img.angle||0);
+        const sX = (g.scaleX||1) * (img.scaleX||1);
+        const sY = (g.scaleY||1) * (img.scaleY||1);
+        cl.set({
+          originX:'center', originY:'center',
+          left:ctr.x, top:ctr.y, angle, scaleX:sX, scaleY:sY,
+          selectable: role==='base' ? false : true,
+          evented:    role==='base' ? false : true,
+          hasControls:role==='base' ? false : true
+        });
+        if (role==='base'){ cl._isBase=true; cl._raSource='upload'; }
+        if (role==='overlay'){ cl._kind='overlay'; }
+        const z = c.getObjects().indexOf(g);
+        c.remove(g); c.add(cl); if (z>=0) c.moveTo(cl, z);
+        cl.setCoords(); c.requestRenderAll();
+      });
+    } finally { window.raHist.end(); REPLACING--; }
+  }
+
+  function scanAndClean(c){
+    if (!c) return;
+    (c.getObjects()||[]).slice().forEach(o=>{
+      if (o.type==='group' && groupHasStamps(o)){
+        if (o._isBase){ unwrapGroupPreservingLook(c, o, 'base'); }
+        else          { unwrapGroupPreservingLook(c, o, 'overlay'); }
+      }
+    });
+    ensureCenteredWM(c); c.requestRenderAll();
+  }
+
+  // ---------- ADMIN dock (only with ?admin=1) ----------
+  function ensureAdminDock(){
+    if (!isAdmin) return null;
+    if ($('#raCleanWmAdmin')) return $('#raCleanWmAdmin');
+
+    const holder =
+      $$('h3').find(h=>/selection/i.test((h.textContent||'').trim()))?.parentNode
+      || $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode
+      || document.body;
+
+    const pane=document.createElement('div');
+    pane.id='raCleanWmAdmin';
+    pane.style.cssText='margin:10px 0;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea;padding:10px';
+    pane.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Watermark</strong>
+        <div style="display:flex;gap:6px">
+          <button id="raWmCRefresh" class="btn small">Refresh</button>
+          <button id="raWmCHide" class="btn small">Hide</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <label><input id="raWmCEnabled" type="checkbox"> Enabled</label>
+        <label style="display:flex;align-items:center;gap:6px">Opacity
+          <input id="raWmCOpacity" type="range" min="0" max="1" step="0.01" style="width:140px">
+        </label>
+        <label style="display:flex;align-items:center;gap:6px">Size (width %)
+          <input id="raWmCSize" type="range" min="0.3" max="1.2" step="0.01" style="width:160px">
+        </label>
+      </div>
+      <div style="margin-top:6px;font-size:11px;opacity:.65">Corner stamps are forcibly removed everywhere.</div>
+    `;
+    holder.appendChild(pane);
+
+    $('#raWmCEnabled').checked = !!STATE.enabled;
+    $('#raWmCOpacity').value   = STATE.opacity;
+    $('#raWmCSize').value      = STATE.sizePct;
+
+    const c=C();
+    const sync = ()=> window.raHist.wrap(()=>{ save(); ensureCenteredWM(c); c.requestRenderAll(); });
+
+    $('#raWmCEnabled').onchange = e=>{ STATE.enabled = !!e.target.checked; sync(); };
+    $('#raWmCOpacity').oninput  = e=>{ STATE.opacity = clamp(parseFloat(e.target.value||'0.18'),0,1); sync(); };
+    $('#raWmCSize').oninput     = e=>{ STATE.sizePct = clamp(parseFloat(e.target.value||'0.88'),0.3,1.2); sync(); };
+    $('#raWmCRefresh').onclick  = ()=> sync();
+    $('#raWmCHide').onclick     = ()=>{ pane.style.display='none'; };
+
+    return pane;
+  }
+
+  // ---------- boot & wiring ----------
+  async function boot(){
+    await ensureWMImage();
+    const c = C(); if (!c) return;
+
+    ensureAdminDock();
+
+    // Clean any existing stamp-groups on startup
+    scanAndClean(c);
+
+    if (!c.__raCleanWMV1){
+      c.__raCleanWMV1 = true;
+      // Any newly-added stamped groups get unwrapped immediately
+      c.on('object:added', (e)=>{
+        const t=e?.target; if (!t || REPLACING) return;
+        if (t.type==='group' && groupHasStamps(t)){
+          unwrapGroupPreservingLook(c, t, t._isBase ? 'base' : 'overlay');
+        }
+        ensureCenteredWM(c);
+      });
+      // Keep WM sized/centered when things change
+      c.on('object:modified', ()=> ensureCenteredWM(c));
+      c.on('object:removed',  ()=> ensureCenteredWM(c));
+    }
+
+    // If the canvas gets resized by your size controls, re-fit the WM
+    try {
+      new ResizeObserver(()=> ensureCenteredWM(c)).observe(c.getElement ? c.getElement() : (c.wrapperEl||c.upperCanvasEl));
+    }catch(_){}
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+})();
