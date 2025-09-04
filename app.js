@@ -2805,189 +2805,145 @@
 })();
 
 /* ==========================================================
-   RA_MOBILE_FORCE_SHOW_SECTIONS_V6 — MOBILE ONLY (≤920px)
-   Goal:
-     • Make mobile show the SAME feature panels as desktop, without moving DOM.
-     • Unhide any cards hidden by Tailwind / layout (hidden, md:hidden, display:none).
-     • Force the main grid into a single column on phones.
-     • Desktop untouched.
+   RA_MOBILE_SHOW_ALL_FEATURES_AND_REMOVE_GAP_V4
+   - Mobile only (≤ 900px)
+   - Forces all control panels visible (Custom Text, Selection, Overlays,
+     Published Overlays, Animate, Export, Video).
+   - Collapses to one column on mobile so nothing is off‑screen.
+   - Removes the desktop fixed‑center "ghost" spacer that was causing the gap.
+   - Leaves desktop completely untouched.
    ========================================================== */
 (() => {
-  if (window.__RA_MOBILE_FORCE_SHOW_SECTIONS_V6__) return;
-  window.__RA_MOBILE_FORCE_SHOW_SECTIONS_V6__ = true;
+  const MQ = '(max-width: 900px)';
+  if (!window.matchMedia(MQ).matches) return;
+  if (window.__RA_MOBILE_FEATURES_V4__) return;
+  window.__RA_MOBILE_FEATURES_V4__ = true;
 
-  const MQ = '(max-width: 920px)';
-  const isMobile = () => window.matchMedia(MQ).matches;
+  // --- CSS overrides (mobile only) ---
+  (function injectCSS(){
+    if (document.getElementById('ra-mobile-reveal-css-v4')) return;
+    const s = document.createElement('style');
+    s.id = 'ra-mobile-reveal-css-v4';
+    s.textContent = `
+      @media ${MQ} {
+        /* Kill the desktop fixed-center ghost that leaves a big blank gap */
+        #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
 
-  // Known control IDs that live inside each card
-  const GROUPS = {
-    token:       ['tokenIdInput','baseUpload','loadToken','loadUrl','clearUpload','baseUrl'],
-    customText:  ['customText','addCustomText','inspireMe','fontFamily','fontSize','fontColor','strokeColor','strokeWidth'],
-    overlays:    ['overlayGrid','overlayUpload','clearOverlayGrid'],
-    selection:   ['duplicate','delete','opacity','blendMode','bringFront','sendBack','flipX','flipY','lock','unlockAll','clearAllOverlays','undoBtn','redoBtn','saveDraftBtn','restoreDraftBtn','raHistoryRow'],
-    animate:     ['raAnimStyle','raAnimDuration','raAnimApply','raAnimPreview','raAnimExport','raAnimate'],
-    exportBox:   ['exportPng','openNewTab','exportMultiplier','exportPreview','manualLink']
-  };
+        /* Make sure our feature panels can show even if an outer class sets display:none */
+        #raAnimDock, #raVideoPanel, #raHistoryRow, #ra2Shelf { display:block !important; visibility:visible !important; }
 
-  // Utility: climb until we hit a reasonable "card" container
-  function findCardFor(el){
-    if (!el) return null;
-    let n = el;
-    for (let i = 0; i < 8 && n; i++) {
-      const cls = (n.className || '').toString();
-      if (
-        /(^|\s)(card|panel|box|content|container|section|wrapper)(\s|$)/i.test(cls) ||
-        ['SECTION','ARTICLE','ASIDE','MAIN'].includes(n.tagName)
-      ) return n;
-      n = n.parentElement;
-    }
-    return el.parentElement || el; // fallback
-  }
+        /* Normalize card spacing so no giant voids appear */
+        .card, .panel, section, .box, .content { margin-bottom: 12px; }
 
-  // Utility: get all ancestors to body
-  function ancestors(el){
-    const list = [];
-    let n = el;
-    while (n && n !== document.body && n.nodeType === 1) {
-      list.push(n);
-      n = n.parentElement;
-    }
-    return list;
-  }
-
-  // Force-show a node and any hidden ancestor (mobile only)
-  function forceShowChain(node){
-    const HIDE_CLASSES = ['hidden','sm:hidden','md:hidden','lg:hidden','xl:hidden','2xl:hidden','sr-only','collapse'];
-    const chain = ancestors(node);
-    chain.forEach(n => {
-      try {
-        // Remove Tailwind "hidden" classes
-        if (n.classList) HIDE_CLASSES.forEach(c => n.classList.remove(c));
-        // Remove HTML hiding
-        if (n.hasAttribute && n.hasAttribute('hidden')) n.removeAttribute('hidden');
-        if (n.getAttribute && n.getAttribute('aria-hidden') === 'true') n.setAttribute('aria-hidden','false');
-
-        const cs = window.getComputedStyle(n);
-        if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) {
-          n.style.setProperty('display', 'block', 'important');
-          n.style.setProperty('visibility', 'visible', 'important');
-          n.style.setProperty('opacity', '1', 'important');
-          // Avoid weird stacking on mobile
-          if (cs.position === 'fixed' || cs.position === 'absolute') {
-            n.style.setProperty('position', 'static', 'important');
-            n.style.removeProperty('top'); n.style.removeProperty('left'); n.style.removeProperty('right'); n.style.removeProperty('bottom');
-          }
-          // In case a max-height:0 collapses it
-          n.style.setProperty('max-height', 'none', 'important');
-          n.style.setProperty('overflow', 'visible', 'important');
+        /* If a grid container is used for the side-by-side desktop layout,
+           collapse to a single column on mobile */
+        .grid, .grid-cols-2, .grid-cols-3, .grid-cols-12 {
+          grid-template-columns: 1fr !important;
+          column-gap: 12px !important;
         }
-      } catch(_) {}
-    });
-  }
-
-  // Find the cards we care about by the controls they contain
-  function collectCards(){
-    const cards = new Set();
-    Object.values(GROUPS).forEach(ids => {
-      ids.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) {
-          const card = findCardFor(el);
-          if (card) cards.add(card);
-        }
-      });
-    });
-    return Array.from(cards);
-  }
-
-  // Lowest common ancestor for all cards — usually the grid/root we want to collapse to 1 col
-  function lowestCommonAncestor(nodes){
-    if (!nodes.length) return null;
-    const paths = nodes.map(n => [n, ...ancestors(n)]);
-    // Start with first path; find the first element that appears in all paths
-    for (const candidate of paths[0]) {
-      if (paths.every(p => p.includes(candidate))) return candidate;
-    }
-    return null;
-  }
-
-  // Collapse the grid to single column on phones
-  function forceOneColumn(root){
-    if (!root) return;
-    try {
-      const cs = getComputedStyle(root);
-      // Ensure it's a block/grid that stacks naturally
-      if (cs.display.includes('grid')) {
-        root.style.setProperty('grid-template-columns', '1fr', 'important');
-        root.style.setProperty('grid-auto-flow', 'row', 'important');
-        root.style.setProperty('gap', '12px', 'important');
-      } else if (cs.display.includes('flex')) {
-        root.style.setProperty('display', 'block', 'important');
-      } else {
-        root.style.setProperty('display', 'block', 'important');
       }
-      root.style.setProperty('max-width', '100%', 'important');
-      root.style.setProperty('overflow', 'visible', 'important');
-    } catch(_) {}
+    `;
+    document.head.appendChild(s);
+  })();
+
+  // Small helpers
+  const $$ = (q,r=document)=>Array.from(r.querySelectorAll(q));
+  const  $ = (q,r=document)=>r.querySelector(q);
+
+  // Remove "hidden" constraints and open accordions around target cards
+  function unhide(el){
+    if (!el) return;
+    el.hidden = false;
+    el.style.display   = 'block';
+    el.style.visibility= 'visible';
+    el.style.maxHeight = 'none';
+    el.style.overflow  = 'visible';
+    // Tailwind/global "hidden" classes—inline style wins, but drop them anyway
+    try { el.classList.remove('hidden','sm:hidden','xs:hidden'); } catch(_){}
+    // Open surrounding <details> or accordions
+    const det = el.closest('details'); if (det) det.open = true;
+    // Common ARIA toggles
+    $$('[aria-expanded="false"]', el).forEach(n => n.setAttribute('aria-expanded','true'));
   }
 
-  // Keep the canvas card visible (not floating), but don’t change its working desktop size
-  function normalizeCanvasCard(){
-    const c = document.getElementById('c') || document.querySelector('canvas');
-    if (!c) return;
-    const card = findCardFor(c);
-    if (!card) return;
-    const cs = getComputedStyle(card);
-    if (cs.position === 'fixed' || cs.position === 'absolute') {
-      card.style.setProperty('position', 'relative', 'important');
-      card.style.removeProperty('top'); card.style.removeProperty('left');
-      card.style.removeProperty('right'); card.style.removeProperty('bottom');
-      card.style.removeProperty('transform');
+  // Find a "card" by heading text (h1..h4) and unhide the whole section
+  function revealCardByHeading(regex){
+    const h = $$('h1,h2,h3,h4').find(n => regex.test((n.textContent||'').trim()));
+    if (!h) return false;
+    const card = h.closest('.card, .panel, section, .box, .content, form, fieldset, div') || h.parentElement;
+    unhide(card);
+    return true;
+  }
+
+  // Force everything visible on mobile
+  function revealAll(){
+    // 1) Unhide the known feature sections by their headings
+    const heads = [
+      /custom\s*text/i,
+      /selection/i,
+      /overlays/i,
+      /published\s*overlays/i,
+      /animate|animation/i,
+      /export/i,
+      /video/i,
+      /rebel\s*ant/i,
+      /token/i
+    ];
+    heads.forEach(revealCardByHeading);
+
+    // 2) Make sure our injected panels are visible
+    ['#raAnimDock','#raVideoPanel','#raHistoryRow','#ra2Shelf'].forEach(sel=>{
+      const el = $(sel); if (el){ el.style.display='block'; el.style.visibility='visible'; }
+    });
+
+    // 3) Collapse the container that holds these cards to one column (mobile)
+    const anchor =
+      revealCardByHeading(/rebel\s*ant/i) ||
+      revealCardByHeading(/custom\s*text/i) ||
+      $('#raAnimDock') || $('#raVideoPanel');
+
+    // Find a reasonable deck/container above the cards
+    const anyCardEl =
+      $$('h1,h2,h3,h4').find(n => /rebel\s*ant|custom\s*text|overlays|export|animate|video/i.test((n.textContent||'').trim()))
+      ?.closest('.card, .panel, section, .box, .content, form, fieldset, div');
+
+    const deck = (anyCardEl && anyCardEl.parentElement) || document.querySelector('.grid, .content, main, .container') || document.body;
+    if (deck){
+      const cs = getComputedStyle(deck);
+      if (cs.display.includes('grid')) deck.style.gridTemplateColumns = '1fr';
+      deck.style.display = cs.display.includes('grid') ? cs.display : 'block';
     }
-    // Make sure it doesn't overlap following cards on mobile
-    card.style.setProperty('z-index', '1', 'important');
-    card.style.setProperty('margin-bottom', '12px', 'important');
-    // Prevent any rogue checkerboard "strip" directly before/after
-    [card.previousElementSibling, card.nextElementSibling].forEach(sib => {
-      if (!sib) return;
-      const bg = (getComputedStyle(sib).backgroundImage || '').toLowerCase();
-      const looksChecker = bg.includes('linear-gradient') || bg.includes('repeating');
-      const dead = (sib.textContent||'').trim()==='' && sib.getBoundingClientRect().height < 16;
-      if (looksChecker || dead) {
-        sib.style.setProperty('display','none','important');
-        sib.style.setProperty('height','0','important');
-        sib.style.setProperty('margin','0','important');
-        sib.style.setProperty('padding','0','important');
+
+    // 4) Make sure no leftover ghost/gap elements are visible near the canvas area
+    const ghost = $('#raCanvasGhost');
+    if (ghost){
+      ghost.style.display='none';
+      ghost.style.height='0';
+      ghost.style.margin='0';
+      ghost.style.padding='0';
+      ghost.setAttribute('data-ra-hidden-gap','1');
+    }
+
+    // 5) If any feature is still inside a parent that’s explicitly display:none,
+    //    walk up a couple of levels and unhide
+    ['#raAnimDock','#raVideoPanel','#raHistoryRow','#ra2Shelf'].forEach(sel=>{
+      let el=$(sel), steps=0;
+      while(el && steps<3){
+        const cs = el && getComputedStyle(el);
+        if (cs && (cs.display==='none' || cs.visibility==='hidden')){
+          unhide(el);
+        }
+        el = el.parentElement; steps++;
       }
     });
   }
 
-  function run(){
-    if (!isMobile()) return;
+  // Run now, and keep it applied as the DOM changes (Reacty UIs)
+  revealAll();
+  new MutationObserver(() => { if (window.matchMedia(MQ).matches) revealAll(); })
+    .observe(document.documentElement, { childList:true, subtree:true });
 
-    // 1) Make sure the canvas card behaves in flow on phones
-    normalizeCanvasCard();
-
-    // 2) Collect all feature cards (by their controls) and force-show them + ancestors
-    const cards = collectCards();
-    cards.forEach(forceShowChain);
-
-    // 3) Collapse their shared container to a single column
-    const root = lowestCommonAncestor(cards);
-    forceOneColumn(root);
-  }
-
-  // Keep it up-to-date as the app mutates (SPA / React)
-  const mo = new MutationObserver(() => { if (isMobile()) run(); });
-  mo.observe(document.documentElement, { childList:true, subtree:true });
-
-  window.addEventListener('resize', () => { if (isMobile()) run(); }, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(() => { if (isMobile()) run(); }, 120), { passive:true });
-
-  // First pass
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => run(), { once:true });
-  } else {
-    run();
-  }
+  // Re‑apply on rotate/resize (mobile only)
+  window.addEventListener('resize', () => { if (window.matchMedia(MQ).matches) revealAll(); }, {passive:true});
+  window.addEventListener('orientationchange', () => setTimeout(revealAll, 150), {passive:true});
 })();
