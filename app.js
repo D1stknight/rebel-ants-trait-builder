@@ -2875,3 +2875,1075 @@
   } else { hide(); }
   new MutationObserver(hide).observe(document.documentElement, { childList:true, subtree:true });
 })();
+
+/* ==========================================================
+   RA_WM_CENTER_ADMIN_NO_STAMPS_V2
+   • Removes corner stamps from EVERY new/old base or overlay.
+     (We strip the stamp children out of the group; no re-centering bugs.)
+   • One centered watermark layer with admin-only controls.
+     - Enable/disable
+     - Show on Tokens
+     - Show on Uploads
+     - Opacity + Size (width % of canvas)
+   • No dependency on your Undo/Redo patch and no overrides.
+     (We never touch window.raHist and we don’t replace base objects.)
+   ========================================================== */
+(() => {
+  if (window.__RA_WM_CENTER_ADMIN_NO_STAMPS_V2__) return;
+  window.__RA_WM_CENTER_ADMIN_NO_STAMPS_V2__ = true;
+
+  // ---------- helpers ----------
+  const $  = (s, r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+
+  // ---------- persisted state ----------
+  const KEY = 'ra_wm_center_admin_v2';
+  const STATE = {
+    enabled: true,
+    showOnTokens:  true,
+    showOnUploads: true,
+    opacity: 0.18,
+    sizePct: 0.88,                         // watermark width as % of canvas width
+    img: null,
+    dataURL: null
+  };
+  try { Object.assign(STATE, JSON.parse(localStorage.getItem(KEY)||'{}')); } catch(_){}
+  const save = ()=>{ try {
+    localStorage.setItem(KEY, JSON.stringify({
+      enabled:STATE.enabled,
+      showOnTokens:STATE.showOnTokens,
+      showOnUploads:STATE.showOnUploads,
+      opacity:STATE.opacity,
+      sizePct:STATE.sizePct
+    }));
+  } catch(_){} };
+
+  // ---------- load watermark image (same precedence you’ve used) ----------
+  const queryWM = new URLSearchParams(location.search).get('wm');
+  const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
+
+  async function fetchAsDataURL(u){
+    const r = await fetch(u, { cache:'no-store', mode:'cors' });
+    if (!r.ok) throw new Error('x');
+    const b = await r.blob();
+    return await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
+  }
+  async function ensureWM(){
+    if (STATE.img) return true;
+    for (const u of CAND){
+      try{
+        const data = await fetchAsDataURL(u);
+        const im = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.crossOrigin='anonymous'; i.src=data; });
+        STATE.img = im; STATE.dataURL = im.src; return true;
+      }catch(_){}
+    }
+    return false;
+  }
+
+  // ---------- identify base type ----------
+  function findBase(c){
+    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+  }
+  function baseIsToken(base){
+    // In your app: tokens were plain Image, uploads were Group.
+    // We keep that invariant by stripping stamp children in-place.
+    return !!(base && base.type === 'image');
+  }
+
+  // ---------- strip corner-stamp children from a group ----------
+  function isStamp(o){ return !!(o && (o._isWatermark || o.raWM || o.raPos)); }
+
+  function stripStampsFromGroup(g){
+    if (!g || g.type!=='group') return false;
+    const kids = (g._objects||[]);
+    const has = kids.some(isStamp);
+    if (!has) return false;
+
+    // remove only the stamp children; keep the main image and group transform
+    kids.slice().forEach(k => { if (isStamp(k)) g.remove(k); });
+    try {
+      g._calcBounds && g._calcBounds();
+      g._updateObjectCoords && g._updateObjectCoords();
+      g.dirty = true; g.setCoords();
+    } catch(_){}
+    return true;
+  }
+
+  function cleanCornerStamps(c){
+    if (!c) return;
+    (c.getObjects()||[]).forEach(o=>{
+      if (o.type==='group') stripStampsFromGroup(o);
+    });
+    c.requestRenderAll();
+  }
+
+  // ---------- centered watermark layer ----------
+  function ensureCenteredWM(c){
+    if (!c || !STATE.img) return;
+
+    const base = findBase(c);
+    const hasBase = !!base;
+    const isToken = baseIsToken(base);
+
+    const shouldShow =
+      STATE.enabled &&
+      hasBase &&
+      ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads));
+
+    let wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
+    if (!shouldShow){
+      if (wm){ c.remove(wm); c.requestRenderAll(); }
+      return;
+    }
+
+    if (!wm){
+      wm = new fabric.Image(STATE.img, {
+        originX:'center', originY:'center',
+        left:c.getWidth()/2, top:c.getHeight()/2,
+        selectable:false, evented:false, hasControls:false,
+        _raWMCenter:true, _raSys:true
+      });
+      c.add(wm);
+    }
+
+    const targetW = clamp(Math.round(c.getWidth()*STATE.sizePct), 16, c.getWidth()*1.4);
+    const s = targetW / (STATE.img.width||targetW);
+    wm.scaleX = s; wm.scaleY = s;
+    wm.opacity = clamp(STATE.opacity, 0, 1);
+    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
+    wm.setCoords();
+    c.bringToFront(wm);
+    c.requestRenderAll();
+  }
+
+  // ---------- admin dock (only with ?admin=1) ----------
+  function ensureAdminDock(){
+    if (!isAdmin) return;
+
+    if ($('#raWmCenterDock')) return;
+    const holder =
+      $$('h3').find(h=>/selection/i.test((h.textContent||'').trim()))?.parentNode
+      || $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode
+      || document.body;
+
+    const pane = document.createElement('div');
+    pane.id = 'raWmCenterDock';
+    pane.style.cssText = 'margin:12px 0;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea;padding:10px';
+    pane.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <strong>Watermark</strong>
+        <div style="display:flex;gap:6px">
+          <button id="raWmCRefresh" class="btn small">Refresh</button>
+          <button id="raWmCHide" class="btn small">Hide</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+        <label><input id="raWmCEnabled" type="checkbox"> Enabled</label>
+        <label><input id="raWmCOnTok"  type="checkbox"> Show on tokens</label>
+        <label><input id="raWmCOnUp"   type="checkbox"> Show on uploads</label>
+        <label style="display:flex;align-items:center;gap:6px">Opacity
+          <input id="raWmCOpacity" type="range" min="0" max="1" step="0.01" style="width:140px">
+        </label>
+        <label style="display:flex;align-items:center;gap:6px">Size (width %)
+          <input id="raWmCSize" type="range" min="0.3" max="1.2" step="0.01" style="width:160px">
+        </label>
+      </div>
+      <div style="margin-top:6px;font-size:11px;opacity:.65">Corner stamps are removed automatically from base & overlays.</div>
+    `;
+    holder.appendChild(pane);
+
+    $('#raWmCEnabled').checked   = !!STATE.enabled;
+    $('#raWmCOnTok').checked     = !!STATE.showOnTokens;
+    $('#raWmCOnUp').checked      = !!STATE.showOnUploads;
+    $('#raWmCOpacity').value     = STATE.opacity;
+    $('#raWmCSize').value        = STATE.sizePct;
+
+    const c = C();
+    const sync = ()=>{ save(); ensureCenteredWM(c); };
+
+    $('#raWmCEnabled').onchange = e=>{ STATE.enabled = !!e.target.checked; sync(); };
+    $('#raWmCOnTok').onchange   = e=>{ STATE.showOnTokens  = !!e.target.checked; sync(); };
+    $('#raWmCOnUp').onchange    = e=>{ STATE.showOnUploads = !!e.target.checked; sync(); };
+    $('#raWmCOpacity').oninput  = e=>{ STATE.opacity = clamp(parseFloat(e.target.value||'0.18'),0,1); sync(); };
+    $('#raWmCSize').oninput     = e=>{ STATE.sizePct = clamp(parseFloat(e.target.value||'0.88'),0.3,1.2); sync(); };
+    $('#raWmCRefresh').onclick  = sync;
+    $('#raWmCHide').onclick     = ()=>{ pane.style.display='none'; };
+  }
+
+  // ---------- boot & wiring ----------
+  async function boot(){
+    await ensureWM();
+    const c = C(); if (!c) return;
+
+    // 1) immediately remove any stamp-children already present
+    cleanCornerStamps(c);
+
+    // 2) watermark in correct state
+    ensureCenteredWM(c);
+
+    // 3) watch for future adds/mods
+    if (!c.__raNoStampsV2){
+      c.__raNoStampsV2 = true;
+
+      c.on('object:added', (e)=>{
+        const t = e?.target;
+        if (!t) return;
+
+        if (t.type==='group'){
+          if (stripStampsFromGroup(t)) c.requestRenderAll();
+        }
+        // keep WM consistent
+        ensureCenteredWM(c);
+      });
+
+      c.on('object:modified', ()=> ensureCenteredWM(c));
+      c.on('object:removed',  ()=> ensureCenteredWM(c));
+    }
+
+    // 4) keep WM scaled if canvas element resizes
+    try {
+      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+      new ResizeObserver(()=> ensureCenteredWM(c)).observe(el);
+    } catch(_) {}
+
+    // 5) admin UI
+    ensureAdminDock();
+  }
+
+  if (document.readyState==='loading') {
+    document.addEventListener('DOMContentLoaded', boot, {once:true});
+  } else {
+    boot();
+  }
+})();
+
+/* ==========================================================
+   RA_FIX_UPLOAD_RECENTER_AFTER_STRIP_V1
+   Keeps newly added base/overlay groups centered after the
+   corner-stamp children are removed.
+   - Runs after the existing watermark/no-stamps patch.
+   - No impact on Undo/Redo (we just correct the initial add).
+   ========================================================== */
+(() => {
+  if (window.__RA_FIX_RECENTER_V1__) return;
+  window.__RA_FIX_RECENTER_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function centerIfMoved(o){
+    const c = C(); if (!c || !o) return;
+    if (o.type !== 'group') return;
+    // Only care about our base group or overlay groups created by the builder.
+    if (!o._isBase && o._kind !== 'overlay') return;
+
+    const cw = c.getWidth(), ch = c.getHeight();
+    const cp = (typeof o.getCenterPoint === 'function')
+      ? o.getCenterPoint()
+      : new fabric.Point(o.left || 0, o.top || 0);
+
+    // If center drifted by more than a few pixels, put it back in the middle.
+    if (Math.abs(cp.x - cw/2) > 4 || Math.abs(cp.y - ch/2) > 4){
+      try{
+        o.set({ originX: 'center', originY: 'center' });
+        if (o.setPositionByOrigin) {
+          o.setPositionByOrigin(new fabric.Point(cw/2, ch/2), 'center', 'center');
+        } else {
+          o.left = cw/2; o.top = ch/2;
+        }
+        o.setCoords();
+        c.requestRenderAll();
+      }catch(_){}
+    }
+  }
+
+  function fixExisting(){
+    const c = C(); if (!c) return;
+    (c.getObjects() || []).forEach(centerIfMoved);
+  }
+
+  function wire(){
+    const c = C(); if (!c) { setTimeout(wire, 120); return; }
+
+    // Correct anything already on the canvas (e.g., immediately after an upload)
+    setTimeout(fixExisting, 30);
+
+    // After any object is added, correct the center once the other listener strips stamps.
+    if (!c.__raFixRecenterBound){
+      c.__raFixRecenterBound = true;
+      c.on('object:added', (e) => {
+        const t = e && e.target;
+        if (!t) return;
+        // Defer to allow the stamp-stripper to finish, then re-center if needed.
+        setTimeout(() => centerIfMoved(t), 0);
+      });
+    }
+
+    // If the canvas element resizes, keep the base centered.
+    try {
+      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+      new ResizeObserver(() => setTimeout(fixExisting, 0)).observe(el);
+    } catch(_){}
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once: true });
+  } else {
+    wire();
+  }
+})();
+
+/* ==========================================================
+   RA_ADMIN_OVERLAYS_LIVE_V2
+   - Live refresh of "Published Overlays" after Publish.
+   - Admin-only delete (×) on published tiles.
+   - No changes to non-admin users.
+   ========================================================== */
+(() => {
+  if (window.__RA_ADMIN_OVERLAYS_LIVE_V2__) return;
+  window.__RA_ADMIN_OVERLAYS_LIVE_V2__ = true;
+
+  const KEY = 'ra2_published';
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+  function getShelf(){
+    try { return JSON.parse((localStorage||sessionStorage).getItem(KEY) || '[]'); }
+    catch(_) { return []; }
+  }
+  function setShelf(arr){
+    try { (localStorage||sessionStorage).setItem(KEY, JSON.stringify(arr||[])); } catch(_){}
+  }
+
+  // Minimal overlay adder (in case we rebuild the grid ourselves)
+  function addOverlayFromDataURL(dataURL){
+    try{
+      const c = window.canvas; if (!c || !window.fabric) return;
+      fabric.Image.fromURL(dataURL, img => {
+        const cw=c.getWidth(), ch=c.getHeight();
+        img.set({ originX:'center', originY:'center' });
+        const maxDim = Math.min(cw, ch) * 0.60;
+        const iw = img.width||maxDim, ih = img.height||maxDim;
+        const sc = Math.min(1, maxDim / Math.max(iw, ih));
+        if (isFinite(sc) && sc>0) img.scale(sc);
+        img._kind = 'overlay';
+        c.add(img);
+        img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+        c.setActiveObject(img);
+        try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
+        c.requestRenderAll();
+      }, { crossOrigin:'anonymous' });
+    }catch(_){}
+  }
+
+  // Rebuild the Published Overlays grid (safe even if original drawer already ran)
+  function drawShelf(){
+    const wrap = $('#ra2ShelfGrid');
+    if (!wrap) { setTimeout(drawShelf, 200); return; }
+
+    const items = getShelf();
+    wrap.innerHTML = '';
+    items.forEach((item, idx) => {
+      const tile = document.createElement('div');
+      tile.style.cssText =
+        'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+      tile.innerHTML = `
+        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+          <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+        </div>
+        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          ${item.name||''}
+        </div>
+      `;
+
+      // Click = add overlay (ignore if clicking the delete button)
+      tile.addEventListener('click', (ev) => {
+        if (ev.target && ev.target.closest && ev.target.closest('.raDelPub')) return;
+        addOverlayFromDataURL(item.dataURL);
+      });
+
+      // Admin-only: delete from shelf
+      if (isAdmin){
+        const del = document.createElement('button');
+        del.className = 'raDelPub';
+        del.title = 'Remove from Published';
+        del.textContent = '×';
+        del.style.cssText =
+          'position:absolute;top:4px;right:6px;background:#2a2a2e;border:0;color:#ddd;border-radius:6px;padding:2px 6px;cursor:pointer;';
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const arr = getShelf();
+          arr.splice(idx, 1);
+          setShelf(arr);
+          drawShelf();
+        });
+        tile.appendChild(del);
+      }
+
+      wrap.appendChild(tile);
+    });
+  }
+
+  // After "Publish" in the Admin Overlays dock, refresh shelf immediately.
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('button');
+    if (!btn) return;
+    const txt = (btn.textContent || '').toLowerCase();
+    // The Admin Overlays dock buttons include "Publish"
+    if (/^publish$/.test(txt) || /publish/.test(txt)) {
+      // Give the original handler a tick to write localStorage, then redraw.
+      setTimeout(drawShelf, 50);
+    }
+  }, true);
+
+  // Keep the shelf in sync if some other code mutates the DOM around it.
+  new MutationObserver(() => { /* cheap keep-alive */ }).observe(document.body, { childList:true, subtree:true });
+
+  // Initial render
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', drawShelf, { once:true });
+  } else {
+    drawShelf();
+  }
+})();
+
+/* ==========================================================
+   RA_CURVED_TEXT_V1
+   - Curved text for Fabric: toggle on/off + live controls.
+   - Integrates with your existing Custom Text controls.
+   - Tagged as _kind:'customText' so Animate includes it.
+   - Desktop/mobile safe; no layout changes.
+   ========================================================== */
+(() => {
+  if (window.__RA_CURVED_TEXT_V1__) return; window.__RA_CURVED_TEXT_V1__ = true;
+
+  const $  = (s,r=document)=>r.querySelector(s);
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function styleFromUI(){
+    return {
+      fontFamily: ($('#fontFamily')||{}).value || "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      fontSize:   parseInt(($('#fontSize')||{}).value||'48',10),
+      fill:       ($('#fontColor')||{}).value || '#ffffff',
+      stroke:     ($('#strokeColor')||{}).value || 'transparent',
+      strokeWidth:parseInt(($('#strokeWidth')||{}).value||'0',10)
+    };
+  }
+
+  function isCurved(o){ return !!(o && (o._raCurved || o?.data?.raType==='curvedText')); }
+  function plainText(o){
+    if (!o) return '';
+    if (o.type==='textbox' || o.type==='text') return String(o.text||'');
+    if (isCurved(o)) return (o._objects||[]).map(g=>g.text||'').join('');
+    return '';
+  }
+
+  // Build a curved text group (center-origin)
+  function buildCurved(text, opts){
+    const c=C(); const cw=c?c.getWidth():700, ch=c?c.getHeight():700, side=Math.min(cw,ch);
+    const radius  = Math.round((opts?.radius ?? side*0.35));
+    const arc     = (opts?.arc    ?? 180);
+    const start   = (opts?.start  ?? 0);
+    const spacing = (opts?.spacing?? 0);         // px-ish fudge
+    const inward  = !!(opts?.inward);
+    const st      = opts?.style || styleFromUI();
+
+    const chars = Array.from(String(text||''));
+    const N     = Math.max(chars.length, 1);
+    const step  = (N>1 ? arc/(N-1) : 0) + (spacing/Math.max(radius,1))*(180/Math.PI);
+    const startDeg = start - arc/2;
+
+    const kids=[];
+    for (let i=0;i<N;i++){
+      const ch = new fabric.Text(chars[i] || ' ', {
+        originX:'center', originY:'center',
+        fontFamily: st.fontFamily, fontSize: st.fontSize,
+        fill: st.fill, stroke: st.stroke, strokeWidth: st.strokeWidth,
+        selectable:false, evented:false
+      });
+      const ang = (startDeg + i*step) * Math.PI/180;
+      ch.left  = radius * Math.cos(ang);
+      ch.top   = radius * Math.sin(ang);
+      ch.angle = (startDeg + i*step) + (inward ? -90 : 90);
+      ch.data  = Object.assign({}, ch.data, { raGlyph:true });
+      kids.push(ch);
+    }
+
+    const g = new fabric.Group(kids, { originX:'center', originY:'center' });
+    g._kind = 'customText';
+    g._raCurved = true;
+    g.raCurve = { text:String(text||''), radius, arc, start, spacing, inward };
+    g.data = Object.assign({}, g.data, { raType:'curvedText', raCurve:g.raCurve });
+    return g;
+  }
+
+  function replaceObject(newObj, oldObj){
+    const c=C(); if(!c) return;
+    const ctr = oldObj.getCenterPoint ? oldObj.getCenterPoint() : new fabric.Point(oldObj.left||0, oldObj.top||0);
+    newObj.set({ left: ctr.x, top: ctr.y });
+    newObj.setCoords();
+    c.remove(oldObj); c.add(newObj); c.setActiveObject(newObj); c.requestRenderAll();
+  }
+
+  function toCurved(o){
+    const st = {
+      fontFamily: o.fontFamily || styleFromUI().fontFamily,
+      fontSize:   o.fontSize   || styleFromUI().fontSize,
+      fill:       o.fill       || styleFromUI().fill,
+      stroke:     o.stroke     || styleFromUI().stroke,
+      strokeWidth:o.strokeWidth|| styleFromUI().strokeWidth
+    };
+    const vals = readUI();
+    const g = buildCurved(plainText(o), { radius: vals.radius, arc: vals.arc, start: vals.start, spacing: vals.spacing, inward: vals.flip, style: st });
+    replaceObject(g, o); reflectUI(g);
+  }
+
+  function toLinear(g){
+    const c=C(); const s=styleFromUI();
+    const tb = new fabric.Textbox(plainText(g), {
+      originX:'center', originY:'center',
+      width: Math.floor(c.getWidth()*0.8), textAlign:'left',
+      fontFamily:s.fontFamily, fontSize:s.fontSize, fill:s.fill, stroke:s.stroke, strokeWidth:s.strokeWidth,
+      editable:true
+    });
+    tb._kind='customText';
+    replaceObject(tb, g); reflectUI(tb);
+  }
+
+  function updateCurved(g, nextPart){
+    if (!isCurved(g)) return g;
+    const keep = Object.assign({}, g.raCurve);
+    const next = Object.assign(keep, nextPart||{});
+    g.raCurve = next; g.data = Object.assign({}, g.data, { raCurve: next });
+
+    const ctr = g.getCenterPoint ? g.getCenterPoint() : new fabric.Point(g.left||0, g.top||0);
+    const ang = g.angle||0, sx=g.scaleX||1, sy=g.scaleY||1;
+    const st  = styleFromUI();
+
+    const fresh = buildCurved(next.text, {
+      radius: next.radius, arc: next.arc, start: next.start, spacing: next.spacing, inward: next.inward,
+      style: { fontFamily:st.fontFamily, fontSize:st.fontSize, fill:st.fill, stroke:st.stroke, strokeWidth:st.strokeWidth }
+    });
+    fresh.set({ left:ctr.x, top:ctr.y, angle:ang, scaleX:sx, scaleY:sy }); fresh.setCoords();
+
+    const c=C(); c.remove(g); c.add(fresh); c.setActiveObject(fresh); c.requestRenderAll();
+    return fresh;
+  }
+
+  function readUI(){
+    const num = (id, d)=>{ const el=$(id); const v=parseFloat(el?.value||''); return Number.isFinite(v)?v:d; };
+    const c=C(); const side=c?Math.min(c.getWidth(), c.getHeight()):700;
+    return {
+      enabled: !!$('#raCurveEnable')?.checked,
+      radius:  num('#raCurveRadius', Math.round(side*0.35)),
+      arc:     num('#raCurveArc', 180),
+      start:   num('#raCurveStart', 0),
+      spacing: num('#raCurveSpacing', 0),
+      flip:    !!$('#raCurveFlip')?.checked
+    };
+  }
+  function updateLabels(){
+    const get=(id,d)=>{ const el=$(id); const v=parseFloat(el?.value||''); return Number.isFinite(v)?v:d; };
+    const put=(id,v,s='')=>{ const el=$(id); if(el) el.textContent=String(v)+(s||''); };
+    put('#raCurveRadiusVal', Math.round(get('#raCurveRadius',0)));
+    put('#raCurveArcVal',    Math.round(get('#raCurveArc',0)), '°');
+    put('#raCurveStartVal',  Math.round(get('#raCurveStart',0)), '°');
+    put('#raCurveSpacingVal',Math.round(get('#raCurveSpacing',0)));
+  }
+  function reflectUI(obj){
+    const vals = isCurved(obj) ? obj.raCurve : null;
+    const set = (id,v)=>{ const el=$(id); if(!el) return; if (typeof v==='boolean') el.checked=v; else el.value=String(v); };
+    set('#raCurveEnable', !!vals);
+    set('#raCurveRadius', vals ? Math.round(vals.radius) : '');
+    set('#raCurveArc',    vals ? Math.round(vals.arc)    : 180);
+    set('#raCurveStart',  vals ? Math.round(vals.start)  : 0);
+    set('#raCurveSpacing',vals ? Math.round(vals.spacing): 0);
+    set('#raCurveFlip',   vals ? !!vals.inward : false);
+    updateLabels();
+    const txt=$('#customText'); if (txt) txt.value = obj ? plainText(obj) : '';
+  }
+
+  function ensureUI(){
+    if ($('#raCurveRow')) return;
+
+    const h3 = $$('h3').find(h => /custom\s*text/i.test((h.textContent||'').trim()));
+    const card = h3 ? h3.parentNode : null;
+    if (!card) return setTimeout(ensureUI, 200);
+
+    const row = document.createElement('div');
+    row.id='raCurveRow';
+    row.style.cssText='margin-top:8px;padding:8px;border:1px dashed #2a2a2e;border-radius:8px;background:#0d0f14';
+    row.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <label style="display:flex;gap:6px;align-items:center"><input id="raCurveEnable" type="checkbox"> Curved</label>
+        <label style="display:flex;gap:6px;align-items:center">Radius
+          <input id="raCurveRadius" type="range" min="40" max="1200" value="240" style="width:150px">
+          <span id="raCurveRadiusVal" style="opacity:.7;font-size:12px">240</span>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">Arc
+          <input id="raCurveArc" type="range" min="20" max="360" value="180" style="width:140px">
+          <span id="raCurveArcVal" style="opacity:.7;font-size:12px">180°</span>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">Start
+          <input id="raCurveStart" type="range" min="-180" max="180" value="0" style="width:140px">
+          <span id="raCurveStartVal" style="opacity:.7;font-size:12px">0°</span>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">Spacing
+          <input id="raCurveSpacing" type="range" min="-50" max="200" value="0" style="width:140px">
+          <span id="raCurveSpacingVal" style="opacity:.7;font-size:12px">0</span>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center"><input id="raCurveFlip" type="checkbox"> Inside</label>
+      </div>
+    `;
+    card.appendChild(row);
+
+    // Change handlers
+    const onAny = ()=>{
+      updateLabels();
+      const c=C(); if(!c) return;
+      const o=c.getActiveObject();
+      const vals=readUI();
+
+      if (!o){
+        // No selection: if Curved enabled and there is text in input, create a new curved text
+        if (vals.enabled){
+          const t=($('#customText')||{}).value?.trim(); if (!t) return;
+          const g = buildCurved(t, { radius:vals.radius, arc:vals.arc, start:vals.start, spacing:vals.spacing, inward:vals.flip, style:styleFromUI() });
+          g.set({ left:c.getWidth()/2, top:c.getHeight()/2 }); g.setCoords();
+          c.add(g).setActiveObject(g); c.requestRenderAll();
+        }
+        return;
+      }
+
+      if (!isCurved(o)){
+        if (vals.enabled && o._kind==='customText'){ toCurved(o); }
+        return;
+      }
+
+      if (!vals.enabled){ toLinear(o); }
+      else {
+        updateCurved(o, {
+          radius: vals.radius, arc: vals.arc, start: vals.start, spacing: vals.spacing, inward: vals.flip,
+          text: plainText(o)
+        });
+      }
+    };
+
+    ['change','input'].forEach(ev=>{
+      ['#raCurveEnable','#raCurveRadius','#raCurveArc','#raCurveStart','#raCurveSpacing','#raCurveFlip']
+      .forEach(id=>{ const el=$(id); if(el) el.addEventListener(ev, onAny); });
+    });
+
+    // Sync UI on selection changes
+    const c=C();
+    if (c && !c.__raCurveSelBound){
+      c.__raCurveSelBound=true;
+      c.on('selection:created', e=> reflectUI(e?.selected?.[0]));
+      c.on('selection:updated', e=> reflectUI(e?.selected?.[0]||c.getActiveObject()));
+      c.on('selection:cleared', ()=> reflectUI(null));
+    }
+
+    // Rebuild when text or font controls change
+    const bindTextControls = ()=>{
+      const txt=$('#customText');
+      if (txt && !txt.__raCurveBound){
+        const h=()=>{
+          const c=C(), o=c?.getActiveObject();
+          if (o && isCurved(o)){
+            const v=(txt.value||'').replace(/\r?\n/g,' ');
+            const fresh = updateCurved(o,{ text:v });
+            c.setActiveObject(fresh||o);
+          }
+        };
+        txt.__raCurveBound=true; txt.addEventListener('change',h); txt.addEventListener('input',h);
+      }
+      [['#fontFamily'],['#fontSize'],['#fontColor'],['#strokeColor'],['#strokeWidth']].forEach(([id])=>{
+        const el=$(id); if (!el || el.__raCurveBound) return;
+        const h=()=>{ const c=C(), o=c?.getActiveObject(); if (o && isCurved(o)) updateCurved(o, {}); };
+        el.__raCurveBound=true; el.addEventListener('change',h); el.addEventListener('input',h);
+      });
+    };
+    bindTextControls();
+    new MutationObserver(bindTextControls).observe(document.documentElement, { childList:true, subtree:true });
+  }
+
+  function boot(){ if (!C()) return setTimeout(boot,200); ensureUI(); }
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); } else { boot(); }
+})();
+
+/* ==========================================================
+   RA_SMART_GUIDES_ON_TOP_V2
+   • Draws guides on Fabric's TOP canvas (contextTop) so they’re above everything.
+   • FIX: True canvas center (uses W/2, H/2 correctly).
+   • FIX: HiDPI/CSS scaling correct (uses devicePixelRatio/clientWidth mapping).
+   • Button now lives in the existing Snap row (away from the “×” button).
+   • Auto‑hide after drop; no impact on export or undo/redo.
+   ========================================================== */
+(() => {
+  if (window.__RA_GUIDES_TOP_V2__) return;
+  window.__RA_GUIDES_TOP_V2__ = true;
+
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  const  $ = (s,r=document)=>r.querySelector(s);
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // ------- options -------
+  const S = {
+    on: true,
+    tol: 12,      // proximity (screen px) to show a guide
+    lingerMs: 120 // tiny linger so eyes can register the snap
+  };
+
+  // ------- put toggle in your existing "Snap / Selection" row -------
+  function placeToggle(){
+    const id='raGuidesToggle';
+    if ($('#'+id)) return;
+
+    // Prefer your Snap row if present (Center H/V/HV · Snap: On row)
+    const snapRow = $('#raSnapRow');
+    const holder =
+      snapRow ||
+      $$('h3').find(h=>/selection/i.test((h.textContent||'').trim()))?.parentNode ||
+      document.body;
+
+    const btn = document.createElement('button');
+    btn.id = id;
+    btn.className = 'btn small';
+    btn.textContent = 'Guides: On';
+    // In the snap row this will sit nicely to the right
+    btn.style.marginLeft = snapRow ? 'auto' : '8px';
+
+    btn.onclick = ()=>{
+      S.on = !S.on;
+      btn.textContent = 'Guides: ' + (S.on ? 'On' : 'Off');
+      clearTop();
+    };
+
+    holder.appendChild(btn);
+  }
+
+  // ------- drawing on Fabric's TOP canvas (always above) -------
+  function topCtx(){
+    const c=C(); if(!c) return null;
+    return (c.getSelectionContext && c.getSelectionContext()) ||
+           c.contextTop ||
+           (c.upperCanvasEl && c.upperCanvasEl.getContext('2d')) || null;
+  }
+
+  function clearTop(){
+    const c=C(); const ctx=topCtx(); if(!c||!ctx) return;
+    const el=c.upperCanvasEl; if(!el) return;
+
+    const ratio = el.width / Math.max(1, (el.clientWidth||el.width));
+    ctx.save();
+    // Draw in CSS‑px space so math is easy, but scale to device pixels
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    ctx.clearRect(0,0, el.width/ratio, el.height/ratio);
+    ctx.restore();
+  }
+
+  function drawLines(lines){
+    const c=C(); const ctx=topCtx(); if(!c||!ctx||!lines||!lines.length) return;
+    const el=c.upperCanvasEl; if(!el) return;
+
+    const ratio = el.width / Math.max(1, (el.clientWidth||el.width));
+    ctx.save();
+    // Work in CSS‑px, scale once for HiDPI
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    ctx.clearRect(0,0, el.width/ratio, el.height/ratio);
+
+    lines.forEach(L=>{
+      // White halo for contrast
+      ctx.strokeStyle = 'rgba(255,255,255,.95)';
+      ctx.lineWidth   = 6;
+      ctx.setLineDash([]);
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(L.x1, L.y1); ctx.lineTo(L.x2, L.y2); ctx.stroke();
+
+      // Bright core (center=cyan, edge=red)
+      ctx.strokeStyle = (L.kind==='edge') ? '#ff4d4d' : '#00e0ff';
+      ctx.lineWidth   = 2.5;
+      ctx.setLineDash([10, 6]);
+      ctx.beginPath(); ctx.moveTo(L.x1, L.y1); ctx.lineTo(L.x2, L.y2); ctx.stroke();
+    });
+
+    ctx.restore();
+  }
+
+  // ------- coordinate helpers (canvas units → CSS‑px) -------
+  const vpt = c => (c && c.viewportTransform) || [1,0,0,1,0,0];
+  function toCssPx(c,x,y){ const m=vpt(c); return { x: m[0]*x + m[2]*y + m[4], y: m[1]*x + m[3]*y + m[5] }; }
+
+  function canvasEdgesCssPx(c){
+    const W=c.getWidth(), H=c.getHeight();
+    const tl=toCssPx(c,0,0), tr=toCssPx(c,W,0), bl=toCssPx(c,0,H);
+    const cc=toCssPx(c,W/2, H/2); // ← FIX: true center (x & y)
+    return { left:tl.x, right:tr.x, top:tl.y, bottom:bl.y, cx:cc.x, cy:cc.y };
+  }
+
+  function objBoundsCssPx(c,o){
+    const br=o.getBoundingRect(true, true); // canvas units, rotation‑aware
+    const tl=toCssPx(c, br.left,              br.top);
+    const brp=toCssPx(c, br.left+br.width,    br.top+br.height);
+    const xMin=Math.min(tl.x, brp.x), xMax=Math.max(tl.x, brp.x);
+    const yMin=Math.min(tl.y, brp.y), yMax=Math.max(tl.y, brp.y);
+    return { xMin,xMax,yMin,yMax, cx:(xMin+xMax)/2, cy:(yMin+yMax)/2 };
+  }
+
+  function guidesFor(c,o){
+    const E=canvasEdgesCssPx(c), O=objBoundsCssPx(c,o);
+    const near = (a,b)=> Math.abs(a-b) <= S.tol;
+    const L=[];
+    // centers
+    if (near(O.cx,E.cx)) L.push({ x1:E.cx, y1:E.top,    x2:E.cx,    y2:E.bottom, kind:'center' });
+    if (near(O.cy,E.cy)) L.push({ x1:E.left, y1:E.cy,    x2:E.right, y2:E.cy,     kind:'center' });
+    // edges
+    if (near(O.xMin,E.left))   L.push({ x1:E.left,  y1:E.top,    x2:E.left,  y2:E.bottom, kind:'edge' });
+    if (near(O.xMax,E.right))  L.push({ x1:E.right, y1:E.top,    x2:E.right, y2:E.bottom, kind:'edge' });
+    if (near(O.yMin,E.top))    L.push({ x1:E.left,  y1:E.top,    x2:E.right, y2:E.top,    kind:'edge' });
+    if (near(O.yMax,E.bottom)) L.push({ x1:E.left,  y1:E.bottom, x2:E.right, y2:E.bottom, kind:'edge' });
+    return L;
+  }
+
+  // ------- wire Fabric events -------
+  let clearTimer=null;
+  function onTransform(e){
+    if (!S.on) return;
+    const c=C(); if(!c) return;
+    const o=e?.target; if(!o || o._isBgRect || o._isBase) return; // only overlays/text/labels
+    try { o.setCoords(); } catch(_){}
+    drawLines(guidesFor(c,o));
+  }
+  function onEnd(){
+    clearTimeout(clearTimer);
+    clearTimer = setTimeout(clearTop, S.lingerMs);
+  }
+
+  function wire(){
+    const c=C(); if(!c || c.__raGuidesTopWired) return setTimeout(wire, 120);
+    c.__raGuidesTopWired = true;
+
+    // Remove any older overlay‑canvas guides layer if present
+    const old = document.getElementById('raGuidesOverlay'); if (old) try{ old.remove(); }catch(_){}
+
+    placeToggle();
+
+    c.on('object:moving',     onTransform);
+    c.on('object:scaling',    onTransform);
+    c.on('object:rotating',   onTransform);
+    c.on('mouse:up',          onEnd);
+    c.on('selection:cleared', onEnd);
+
+    // Clean on zoom/pan/resize (if your UI does that)
+    c.on('after:render', ()=>{/* keep last guides while dragging; cleared on mouse:up */});
+    window.addEventListener('resize', clearTop, {passive:true});
+    window.addEventListener('orientationchange', ()=>setTimeout(clearTop,150), {passive:true});
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, {once:true});
+  else wire();
+
+  // Quick API if you want to tweak later in console:
+  window.raGuides = Object.freeze({
+    on:(v)=>{ if(typeof v==='boolean'){ S.on=v; const b=$('#raGuidesToggle'); if(b) b.textContent='Guides: '+(S.on?'On':'Off'); if(!v) clearTop(); } return S.on; },
+    tolerance:(px)=>{ if(px>0) S.tol=+px; return S.tol; },
+    linger:(ms)=>{ if(ms>=0) S.lingerMs=+ms; return S.lingerMs; }
+  });
+})();
+
+/* ================= RA_GUIDES_BUTTON_NUDGE_V1 =================
+   Repositions the Guides toggle so it sits right after “Snap: On”.
+   No behavior change—purely visual alignment. Safe to stack.
+   ============================================================ */
+(() => {
+  const ID = 'raGuidesToggle';
+  const SNAP_ID = 'raSnapToggle';
+
+  function nudge(){
+    const btn = document.getElementById(ID);
+    if (!btn) return;                    // guides not created yet
+    const snap = document.getElementById(SNAP_ID);
+    const row  = document.getElementById('raSnapRow') ||
+                 (snap && snap.parentNode) ||
+                 btn.parentNode;
+
+    // If we can find the Snap toggle, place Guides right after it.
+    if (snap && snap.parentNode && snap.nextSibling !== btn) {
+      snap.parentNode.insertBefore(btn, snap.nextSibling);
+    } else if (row && btn.parentNode !== row) {
+      row.appendChild(btn);
+    }
+
+    // Tidy spacing/alignment
+    btn.style.marginLeft = '8px';
+    btn.style.marginRight = '0';
+    btn.style.marginTop = '0';
+    btn.style.alignSelf = 'center';
+  }
+
+  // Run now and keep fixing if the UI re-renders
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', nudge, { once:true });
+  } else {
+    nudge();
+  }
+  new MutationObserver(nudge).observe(document.documentElement, { childList:true, subtree:true });
+})();
+
+/* ==========================================================
+   RA_OVERLAY_AUTO_TRIM_ON_ADD_V2
+   - Tightens the selection box: trims transparent padding on overlays.
+   - Works when overlays are added from any source (grid, upload, publish).
+   - Also enables per-pixel hit testing on overlays.
+   - One initial pass trims existing overlays already on canvas.
+   - No UI added. Desktop/mobile & exports unaffected.
+   ========================================================== */
+(() => {
+  if (window.__RA_TRIM_OVERLAYS_V2__) return;
+  window.__RA_TRIM_OVERLAYS_V2__ = true;
+
+  const ALPHA_THRESHOLD = 8;     // 0..255 — pixels with alpha <= threshold are treated as transparent
+  const MIN_SHRINK = 0.01;       // ignore trims that change <1% (avoid needless churn)
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // Grab the HTMLImageElement that Fabric uses internally
+  function getImgEl(fabImg){
+    return fabImg? (fabImg._originalElement || fabImg._element || fabImg.getElement?.() || null) : null;
+  }
+
+  // Compute tight bounds of non-transparent pixels
+  function findOpaqueBounds(imgEl, thr = ALPHA_THRESHOLD){
+    const w = imgEl.naturalWidth || imgEl.width;
+    const h = imgEl.naturalHeight || imgEl.height;
+    if (!w || !h) return null;
+
+    const off = document.createElement('canvas');
+    off.width = w; off.height = h;
+    const ctx = off.getContext('2d', { willReadFrequently:true });
+    ctx.drawImage(imgEl, 0, 0);
+    const data = ctx.getImageData(0,0,w,h).data;
+
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y=0, i=3; y<h; y++){
+      for (let x=0; x<w; x++, i+=4){
+        if (data[i] > thr){    // alpha channel
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) return null; // fully transparent
+    return { x:minX, y:minY, w:(maxX - minX + 1), h:(maxY - minY + 1), W:w, H:h };
+  }
+
+  // Apply crop to a Fabric.Image in-place
+  function applyCrop(img, bounds){
+    if (!bounds) return false;
+    const { x, y, w, h, W, H } = bounds;
+
+    // Ignore microscopic trims (UI churn without benefit)
+    const shrinkW = 1 - (w / W);
+    const shrinkH = 1 - (h / H);
+    if (shrinkW < MIN_SHRINK && shrinkH < MIN_SHRINK) return false;
+
+    // Keep current scale; change the source frame to the tight rect
+    // Fabric's bbox = width*scaleX by height*scaleY, so shrink width/height.
+    img.set({
+      cropX: x, cropY: y,
+      width: w, height: h
+    });
+    img.setCoords();
+    // Better hit-testing on irregular shapes
+    img.perPixelTargetFind = true;
+    img.targetFindTolerance = 4;
+    return true;
+  }
+
+  // If an overlay is wrapped in a group, trim the inner image instead.
+  function trimOverlayObject(obj){
+    try{
+      if (!obj || obj._kind !== 'overlay') return false;
+
+      if (obj.type === 'image'){
+        const el = getImgEl(obj);
+        if (!el) return false;
+        const b = findOpaqueBounds(el);
+        return applyCrop(obj, b);
+      }
+
+      if (obj.type === 'group' && Array.isArray(obj._objects)){
+        const inner = obj._objects.find(o => o.type === 'image');
+        if (!inner) return false;
+        const el = getImgEl(inner);
+        if (!el) return false;
+        const b = findOpaqueBounds(el);
+        const changed = applyCrop(inner, b);
+        if (changed){
+          obj.addWithUpdate();  // refresh group geometry
+          obj.setCoords();
+        }
+        return changed;
+      }
+    }catch(_){}
+    return false;
+  }
+
+  function enablePerPixel(obj){
+    if (!obj || obj._kind !== 'overlay') return;
+    if (obj.type === 'image') {
+      obj.perPixelTargetFind = true;
+      obj.targetFindTolerance = 4;
+    } else if (obj.type === 'group' && Array.isArray(obj._objects)){
+      obj._objects.forEach(k => {
+        if (k.type === 'image'){ k.perPixelTargetFind = true; k.targetFindTolerance = 4; }
+      });
+    }
+  }
+
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+
+    // Trim overlays as they are added
+    if (!c.__raTrimBound){
+      c.__raTrimBound = true;
+
+      c.on('object:added', (e)=>{
+        const o = e?.target;
+        if (!o || o._isBgRect) return;
+
+        // Only overlays (not base image, not background, not token id text)
+        if (o._kind === 'overlay'){
+          const changed = trimOverlayObject(o);
+          enablePerPixel(o);
+          if (changed){
+            try { c.requestRenderAll(); } catch(_){}
+          }
+        }
+      });
+
+      // One-time pass to tighten any existing overlays (e.g., after reload)
+      (c.getObjects()||[]).forEach(o=>{
+        if (o._kind === 'overlay'){
+          const changed = trimOverlayObject(o);
+          enablePerPixel(o);
+          if (changed) o.setCoords();
+        }
+      });
+      try { c.requestRenderAll(); } catch(_){}
+    }
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
