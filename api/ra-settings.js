@@ -7,8 +7,13 @@
 // POST /api/ra-settings  -> body: {enabled, showOnTokens, showOnUploads, opacity, sizePct}
 
 module.exports = async (req, res) => {
-  const url   = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url =
+  process.env.UPSTASH_REDIS_REST_URL ||
+  process.env.KV_REST_API_URL;        // Vercel KV style
+
+const token =
+  process.env.UPSTASH_REDIS_REST_TOKEN ||
+  process.env.KV_REST_API_TOKEN;      // Vercel KV style
 
   if (!url || !token) {
     res.status(500).json({ ok:false, error:'Missing UPSTASH_REDIS_REST_URL / _TOKEN env vars' });
