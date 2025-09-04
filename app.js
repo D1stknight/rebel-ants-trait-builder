@@ -2805,145 +2805,181 @@
 })();
 
 /* ==========================================================
-   RA_MOBILE_SHOW_ALL_FEATURES_AND_REMOVE_GAP_V4
-   - Mobile only (≤ 900px)
-   - Forces all control panels visible (Custom Text, Selection, Overlays,
-     Published Overlays, Animate, Export, Video).
-   - Collapses to one column on mobile so nothing is off‑screen.
-   - Removes the desktop fixed‑center "ghost" spacer that was causing the gap.
-   - Leaves desktop completely untouched.
+   RA_MOBILE_PLAN_B_RESET_AND_REVEAL_V1
+   Purpose (mobile only ≤ 900px):
+   • Neutralize the desktop fixed-center behavior on phones (no floating card).
+   • Remove the ghost spacer (#raCanvasGhost) that causes the big empty gap.
+   • Collapse any multi-column grid into a single column so all tools show.
+   • Force-reveal our injected panels (Animate, Undo/Redo, Video, Published Overlays).
+   • Does NOT touch desktop.
    ========================================================== */
 (() => {
   const MQ = '(max-width: 900px)';
-  if (!window.matchMedia(MQ).matches) return;
-  if (window.__RA_MOBILE_FEATURES_V4__) return;
-  window.__RA_MOBILE_FEATURES_V4__ = true;
+  if (!window.matchMedia(MQ).matches) return;        // desktop untouched
+  if (window.__RA_MOBILE_PLAN_B_V1__) return;
+  window.__RA_MOBILE_PLAN_B_V1__ = true;
 
-  // --- CSS overrides (mobile only) ---
+  // ------- Helpers -------
+  const $$ = (q, r=document)=>Array.from(r.querySelectorAll(q));
+  const  $ = (q, r=document)=>r.querySelector(q);
+
+  function getCanvasCard(){
+    const c = $('#c'); // your Fabric lower-canvas
+    if (!c) return null;
+    return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
+  }
+  function unhide(el){
+    if (!el) return;
+    el.hidden = false;
+    el.style.display = 'block';
+    el.style.visibility = 'visible';
+    el.style.maxHeight = 'none';
+    el.style.overflow  = 'visible';
+    try { el.classList.remove('hidden','sm:hidden','md:hidden'); } catch(_){}
+    const det = el.closest && el.closest('details'); if (det) det.open = true;
+  }
+
+  // ------- 1) Strong CSS overrides on mobile -------
   (function injectCSS(){
-    if (document.getElementById('ra-mobile-reveal-css-v4')) return;
+    if (document.getElementById('ra-mobile-planb-css')) return;
     const s = document.createElement('style');
-    s.id = 'ra-mobile-reveal-css-v4';
+    s.id = 'ra-mobile-planb-css';
     s.textContent = `
       @media ${MQ} {
-        /* Kill the desktop fixed-center ghost that leaves a big blank gap */
+        /* If the fixed-center script tries to keep the card fixed,
+           we pin it back to the page flow. We also clear offsets. */
+        #raMobileCanvasCard {
+          position: static !important;
+          top: auto !important; left: auto !important; right: auto !important;
+          transform: none !important; width: auto !important; z-index: auto !important;
+          margin: 0 0 12px 0 !important;
+        }
+        /* The ghost spacer that creates the gap */
         #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
 
-        /* Make sure our feature panels can show even if an outer class sets display:none */
-        #raAnimDock, #raVideoPanel, #raHistoryRow, #ra2Shelf { display:block !important; visibility:visible !important; }
-
-        /* Normalize card spacing so no giant voids appear */
-        .card, .panel, section, .box, .content { margin-bottom: 12px; }
-
-        /* If a grid container is used for the side-by-side desktop layout,
-           collapse to a single column on mobile */
+        /* Single column so all tools are in view */
         .grid, .grid-cols-2, .grid-cols-3, .grid-cols-12 {
           grid-template-columns: 1fr !important;
           column-gap: 12px !important;
+        }
+        .card, .panel, section, .box, .content { margin-bottom: 12px; }
+
+        /* Make sure our injected panels are visible */
+        #raAnimDock, #raVideoPanel, #raHistoryRow, #ra2Shelf {
+          display:block !important; visibility:visible !important;
         }
       }
     `;
     document.head.appendChild(s);
   })();
 
-  // Small helpers
-  const $$ = (q,r=document)=>Array.from(r.querySelectorAll(q));
-  const  $ = (q,r=document)=>r.querySelector(q);
+  // ------- 2) Neutralize the desktop fixed-center on phones -------
+  (function unfixCardAndKillGhost(){
+    const card = getCanvasCard();
+    if (card){
+      // Give it an id so our CSS can override inline "position:fixed"
+      if (!card.id) card.id = 'raMobileCanvasCard';
+      // Also clear any inline styles once right now (CSS keeps it static after)
+      card.style.position = 'static';
+      card.style.top = card.style.left = card.style.right = '';
+      card.style.transform = ''; card.style.width = ''; card.style.zIndex = '';
+      card.style.margin = '0 0 12px 0';
+    }
+    // Remove the spacer that leaves a giant gap
+    const gh = $('#raCanvasGhost');
+    if (gh){
+      gh.style.display='none'; gh.style.height='0'; gh.style.margin='0'; gh.style.padding='0';
+      // Remove from DOM to be extra safe
+      try { gh.remove(); } catch(_) {}
+    }
+  })();
 
-  // Remove "hidden" constraints and open accordions around target cards
-  function unhide(el){
-    if (!el) return;
-    el.hidden = false;
-    el.style.display   = 'block';
-    el.style.visibility= 'visible';
-    el.style.maxHeight = 'none';
-    el.style.overflow  = 'visible';
-    // Tailwind/global "hidden" classes—inline style wins, but drop them anyway
-    try { el.classList.remove('hidden','sm:hidden','xs:hidden'); } catch(_){}
-    // Open surrounding <details> or accordions
-    const det = el.closest('details'); if (det) det.open = true;
-    // Common ARIA toggles
-    $$('[aria-expanded="false"]', el).forEach(n => n.setAttribute('aria-expanded','true'));
-  }
-
-  // Find a "card" by heading text (h1..h4) and unhide the whole section
-  function revealCardByHeading(regex){
-    const h = $$('h1,h2,h3,h4').find(n => regex.test((n.textContent||'').trim()));
-    if (!h) return false;
-    const card = h.closest('.card, .panel, section, .box, .content, form, fieldset, div') || h.parentElement;
-    unhide(card);
-    return true;
-  }
-
-  // Force everything visible on mobile
-  function revealAll(){
-    // 1) Unhide the known feature sections by their headings
-    const heads = [
-      /custom\s*text/i,
-      /selection/i,
-      /overlays/i,
-      /published\s*overlays/i,
-      /animate|animation/i,
-      /export/i,
-      /video/i,
-      /rebel\s*ant/i,
-      /token/i
-    ];
-    heads.forEach(revealCardByHeading);
-
-    // 2) Make sure our injected panels are visible
-    ['#raAnimDock','#raVideoPanel','#raHistoryRow','#ra2Shelf'].forEach(sel=>{
-      const el = $(sel); if (el){ el.style.display='block'; el.style.visibility='visible'; }
+  // ------- 3) Make sure ALL feature panels are actually visible -------
+  (function revealFeatures(){
+    // Our injected panels
+    ['#raAnimDock', '#raVideoPanel', '#raHistoryRow', '#ra2Shelf'].forEach(sel => {
+      const el = $(sel); if (el) unhide(el);
     });
 
-    // 3) Collapse the container that holds these cards to one column (mobile)
-    const anchor =
-      revealCardByHeading(/rebel\s*ant/i) ||
-      revealCardByHeading(/custom\s*text/i) ||
-      $('#raAnimDock') || $('#raVideoPanel');
+    // Built-in blocks by heading text: Custom Text / Selection / Overlays / Export / Video
+    const headTests = [
+      /custom\s*text/i, /selection/i, /overlays/i, /published\s*overlays/i,
+      /animate|animation/i, /export/i, /video/i, /rebel\s*ant/i
+    ];
+    $$('h1,h2,h3,h4').forEach(h=>{
+      const title = (h.textContent||'').trim();
+      if (headTests.some(re=>re.test(title))){
+        const card = h.closest('.card, .panel, section, .box, .content, form, fieldset, div') || h.parentElement;
+        unhide(card);
+      }
+    });
+  })();
 
-    // Find a reasonable deck/container above the cards
-    const anyCardEl =
-      $$('h1,h2,h3,h4').find(n => /rebel\s*ant|custom\s*text|overlays|export|animate|video/i.test((n.textContent||'').trim()))
-      ?.closest('.card, .panel, section, .box, .content, form, fieldset, div');
+  // ------- 4) Fit the Fabric wrapper to the phone width (view-only) -------
+  function fitFabricWrapper(){
+    const lower = $('#c');         // Fabric lower canvas
+    const card  = getCanvasCard();
+    if (!lower || !card) return;
 
-    const deck = (anyCardEl && anyCardEl.parentElement) || document.querySelector('.grid, .content, main, .container') || document.body;
-    if (deck){
-      const cs = getComputedStyle(deck);
-      if (cs.display.includes('grid')) deck.style.gridTemplateColumns = '1fr';
-      deck.style.display = cs.display.includes('grid') ? cs.display : 'block';
-    }
+    // Fabric wraps the lower canvas in .canvas-container
+    const wrap = lower.parentElement && lower.parentElement.classList.contains('canvas-container')
+      ? lower.parentElement : lower;
 
-    // 4) Make sure no leftover ghost/gap elements are visible near the canvas area
-    const ghost = $('#raCanvasGhost');
-    if (ghost){
-      ghost.style.display='none';
-      ghost.style.height='0';
-      ghost.style.margin='0';
-      ghost.style.padding='0';
-      ghost.setAttribute('data-ra-hidden-gap','1');
-    }
+    // Square side = min(92vw, 620px); keep crisp export by not touching intrinsic size
+    const target = Math.min(620, Math.floor(window.innerWidth * 0.92));
+    wrap.style.width  = target + 'px';
+    wrap.style.height = target + 'px';
+    wrap.style.margin = '0 auto 12px auto';
+    wrap.style.position = 'relative';
 
-    // 5) If any feature is still inside a parent that’s explicitly display:none,
-    //    walk up a couple of levels and unhide
-    ['#raAnimDock','#raVideoPanel','#raHistoryRow','#ra2Shelf'].forEach(sel=>{
-      let el=$(sel), steps=0;
-      while(el && steps<3){
-        const cs = el && getComputedStyle(el);
-        if (cs && (cs.display==='none' || cs.visibility==='hidden')){
-          unhide(el);
-        }
-        el = el.parentElement; steps++;
+    // upper/lower canvases sizing for hit targets (CSS only)
+    $$('canvas', wrap).forEach(cv => {
+      cv.style.width = target + 'px';
+      cv.style.height = target + 'px';
+      cv.style.maxWidth = '100%';
+      cv.style.display = 'block';
+    });
+
+    // Collapse any tiny checkerboard strip just above/below the canvas
+    [wrap.previousElementSibling, wrap.nextElementSibling].forEach(el=>{
+      if (!el) return;
+      const bg = (getComputedStyle(el).backgroundImage||'');
+      const tiny = el.getBoundingClientRect().height < 20 || !(el.textContent||'').trim();
+      if (tiny || /linear-gradient|repeating/i.test(bg)){
+        el.style.display='none'; el.style.height='0'; el.style.margin='0'; el.style.padding='0';
       }
     });
   }
 
-  // Run now, and keep it applied as the DOM changes (Reacty UIs)
-  revealAll();
-  new MutationObserver(() => { if (window.matchMedia(MQ).matches) revealAll(); })
+  // ------- 5) Keep it applied as the UI changes (React-ish) -------
+  function applyAll(){
+    // Some UIs re-render; just re-run the key bits
+    const card = getCanvasCard();
+    if (card && !card.id) card.id = 'raMobileCanvasCard';
+    fitFabricWrapper();
+    // Make sure important panels are not hidden again
+    ['#raAnimDock', '#raVideoPanel', '#raHistoryRow', '#ra2Shelf'].forEach(sel => {
+      const el = $(sel); if (el) { el.style.display='block'; el.style.visibility='visible'; }
+    });
+  }
+
+  // First pass
+  applyAll();
+
+  // Watch DOM mutations and orientation/resize
+  new MutationObserver(() => { if (window.matchMedia(MQ).matches) applyAll(); })
     .observe(document.documentElement, { childList:true, subtree:true });
 
-  // Re‑apply on rotate/resize (mobile only)
-  window.addEventListener('resize', () => { if (window.matchMedia(MQ).matches) revealAll(); }, {passive:true});
-  window.addEventListener('orientationchange', () => setTimeout(revealAll, 150), {passive:true});
+  window.addEventListener('resize', () => { if (window.matchMedia(MQ).matches) applyAll(); }, { passive:true });
+  window.addEventListener('orientationchange', () => setTimeout(applyAll, 150), { passive:true });
+
+  // Also re-fit shortly after the user loads a token or a file (common buttons)
+  ['loadToken','baseUpload','loadUrl','clearUpload'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el && !el.__raMobileFitBound){
+      el.__raMobileFitBound = true;
+      el.addEventListener('click', ()=> setTimeout(applyAll, 60), { passive:true });
+      el.addEventListener('change',()=> setTimeout(applyAll, 60), { passive:true });
+    }
+  });
 })();
