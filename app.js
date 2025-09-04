@@ -2805,198 +2805,119 @@
 })();
 
 /* ==========================================================
-   RA_MOBILE_PORT_ALL_FEATURES_V1  — mobile only (≤900px)
-   What it does:
-   • Removes the fixed/ghost behavior on phones (no floating canvas, no gap).
-   • Builds a single "Mobile Controls" panel.
-   • MOVES real desktop panels into that panel so all features work on mobile:
-       - Custom Text (+ Inspire Me + fonts)
-       - Selection (+ Undo/Redo row)
-       - Overlays (+ Published Overlays)
-       - Animate dock
-       - Export
-       - Video (token-only)
-   • Forces visibility (overrides hidden CSS) without touching desktop.
+   RA_MOBILE_DISABLE_FLOAT_AND_UNHIDE_V2 (≤900px, Fabric only)
+   Purpose:
+   • Turn OFF fixed-centering on phones (remove ghost, stop floating canvas).
+   • Neutralize the Konva v28 mobile host (not used by Fabric).
+   • Fit Fabric canvas visually to phone width (view-only).
+   • Unhide all feature panels so mobile sees desktop features.
+   • Desktop remains untouched.
    ========================================================== */
 (() => {
-  const MQ = '(max-width: 900px)';
-  if (!window.matchMedia(MQ).matches) return;          // desktop untouched
-  if (window.__RA_MOBILE_PORT_ALL_FEATURES_V1__) return;
-  window.__RA_MOBILE_PORT_ALL_FEATURES_V1__ = true;
+  const MQ='(max-width: 900px)';
+  if (!window.matchMedia(MQ).matches) return;
+  if (window.__RA_MBL_KILL_FLOAT_V2__) return;
+  window.__RA_MBL_KILL_FLOAT_V2__=true;
 
-  // ---------- small helpers ----------
-  const $$ = (q, r=document)=>Array.from(r.querySelectorAll(q));
-  const  $ = (q, r=document)=>r.querySelector(q);
+  const $$=(q,r=document)=>Array.from(r.querySelectorAll(q));
+  const $=(q,r=document)=>r.querySelector(q);
 
+  function getCanvasCard(){
+    const c=$('#c');
+    return c ? (c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement) : null;
+  }
   function closestCard(el){
     return el?.closest?.('.card, .panel, section, form, fieldset, .box, .content, main, div') || null;
   }
-  function getCanvasCard(){
-    const c = $('#c'); if (!c) return null;
-    return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
-  }
   function unhide(el){
     if (!el) return;
-    el.hidden = false;
-    el.style.display = 'block';
-    el.style.visibility = 'visible';
-    el.style.maxHeight = 'none';
-    el.style.overflow  = 'visible';
-    el.removeAttribute?.('hidden');
+    el.hidden=false;
+    el.style.display='block';
+    el.style.visibility='visible';
+    el.style.maxHeight='none';
+    el.style.overflow='visible';
     try { el.classList.remove('hidden','sm:hidden','md:hidden','lg:hidden'); } catch(_){}
-    const det = el.closest && el.closest('details'); if (det) det.open = true;
+    const det=el.closest?.('details'); if(det) det.open=true;
   }
 
-  // ---------- 0) CSS for the mobile hub & single column ----------
-  (function injectCSS(){
-    if (document.getElementById('ra-mobile-port-css')) return;
-    const s = document.createElement('style');
-    s.id = 'ra-mobile-port-css';
+  // ---------- CSS overrides (mobile only) ----------
+  (function css(){
+    const s=document.createElement('style');
     s.textContent = `
-      @media ${MQ} {
-        /* Make sure the canvas card is in-flow on mobile */
-        #raMobileCanvasCard {
-          position: static !important;
-          top:auto !important; left:auto !important; right:auto !important;
-          transform:none !important; width:auto !important; z-index:auto !important;
-          margin:0 0 12px 0 !important;
+      @media ${MQ}{
+        /* Force canvas card into normal flow; defeat inline fixed styles */
+        #raMobileCanvasCard{
+          position:static !important; top:auto!important; left:auto!important; right:auto!important;
+          width:auto!important; transform:none!important; margin:0 0 12px 0 !important; z-index:auto !important;
         }
-        #raCanvasGhost { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+        /* Kill the ghost spacer */
+        #raCanvasGhost{ display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
 
-        /* One-column bias for common grid wrappers */
-        .grid, .grid-cols-2, .grid-cols-3, .grid-cols-12 {
-          grid-template-columns: 1fr !important;
-          column-gap: 12px !important;
-        }
+        /* Neutralize the Konva mobile host from v28 (Fabric app doesn't use it) */
+        #ra-mobile-stage-host, #ra-mobile-stage-frame, #ra-mobile-checker{ display:none !important; }
 
-        /* Mobile hub styling */
-        #raMobileHub {
-          margin: 8px 0 16px 0;
-          border: 1px solid #23242a;
-          border-radius: 12px;
-          background: #0f1116;
-          color: #e7e7ea;
-          padding: 10px;
-        }
-        #raMobileHub h3 {
-          margin: 8px 0 6px 0;
-          font: 600 14px/1.2 -apple-system,Segoe UI,Roboto,Arial;
-        }
-        .ra-mbl-box {
-          border: 1px solid #1f2026;
-          background: #0d0e13;
-          border-radius: 10px;
-          padding: 8px;
-          margin-top: 10px;
-        }
-
-        /* Ensure our injected/ported panels are visible */
-        #raAnimDock, #raVideoPanel, #raHistoryRow, #ra2Shelf {
-          display:block !important; visibility:visible !important;
-        }
-      }
-    `;
+        /* Always show our feature blocks if present */
+        #raAnimDock, #raVideoPanel, #raHistoryRow, #ra2Shelf,
+        #overlayGrid, #raSnapRow { display:block !important; visibility:visible !important; }
+      }`;
     document.head.appendChild(s);
   })();
 
-  // ---------- 1) Normalize canvas card on phones (no float, no ghost) ----------
-  (function normalizeCanvasCard(){
-    const card = getCanvasCard();
+  // ---------- Stop the fixed-center behavior on phones ----------
+  function neutralizeFixed(){
+    const card=getCanvasCard();
     if (card){
-      if (!card.id) card.id = 'raMobileCanvasCard';
-      card.style.position = 'static';
-      card.style.top = card.style.left = card.style.right = '';
-      card.style.transform = '';
-      card.style.width = '';
-      card.style.zIndex = '';
-      card.style.margin = '0 0 12px 0';
+      if(!card.id) card.id='raMobileCanvasCard';
+      Object.assign(card.style, {
+        position:'static', top:'', left:'', right:'', width:'', transform:'', margin:'0 0 12px 0', zIndex:''
+      });
     }
-    const gh = $('#raCanvasGhost');
-    if (gh){ try{ gh.remove(); }catch(_){
-      gh.style.display='none'; gh.style.height='0'; gh.style.margin='0'; gh.style.padding='0';
-    }}
-  })();
-
-  // ---------- 2) Create the Mobile Controls hub right under the canvas card ----------
-  function ensureHub(){
-    let hub = $('#raMobileHub');
-    if (hub) return hub;
-
-    const card = getCanvasCard();
-    const parent = card?.parentElement || document.body;
-
-    hub = document.createElement('section');
-    hub.id = 'raMobileHub';
-    hub.innerHTML = `
-      <h3>Mobile Controls</h3>
-      <div id="raMB_Custom"  class="ra-mbl-box"><h3>Custom Text</h3></div>
-      <div id="raMB_Select"  class="ra-mbl-box"><h3>Selection / History</h3></div>
-      <div id="raMB_Over"    class="ra-mbl-box"><h3>Overlays</h3></div>
-      <div id="raMB_Pub"     class="ra-mbl-box"><h3>Published Overlays</h3></div>
-      <div id="raMB_Anim"    class="ra-mbl-box"><h3>Animate</h3></div>
-      <div id="raMB_Export"  class="ra-mbl-box"><h3>Export</h3></div>
-      <div id="raMB_Video"   class="ra-mbl-box"><h3>Video</h3></div>
-    `;
-    // Insert right after the canvas card (so canvas stays top, hub follows)
-    if (card && card.nextSibling) parent.insertBefore(hub, card.nextSibling);
-    else parent.appendChild(hub);
-    return hub;
+    const ghost=document.getElementById('raCanvasGhost');
+    if (ghost){ try{ ghost.remove(); } catch(_){ ghost.style.display='none'; } }
   }
 
-  // We place a tiny placeholder where we took panels from, so we could restore later if needed
-  function take(card, targetBox){
-    if (!card || !targetBox) return;
-    if (card.__raMovedToMobile) return; // already moved
-
-    const ph = document.createElement('div');
-    ph.setAttribute('data-ra-ph', '1');
-    ph.style.display = 'none';
-    card.__raPH = ph;
-    // insert placeholder before card, then move card
-    card.parentNode?.insertBefore(ph, card);
-    targetBox.appendChild(card);
-    card.__raMovedToMobile = true;
-
-    unhide(card);
-  }
-
-  // For each feature group, find its desktop card by a *child* anchor and move it
-  function moveByChildSelector(selList, targetId){
-    const target = document.getElementById(targetId);
-    if (!target) return false;
-
-    for (const sel of selList){
-      const el = $(sel);
-      if (!el) continue;
-      const card = closestCard(el);
-      if (!card) continue;
-      take(card, target);
-      return true;
+  // ---------- If v28 host exists, remove it and restore canvas to card ----------
+  function killMobileStageHost(){
+    const host = document.getElementById('ra-mobile-stage-host');
+    if (host){
+      const cv = host.querySelector('canvas');
+      if (cv){
+        const card=getCanvasCard() || document.body;
+        const wrap = cv.parentElement?.classList?.contains('canvas-container') ? cv.parentElement : cv;
+        card.insertBefore(wrap, card.firstChild);
+      }
+      try { host.remove(); } catch(_) { host.style.display='none'; }
     }
-    return false;
+    // Unhide any parent that v28 hid with inline display:none
+    $$('[style]').forEach(el=>{
+      const st=(el.getAttribute('style')||'').toLowerCase();
+      if (st.includes('display: none')) el.style.display='';
+    });
   }
 
-  // ---------- 3) Fit Fabric wrapper width on phones (view-only) ----------
-  function fitFabricWrapper(){
-    const lower = $('#c'); if (!lower) return;
-    const wrap = lower.parentElement && lower.parentElement.classList.contains('canvas-container')
-      ? lower.parentElement : lower;
+  // ---------- Fit the Fabric stage visually to phone width (view-only) ----------
+  function fitFabric(){
+    const all = $$('canvas'); if (!all.length) return;
+    const stage = all.reduce((a,b)=> (b.width > (a?.width||0) ? b : a), null);
+    const wrap = stage?.parentElement?.classList?.contains('canvas-container') ? stage.parentElement : (stage?.parentElement || stage);
+    if (!wrap) return;
+
     const target = Math.min(620, Math.floor(window.innerWidth * 0.92));
     wrap.style.width  = target + 'px';
     wrap.style.height = target + 'px';
     wrap.style.margin = '0 auto 12px auto';
     wrap.style.position = 'relative';
     $$('canvas', wrap).forEach(cv => {
-      cv.style.width = target + 'px';
-      cv.style.height = target + 'px';
-      cv.style.maxWidth = '100%';
-      cv.style.display = 'block';
+      cv.style.width  = target+'px';
+      cv.style.height = target+'px';
+      cv.style.maxWidth='100%';
+      cv.style.display='block';
     });
 
     // Hide any tiny checkerboard strip above/below
     [wrap.previousElementSibling, wrap.nextElementSibling].forEach(el=>{
       if (!el) return;
-      const bg = (getComputedStyle(el).backgroundImage||'');
+      const bg=(getComputedStyle(el).backgroundImage||'');
       const tiny = el.getBoundingClientRect().height < 18 || !(el.textContent||'').trim();
       if (tiny || /linear-gradient|repeating/i.test(bg)){
         el.style.display='none'; el.style.height='0'; el.style.margin='0'; el.style.padding='0';
@@ -3004,68 +2925,38 @@
     });
   }
 
-  // ---------- 4) Perform the port (move real panels into the hub) ----------
-  function portAll(){
-    const hub = ensureHub();
-    // Custom Text (input/textarea + add button + fonts + Inspire)
-    moveByChildSelector(['#customText', '#addCustomText', '#fontFamily', '#raAiQuoteBtn'], 'raMB_Custom');
-
-    // Selection + our Undo/Redo row
-    moveByChildSelector(['#duplicate', '#delete', '#opacity', '#raSnapRow', '#raHistoryRow', '#raUndoBtn'], 'raMB_Select');
-
-    // Overlays grid/upload
-    moveByChildSelector(['#overlayUpload', '#overlayGrid'], 'raMB_Over');
-
-    // Published overlays shelf (our id)
-    moveByChildSelector(['#ra2Shelf'], 'raMB_Pub');
-
-    // Animate dock (our id)
-    moveByChildSelector(['#raAnimDock'], 'raMB_Anim');
-
-    // Export (buttons/preview/multiplier)
-    moveByChildSelector(['#exportPng', '#openNewTab', '#manualLink', '#exportPreview', '#exportMultiplier'], 'raMB_Export');
-
-    // Video panel (our id)
-    moveByChildSelector(['#raVideoPanel'], 'raMB_Video');
-
-    // Make sure each box is visible (some wrappers carry "hidden" classes)
-    ['raMB_Custom','raMB_Select','raMB_Over','raMB_Pub','raMB_Anim','raMB_Export','raMB_Video']
-      .map(id => document.getElementById(id))
-      .forEach(unhide);
-
-    // Finally, fit the canvas size visually for phone
-    fitFabricWrapper();
+  // ---------- Make sure the real panels are visible on mobile ----------
+  function unhideFeatureCards(){
+    const anchors=[
+      '#customText','#addCustomText','#fontFamily','#idFontFamily','#raAiQuoteBtn',
+      '#duplicate','#delete','#opacity','#blendMode','#raSnapRow','#raHistoryRow',
+      '#overlayUpload','#overlayGrid','#ra2Shelf',
+      '#raAnimDock','#exportPng','#openNewTab','#exportMultiplier',
+      '#raVideoPanel'
+    ];
+    anchors.forEach(sel=>{
+      const el=$(sel); if (!el) return;
+      const card=closestCard(el); if (!card) return;
+      unhide(card);
+    });
   }
 
-  // ---------- 5) Keep it applied as DOM changes (React-ish UIs) ----------
-  function applyAll(){
-    // Ensure canvas card is normalized
-    const card = getCanvasCard();
-    if (card && !card.id) card.id = 'raMobileCanvasCard';
-
-    portAll();
+  function apply(){
+    neutralizeFixed();
+    killMobileStageHost();
+    fitFabric();
+    unhideFeatureCards();
   }
 
-  // Initial pass
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', applyAll, {once:true});
+  if (document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', apply, {once:true});
   } else {
-    applyAll();
+    apply();
   }
 
-  // Re-apply when the app mutates or screen rotates
-  new MutationObserver(() => { if (window.matchMedia(MQ).matches) applyAll(); })
-    .observe(document.documentElement, { childList:true, subtree:true });
-  window.addEventListener('resize', () => { if (window.matchMedia(MQ).matches) applyAll(); }, { passive:true });
-  window.addEventListener('orientationchange', () => setTimeout(()=>{ if (window.matchMedia(MQ).matches) applyAll(); }, 120), { passive:true });
-
-  // Also re-fit when the user loads/clears images (common actions)
-  ['loadToken','baseUpload','loadUrl','clearUpload'].forEach(id=>{
-    const el = document.getElementById(id);
-    if (el && !el.__raMobilePortBound){
-      el.__raMobilePortBound = true;
-      el.addEventListener('click',  ()=> setTimeout(applyAll, 60), {passive:true});
-      el.addEventListener('change', ()=> setTimeout(applyAll, 60), {passive:true});
-    }
-  });
+  // Keep it applied as the UI changes or rotates
+  new MutationObserver(()=>{ if (window.matchMedia(MQ).matches) apply(); })
+    .observe(document.documentElement,{childList:true,subtree:true});
+  window.addEventListener('resize', ()=>{ if (window.matchMedia(MQ).matches) apply(); }, {passive:true});
+  window.addEventListener('orientationchange', ()=> setTimeout(()=>{ if (window.matchMedia(MQ).matches) apply(); }, 120), {passive:true});
 })();
