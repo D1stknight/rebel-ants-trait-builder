@@ -4141,3 +4141,181 @@
   }
   wire();
 })();
+
+/* ==========================================================
+   RA_WM_ADMIN_FIXES_v2 — paste at the very bottom of app.js
+   - Toggles (Enabled / Show on tokens / Show on uploads) save+apply.
+   - Refresh pulls from the server and applies values.
+   - Hide collapses the panel and shows a "Watermark" button to restore.
+   ========================================================== */
+(() => {
+  const GET_URL  = '/api/ra-settings';
+  const POST_URL = '/api/ra-settings';
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // --- UI helpers ---
+  function el(id){ return document.getElementById(id); }
+  function readUI(){
+    return {
+      enabled:       !!(el('raWmCEnabled')?.checked),
+      showOnTokens:  !!(el('raWmCOnTok')?.checked),
+      showOnUploads: !!(el('raWmCOnUp')?.checked),
+      opacity:  Number(el('raWmCOpacity')?.value ?? 0.18),
+      sizePct:  Number(el('raWmCSize')?.value ?? 0.88),
+    };
+  }
+  function setUI(s){
+    if (!s) return;
+    if (el('raWmCEnabled'))  el('raWmCEnabled').checked  = !!s.enabled;
+    if (el('raWmCOnTok'))    el('raWmCOnTok').checked    = !!s.showOnTokens;
+    if (el('raWmCOnUp'))     el('raWmCOnUp').checked     = !!s.showOnUploads;
+    if (el('raWmCOpacity'))  el('raWmCOpacity').value    = String(s.opacity ?? 0.18);
+    if (el('raWmCSize'))     el('raWmCSize').value       = String(s.sizePct ?? 0.88);
+
+    // Nudge any existing listeners to re-apply locally
+    try {
+      el('raWmCEnabled')?.dispatchEvent(new Event('change', {bubbles:true}));
+      el('raWmCOnTok')?.dispatchEvent(new Event('change', {bubbles:true}));
+      el('raWmCOnUp')?.dispatchEvent(new Event('change', {bubbles:true}));
+      el('raWmCOpacity')?.dispatchEvent(new Event('input', {bubbles:true}));
+      el('raWmCSize')?.dispatchEvent(new Event('input', {bubbles:true}));
+    } catch(_) {}
+  }
+
+  // Apply size/opacity to the centered WM layer if it exists
+  function applyToCanvas(settings){
+    const c = C(); if (!c) return false;
+    const wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
+    if (!wm) return false;
+
+    const opacity = Math.max(0, Math.min(1, Number(settings?.opacity ?? 0.18)));
+    const sizePct = Math.max(0.05, Math.min(1, Number(settings?.sizePct ?? 0.88)));
+
+    const targetW = Math.round(c.getWidth() * sizePct);
+    const baseW   = wm.width || (wm._element?.naturalWidth) || 512;
+    const s = targetW / baseW;
+
+    wm.opacity = opacity;
+    wm.scaleX = s; wm.scaleY = s;
+    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
+    wm.setCoords();
+    c.bringToFront(wm);
+    c.requestRenderAll();
+    return true;
+  }
+
+  // Respect Enabled / Show‑on rules by asking the existing code to re‑evaluate
+  function reapplyRules(){
+    // The Watermark block already wires the "Refresh" button to re-run its logic.
+    const btn = el('raWmCRefresh');
+    if (btn) { try { btn.click(); } catch(_) {} }
+  }
+
+  // --- server I/O ---
+  async function getFromServer(){
+    try {
+      const r = await fetch(GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache:'no-store' });
+      if (!r.ok) return null;
+      const j = await r.json();
+      return j.settings ?? j.data ?? j;
+    } catch(_) { return null; }
+  }
+  async function postToServer(body){
+    try {
+      await fetch(POST_URL, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(body)
+      });
+    } catch(_) {}
+  }
+
+  // --- wire toggles + sliders to save+apply ---
+  function wireAdmin(){
+    const op  = el('raWmCOpacity');
+    const sz  = el('raWmCSize');
+    const on  = el('raWmCEnabled');
+    const tok = el('raWmCOnTok');
+    const up  = el('raWmCOnUp');
+
+    if (!op || op.__raWmAdminFixes) return; // not visible yet or already wired
+    op.__raWmAdminFixes = sz && (sz.__raWmAdminFixes = true);
+    if (on)  on.__raWmAdminFixes  = true;
+    if (tok) tok.__raWmAdminFixes = true;
+    if (up)  up.__raWmAdminFixes  = true;
+
+    const debounced = (()=>{ let t; return ()=>{
+      clearTimeout(t);
+      t = setTimeout(async ()=>{
+        const body = readUI();
+        await postToServer(body);     // save for everyone
+        reapplyRules();               // add/remove layer if needed
+        applyToCanvas(body);          // size/opacity instant feedback
+      }, 220);
+    };})();
+
+    [op, sz].forEach(e=> e && e.addEventListener('input', debounced));
+    [on, tok, up].forEach(e=> e && e.addEventListener('change', debounced));
+
+    // Intercept "Refresh" to actually pull from server and apply
+    const ref = el('raWmCRefresh');
+    if (ref && !ref.__raWmAdminFixes){
+      ref.__raWmAdminFixes = true;
+      ref.addEventListener('click', async (ev)=>{
+        ev.preventDefault();
+        const s = await getFromServer();
+        if (s){ setUI(s); applyToCanvas(s); reapplyRules(); }
+      });
+    }
+
+    // Replace "Hide" with a collapse + show button
+    const pane = el('raWmCenterDock');
+    const hideBtn = el('raWmCHide');
+    if (pane && hideBtn && !hideBtn.__raWmAdminFixes){
+      hideBtn.__raWmAdminFixes = true;
+      hideBtn.addEventListener('click', (ev)=>{
+        ev.preventDefault();
+        collapsePanel();
+      });
+      // If panel is already hidden from a previous click, provide a way back
+      if (getComputedStyle(pane).display === 'none'){ ensureShowButton(); }
+    }
+  }
+
+  // Show/Hide helpers for the panel
+  function ensureShowButton(){
+    if (el('raWmShowBtn')) return;
+    const row = el('raSnapRow'); // nice home next to Snap / Guides
+    const btn = document.createElement('button');
+    btn.id = 'raWmShowBtn';
+    btn.textContent = 'Watermark';
+    btn.className = 'btn small';
+    btn.style.marginLeft = '8px';
+    btn.addEventListener('click', ()=>{ showPanel(); });
+    (row || document.body).appendChild(btn);
+    if (!row){ // position nicely if we had to put it on body
+      Object.assign(btn.style, { position:'fixed', right:'16px', bottom:'16px', zIndex:'99999' });
+    }
+  }
+  function collapsePanel(){
+    const pane = el('raWmCenterDock');
+    if (pane){ pane.style.display = 'none'; }
+    ensureShowButton();
+  }
+  function showPanel(){
+    const pane = el('raWmCenterDock');
+    const btn  = el('raWmShowBtn');
+    if (pane){ pane.style.display = ''; }
+    if (btn){ btn.remove(); }
+  }
+
+  // Keep trying until admin panel exists, then wire once
+  const mo = new MutationObserver(wireAdmin);
+  mo.observe(document.documentElement, { childList:true, subtree:true });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireAdmin, { once:true });
+  } else {
+    wireAdmin();
+  }
+})();
