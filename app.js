@@ -4143,133 +4143,160 @@
 })();
 
 /* ==========================================================
-   RA_WM_HYDRATE_TOGGLES_AND_CONTEXT_v1 — paste at the bottom
-   - Reads {enabled, showOnTokens, showOnUploads, opacity, sizePct}
-     from /api/ra-settings on open and fills the admin UI.
-   - When you switch between a Token and an Upload, the opacity
-     slider jumps to the *effective* value for that type:
-       • off for that type  -> 0
-       • on for that type   -> saved opacity
-   - Also mirrors local UI changes so the slider stays honest.
+   RA_WM_SERVER_MASTER_v1  — PASTE AT THE VERY BOTTOM
+   What this does (no other edits needed):
+   • Loads settings from /api/ra-settings on open.
+   • Makes the three toggles (Enabled / Show on tokens / Show on uploads)
+     save to the server AND actually show/hide the watermark.
+   • Makes the sliders (Opacity / Size) save to the server and apply.
+   • Turns the "Refresh" button into "Save for everyone" + re-apply.
+   • Works for admin and non-admin pages.
    ========================================================== */
 (() => {
-  const GET_URL = '/api/ra-settings';
-  const $ = (id) => document.getElementById(id);
+  const API = '/api/ra-settings';
+
+  // --- Fabric helpers ---
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $ = (id) => document.getElementById(id);
 
-  let server = null;  // last values from the server
-
-  // --- tiny setters that also fire events so existing code reacts ---
-  function setCheck(id, v){
-    const el = $(id); if (!el) return;
-    const val = !!v;
-    if (el.checked !== val) {
-      el.checked = val;
-      try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
-    }
-  }
-  function setRange(id, v){
-    const el = $(id); if (!el) return;
-    const val = Number(v);
-    if (Number(el.value) !== val) {
-      el.value = String(val);
-      try { el.dispatchEvent(new Event('input', { bubbles:true })); } catch(_){}
-    }
-  }
-
-  // --- detect whether current base is a token or an upload ---
-  function currentBaseIsToken(){
+  function baseIsToken(){
     const c = C(); if (!c) return null;
-    const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+    const base = (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect);
     if (!base) return null;
-    return (base.type === 'image');    // your app: token = plain image; upload = group
+    // in your app: token base = plain Image; uploads = Group
+    return base.type === 'image';
   }
 
-  // The opacity that should *actually* be used for the current type
-  function effectiveOpacity(){
-    if (!server) return null;
-    const isTok = currentBaseIsToken();
-    if (isTok === null) return null;
-    const show =
-      !!server.enabled &&
-      ((isTok && !!server.showOnTokens) || (!isTok && !!server.showOnUploads));
-    return show ? Number(server.opacity || 0) : 0;
+  function findWM(){
+    const c = C(); if (!c) return null;
+    return (c.getObjects()||[]).find(o => o && o._raWMCenter) || null;
   }
 
-  // Move the slider to match the current type (token vs upload)
-  function adjustSliderForContext(){
-    const eff = effectiveOpacity();
-    if (eff == null) return;
-    setRange('raWmCOpacity', eff);
+  // --- server I/O ---
+  async function getServer(){
+    const r = await fetch(API + (API.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache:'no-store' });
+    if (!r.ok) throw new Error('GET failed');
+    const j = await r.json();
+    return j.settings ?? j.data ?? j;
   }
-
-  // --- hydrate UI from the server on open ---
-  async function hydrateFromServer(){
-    try {
-      const r = await fetch(GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache: 'no-store' });
-      if (!r.ok) return;
-      const j = await r.json();
-      server = j.settings ?? j.data ?? j;
-
-      // Fill the three toggles and the sliders, and let existing code apply them
-      setCheck('raWmCEnabled',  server.enabled);
-      setCheck('raWmCOnTok',    server.showOnTokens);
-      setCheck('raWmCOnUp',     server.showOnUploads);
-      setRange('raWmCOpacity',  server.opacity ?? 0.18);
-      setRange('raWmCSize',     server.sizePct ?? 0.88);
-
-      // After the panel applies size/opacity, adjust the slider for the current type
-      // (so Token vs Upload shows the right number on the handle)
-      adjustSliderForContext();
-    } catch(_) {}
-  }
-
-  // --- keep the slider honest when base type changes (token <-> upload) ---
-  let lastIsToken = null;
-  function watchBaseChanges(){
-    const c = C(); if (!c) { setTimeout(watchBaseChanges, 150); return; }
-    if (c.__raHydrateContext) return;
-    c.__raHydrateContext = true;
-
-    const recheck = () => {
-      const now = currentBaseIsToken();
-      if (now !== lastIsToken) {
-        lastIsToken = now;
-        adjustSliderForContext();
-      }
-    };
-
-    c.on('object:added',   recheck);
-    c.on('object:removed', recheck);
-    // First pass once canvas is ready
-    setTimeout(recheck, 0);
-  }
-
-  // --- mirror local UI so "server" snapshot stays current while you edit ---
-  function mirrorLocalUI(){
-    const map = [
-      ['raWmCEnabled',  'change', (v)=> server && (server.enabled = !!v.checked)],
-      ['raWmCOnTok',    'change', (v)=> server && (server.showOnTokens = !!v.checked)],
-      ['raWmCOnUp',     'change', (v)=> server && (server.showOnUploads = !!v.checked)],
-      ['raWmCOpacity',  'input',  (v)=> server && (server.opacity = Number(v.value))],
-      ['raWmCSize',     'input',  (v)=> server && (server.sizePct = Number(v.value))],
-    ];
-    map.forEach(([id, ev, fn])=>{
-      const el = $(id);
-      if (!el || el.__raHydrateBound) return;
-      el.__raHydrateBound = true;
-      el.addEventListener(ev, ()=>{ try{ fn(el); }catch(_){}
-        // after any toggle/slider change, keep the slider in context
-        adjustSliderForContext();
-      });
+  async function postServer(body){
+    await fetch(API, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(body)
     });
   }
 
-  function boot(){
-    hydrateFromServer();
-    watchBaseChanges();
-    mirrorLocalUI();
+  // --- current UI values (when admin panel is visible) ---
+  function readAdminUI(){
+    return {
+      enabled:       !!($('raWmCEnabled')?.checked),
+      showOnTokens:  !!($('raWmCOnTok')?.checked),
+      showOnUploads: !!($('raWmCOnUp')?.checked),
+      opacity:  Number($('raWmCOpacity')?.value ?? 0.18),
+      sizePct:  Number($('raWmCSize')?.value ?? 0.88)
+    };
   }
+
+  // --- apply settings to the existing centered watermark layer ---
+  function applyToWM(s){
+    const c = C(); const wm = findWM();
+    if (!c || !wm || !s) return;
+
+    // 1) visibility: obey Enabled + token/upload switches
+    const isTok = baseIsToken();
+    const show  = !!s.enabled && ((isTok && !!s.showOnTokens) || (!isTok && !!s.showOnUploads));
+    wm.visible  = show;
+
+    // 2) size + opacity from server
+    const sizePct = Math.max(0.05, Math.min(1.4, Number(s.sizePct ?? 0.88)));
+    const op      = Math.max(0, Math.min(1,   Number(s.opacity ?? 0.18)));
+
+    const baseW = wm.width || (wm._element?.naturalWidth) || 512;
+    const targetW = Math.round(c.getWidth() * sizePct);
+    const sc = targetW / baseW;
+
+    wm.scaleX = sc; wm.scaleY = sc;
+    wm.opacity = op;
+    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
+    wm.setCoords();
+
+    // keep it on top but invisible if show==false
+    try { c.bringToFront(wm); } catch(_){}
+    c.requestRenderAll();
+  }
+
+  // keep watermark in sync when canvas objects change
+  function wireCanvasFollows(stateRef){
+    const c = C(); if (!c || c.__raWmServerMaster) { if (!c) setTimeout(()=>wireCanvasFollows(stateRef), 150); return; }
+    c.__raWmServerMaster = true;
+    const reapply = ()=> applyToWM(stateRef.val);
+    c.on('object:added',    reapply);
+    c.on('object:removed',  reapply);
+    c.on('object:modified', reapply);
+    // first pass
+    setTimeout(reapply, 0);
+  }
+
+  // --- admin wiring: make every control "save + apply" ---
+  function wireAdmin(stateRef){
+    const ids = {
+      en:  'raWmCEnabled',
+      tok: 'raWmCOnTok',
+      up:  'raWmCOnUp',
+      op:  'raWmCOpacity',
+      sz:  'raWmCSize',
+      rf:  'raWmCRefresh'
+    };
+    const en  = $(ids.en), tok = $(ids.tok), up = $(ids.up),
+          op  = $(ids.op), sz  = $(ids.sz),  rf = $(ids.rf);
+
+    if (!op || op.__raWmServerMasterUI) return;   // not visible yet or already wired
+    op.__raWmServerMasterUI = sz && (sz.__raWmServerMasterUI = true);
+    if (en)  en.__raWmServerMasterUI  = true;
+    if (tok) tok.__raWmServerMasterUI = true;
+    if (up)  up.__raWmServerMasterUI  = true;
+    if (rf)  rf.__raWmServerMasterUI  = true;
+
+    const saveAndApply = async () => {
+      const body = readAdminUI();
+      stateRef.val = body;            // remember latest
+      try { await postServer(body); } catch(_){}
+      applyToWM(body);                // instant visual feedback
+    };
+
+    [op, sz].forEach(el => el && el.addEventListener('input',  saveAndApply));
+    [en, tok, up].forEach(el => el && el.addEventListener('change', saveAndApply));
+
+    // Make "Refresh" behave like "Save for everyone"
+    if (rf){
+      rf.addEventListener('click', (e)=>{
+        e.preventDefault();
+        saveAndApply();
+      });
+    }
+  }
+
+  // --- boot: load server once, enforce everywhere, then wire admin if present ---
+  const STATE = { val: null };
+
+  async function boot(){
+    try { STATE.val = await getServer(); } catch(_){ STATE.val = readAdminUI(); }
+    // Apply when watermark shows up (the other script adds it)
+    (function waitWm(tries=0){
+      const wm = findWM();
+      if (wm) { applyToWM(STATE.val); return; }
+      if (tries < 60) setTimeout(()=>waitWm(tries+1), 250);
+    })();
+
+    wireCanvasFollows(STATE);
+
+    // If admin panel is on screen, wire it; keep trying until it appears.
+    const mo = new MutationObserver(()=> wireAdmin(STATE));
+    mo.observe(document.documentElement, { childList:true, subtree:true });
+    wireAdmin(STATE);
+  }
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot, { once:true });
   } else {
