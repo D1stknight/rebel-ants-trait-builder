@@ -4143,53 +4143,136 @@
 })();
 
 /* ==========================================================
-   RA_WM_TOGGLE_REEVAL_MINI_v1 — paste at the very bottom
-   Ensures the three checkboxes actually show/hide watermark.
-   It removes the current centered watermark, then triggers
-   the built‑in “Refresh” to re‑apply the rules.
+   RA_WM_HYDRATE_TOGGLES_AND_CONTEXT_v1 — paste at the bottom
+   - Reads {enabled, showOnTokens, showOnUploads, opacity, sizePct}
+     from /api/ra-settings on open and fills the admin UI.
+   - When you switch between a Token and an Upload, the opacity
+     slider jumps to the *effective* value for that type:
+       • off for that type  -> 0
+       • on for that type   -> saved opacity
+   - Also mirrors local UI changes so the slider stays honest.
    ========================================================== */
 (() => {
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-  function $(id){ return document.getElementById(id); }
+  const GET_URL = '/api/ra-settings';
+  const $ = (id) => document.getElementById(id);
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // removes any centered watermark layer(s)
-  function nukeCenteredWM(){
-    const c = C(); if (!c) return;
-    const objs = (c.getObjects() || []);
-    let changed = false;
-    objs.slice().forEach(o => {
-      if (o && o._raWMCenter) { c.remove(o); changed = true; }
+  let server = null;  // last values from the server
+
+  // --- tiny setters that also fire events so existing code reacts ---
+  function setCheck(id, v){
+    const el = $(id); if (!el) return;
+    const val = !!v;
+    if (el.checked !== val) {
+      el.checked = val;
+      try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
+    }
+  }
+  function setRange(id, v){
+    const el = $(id); if (!el) return;
+    const val = Number(v);
+    if (Number(el.value) !== val) {
+      el.value = String(val);
+      try { el.dispatchEvent(new Event('input', { bubbles:true })); } catch(_){}
+    }
+  }
+
+  // --- detect whether current base is a token or an upload ---
+  function currentBaseIsToken(){
+    const c = C(); if (!c) return null;
+    const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+    if (!base) return null;
+    return (base.type === 'image');    // your app: token = plain image; upload = group
+  }
+
+  // The opacity that should *actually* be used for the current type
+  function effectiveOpacity(){
+    if (!server) return null;
+    const isTok = currentBaseIsToken();
+    if (isTok === null) return null;
+    const show =
+      !!server.enabled &&
+      ((isTok && !!server.showOnTokens) || (!isTok && !!server.showOnUploads));
+    return show ? Number(server.opacity || 0) : 0;
+  }
+
+  // Move the slider to match the current type (token vs upload)
+  function adjustSliderForContext(){
+    const eff = effectiveOpacity();
+    if (eff == null) return;
+    setRange('raWmCOpacity', eff);
+  }
+
+  // --- hydrate UI from the server on open ---
+  async function hydrateFromServer(){
+    try {
+      const r = await fetch(GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json();
+      server = j.settings ?? j.data ?? j;
+
+      // Fill the three toggles and the sliders, and let existing code apply them
+      setCheck('raWmCEnabled',  server.enabled);
+      setCheck('raWmCOnTok',    server.showOnTokens);
+      setCheck('raWmCOnUp',     server.showOnUploads);
+      setRange('raWmCOpacity',  server.opacity ?? 0.18);
+      setRange('raWmCSize',     server.sizePct ?? 0.88);
+
+      // After the panel applies size/opacity, adjust the slider for the current type
+      // (so Token vs Upload shows the right number on the handle)
+      adjustSliderForContext();
+    } catch(_) {}
+  }
+
+  // --- keep the slider honest when base type changes (token <-> upload) ---
+  let lastIsToken = null;
+  function watchBaseChanges(){
+    const c = C(); if (!c) { setTimeout(watchBaseChanges, 150); return; }
+    if (c.__raHydrateContext) return;
+    c.__raHydrateContext = true;
+
+    const recheck = () => {
+      const now = currentBaseIsToken();
+      if (now !== lastIsToken) {
+        lastIsToken = now;
+        adjustSliderForContext();
+      }
+    };
+
+    c.on('object:added',   recheck);
+    c.on('object:removed', recheck);
+    // First pass once canvas is ready
+    setTimeout(recheck, 0);
+  }
+
+  // --- mirror local UI so "server" snapshot stays current while you edit ---
+  function mirrorLocalUI(){
+    const map = [
+      ['raWmCEnabled',  'change', (v)=> server && (server.enabled = !!v.checked)],
+      ['raWmCOnTok',    'change', (v)=> server && (server.showOnTokens = !!v.checked)],
+      ['raWmCOnUp',     'change', (v)=> server && (server.showOnUploads = !!v.checked)],
+      ['raWmCOpacity',  'input',  (v)=> server && (server.opacity = Number(v.value))],
+      ['raWmCSize',     'input',  (v)=> server && (server.sizePct = Number(v.value))],
+    ];
+    map.forEach(([id, ev, fn])=>{
+      const el = $(id);
+      if (!el || el.__raHydrateBound) return;
+      el.__raHydrateBound = true;
+      el.addEventListener(ev, ()=>{ try{ fn(el); }catch(_){}
+        // after any toggle/slider change, keep the slider in context
+        adjustSliderForContext();
+      });
     });
-    if (changed) { try { c.requestRenderAll(); } catch(_){} }
   }
 
-  function reapply(){
-    // Ask the existing Watermark panel to recompute (uses its own logic)
-    const btn = $('raWmCRefresh');
-    if (btn) { try { btn.click(); } catch(_){} }
+  function boot(){
+    hydrateFromServer();
+    watchBaseChanges();
+    mirrorLocalUI();
   }
-
-  function wire(){
-    const en  = $('raWmCEnabled');
-    const tok = $('raWmCOnTok');
-    const up  = $('raWmCOnUp');
-
-    // Only wire once when the admin panel exists
-    if (!en || en.__raWmMiniBound) return;
-    en.__raWmMiniBound = tok && (tok.__raWmMiniBound = true);
-    if (up) up.__raWmMiniBound = true;
-
-    const onChange = () => { nukeCenteredWM(); reapply(); };
-    [en, tok, up].forEach(el => el && el.addEventListener('change', onChange));
-
-    // If the panel is already hidden, create a way to show it (optional block below).
-  }
-
-  const mo = new MutationObserver(wire);
-  mo.observe(document.documentElement, { childList:true, subtree:true });
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once:true });
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
   } else {
-    wire();
+    boot();
   }
 })();
