@@ -4437,3 +4437,265 @@
     wire();
   }
 })();
+
+/* ==========================================================
+   RA_CHROMA_KEY_TOOL_V1 — Background Remover (solid colors)
+   - Adds a small UI panel.
+   - Works on the selected overlay OR the base image.
+   - Base is non‑destructive: creates a cut-out copy above the base.
+   - Best for flat/solid backgrounds (blue/green/etc.).
+   ========================================================== */
+(() => {
+  if (window.__RA_CHROMA_KEY_V1__) return; window.__RA_CHROMA_KEY_V1__ = true;
+
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  const  $ = (s,r=document)=>r.querySelector(s);
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // --- helpers ---
+  function findBase(c){
+    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+  }
+  function hasBase(){ const c=C(); return !!(c && findBase(c)); }
+  function hexToRgb(hex){
+    const h = String(hex||'').trim().replace('#','');
+    if (h.length===3) return [parseInt(h[0]+h[0],16),parseInt(h[1]+h[1],16),parseInt(h[2]+h[2],16)];
+    return [parseInt(h.slice(0,2),16)||0, parseInt(h.slice(2,4),16)||0, parseInt(h.slice(4,6),16)||0];
+  }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+  // Grab the HTMLImageElement that Fabric uses
+  function imageEl(fImg){ return fImg? (fImg._originalElement || fImg._element || fImg.getElement?.() || null) : null; }
+
+  // For groups, operate on the inner image if present
+  function innerImageOf(obj){
+    if (!obj) return null;
+    if (obj.type==='image') return obj;
+    if (obj.type==='group' && Array.isArray(obj._objects)){
+      return obj._objects.find(k => k.type==='image') || null;
+    }
+    return null;
+  }
+
+  // Build a cut‑out PNG dataURL by removing pixels near target color
+  function chromaCutDataURL(fImg, rgb, tolPct, featherPx){
+    const el = imageEl(fImg); if (!el) return null;
+
+    // Use visible source window (Fabric cropping)
+    const sx = fImg.cropX || 0;
+    const sy = fImg.cropY || 0;
+    const sw = Math.max(1, Math.round(fImg.width  || el.naturalWidth || el.width));
+    const sh = Math.max(1, Math.round(fImg.height || el.naturalHeight|| el.height));
+
+    const off = document.createElement('canvas'); off.width = sw; off.height = sh;
+    const ctx = off.getContext('2d', { willReadFrequently:true });
+    ctx.drawImage(el, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    const img = ctx.getImageData(0,0,sw,sh);
+    const d   = img.data;
+    const [rT, gT, bT] = rgb;
+
+    // Tolerance → 0..441 (max Euclidean distance in RGB)
+    const thr    = clamp((tolPct/100) * 441.67, 0, 441.67);
+    const low    = Math.max(0, thr - featherPx);
+    const high   = thr + featherPx;
+
+    for (let i=0;i<d.length;i+=4){
+      const r=d[i], g=d[i+1], b=d[i+2]; const a=d[i+3];
+      const dr=r-rT, dg=g-gT, db=b-bT;
+      const dist = Math.sqrt(dr*dr + dg*dg + db*db);
+
+      if (dist <= low){
+        d[i+3] = 0;                        // fully transparent
+      } else if (dist < high){
+        const t = (dist - low) / (high - low);   // 0..1
+        d[i+3] = Math.round(a * t);        // soft edge
+      } else {
+        // keep
+      }
+    }
+    ctx.putImageData(img,0,0);
+    try { return off.toDataURL('image/png'); } catch(_){ return null; }
+  }
+
+  // Replace/overlay result on canvas
+  function placeResultFromDataURL(dataURL, srcObj, asOverlayOnly){
+    const c=C(); if (!c || !dataURL) return;
+    const center = (srcObj.getCenterPoint ? srcObj.getCenterPoint() : new fabric.Point(srcObj.left||0, srcObj.top||0));
+    const wasGroup = (srcObj.type==='group');
+
+    fabric.Image.fromURL(dataURL, (newImg)=>{
+      newImg.set({ originX:'center', originY:'center' });
+
+      // Keep the same visual size/angle as the source object
+      let targetW, targetH, ang;
+      if (wasGroup){
+        targetW = srcObj.getScaledWidth();
+        targetH = srcObj.getScaledHeight();
+        ang     = srcObj.angle || 0;
+      } else {
+        targetW = srcObj.getScaledWidth();
+        targetH = srcObj.getScaledHeight();
+        ang     = srcObj.angle || 0;
+      }
+      const niw = newImg.width  || 1;
+      const nih = newImg.height || 1;
+      newImg.scaleX = targetW / niw;
+      newImg.scaleY = targetH / nih;
+      newImg.angle  = ang;
+      newImg.left   = center.x;
+      newImg.top    = center.y;
+
+      newImg._kind     = 'overlay';
+      newImg._raChroma = true;
+
+      c.add(newImg);
+      c.setActiveObject(newImg);
+      c.requestRenderAll();
+
+      // If we worked on an overlay, replace it; if we worked on base, leave base as-is.
+      if (!asOverlayOnly){
+        try { c.remove(srcObj); } catch(_) {}
+      }
+    }, { crossOrigin:'anonymous' });
+  }
+
+  // Main apply
+  function applyChroma(){
+    const c = C();
+    if (!c){ alert('Canvas not ready'); return; }
+
+    const useBase = !!$('#raKeyScopeBase')?.checked;
+    let target = useBase ? findBase(c) : c.getActiveObject();
+
+    if (!target){
+      alert(useBase ? 'No base image loaded yet.' : 'Select an overlay image first.');
+      return;
+    }
+
+    // Find an actual image to operate on (handles image OR group)
+    const fImg = innerImageOf(target);
+    if (!fImg){ alert('Selected layer is not an image. Pick an image layer.'); return; }
+
+    const color = $('#raKeyColor')?.value || '#00b7ff';
+    const tol   = parseInt($('#raKeyTol')?.value || '28', 10);
+    const soft  = parseInt($('#raKeySoft')?.value|| '8',  10);
+
+    const dataURL = chromaCutDataURL(fImg, hexToRgb(color), tol, soft);
+    if (!dataURL){ alert('Could not process this image (security or format). Try another image.'); return; }
+
+    // If we operated on base, always place result as an overlay COPY above base
+    placeResultFromDataURL(dataURL, target, /*asOverlayOnly*/ useBase);
+  }
+
+  // Eyedropper from the rendered canvas (simple & good enough for solid bg)
+  let picking = false;
+  function togglePick(){
+    const btn = $('#raKeyPick');
+    picking = !picking;
+    if (btn) btn.textContent = picking ? 'Pick (click on canvas…)': 'Pick';
+    if (!picking) return;
+
+    const c=C(); if (!c) return;
+    const el = c.lowerCanvasEl || c.upperCanvasEl;
+    const rect = el.getBoundingClientRect();
+    const ratio = el.width / Math.max(1, rect.width);
+    const ctx = el.getContext('2d');
+
+    const onClick = (e)=>{
+      if (!picking) return cleanup();
+      const x = Math.round((e.clientX - rect.left) * ratio);
+      const y = Math.round((e.clientY - rect.top)  * ratio);
+      try{
+        const px = ctx.getImageData(x,y,1,1).data;
+        const hex = '#'
+          + px[0].toString(16).padStart(2,'0')
+          + px[1].toString(16).padStart(2,'0')
+          + px[2].toString(16).padStart(2,'0');
+        const inp = $('#raKeyColor'); if (inp) inp.value = hex;
+      }catch(_){}
+      picking = false; if (btn) btn.textContent = 'Pick'; cleanup();
+    };
+    const cleanup = ()=>{
+      document.removeEventListener('click', onClick, true);
+    };
+    document.addEventListener('click', onClick, true);
+  }
+
+  // UI
+  function ensureUI(){
+    if ($('#raChromaPanel')) return;
+
+    // Place under the “Selection” card if we can find it
+    const host = $$('h3').find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode
+              || document.body;
+
+    const box = document.createElement('div');
+    box.id = 'raChromaPanel';
+    box.style.cssText = 'margin-top:12px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea;padding:10px';
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <strong>Background Remover (Chroma Key)</strong>
+        <div style="font-size:11px;opacity:.65">Best for solid colors</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <label style="display:flex;gap:6px;align-items:center">Color
+          <input id="raKeyColor" type="color" value="#00b7ff">
+          <button id="raKeyPick" class="btn small">Pick</button>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">Tolerance
+          <input id="raKeyTol" type="range" min="0" max="100" value="28" style="width:140px">
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">Feather
+          <input id="raKeySoft" type="range" min="0" max="40" value="8" style="width:120px">
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">Apply to
+          <select id="raKeyScope">
+            <option value="sel">Selected layer</option>
+            <option value="base">Base image</option>
+          </select>
+        </label>
+        <button id="raKeyApply" class="btn">Apply</button>
+      </div>
+      <div style="margin-top:6px;font-size:11px;opacity:.65">
+        Tip: Pick the background color, adjust tolerance, then Apply. Undo works.
+      </div>
+    `;
+    host.appendChild(box);
+
+    // Wire
+    $('#raKeyPick').onclick   = togglePick;
+    $('#raKeyApply').onclick  = applyChroma;
+    const scopeSel = $('#raKeyScope');
+    const syncScope = ()=>{
+      const has = hasBase();
+      // If no base, force "Selected layer"
+      if (!has){ scopeSel.value = 'sel'; }
+      scopeSel.querySelectorAll('option[value="base"]')[0].disabled = !has;
+    };
+    scopeSel.onchange = ()=>{
+      const v = scopeSel.value;
+      // mirror to a simple checkbox flag
+      const fake = document.getElementById('raKeyScopeBase') || (()=>{
+        const el=document.createElement('input'); el.type='checkbox'; el.id='raKeyScopeBase'; el.style.display='none'; document.body.appendChild(el); return el;
+      })();
+      fake.checked = (v==='base');
+    };
+    syncScope();
+
+    // Keep the base option enabled/disabled depending on canvas state
+    const c=C();
+    if (c && !c.__raChromaScopeWatch){
+      c.__raChromaScopeWatch = true;
+      c.on('object:added', syncScope);
+      c.on('object:removed', syncScope);
+    }
+  }
+
+  function boot(){ ensureUI(); }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
