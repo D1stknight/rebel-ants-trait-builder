@@ -4699,3 +4699,66 @@
     boot();
   }
 })();
+
+/* ==========================================================
+   RA_CHROMA_KEY_TARGET_FIX_V1 — make Base selectable + auto-pick overlay
+   - Keeps "Base image" choice enabled (even before a base is loaded).
+   - If user chooses "Selected layer" with nothing selected, auto-select
+     the top-most image overlay so Apply just works.
+   ========================================================== */
+(() => {
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function alwaysEnableBaseChoice(){
+    const sel = document.getElementById('raKeyScope');
+    if (!sel) return;
+    const optBase = Array.from(sel.options || []).find(o => o.value === 'base');
+    if (optBase) optBase.disabled = false; // never grey out
+  }
+
+  function topMostImageOverlay(){
+    const c = C(); if (!c) return null;
+    const objs = c.getObjects() || [];
+    // walk from top to bottom; pick first non-base image/group
+    for (let i = objs.length - 1; i >= 0; i--){
+      const o = objs[i];
+      if (!o || o._isBgRect || o._isBase) continue;
+      if (o.type === 'image' || o.type === 'group') return o;
+    }
+    return null;
+  }
+
+  function wire(){
+    const applyBtn = document.getElementById('raKeyApply');
+    const scopeSel = document.getElementById('raKeyScope');
+    if (!applyBtn || applyBtn.__raChromaTargetFixBound) return;
+    applyBtn.__raChromaTargetFixBound = true;
+
+    // If "Selected layer" is chosen but nothing is selected, auto-pick top overlay
+    applyBtn.addEventListener('click', () => {
+      const c = C(); if (!c) return;
+      if ((scopeSel?.value || 'sel') === 'sel') {
+        const cur = c.getActiveObject();
+        if (!cur) {
+          const pick = topMostImageOverlay();
+          if (pick) { c.setActiveObject(pick); c.requestRenderAll(); }
+        }
+      }
+    });
+
+    // Keep base choice enabled now and whenever the canvas changes
+    alwaysEnableBaseChoice();
+    const c = C();
+    if (c && !c.__raChromaTargetFixCanvas){
+      c.__raChromaTargetFixCanvas = true;
+      c.on('object:added',   alwaysEnableBaseChoice);
+      c.on('object:removed', alwaysEnableBaseChoice);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
