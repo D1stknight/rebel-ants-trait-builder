@@ -4813,148 +4813,71 @@
     return Math.ceil(max + pad + stroke*2);
   }
 
- /* ================= RA_FIX_TOKENID_DELETE_V6 =================
-   Goal: When the Token ID is deleted via Selection → Delete or keyboard,
-   - turn OFF the "show token number" intent,
-   - prevent it from auto‑reappearing,
-   - and clear Fabric's top (selection) layer to avoid the tall ghost rectangle.
-   Safe add-only; no layout changes.
-   ============================================================ */
+/* ============== RA_TOKENID_SUPPRESS_MINI_v1 (safe) ==============
+   If the Token ID text is deleted via Selection/keyboard, keep it OFF
+   until the user clicks "Load by Token" again. Prevents the ID from
+   auto‑reappearing and avoids the tall ghost box.
+   Add-only. Doesn't touch your buttons or canvas internals.
+================================================================= */
 (() => {
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  function C(){ return window.canvas || null; }
 
-  // --- Helpers to clear the top/selection layer and repaint ---
-  function clearTop(c){
-    try {
-      if (typeof c.clearContext === 'function' && c.contextTop) {
-        c.clearContext(c.contextTop);
-      } else {
-        const ctx = (c.getSelectionContext && c.getSelectionContext()) || c.contextTop;
-        const cv  = ctx && ctx.canvas;
-        if (ctx && cv) { ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height); }
-      }
-    } catch(_) {}
-    try { const u = c.upperCanvasEl; if (u) u.width = u.width; } catch(_) {}
-  }
-  function repaint(){
-    const c = C(); if (!c) return;
-    clearTop(c);
-    try { c.requestRenderAll(); } catch(_) {}
-    setTimeout(() => { try { c.renderAll(); } catch(_) {} }, 0);
-  }
-
-  // --- Figure out what the Token ID label text should look like (e.g. "#1111") ---
   function getTokenIdString(){
-    // Prefer the input next to "Load by Token"
-    let id = '';
+    // Read the token number shown/typed next to "Load by Token"
     try {
       const btn = Array.from(document.querySelectorAll('button'))
         .find(b => /load\s*by\s*token/i.test((b.textContent||'').trim()));
-      if (btn){
-        const box = btn.parentNode?.querySelector('input');
-        if (box && box.value) id = String(box.value).trim();
-      }
+      const box = btn && btn.parentNode && btn.parentNode.querySelector('input');
+      let id = (box && box.value || '').trim();
       if (!id) {
         const any = Array.from(document.querySelectorAll('input'))
           .find(i => /token\s*id/i.test((i.placeholder||'').toLowerCase()));
         if (any && any.value) id = String(any.value).trim();
       }
-    } catch(_) {}
-    return id ? ('#' + id) : null;
+      return id ? ('#' + id) : null;
+    } catch(_){ return null; }
   }
 
   function isFabricText(o){
-    if (!o) return false;
-    const t = o.type;
+    const t = o && o.type;
     return t === 'i-text' || t === 'text' || t === 'textbox';
   }
   function isTokenIdObject(o){
     if (!isFabricText(o)) return false;
-    if (o._isTokenId || o.__raIsTokenId) return true; // if the app already tags it
+    if (o._isTokenId || o.__raIsTokenId) return true;  // in case the app tags it
     const expect = getTokenIdString();
     if (!expect) return false;
     const txt = (o.text || '').trim();
-    if (txt === expect) return true;
     return txt.replace(/\s+/g,'') === expect.replace(/\s+/g,'');
   }
 
-  // After a manual delete, keep Token ID suppressed until user loads a new token
-  let suppressed = false;
-  function suppressTokenId(){ suppressed = true; }
-  function unsuppressTokenId(){ suppressed = false; }
-
-  // Safe delete (used for Selection → Delete and keyboard)
-  function safeDeleteActive(){
-    const c = C(); if (!c) return;
-    const o = c.getActiveObject();
-    if (!o) return;
-    if (isTokenIdObject(o)) suppressTokenId();
-    try { c.discardActiveObject(); } catch(_) {}
-    try { c.remove(o); } catch(_) {}
-    repaint();
-  }
-
-  // If something tries to bring the Token ID back while suppressed, remove it instantly
-  function guardAdded(o){
-    const c = C(); if (!c || !o) return;
-    if (suppressed && isTokenIdObject(o)){
-      try { c.remove(o); } catch(_) {}
-      repaint();
-    }
-  }
-
   function boot(){
-    const c = C(); if (!c) return setTimeout(boot, 120);
-    if (c.__raFixTidDelV6) return; c.__raFixTidDelV6 = true;
+    const c = C(); if (!c) return setTimeout(boot, 150);
+    if (c.__raTidMini) return; c.__raTidMini = true;
 
-    // When objects are removed/added, keep things clean
+    let suppressed = false; // true means: keep Token ID off for now
+
+    // When *anything* is removed, if it was the Token ID, start suppression
     c.on('object:removed', (e)=>{
-      const o = e?.target || e?.obj || e;
-      if (isTokenIdObject(o)) suppressTokenId();
-      setTimeout(repaint, 0);
+      const o = e && (e.target || e.obj || e);
+      if (isTokenIdObject(o)) suppressed = true;
     });
-    c.on('object:added', (e)=> guardAdded(e?.target||e?.obj||e));
 
-    // Keyboard Delete / Backspace
-    document.addEventListener('keydown', (e)=>{
-      const tag = (e.target && e.target.tagName || '').toLowerCase();
-      if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
-      if (e.key === 'Delete' || e.key === 'Backspace'){
-        setTimeout(safeDeleteActive, 0);
+    // If something tries to add the Token ID while suppressed, instantly remove it
+    c.on('object:added', (e)=>{
+      const o = e && (e.target || e.obj || e);
+      if (suppressed && isTokenIdObject(o)) {
+        try { c.remove(o); } catch(_){}
       }
-    }, true);
+    });
 
-    // Selection panel → Delete button (wire it even if UI re-renders)
-    function wireSelectionDelete(){
-      let btn = document.getElementById('delete');
-      if (!btn){
-        const panel = Array.from(document.querySelectorAll('h3'))
-          .find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode;
-        if (panel){
-          btn = Array.from(panel.querySelectorAll('button'))
-            .find(b => /^delete$/i.test((b.textContent||'').trim()));
-        }
-      }
-      if (!btn || btn.__raFixTidDelV6) return;
-      const orig = btn.onclick;
-      btn.onclick = (ev)=>{
-        ev?.preventDefault?.(); ev?.stopPropagation?.();
-        safeDeleteActive();
-        try { orig && orig.call(btn, ev); } catch(_) {}
-        return false;
-      };
-      btn.__raFixTidDelV6 = true;
-    }
-    wireSelectionDelete();
-    new MutationObserver(wireSelectionDelete).observe(document.body, { childList:true, subtree:true });
-
-    // When user clicks "Load by Token", allow the Token ID to show again
+    // When user clicks "Load by Token", lift suppression so the ID shows again
     function wireLoadByToken(){
       const btn = Array.from(document.querySelectorAll('button'))
         .find(b => /load\s*by\s*token/i.test((b.textContent||'').trim()));
-      if (!btn || btn.__raUnsup) return;
-      btn.addEventListener('click', ()=>{ unsuppressTokenId(); setTimeout(repaint,0); }, true);
-      btn.__raUnsup = true;
+      if (!btn || btn.__raUnsupMini) return;
+      btn.addEventListener('click', ()=>{ suppressed = false; }, true);
+      btn.__raUnsupMini = true;
     }
     wireLoadByToken();
     new MutationObserver(wireLoadByToken).observe(document.body, { childList:true, subtree:true });
