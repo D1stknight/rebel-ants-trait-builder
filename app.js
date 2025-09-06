@@ -4771,19 +4771,26 @@
 })();
 
 /* ==========================================================
-   RA_TIGHTEN_TEXT_BOUNDS_V1
-   - Shrinks emoji/custom text/token ID boxes to true text width
-   - Works for new items and when text changes
-   - Skips tightening if you manually scale the text
+   RA_TIGHTEN_TEXT_BOUNDS_V2 — safe + no ghost trails
+   - Shrinks emoji/custom text/token ID boxes to real text width
+   - Runs only at safe times (after add/edit/mouse-up)
+   - Turns off object caching on text to avoid stale redraws
    ========================================================== */
 (() => {
-  if (window.__RA_TIGHTEN_TEXT_BOUNDS_V1__) return;
-  window.__RA_TIGHTEN_TEXT_BOUNDS_V1__ = true;
+  if (window.__RA_TIGHTEN_TEXT_BOUNDS_V2__) return;
+  window.__RA_TIGHTEN_TEXT_BOUNDS_V2__ = true;
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
   const isTextLike = o => !!o && (o.type === 'textbox' || o.type === 'text' || o.type === 'i-text');
 
-  // Measure the actual width of the longest line with current font
+  // Make Fabric draw text live (prevents cached "ghost" rectangles)
+  function makeLive(o){
+    if (!isTextLike(o)) return;
+    o.objectCaching = false;   // key: draw fresh each frame
+    o.noScaleCache  = true;    // don’t cache scaled versions
+  }
+
+  // Pretty accurate width of the widest line with current font
   function measureLineWidth(o){
     const text = String(o.text || '');
     const lines = text.split(/\r?\n/);
@@ -4800,73 +4807,95 @@
       const w = ctx.measureText(line).width || 0;
       if (w > max) max = w;
     }
-    // Small padding + stroke allowance
+    // small padding + stroke allowance
     const pad = Math.max(4, Math.min(12, size*0.15));
     const stroke = Math.max(0, o.strokeWidth || 0);
     return Math.ceil(max + pad + stroke*2);
   }
 
-  function tighten(o){
+  function tighten(o, reason=''){
     if (!isTextLike(o)) return false;
-    // If user scaled the text, don't fight them
+
+    // If user intentionally scaled text, don’t override their choice
     const scaled = Math.abs((o.scaleX||1) - 1) > 0.01 || Math.abs((o.scaleY||1) - 1) > 0.01;
     if (scaled) return false;
 
-    const c = C();
-    const maxW = c ? c.getWidth() : 4096;
+    // Keep selection centered where it was
+    const c = C(); if (!c) return false;
+    const ctr = (o.getCenterPoint ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0));
+
+    // Measure and apply width safely
+    makeLive(o);
+    const maxW = c.getWidth();
     const want = Math.max(12, Math.min(measureLineWidth(o), maxW));
 
-    // Keep center where it was
-    const ctr = o.getCenterPoint ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0);
-
-    o.set({
-      width: want,
-      minWidth: 4,
-      padding: 0,
-      lineHeight: 1.05,
-      dirty: true
-    });
+    // Force Fabric to fully recompute text geometry
+    o.set({ width: want, padding: 0, dirty: true });
+    if (typeof o.initDimensions === 'function') o.initDimensions();
 
     if (o.setPositionByOrigin) o.setPositionByOrigin(ctr, 'center', 'center');
     o.setCoords();
-    try { o.canvas && o.canvas.requestRenderAll(); } catch(_){}
+
+    try { c.requestRenderAll(); } catch(_){}
     return true;
   }
+
+  // Tiny throttle so “text:changed” doesn’t spam
+  function throttle(fn, ms){
+    let t=0, id=null, lastArgs=null;
+    return (...args) => {
+      const now = Date.now();
+      lastArgs = args;
+      if (now - t > ms){ t = now; fn(...args); }
+      else {
+        clearTimeout(id);
+        id = setTimeout(()=>{ t = Date.now(); fn(...(lastArgs||[])); }, ms);
+      }
+    };
+  }
+
+  const tightenActive = throttle(() => {
+    const c = C(); if (!c) return;
+    const o = c.getActiveObject();
+    if (isTextLike(o)) tighten(o,'active');
+  }, 60);
 
   function runAll(){
     const c = C(); if (!c) return;
     (c.getObjects()||[]).forEach(o => {
       if (!isTextLike(o)) return;
-      if (o._kind === 'customText' || o._kind === 'tokenId' || true) tighten(o);
+      makeLive(o);
+      tighten(o,'scan');
     });
   }
 
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
 
-    // One pass a moment after load
+    // One pass after load
     setTimeout(runAll, 40);
 
-    if (!c.__raTightTextBound){
-      c.__raTightTextBound = true;
+    if (!c.__raTightTextV2Bound){
+      c.__raTightTextV2Bound = true;
 
-      // New text (emoji/custom text/token ID)
+      // New text objects (emoji/custom text/token ID)
       c.on('object:added', e => {
         const o = e && e.target;
-        if (isTextLike(o)) tighten(o);
+        if (!isTextLike(o)) return;
+        makeLive(o);
+        // allow Fabric to finish its own init before we tighten
+        setTimeout(() => tighten(o,'added'), 0);
       });
 
-      // Text edited on canvas (double‑click edit)
-      c.on('text:changed', e => {
-        const o = e && e.target;
-        if (isTextLike(o)) tighten(o);
-      });
+      // When you stop dragging / scaling / rotating
+      c.on('mouse:up', () => tightenActive());
 
-      // When properties change via UI (size/color/etc.) this often fires
-      c.on('object:modified', e => {
-        const o = e && e.target;
-        if (isTextLike(o)) tighten(o);
-      });
+      // While editing text in place; we tighten lightly (throttled)
+      c.on('text:changed', () => tightenActive());
+
+      // Selection changes (e.g., you select the text from the canvas)
+      c.on('selection:created', () => tightenActive());
+      c.on('selection:updated', () => tightenActive());
     }
   }
 
