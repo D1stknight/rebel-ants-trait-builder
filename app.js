@@ -4813,7 +4813,101 @@
     return Math.ceil(max + pad + stroke*2);
   }
 
-  function tighten(o, reason=''){
+  /* ==========================================================
+   RA_TOKENID_DELETE_SAFE_V1
+   - Fixes the “big rectangle” after deleting Token‑ID via keyboard
+     or the Selection panel's Delete button.
+   - Also disables caching on text/emoji/Token‑ID to avoid stale frames.
+   ========================================================== */
+(() => {
+  if (window.__RA_TOKENID_DELETE_SAFE_V1__) return;
+  window.__RA_TOKENID_DELETE_SAFE_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const isTextLike = o => !!o && (o.type === 'textbox' || o.type === 'text' || o.type === 'i-text' || o._kind === 'tokenId');
+
+  // Hard clear both layers (draw + controls), then render
+  function hardRedraw(){
+    const c = C(); if (!c) return;
+    try{
+      [c.lowerCanvasEl, c.upperCanvasEl].forEach(el=>{
+        if(!el) return;
+        const ctx = el.getContext('2d');
+        ctx.save();
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.clearRect(0,0, el.width, el.height);
+        ctx.restore();
+      });
+    }catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  // Safe remove for text/emoji/token‑ID (and keep idLabel in sync if present)
+  function safeRemoveActive(){
+    const c = C(); if (!c) return;
+    const o = c.getActiveObject(); if (!o) return;
+    if (!isTextLike(o)) return;
+
+    // If this is the Token‑ID object, clear the global reference too
+    try { if (typeof idLabel !== 'undefined' && o === idLabel) { idLabel = null; } } catch(_){}
+
+    try { c.remove(o); } catch(_){}
+    try { c.discardActiveObject(); } catch(_){}
+    hardRedraw();
+  }
+
+  // 1) Intercept keyboard Delete/Backspace (only when a text-like object is active)
+  document.addEventListener('keydown', (e)=>{
+    const tag = (e.target && e.target.tagName || '').toLowerCase();
+    if (e.target && (e.target.isContentEditable || /^(input|textarea|select)$/.test(tag))) return;
+
+    if (e.key === 'Delete' || e.key === 'Backspace'){
+      const c = C(); const o = c && c.getActiveObject && c.getActiveObject();
+      if (o && isTextLike(o)){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        safeRemoveActive();
+      }
+    }
+  }, true);
+
+  // 2) Intercept the Selection panel “Delete” button for text-like objects
+  function hookDeleteButton(){
+    const btn = document.getElementById('delete');  // your Selection → Delete button id
+    if (!btn || btn.__raSafeDel) return setTimeout(hookDeleteButton, 200);
+    btn.__raSafeDel = true;
+
+    btn.addEventListener('click', (e)=>{
+      const c = C(); const o = c && c.getActiveObject && c.getActiveObject();
+      if (o && isTextLike(o)){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        safeRemoveActive();
+      }
+    }, true); // capture so we preempt the old handler
+  }
+
+  // 3) As a precaution, turn off caching on any text-like object as it’s added
+  function hookObjectAdded(){
+    const c = C(); if (!c) return setTimeout(hookObjectAdded, 120);
+    if (c.__raNoCacheTexts) return; c.__raNoCacheTexts = true;
+
+    c.on('object:added', (e)=>{
+      const o = e && e.target; if (!o) return;
+      if (isTextLike(o)){
+        try { o.objectCaching = false; o.noScaleCache = true; } catch(_){}
+        setTimeout(hardRedraw, 0);
+      }
+    });
+  }
+
+  function boot(){ hookDeleteButton(); hookObjectAdded(); }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();  function tighten(o, reason=''){
     if (!isTextLike(o)) return false;
 
     // If user intentionally scaled text, don’t override their choice
