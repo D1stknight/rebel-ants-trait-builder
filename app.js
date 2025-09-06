@@ -4769,3 +4769,110 @@
   window.addEventListener('resize',           ()=> setTimeout(placeEmojiPop, 0), {passive:true});
   window.addEventListener('orientationchange',()=> setTimeout(placeEmojiPop,100), {passive:true});
 })();
+
+/* ==========================================================
+   RA_TIGHTEN_TEXT_BOUNDS_V1
+   - Shrinks emoji/custom text/token ID boxes to true text width
+   - Works for new items and when text changes
+   - Skips tightening if you manually scale the text
+   ========================================================== */
+(() => {
+  if (window.__RA_TIGHTEN_TEXT_BOUNDS_V1__) return;
+  window.__RA_TIGHTEN_TEXT_BOUNDS_V1__ = true;
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  const isTextLike = o => !!o && (o.type === 'textbox' || o.type === 'text' || o.type === 'i-text');
+
+  // Measure the actual width of the longest line with current font
+  function measureLineWidth(o){
+    const text = String(o.text || '');
+    const lines = text.split(/\r?\n/);
+    const size   = o.fontSize   || 40;
+    const weight = (o.fontWeight && String(o.fontWeight)) || 'normal';
+    const style  = o.fontStyle  || 'normal';
+    const fam    = o.fontFamily || 'Arial, sans-serif';
+
+    const ctx = measureLineWidth._ctx || (measureLineWidth._ctx = document.createElement('canvas').getContext('2d'));
+    ctx.font = `${style} ${weight} ${size}px ${fam}`;
+
+    let max = 0;
+    for (const line of lines){
+      const w = ctx.measureText(line).width || 0;
+      if (w > max) max = w;
+    }
+    // Small padding + stroke allowance
+    const pad = Math.max(4, Math.min(12, size*0.15));
+    const stroke = Math.max(0, o.strokeWidth || 0);
+    return Math.ceil(max + pad + stroke*2);
+  }
+
+  function tighten(o){
+    if (!isTextLike(o)) return false;
+    // If user scaled the text, don't fight them
+    const scaled = Math.abs((o.scaleX||1) - 1) > 0.01 || Math.abs((o.scaleY||1) - 1) > 0.01;
+    if (scaled) return false;
+
+    const c = C();
+    const maxW = c ? c.getWidth() : 4096;
+    const want = Math.max(12, Math.min(measureLineWidth(o), maxW));
+
+    // Keep center where it was
+    const ctr = o.getCenterPoint ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0);
+
+    o.set({
+      width: want,
+      minWidth: 4,
+      padding: 0,
+      lineHeight: 1.05,
+      dirty: true
+    });
+
+    if (o.setPositionByOrigin) o.setPositionByOrigin(ctr, 'center', 'center');
+    o.setCoords();
+    try { o.canvas && o.canvas.requestRenderAll(); } catch(_){}
+    return true;
+  }
+
+  function runAll(){
+    const c = C(); if (!c) return;
+    (c.getObjects()||[]).forEach(o => {
+      if (!isTextLike(o)) return;
+      if (o._kind === 'customText' || o._kind === 'tokenId' || true) tighten(o);
+    });
+  }
+
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+
+    // One pass a moment after load
+    setTimeout(runAll, 40);
+
+    if (!c.__raTightTextBound){
+      c.__raTightTextBound = true;
+
+      // New text (emoji/custom text/token ID)
+      c.on('object:added', e => {
+        const o = e && e.target;
+        if (isTextLike(o)) tighten(o);
+      });
+
+      // Text edited on canvas (double‑click edit)
+      c.on('text:changed', e => {
+        const o = e && e.target;
+        if (isTextLike(o)) tighten(o);
+      });
+
+      // When properties change via UI (size/color/etc.) this often fires
+      c.on('object:modified', e => {
+        const o = e && e.target;
+        if (isTextLike(o)) tighten(o);
+      });
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
