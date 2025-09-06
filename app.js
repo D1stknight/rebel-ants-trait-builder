@@ -4438,3 +4438,161 @@
   }
 })();
 
+/* ==========================================================
+   RA_EMOJI_PICKER_MINI_V1 — add emojis to Custom Text (paste at bottom)
+   - Adds a "🙂 Emoji" button with a small picker.
+   - Inserts at cursor in #customText and updates the selected text layer.
+   - Ensures color-emoji fonts are available for export (Apple/Segoe/Noto).
+   ========================================================== */
+(() => {
+  if (window.__RA_EMOJI_MINI__) return; window.__RA_EMOJI_MINI__ = true;
+
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  const  $ = (s,r=document)=>r.querySelector(s);
+  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // 1) Make sure emoji fonts can render
+  const EMOJI_FALLBACK = "'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji'";
+  function ensureEmojiFallback(stack){
+    const s = String(stack||'system-ui');
+    return /emoji/i.test(s) ? s : `${s}, ${EMOJI_FALLBACK}`;
+  }
+  function patchActiveFonts(){
+    try{
+      const c=C(); if (!c) return;
+      const o=c.getActiveObject();
+      if (o && (o.type==='textbox'||o.type==='text')){
+        o.set('fontFamily', ensureEmojiFallback(o.fontFamily||'system-ui'));
+        o.setCoords(); c.requestRenderAll();
+      }
+    }catch(_){}
+  }
+  // Patch fonts on text objects as they’re added (safe, no-ops for others)
+  function wireFontAutoPatch(){
+    const c=C(); if (!c || c.__raEmojiFontPatch) return;
+    c.__raEmojiFontPatch = true;
+    c.on('object:added', (e)=>{
+      const o=e?.target;
+      if (o && (o.type==='textbox'||o.type==='text')){
+        o.set('fontFamily', ensureEmojiFallback(o.fontFamily||'system-ui'));
+        o.setCoords(); c.requestRenderAll();
+      }
+    });
+    ['fontFamily','idFontFamily'].forEach(id=>{
+      const el=$( '#'+id );
+      if (el && !el.__raEmojiBound){
+        el.__raEmojiBound = true;
+        const fix=()=>{ el.value = ensureEmojiFallback(el.value||'system-ui'); patchActiveFonts(); };
+        el.addEventListener('change', fix);
+        el.addEventListener('input',  fix);
+        // initial
+        fix();
+      }
+    });
+  }
+
+  // 2) Emoji picker UI (quick grid of popular ones)
+  const EMOJI_SET = [
+    '😀','😎','😍','🥳','🔥','💥','💀','👑','⚡️','✨','🚀','🛸',
+    '❤️','🖤','💚','💙','💜','🧡','💛','🤍','🤎','❤️‍🔥','❤️‍🩹',
+    '🐜','🧪','🧠','💎','🌀','🎯','🏆','⬆️','⬇️','➡️','⬅️'
+  ];
+
+  function insertAtCaret(input, str){
+    const start = input.selectionStart ?? input.value.length;
+    const end   = input.selectionEnd   ?? start;
+    const before = input.value.slice(0,start);
+    const after  = input.value.slice(end);
+    input.value = before + str + after;
+    const pos = start + str.length;
+    input.focus();
+    try { input.setSelectionRange(pos, pos); } catch(_){}
+    // Notify listeners (curved text patch, etc.)
+    input.dispatchEvent(new Event('input', { bubbles:true }));
+    input.dispatchEvent(new Event('change', { bubbles:true }));
+  }
+
+  function updateCanvasTextFromInput(){
+    const c=C(); if (!c) return;
+    const o=c.getActiveObject();
+    const txt=$('#customText'); const v=(txt?.value||'').replace(/\r?\n/g,' ');
+    if (!o) return;
+    if (o.type==='textbox' || o.type==='text'){
+      o.text = v; o.setCoords(); c.requestRenderAll();
+    } else {
+      // If it's a curved-text group, our existing curved-text patch listens
+      // to #customText input events and will rebuild automatically.
+    }
+  }
+
+  function buildPicker(){
+    if ($('#raEmojiBtn')) return;
+    // Find a good spot: next to Add Custom Text or after the input
+    let anchor = $('#addCustomText') || $('#customText');
+    if (!anchor) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'raEmojiBtn';
+    btn.className = 'btn small';
+    btn.textContent = '🙂 Emoji';
+    btn.style.marginLeft = '8px';
+    btn.style.cursor = 'pointer';
+
+    const pop = document.createElement('div');
+    pop.id = 'raEmojiPop';
+    Object.assign(pop.style, {
+      position:'absolute', zIndex:'10000', display:'none',
+      padding:'8px', border:'1px solid #2a2a2e', borderRadius:'8px',
+      background:'#0f1116', color:'#e7e7ea', boxShadow:'0 8px 24px rgba(0,0,0,.45)'
+    });
+    const grid = document.createElement('div');
+    Object.assign(grid.style, {
+      display:'grid', gridTemplateColumns:'repeat(10, 1fr)', gap:'6px', fontSize:'20px'
+    });
+    EMOJI_SET.forEach(e=>{
+      const cell=document.createElement('button');
+      cell.textContent=e;
+      Object.assign(cell.style,{
+        width:'28px',height:'28px',lineHeight:'28px',
+        textAlign:'center',border:'0',borderRadius:'6px',
+        background:'#161821',color:'#fff',cursor:'pointer'
+      });
+      cell.addEventListener('click',()=>{
+        const input=$('#customText'); if (!input) return;
+        insertAtCaret(input, e);
+        updateCanvasTextFromInput();
+        pop.style.display='none';
+      });
+      grid.appendChild(cell);
+    });
+    pop.appendChild(grid);
+
+    // Place UI
+    anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+    document.body.appendChild(pop);
+
+    // Toggle popover near the button
+    btn.addEventListener('click', ()=>{
+      if (pop.style.display==='block'){ pop.style.display='none'; return; }
+      const rect = btn.getBoundingClientRect();
+      pop.style.left = Math.round(rect.left) + 'px';
+      pop.style.top  = Math.round(rect.bottom + 6) + 'px';
+      pop.style.display='block';
+    });
+    // Click-away
+    document.addEventListener('click', (e)=>{
+      if (e.target===btn || pop.contains(e.target)) return;
+      pop.style.display='none';
+    });
+  }
+
+  function boot(){
+    wireFontAutoPatch();
+    buildPicker();
+  }
+  if (document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', boot, {once:true});
+  } else {
+    boot();
+  }
+})();
