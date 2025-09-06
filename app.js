@@ -3947,3 +3947,359 @@
     wire();
   }
 })();
+
+/* ==========================================================
+   RA_WM_GLOBAL_SYNC_v3 — PASTE AT THE VERY BOTTOM OF app.js
+   Uses /api/ra-settings to load+save watermark settings for everyone.
+   ========================================================== */
+(() => {
+  const GET_URL  = '/api/ra-settings';  // your endpoint (GET returns {ok, settings:{...}})
+  const POST_URL = '/api/ra-settings';  // same endpoint for saving
+
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+
+  function canvas() {
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+
+  // Put server values onto the centered watermark layer that's already on the canvas
+  function applyToCanvas(settings) {
+    if (typeof settings === 'string') { try { settings = JSON.parse(settings); } catch(_) {} }
+
+    const c = canvas(); if (!c) return false;
+    const wm = (c.getObjects() || []).find(o => o && o._raWMCenter);
+    if (!wm) return false;
+
+    const opacity = Math.max(0, Math.min(1, Number(settings?.opacity ?? 0.18)));
+    const sizePct = Math.max(0.05, Math.min(1, Number(settings?.sizePct ?? 0.88)));
+
+    const targetW = Math.round(c.getWidth() * sizePct);
+    const baseW   = wm.width || (wm._element?.naturalWidth) || 512;
+    const s = targetW / baseW;
+
+    wm.opacity = opacity;
+    wm.scaleX = s; wm.scaleY = s;
+    wm.left = c.getWidth() / 2; wm.top = c.getHeight() / 2;
+    wm.setCoords();
+    c.bringToFront(wm);
+    c.requestRenderAll();
+    return true;
+  }
+
+  // Everyone: load the latest settings on open
+  async function loadFromServerAndApply() {
+    try {
+      const url = GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now(); // avoid cache
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json();
+      let s = j.settings ?? j.data ?? j;
+      if (typeof s === 'string') { try { s = JSON.parse(s); } catch(_) {} }
+
+      // Try now; if the watermark layer isn't on the canvas yet, retry briefly
+      let tries = 0;
+      const tick = () => {
+        if (applyToCanvas(s)) return;
+        if (++tries < 30) setTimeout(tick, 150);
+      };
+      tick();
+    } catch (_) {}
+  }
+
+  // Read the current admin slider values
+  function currentAdminValues() {
+    const on  = document.getElementById('raWmCEnabled');
+    const tok = document.getElementById('raWmCOnTok');
+    const up  = document.getElementById('raWmCOnUp');
+    const op  = document.getElementById('raWmCOpacity');
+    const sz  = document.getElementById('raWmCSize');
+    return {
+      enabled: !!(on && on.checked),
+      showOnTokens:  !!(tok && tok.checked),
+      showOnUploads: !!(up && up.checked),
+      opacity: op ? Number(op.value) : 0.18,
+      sizePct: sz ? Number(sz.value) : 0.88
+    };
+  }
+
+  // Save to the server (your /api/ra-settings has no auth, so this is simple)
+  async function saveToServer(body) {
+    try {
+      await fetch(POST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    } catch(_) {}
+  }
+
+  // When admin sliders appear, send changes to server (debounced) and apply locally
+  function wireAdminSaveOnce() {
+    if (!isAdmin) return;
+
+    const op = document.getElementById('raWmCOpacity');
+    const sz = document.getElementById('raWmCSize');
+    const on = document.getElementById('raWmCEnabled');
+    const tok = document.getElementById('raWmCOnTok');
+    const up = document.getElementById('raWmCOnUp');
+
+    if (!op || op.__wmSyncBound) return;
+
+    const debounced = (() => {
+      let t; return () => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+          const body = currentAdminValues();
+          saveToServer(body);   // push to server for everyone
+          applyToCanvas(body);  // reflect immediately in this tab
+        }, 250);
+      };
+    })();
+
+    [op, sz].forEach(el => el && el.addEventListener('input', debounced));
+    [on, tok, up].forEach(el => el && el.addEventListener('change', debounced));
+
+    op.__wmSyncBound = sz && (sz.__wmSyncBound = true);
+    if (on)  on.__wmSyncBound  = true;
+    if (tok) tok.__wmSyncBound = true;
+    if (up)  up.__wmSyncBound  = true;
+  }
+
+  // Keep waiting for the admin controls to appear, then wire them once
+  const mo = new MutationObserver(wireAdminSaveOnce);
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Load settings for everyone on page open
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadFromServerAndApply, { once: true });
+  } else {
+    loadFromServerAndApply();
+  }
+})();
+
+/* ==========================================================
+   RA_WM_FOLLOW_EVENTS_v1 — paste below the v3 block
+   Makes sure the server settings apply even when you load
+   the token later. Re-applies on object add/modify.
+   ========================================================== */
+(() => {
+  const GET_URL = '/api/ra-settings'; // same endpoint
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function applyToCanvas(settings){
+    if (!settings) return false;
+    const c = C(); if (!c) return false;
+    const wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
+    if (!wm) return false;
+
+    const opacity = Math.max(0, Math.min(1, Number(settings.opacity ?? 0.18)));
+    const sizePct = Math.max(0.05, Math.min(1, Number(settings.sizePct ?? 0.88)));
+
+    const targetW = Math.round(c.getWidth() * sizePct);
+    const baseW   = wm.width || (wm._element?.naturalWidth) || 512;
+    const s = targetW / baseW;
+
+    wm.opacity = opacity;
+    wm.scaleX = s; wm.scaleY = s;
+    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
+    wm.setCoords();
+    c.bringToFront(wm);
+    c.requestRenderAll();
+    return true;
+  }
+
+  let latest = null;
+
+  async function fetchLatest(){
+    try{
+      const r = await fetch(GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache:'no-store' });
+      if (!r.ok) return;
+      const j = await r.json();
+      latest = j.settings ?? j.data ?? j;
+    }catch(_){}
+  }
+
+  // 1) Grab settings once on open
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fetchLatest, { once:true });
+  } else { fetchLatest(); }
+
+  // 2) Try to apply a few times right away (covers fast loads)
+  let tries = 0, maxTries = 50; // ~25s total
+  (function tick(){
+    if (applyToCanvas(latest)) return;
+    if (++tries < maxTries) setTimeout(tick, 500);
+  })();
+
+  // 3) Follow canvas changes: apply whenever something is added/modified
+  function wire(){
+    const c = C(); if (!c || c.__raWmFollow) { if (!c) setTimeout(wire, 150); return; }
+    c.__raWmFollow = true;
+    c.on('object:added',    ()=> applyToCanvas(latest));
+    c.on('object:modified', ()=> applyToCanvas(latest));
+  }
+  wire();
+})();
+
+/* ==========================================================
+   RA_WM_SERVER_MASTER_v1  — PASTE AT THE VERY BOTTOM
+   What this does (no other edits needed):
+   • Loads settings from /api/ra-settings on open.
+   • Makes the three toggles (Enabled / Show on tokens / Show on uploads)
+     save to the server AND actually show/hide the watermark.
+   • Makes the sliders (Opacity / Size) save to the server and apply.
+   • Turns the "Refresh" button into "Save for everyone" + re-apply.
+   • Works for admin and non-admin pages.
+   ========================================================== */
+(() => {
+  const API = '/api/ra-settings';
+
+  // --- Fabric helpers ---
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $ = (id) => document.getElementById(id);
+
+  function baseIsToken(){
+    const c = C(); if (!c) return null;
+    const base = (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect);
+    if (!base) return null;
+    // in your app: token base = plain Image; uploads = Group
+    return base.type === 'image';
+  }
+
+  function findWM(){
+    const c = C(); if (!c) return null;
+    return (c.getObjects()||[]).find(o => o && o._raWMCenter) || null;
+  }
+
+  // --- server I/O ---
+  async function getServer(){
+    const r = await fetch(API + (API.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache:'no-store' });
+    if (!r.ok) throw new Error('GET failed');
+    const j = await r.json();
+    return j.settings ?? j.data ?? j;
+  }
+  async function postServer(body){
+    await fetch(API, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
+
+  // --- current UI values (when admin panel is visible) ---
+  function readAdminUI(){
+    return {
+      enabled:       !!($('raWmCEnabled')?.checked),
+      showOnTokens:  !!($('raWmCOnTok')?.checked),
+      showOnUploads: !!($('raWmCOnUp')?.checked),
+      opacity:  Number($('raWmCOpacity')?.value ?? 0.18),
+      sizePct:  Number($('raWmCSize')?.value ?? 0.88)
+    };
+  }
+
+  // --- apply settings to the existing centered watermark layer ---
+  function applyToWM(s){
+    const c = C(); const wm = findWM();
+    if (!c || !wm || !s) return;
+
+    // 1) visibility: obey Enabled + token/upload switches
+    const isTok = baseIsToken();
+    const show  = !!s.enabled && ((isTok && !!s.showOnTokens) || (!isTok && !!s.showOnUploads));
+    wm.visible  = show;
+
+    // 2) size + opacity from server
+    const sizePct = Math.max(0.05, Math.min(1.4, Number(s.sizePct ?? 0.88)));
+    const op      = Math.max(0, Math.min(1,   Number(s.opacity ?? 0.18)));
+
+    const baseW = wm.width || (wm._element?.naturalWidth) || 512;
+    const targetW = Math.round(c.getWidth() * sizePct);
+    const sc = targetW / baseW;
+
+    wm.scaleX = sc; wm.scaleY = sc;
+    wm.opacity = op;
+    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
+    wm.setCoords();
+
+    // keep it on top but invisible if show==false
+    try { c.bringToFront(wm); } catch(_){}
+    c.requestRenderAll();
+  }
+
+  // keep watermark in sync when canvas objects change
+  function wireCanvasFollows(stateRef){
+    const c = C(); if (!c || c.__raWmServerMaster) { if (!c) setTimeout(()=>wireCanvasFollows(stateRef), 150); return; }
+    c.__raWmServerMaster = true;
+    const reapply = ()=> applyToWM(stateRef.val);
+    c.on('object:added',    reapply);
+    c.on('object:removed',  reapply);
+    c.on('object:modified', reapply);
+    // first pass
+    setTimeout(reapply, 0);
+  }
+
+  // --- admin wiring: make every control "save + apply" ---
+  function wireAdmin(stateRef){
+    const ids = {
+      en:  'raWmCEnabled',
+      tok: 'raWmCOnTok',
+      up:  'raWmCOnUp',
+      op:  'raWmCOpacity',
+      sz:  'raWmCSize',
+      rf:  'raWmCRefresh'
+    };
+    const en  = $(ids.en), tok = $(ids.tok), up = $(ids.up),
+          op  = $(ids.op), sz  = $(ids.sz),  rf = $(ids.rf);
+
+    if (!op || op.__raWmServerMasterUI) return;   // not visible yet or already wired
+    op.__raWmServerMasterUI = sz && (sz.__raWmServerMasterUI = true);
+    if (en)  en.__raWmServerMasterUI  = true;
+    if (tok) tok.__raWmServerMasterUI = true;
+    if (up)  up.__raWmServerMasterUI  = true;
+    if (rf)  rf.__raWmServerMasterUI  = true;
+
+    const saveAndApply = async () => {
+      const body = readAdminUI();
+      stateRef.val = body;            // remember latest
+      try { await postServer(body); } catch(_){}
+      applyToWM(body);                // instant visual feedback
+    };
+
+    [op, sz].forEach(el => el && el.addEventListener('input',  saveAndApply));
+    [en, tok, up].forEach(el => el && el.addEventListener('change', saveAndApply));
+
+    // Make "Refresh" behave like "Save for everyone"
+    if (rf){
+      rf.addEventListener('click', (e)=>{
+        e.preventDefault();
+        saveAndApply();
+      });
+    }
+  }
+
+  // --- boot: load server once, enforce everywhere, then wire admin if present ---
+  const STATE = { val: null };
+
+  async function boot(){
+    try { STATE.val = await getServer(); } catch(_){ STATE.val = readAdminUI(); }
+    // Apply when watermark shows up (the other script adds it)
+    (function waitWm(tries=0){
+      const wm = findWM();
+      if (wm) { applyToWM(STATE.val); return; }
+      if (tries < 60) setTimeout(()=>waitWm(tries+1), 250);
+    })();
+
+    wireCanvasFollows(STATE);
+
+    // If admin panel is on screen, wire it; keep trying until it appears.
+    const mo = new MutationObserver(()=> wireAdmin(STATE));
+    mo.observe(document.documentElement, { childList:true, subtree:true });
+    wireAdmin(STATE);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
