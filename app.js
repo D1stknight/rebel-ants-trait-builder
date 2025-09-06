@@ -4813,205 +4813,19 @@
     return Math.ceil(max + pad + stroke*2);
   }
 
-  /* ==========================================================
-   RA_TOKENID_DELETE_SAFE_V1
-   - Fixes the “big rectangle” after deleting Token‑ID via keyboard
-     or the Selection panel's Delete button.
-   - Also disables caching on text/emoji/Token‑ID to avoid stale frames.
-   ========================================================== */
-(() => {
-  if (window.__RA_TOKENID_DELETE_SAFE_V1__) return;
-  window.__RA_TOKENID_DELETE_SAFE_V1__ = true;
-
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const isTextLike = o => !!o && (o.type === 'textbox' || o.type === 'text' || o.type === 'i-text' || o._kind === 'tokenId');
-
-  // Hard clear both layers (draw + controls), then render
-  function hardRedraw(){
-    const c = C(); if (!c) return;
-    try{
-      [c.lowerCanvasEl, c.upperCanvasEl].forEach(el=>{
-        if(!el) return;
-        const ctx = el.getContext('2d');
-        ctx.save();
-        ctx.setTransform(1,0,0,1,0,0);
-        ctx.clearRect(0,0, el.width, el.height);
-        ctx.restore();
-      });
-    }catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  // Safe remove for text/emoji/token‑ID (and keep idLabel in sync if present)
-  function safeRemoveActive(){
-    const c = C(); if (!c) return;
-    const o = c.getActiveObject(); if (!o) return;
-    if (!isTextLike(o)) return;
-
-    // If this is the Token‑ID object, clear the global reference too
-    try { if (typeof idLabel !== 'undefined' && o === idLabel) { idLabel = null; } } catch(_){}
-
-    try { c.remove(o); } catch(_){}
-    try { c.discardActiveObject(); } catch(_){}
-    hardRedraw();
-  }
-
-  // 1) Intercept keyboard Delete/Backspace (only when a text-like object is active)
-  document.addEventListener('keydown', (e)=>{
-    const tag = (e.target && e.target.tagName || '').toLowerCase();
-    if (e.target && (e.target.isContentEditable || /^(input|textarea|select)$/.test(tag))) return;
-
-    if (e.key === 'Delete' || e.key === 'Backspace'){
-      const c = C(); const o = c && c.getActiveObject && c.getActiveObject();
-      if (o && isTextLike(o)){
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        safeRemoveActive();
-      }
-    }
-  }, true);
-
-  // 2) Intercept the Selection panel “Delete” button for text-like objects
-  function hookDeleteButton(){
-    const btn = document.getElementById('delete');  // your Selection → Delete button id
-    if (!btn || btn.__raSafeDel) return setTimeout(hookDeleteButton, 200);
-    btn.__raSafeDel = true;
-
-    btn.addEventListener('click', (e)=>{
-      const c = C(); const o = c && c.getActiveObject && c.getActiveObject();
-      if (o && isTextLike(o)){
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        safeRemoveActive();
-      }
-    }, true); // capture so we preempt the old handler
-  }
-
-  // 3) As a precaution, turn off caching on any text-like object as it’s added
-  function hookObjectAdded(){
-    const c = C(); if (!c) return setTimeout(hookObjectAdded, 120);
-    if (c.__raNoCacheTexts) return; c.__raNoCacheTexts = true;
-
-    c.on('object:added', (e)=>{
-      const o = e && e.target; if (!o) return;
-      if (isTextLike(o)){
-        try { o.objectCaching = false; o.noScaleCache = true; } catch(_){}
-        setTimeout(hardRedraw, 0);
-      }
-    });
-  }
-
-  function boot(){ hookDeleteButton(); hookObjectAdded(); }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
-})();  function tighten(o, reason=''){
-    if (!isTextLike(o)) return false;
-
-    // If user intentionally scaled text, don’t override their choice
-    const scaled = Math.abs((o.scaleX||1) - 1) > 0.01 || Math.abs((o.scaleY||1) - 1) > 0.01;
-    if (scaled) return false;
-
-    // Keep selection centered where it was
-    const c = C(); if (!c) return false;
-    const ctr = (o.getCenterPoint ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0));
-
-    // Measure and apply width safely
-    makeLive(o);
-    const maxW = c.getWidth();
-    const want = Math.max(12, Math.min(measureLineWidth(o), maxW));
-
-    // Force Fabric to fully recompute text geometry
-    o.set({ width: want, padding: 0, dirty: true });
-    if (typeof o.initDimensions === 'function') o.initDimensions();
-
-    if (o.setPositionByOrigin) o.setPositionByOrigin(ctr, 'center', 'center');
-    o.setCoords();
-
-    try { c.requestRenderAll(); } catch(_){}
-    return true;
-  }
-
-  // Tiny throttle so “text:changed” doesn’t spam
-  function throttle(fn, ms){
-    let t=0, id=null, lastArgs=null;
-    return (...args) => {
-      const now = Date.now();
-      lastArgs = args;
-      if (now - t > ms){ t = now; fn(...args); }
-      else {
-        clearTimeout(id);
-        id = setTimeout(()=>{ t = Date.now(); fn(...(lastArgs||[])); }, ms);
-      }
-    };
-  }
-
-  const tightenActive = throttle(() => {
-    const c = C(); if (!c) return;
-    const o = c.getActiveObject();
-    if (isTextLike(o)) tighten(o,'active');
-  }, 60);
-
-  function runAll(){
-    const c = C(); if (!c) return;
-    (c.getObjects()||[]).forEach(o => {
-      if (!isTextLike(o)) return;
-      makeLive(o);
-      tighten(o,'scan');
-    });
-  }
-
-  function wire(){
-    const c = C(); if (!c) return setTimeout(wire, 120);
-
-    // One pass after load
-    setTimeout(runAll, 40);
-
-    if (!c.__raTightTextV2Bound){
-      c.__raTightTextV2Bound = true;
-
-      // New text objects (emoji/custom text/token ID)
-      c.on('object:added', e => {
-        const o = e && e.target;
-        if (!isTextLike(o)) return;
-        makeLive(o);
-        // allow Fabric to finish its own init before we tighten
-        setTimeout(() => tighten(o,'added'), 0);
-      });
-
-      // When you stop dragging / scaling / rotating
-      c.on('mouse:up', () => tightenActive());
-
-      // While editing text in place; we tighten lightly (throttled)
-      c.on('text:changed', () => tightenActive());
-
-      // Selection changes (e.g., you select the text from the canvas)
-      c.on('selection:created', () => tightenActive());
-      c.on('selection:updated', () => tightenActive());
-    }
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once:true });
-  } else {
-    wire();
-  }
-})();
-
-/* ================= RA_DELETE_GHOST_BUSTER_V5 =================
-   Kills the "split rectangle" ghost after deletes.
-   - Works for: Selection → Delete button AND keyboard Delete/Backspace
-   - Clears Fabric's top layer and forces a clean re-render
-   - Safe add-only; does not touch your layout or other features
+ /* ================= RA_FIX_TOKENID_DELETE_V6 =================
+   Goal: When the Token ID is deleted via Selection → Delete or keyboard,
+   - turn OFF the "show token number" intent,
+   - prevent it from auto‑reappearing,
+   - and clear Fabric's top (selection) layer to avoid the tall ghost rectangle.
+   Safe add-only; no layout changes.
    ============================================================ */
 (() => {
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
+  // --- Helpers to clear the top/selection layer and repaint ---
   function clearTop(c){
     try {
-      // Prefer Fabric helper if present
       if (typeof c.clearContext === 'function' && c.contextTop) {
         c.clearContext(c.contextTop);
       } else {
@@ -5020,81 +4834,130 @@
         if (ctx && cv) { ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height); }
       }
     } catch(_) {}
-
-    // Nuclear fall-back: reset the top canvas element (cheap + safe)
     try { const u = c.upperCanvasEl; if (u) u.width = u.width; } catch(_) {}
   }
-
   function repaint(){
     const c = C(); if (!c) return;
     clearTop(c);
     try { c.requestRenderAll(); } catch(_) {}
-    // tiny post-tick nudge for stubborn browsers
     setTimeout(() => { try { c.renderAll(); } catch(_) {} }, 0);
   }
 
-  // Safe delete: clear selection FIRST, then remove, then repaint
+  // --- Figure out what the Token ID label text should look like (e.g. "#1111") ---
+  function getTokenIdString(){
+    // Prefer the input next to "Load by Token"
+    let id = '';
+    try {
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find(b => /load\s*by\s*token/i.test((b.textContent||'').trim()));
+      if (btn){
+        const box = btn.parentNode?.querySelector('input');
+        if (box && box.value) id = String(box.value).trim();
+      }
+      if (!id) {
+        const any = Array.from(document.querySelectorAll('input'))
+          .find(i => /token\s*id/i.test((i.placeholder||'').toLowerCase()));
+        if (any && any.value) id = String(any.value).trim();
+      }
+    } catch(_) {}
+    return id ? ('#' + id) : null;
+  }
+
+  function isFabricText(o){
+    if (!o) return false;
+    const t = o.type;
+    return t === 'i-text' || t === 'text' || t === 'textbox';
+  }
+  function isTokenIdObject(o){
+    if (!isFabricText(o)) return false;
+    if (o._isTokenId || o.__raIsTokenId) return true; // if the app already tags it
+    const expect = getTokenIdString();
+    if (!expect) return false;
+    const txt = (o.text || '').trim();
+    if (txt === expect) return true;
+    return txt.replace(/\s+/g,'') === expect.replace(/\s+/g,'');
+  }
+
+  // After a manual delete, keep Token ID suppressed until user loads a new token
+  let suppressed = false;
+  function suppressTokenId(){ suppressed = true; }
+  function unsuppressTokenId(){ suppressed = false; }
+
+  // Safe delete (used for Selection → Delete and keyboard)
   function safeDeleteActive(){
     const c = C(); if (!c) return;
     const o = c.getActiveObject();
     if (!o) return;
-    if (o._isBgRect || o._isBase) return; // don't delete your background or base
+    if (isTokenIdObject(o)) suppressTokenId();
     try { c.discardActiveObject(); } catch(_) {}
     try { c.remove(o); } catch(_) {}
     repaint();
   }
 
-  // Wire the Selection → Delete button (and keep it wired if UI re-renders)
-  function wireDeleteButton(){
-    const c = C(); if (!c) return;
-    // First try by ID (your UI already uses id="delete")
-    let btn = document.getElementById('delete');
-
-    // Fallback: find a button in the Selection panel whose text is "Delete"
-    if (!btn){
-      const guessPanel = Array.from(document.querySelectorAll('h3'))
-        .find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode;
-      if (guessPanel){
-        btn = Array.from(guessPanel.querySelectorAll('button'))
-          .find(b => /^delete$/i.test((b.textContent||'').trim()));
-      }
+  // If something tries to bring the Token ID back while suppressed, remove it instantly
+  function guardAdded(o){
+    const c = C(); if (!c || !o) return;
+    if (suppressed && isTokenIdObject(o)){
+      try { c.remove(o); } catch(_) {}
+      repaint();
     }
-    if (!btn || btn.__raGhostBuster) return;
-
-    const orig = btn.onclick;
-    btn.onclick = (e)=>{
-      e?.preventDefault?.();
-      e?.stopPropagation?.();
-      safeDeleteActive();
-      // If the original handler existed, let it run AFTER our safe delete
-      try { orig && orig.call(btn, e); } catch(_) {}
-      return false;
-    };
-    btn.__raGhostBuster = true;
   }
 
   function boot(){
     const c = C(); if (!c) return setTimeout(boot, 120);
-    if (c.__raGhostBusterV5) return; c.__raGhostBusterV5 = true;
+    if (c.__raFixTidDelV6) return; c.__raFixTidDelV6 = true;
 
-    // Clean whenever an object goes away or selection changes
-    c.on('object:removed',   () => setTimeout(repaint, 0));
-    c.on('selection:cleared',() => setTimeout(repaint, 0));
-    c.on('mouse:up',         () => setTimeout(repaint, 0));
+    // When objects are removed/added, keep things clean
+    c.on('object:removed', (e)=>{
+      const o = e?.target || e?.obj || e;
+      if (isTokenIdObject(o)) suppressTokenId();
+      setTimeout(repaint, 0);
+    });
+    c.on('object:added', (e)=> guardAdded(e?.target||e?.obj||e));
 
-    // Keyboard Delete/Backspace → run cleanup right after Fabric handles it
+    // Keyboard Delete / Backspace
     document.addEventListener('keydown', (e)=>{
       const tag = (e.target && e.target.tagName || '').toLowerCase();
       if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
       if (e.key === 'Delete' || e.key === 'Backspace'){
-        // Wait a tick so the removal happens, then repaint
-        setTimeout(repaint, 0);
+        setTimeout(safeDeleteActive, 0);
       }
     }, true);
 
-    wireDeleteButton();
-    // Keep the button wired if the UI re-renders
-    new MutationObserver(wireDeleteButton).observe(document.body, { childList:true, subtree:true });
+    // Selection panel → Delete button (wire it even if UI re-renders)
+    function wireSelectionDelete(){
+      let btn = document.getElementById('delete');
+      if (!btn){
+        const panel = Array.from(document.querySelectorAll('h3'))
+          .find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode;
+        if (panel){
+          btn = Array.from(panel.querySelectorAll('button'))
+            .find(b => /^delete$/i.test((b.textContent||'').trim()));
+        }
+      }
+      if (!btn || btn.__raFixTidDelV6) return;
+      const orig = btn.onclick;
+      btn.onclick = (ev)=>{
+        ev?.preventDefault?.(); ev?.stopPropagation?.();
+        safeDeleteActive();
+        try { orig && orig.call(btn, ev); } catch(_) {}
+        return false;
+      };
+      btn.__raFixTidDelV6 = true;
+    }
+    wireSelectionDelete();
+    new MutationObserver(wireSelectionDelete).observe(document.body, { childList:true, subtree:true });
+
+    // When user clicks "Load by Token", allow the Token ID to show again
+    function wireLoadByToken(){
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find(b => /load\s*by\s*token/i.test((b.textContent||'').trim()));
+      if (!btn || btn.__raUnsup) return;
+      btn.addEventListener('click', ()=>{ unsuppressTokenId(); setTimeout(repaint,0); }, true);
+      btn.__raUnsup = true;
+    }
+    wireLoadByToken();
+    new MutationObserver(wireLoadByToken).observe(document.body, { childList:true, subtree:true });
   }
 
   if (document.readyState === 'loading'){
