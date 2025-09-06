@@ -5000,42 +5000,101 @@
   }
 })();
 
-/* ================= RA_DELETE_RENDER_CLEANUP_V3 =================
-   Clears Fabric's TOP layer after deletes (keyboard or button)
-   to remove the "split rectangle" ghost. Safe + add-only.
-   ============================================================= */
+/* ================= RA_DELETE_GHOST_BUSTER_V5 =================
+   Kills the "split rectangle" ghost after deletes.
+   - Works for: Selection → Delete button AND keyboard Delete/Backspace
+   - Clears Fabric's top layer and forces a clean re-render
+   - Safe add-only; does not touch your layout or other features
+   ============================================================ */
 (() => {
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
   function clearTop(c){
-    try{
-      const ctx = (c.getSelectionContext && c.getSelectionContext()) || c.contextTop;
-      const cv  = ctx && ctx.canvas;
-      if (ctx && cv){
-        ctx.setTransform(1,0,0,1,0,0);
-        ctx.clearRect(0, 0, cv.width, cv.height);
+    try {
+      // Prefer Fabric helper if present
+      if (typeof c.clearContext === 'function' && c.contextTop) {
+        c.clearContext(c.contextTop);
+      } else {
+        const ctx = (c.getSelectionContext && c.getSelectionContext()) || c.contextTop;
+        const cv  = ctx && ctx.canvas;
+        if (ctx && cv) { ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height); }
       }
-    }catch(_) {}
+    } catch(_) {}
+
+    // Nuclear fall-back: reset the top canvas element (cheap + safe)
+    try { const u = c.upperCanvasEl; if (u) u.width = u.width; } catch(_) {}
   }
 
   function repaint(){
     const c = C(); if (!c) return;
     clearTop(c);
     try { c.requestRenderAll(); } catch(_) {}
-    // One more nudge on the next tick (belt + suspenders)
+    // tiny post-tick nudge for stubborn browsers
     setTimeout(() => { try { c.renderAll(); } catch(_) {} }, 0);
+  }
+
+  // Safe delete: clear selection FIRST, then remove, then repaint
+  function safeDeleteActive(){
+    const c = C(); if (!c) return;
+    const o = c.getActiveObject();
+    if (!o) return;
+    if (o._isBgRect || o._isBase) return; // don't delete your background or base
+    try { c.discardActiveObject(); } catch(_) {}
+    try { c.remove(o); } catch(_) {}
+    repaint();
+  }
+
+  // Wire the Selection → Delete button (and keep it wired if UI re-renders)
+  function wireDeleteButton(){
+    const c = C(); if (!c) return;
+    // First try by ID (your UI already uses id="delete")
+    let btn = document.getElementById('delete');
+
+    // Fallback: find a button in the Selection panel whose text is "Delete"
+    if (!btn){
+      const guessPanel = Array.from(document.querySelectorAll('h3'))
+        .find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode;
+      if (guessPanel){
+        btn = Array.from(guessPanel.querySelectorAll('button'))
+          .find(b => /^delete$/i.test((b.textContent||'').trim()));
+      }
+    }
+    if (!btn || btn.__raGhostBuster) return;
+
+    const orig = btn.onclick;
+    btn.onclick = (e)=>{
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+      safeDeleteActive();
+      // If the original handler existed, let it run AFTER our safe delete
+      try { orig && orig.call(btn, e); } catch(_) {}
+      return false;
+    };
+    btn.__raGhostBuster = true;
   }
 
   function boot(){
     const c = C(); if (!c) return setTimeout(boot, 120);
-    if (c.__raDelCleanV3) return; c.__raDelCleanV3 = true;
+    if (c.__raGhostBusterV5) return; c.__raGhostBusterV5 = true;
 
-    // Whenever something is removed, make sure the top layer is clean.
-    c.on('object:removed',   repaint);
+    // Clean whenever an object goes away or selection changes
+    c.on('object:removed',   () => setTimeout(repaint, 0));
+    c.on('selection:cleared',() => setTimeout(repaint, 0));
+    c.on('mouse:up',         () => setTimeout(repaint, 0));
 
-    // Also clean when selection drops or mouse is released (covers edge cases).
-    c.on('selection:cleared',repaint);
-    c.on('mouse:up',         repaint);
+    // Keyboard Delete/Backspace → run cleanup right after Fabric handles it
+    document.addEventListener('keydown', (e)=>{
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
+      if (e.key === 'Delete' || e.key === 'Backspace'){
+        // Wait a tick so the removal happens, then repaint
+        setTimeout(repaint, 0);
+      }
+    }, true);
+
+    wireDeleteButton();
+    // Keep the button wired if the UI re-renders
+    new MutationObserver(wireDeleteButton).observe(document.body, { childList:true, subtree:true });
   }
 
   if (document.readyState === 'loading'){
