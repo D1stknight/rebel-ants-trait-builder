@@ -4999,3 +4999,48 @@
     wire();
   }
 })();
+
+/* ================= RA_DELETE_RENDER_CLEANUP_V3 =================
+   Clears Fabric's TOP layer after deletes (keyboard or button)
+   to remove the "split rectangle" ghost. Safe + add-only.
+   ============================================================= */
+(() => {
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function clearTop(c){
+    try{
+      const ctx = (c.getSelectionContext && c.getSelectionContext()) || c.contextTop;
+      const cv  = ctx && ctx.canvas;
+      if (ctx && cv){
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.clearRect(0, 0, cv.width, cv.height);
+      }
+    }catch(_) {}
+  }
+
+  function repaint(){
+    const c = C(); if (!c) return;
+    clearTop(c);
+    try { c.requestRenderAll(); } catch(_) {}
+    // One more nudge on the next tick (belt + suspenders)
+    setTimeout(() => { try { c.renderAll(); } catch(_) {} }, 0);
+  }
+
+  function boot(){
+    const c = C(); if (!c) return setTimeout(boot, 120);
+    if (c.__raDelCleanV3) return; c.__raDelCleanV3 = true;
+
+    // Whenever something is removed, make sure the top layer is clean.
+    c.on('object:removed',   repaint);
+
+    // Also clean when selection drops or mouse is released (covers edge cases).
+    c.on('selection:cleared',repaint);
+    c.on('mouse:up',         repaint);
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
