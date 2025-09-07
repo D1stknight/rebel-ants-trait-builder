@@ -450,7 +450,19 @@
 
     // -------- Selection tools
     safeAddListener("duplicate","click", ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.clone(c=>{ c.set({ left:(o.left||0)+20, top:(o.top||0)+20 }); canvas.add(c).setActiveObject(c); canvas.requestRenderAll(); }); });
-    safeAddListener("delete","click", ()=>{ const o=canvas.getActiveObject(); if(!o || o===backgroundRect || o._isBase) return; canvas.remove(o); canvas.requestRenderAll(); });
+    safeAddListener("delete","click", ()=>{
+  const o = canvas.getActiveObject();
+  if (!o || o===backgroundRect || o._isBase) return;
+
+  // If it’s the Token ID, clear the pointer so it won’t pop back
+  try { if (o === idLabel) { idLabel = null; } } catch(_) {}
+
+  // Drop the selection layer first (prevents the tall ghost strip)
+  try { canvas.discardActiveObject(); } catch(_) {}
+
+  canvas.remove(o);
+  canvas.requestRenderAll();
+});
     safeAddListener("opacity","input", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value||"1")); canvas.requestRenderAll(); });
     safeAddListener("blendMode","change", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.globalCompositeOperation = e.target.value==="normal" ? null : e.target.value; canvas.requestRenderAll(); });
     safeAddListener("bringFront","click", ()=> reorderOverlay('front'));
@@ -483,12 +495,19 @@
       const o = canvas.getActiveObject();
 
       // Delete selection
-      if (o && (e.key==="Delete" || e.key==="Backspace")){
-        if (!o._isBase && o!==backgroundRect){
-          canvas.remove(o); canvas.requestRenderAll();
-        }
-        e.preventDefault(); return;
-      }
+     if (o && (e.key==="Delete" || e.key==="Backspace")){
+  if (!o._isBase && o!==backgroundRect){
+    // If it’s the Token ID, clear the pointer so it won’t pop back
+    try { if (o === idLabel) { idLabel = null; } } catch(_) {}
+
+    // Drop the selection layer first (prevents the tall ghost strip)
+    try { canvas.discardActiveObject(); } catch(_) {}
+
+    canvas.remove(o);
+    canvas.requestRenderAll();
+  }
+  e.preventDefault(); return;
+}
       // Duplicate
       if (o && ( (e.metaKey && e.key.toLowerCase()==="d") || (e.ctrlKey && e.key.toLowerCase()==="d") )){
         try { o.clone(cl=>{ cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 }); canvas.add(cl); canvas.setActiveObject(cl); canvas.requestRenderAll(); }); } catch(_){}
