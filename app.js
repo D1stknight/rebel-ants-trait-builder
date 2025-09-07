@@ -3156,7 +3156,8 @@ const shouldShow =
       c.on('object:removed',  ()=> ensureCenteredWM(c));
 
     // 🔔 Wallet holder status changed → re-evaluate watermark
-    document.addEventListener('ra-holder-update', ()=> ensureCenteredWM(c));      
+    document.addEventListener('ra-holder-update', ()=> ensureCenteredWM(c)); 
+    document.addEventListener('ra-wm-recalc',    ()=> ensureCenteredWM(c));
     }
 
     // 4) keep WM scaled if canvas element resizes
@@ -5580,27 +5581,24 @@ const shouldShow =
   (async ()=>{ try{ await refresh(); }catch(_){} })();
 })();
 
-/* ========== RA_WM_HOLDER_GATING_v1 — wallet → watermark behavior ========== */
+/* ========== RA_WM_HOLDER_GATING_v2 — wallet → watermark behavior (no loops) ========== */
 (()=>{
-  function applyFromHolder(detail){
-    // detail = { checked, hasRebel, hasFriend, matches:[...] }
-    // Rule: Rebel holders => watermark OFF locally (doesn’t change your admin values)
+  function apply(detail){
+    // keep last known state around for other bits if needed
+    window.RA_HOLDER_STATE = detail || window.RA_HOLDER_STATE || {};
+
+    // Rebel holders: locally force watermark OFF (doesn't change admin toggles)
     if (detail && detail.hasRebel) {
       window.__raWMForce = { off: true };
     } else {
-      // No special override; obey admin toggles
-      window.__raWMForce = null;
+      window.__raWMForce = null; // obey admin toggles again
     }
-    // Nudge the watermark block to re-evaluate (in case it hasn’t heard the event)
-    try { document.dispatchEvent(new Event('ra-holder-update')); } catch(_){}
-    try { window.canvas && window.canvas.requestRenderAll(); } catch(_){}
+
+    // Tell the watermark block to recompute using the new flag
+    try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
+    try { window.canvas && window.canvas.requestRenderAll(); } catch(_) {}
   }
 
-  // Listen to the wallet box (it already dispatches 'ra-holder-update')
-  document.addEventListener('ra-holder-update', (e)=> applyFromHolder(e.detail||{}));
-
-  // Also run once on load if the wallet already refreshed itself
-  if (window.RA_HOLDER_STATE && window.RA_HOLDER_STATE.checked){
-    applyFromHolder(window.RA_HOLDER_STATE);
-  }
+  // Wallet checker emits 'ra-holder-update' with detail: { hasRebel, hasFriend, ... }
+  document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
