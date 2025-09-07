@@ -5888,3 +5888,76 @@ const shouldShow =
     window.ethereum.on?.('accountsChanged', ()=>{ fetchCollections(); });
   }
 })();
+
+/* ========== RA_COLLECTION_ROW_FIX_v1 — tidy row + load names ========== */
+(()=>{
+  const $ = (id)=> document.getElementById(id);
+
+  async function loadCollections(){
+    // If already present, reuse
+    if (Array.isArray(window.RA_COLLECTIONS) && window.RA_COLLECTIONS.length) return window.RA_COLLECTIONS;
+    try {
+      const r = await fetch('/api/ra-collections');
+      const j = await r.json();
+      window.RA_COLLECTIONS = j.collections || j || [];
+    } catch (e) {
+      window.RA_COLLECTIONS = window.RA_COLLECTIONS || [];
+    }
+    return window.RA_COLLECTIONS;
+  }
+
+  function ensureRow(){
+    const loadBtn = document.getElementById('loadTokenBtn') || document.getElementById('loadByToken');
+    if (!loadBtn) return;
+    if ($('ra-col-row')) return; // already placed
+
+    // Insert just above the Load-by-Token button
+    const row = document.createElement('div');
+    row.id = 'ra-col-row';
+    row.className = 'ra-collection-row';
+    row.innerHTML = `
+      <span class="ra-mini">Collection</span>
+      <select id="ra-col-sel"></select>
+      <button id="ra-col-refresh" type="button" class="mini">Refresh</button>
+      <small id="ra-col-using" class="ra-mini">Using: —</small>
+    `;
+    loadBtn.parentElement.insertBefore(row, loadBtn);
+  }
+
+  function renderOptions(list){
+    const sel = $('ra-col-sel'); if (!sel) return;
+    sel.innerHTML = '';
+    list.forEach(c=>{
+      const opt = document.createElement('option');
+      opt.value = `${c.chain}:${c.contract}`;
+      opt.textContent = `${c.name} — ${c.chain==='ethereum' ? 'Ether' : c.chain}`;
+      sel.appendChild(opt);
+    });
+    updateUsing();
+  }
+
+  function getSelected(){
+    const sel = $('ra-col-sel');
+    if (!sel) return null;
+    const key = sel.value;
+    return (window.RA_COLLECTIONS||[]).find(c => `${c.chain}:${c.contract}` === key) || null;
+  }
+
+  function updateUsing(){
+    const s = getSelected();
+    const el = $('ra-col-using');
+    if (el) el.textContent = s ? `Using: ${s.name}` : 'Using: —';
+  }
+
+  async function init(){
+    ensureRow();
+    const list = await loadCollections();
+    if (list.length) renderOptions(list);
+    $('ra-col-sel')?.addEventListener('change', updateUsing);
+    $('ra-col-refresh')?.addEventListener('click', ()=> renderOptions(window.RA_COLLECTIONS||[]));
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
