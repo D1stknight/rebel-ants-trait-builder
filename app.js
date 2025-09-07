@@ -5988,3 +5988,150 @@ const shouldShow =
     clone.addEventListener('click', onLoadByToken);
   }
 })();
+
+/* ========== RA_COLLECTION_PICKER_RESURFACE_v1 — force show + rebind loader ========== */
+(()=>{
+  function $(id){ return document.getElementById(id); }
+  function toHexChainId(v){
+    if (!v) return '0x1';
+    const s = String(v);
+    if (s.startsWith('0x')) return s.toLowerCase();
+    const n = Number(s);
+    return Number.isFinite(n) ? ('0x'+n.toString(16)) : '0x1';
+  }
+  function netNameFromChainId(hex){
+    const h = (hex||'').toLowerCase();
+    if (h==='0x1') return 'Ethereum';
+    if (h==='0x2105') return 'Base';
+    return hex || 'Unknown';
+  }
+
+  // If our row already exists but got hidden, make sure it’s visible
+  const existingRow = $('raColRowSimple');
+  if (existingRow){ existingRow.style.display = 'flex'; }
+
+  // Build row HTML (id matches our previous patch so we don't double‑create)
+  const html = `
+    <div id="raColRowSimple" style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+      <span style="font-size:12px;opacity:.75;white-space:nowrap;">Collection</span>
+      <select id="raCollectionSelectSimple" style="flex:1;min-width:0;background:#111;border:1px solid #444;color:#eee;padding:4px 6px;border-radius:6px;"></select>
+      <button id="raColRefreshSimple" type="button" style="background:#1f1f1f;border:1px solid #444;color:#ddd;padding:4px 8px;border-radius:6px;">Refresh</button>
+    </div>`;
+
+  // Try to place under “Load by Token”; else, pin to the top of the left column.
+  let anchor = $('loadByToken') || $('tokenId');
+  if (!$('raColRowSimple')) {
+    if (anchor) {
+      anchor.insertAdjacentHTML('afterend', html);
+    } else {
+      const leftCol = document.querySelector('#left, .left, .sidebar, .panel-left, .sidecol') || document.body;
+      leftCol.insertAdjacentHTML('afterbegin',
+        `<div style="padding:8px 10px;background:#0f0f0f;border:1px solid #444;border-radius:8px;margin:10px;">${html}</div>`
+      );
+    }
+  }
+
+  const sel = $('raCollectionSelectSimple');
+  const refreshBtn = $('raColRefreshSimple');
+
+  async function fetchAndFill(){
+    let chainHex = '0x1';
+    try { chainHex = (window.ethereum && (window.ethereum.chainId || '0x1')) || '0x1'; } catch(_){}
+    let listRaw = [];
+    try {
+      const r = await fetch('/api/ra-collections');
+      const j = await r.json();
+      listRaw = (j && (j.collections || j.list || j.items)) || [];
+    } catch(_){}
+
+    const list = listRaw.map(c=>({
+      name: c.name || c.label || 'Unnamed',
+      address: (c.address || c.contract || '').toLowerCase(),
+      chainId: toHexChainId(c.chainId || c.chain || '0x1'),
+      type: c.type || 'friend'
+    })).filter(c=>c.address);
+
+    let filtered = list.filter(c=> c.chainId===toHexChainId(chainHex));
+    if (!filtered.length) filtered = list;
+
+    window.__raCollections = filtered;
+    window.__raColState = { list: filtered, index: 0 };
+
+    if (sel){
+      sel.innerHTML = '';
+      filtered.forEach((c,i)=>{
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `${c.name} — ${netNameFromChainId(c.chainId)}`;
+        sel.appendChild(opt);
+      });
+    }
+  }
+
+  sel && sel.addEventListener('change', (e)=>{
+    const idx = Number(e.target.value || 0);
+    if (window.__raColState) window.__raColState.index = idx;
+  });
+  refreshBtn && refreshBtn.addEventListener('click', (e)=>{ e.preventDefault(); fetchAndFill(); });
+
+  // Rebind "Load by Token" so it always uses the selected collection
+  function getSelectedCollection(){
+    const st = (window.__raColState || {});
+    if (st.list && st.list.length) {
+      const idx = Number(st.index || 0);
+      return st.list[idx] || st.list[0];
+    }
+    const list = (window.__raCollections || []);
+    const idx = Number((sel && sel.value) || 0);
+    return list[idx] || list[0] || null;
+  }
+  function normalizeURL(u){
+    if (!u) return u;
+    if (u.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + u.slice(7).replace(/^ipfs\//,'');
+    return u;
+  }
+  async function fetchReservoirImage(contract, tokenId){
+    const qs = `tokens=${encodeURIComponent(contract+':'+String(tokenId))}&includeTopBid=false&includeAttributes=false&limit=1`;
+    const url = `https://api.reservoir.tools/tokens/v7?${qs}`;
+    const r = await fetch(url, { headers:{ 'Accept':'application/json' }});
+    if (!r.ok) throw new Error(`Reservoir ${r.status}`);
+    const j = await r.json();
+    const tok = j && j.tokens && j.tokens[0] && j.tokens[0].token;
+    const img = tok && (tok.image || tok.imageLarge || tok.imageSmall || tok.media);
+    return normalizeURL(img || '');
+  }
+  async function onLoadByToken(ev){
+    try { ev && ev.preventDefault(); ev && ev.stopPropagation(); } catch(_){}
+    const idInput = $('tokenId') || document.querySelector('input[name="tokenId"]');
+    const tokenId = parseInt((idInput && idInput.value) || '', 10);
+    if (!Number.isFinite(tokenId)) { alert('Enter a token number first'); return; }
+
+    const col = getSelectedCollection();
+    if (!col || !col.address) { alert('Pick a collection first'); return; }
+
+    try {
+      const imgUrl = await fetchReservoirImage(col.address, tokenId);
+      if (!imgUrl) { alert('No image found for that token.'); return; }
+
+      if (typeof loadBaseImage === 'function') {
+        await loadBaseImage(imgUrl);
+      } else if (typeof setBaseImage === 'function') {
+        await setBaseImage(imgUrl);
+      }
+      try { if (typeof addOrUpdateTokenLabel==='function') addOrUpdateTokenLabel(tokenId); } catch(_){}
+      try { document.dispatchEvent(new Event('ra-holder-update')); } catch(_){}
+    } catch(e){
+      console.error(e);
+      alert('Load failed: ' + (e && e.message || e));
+    }
+  }
+  const btn = $('loadByToken');
+  if (btn && btn.parentNode){
+    const clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+    clone.addEventListener('click', onLoadByToken);
+  }
+
+  // initial fill
+  fetchAndFill();
+})();
