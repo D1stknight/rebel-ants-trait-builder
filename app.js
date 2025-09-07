@@ -5800,3 +5800,85 @@ const shouldShow =
     init();
   }
 })();
+
+/* ========== RA_BRAND_FOOTER_LIVE_MINI_v2 — auto footer for non‑Rebel tokens (live + export) ========== */
+(()=>{
+  const FOOTER_TEXT = 'Powered by Rebel Studios';
+  const STYLE = { fontFamily: "Inter, Arial, sans-serif", fontSize: 12, fill: "#cfcfcf", opacity: 0.88 };
+  const PAD = 10;
+
+  const toLower = s => (s||'').toLowerCase();
+  const rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  function findBase(c){ return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null; }
+
+  function shouldShow(c){
+    const base = findBase(c);
+    if (!base) return false;
+    // Only friend tokens: needs the loader to set _tokenContract
+    const cc = toLower(base._tokenContract||'');
+    if (!cc) return false;                      // unknown → assume Rebel / no footer
+    return (rebelContract && cc !== rebelContract);
+  }
+
+  function place(c, footer){
+    footer.set({
+      originX:'right', originY:'bottom',
+      left: c.getWidth() - PAD,
+      top:  c.getHeight() - PAD
+    });
+    footer.setCoords();
+  }
+
+  function ensure(){
+    const c = C(); if (!c) return;
+
+    let footer = (c.getObjects()||[]).find(o => o && o._raBrandFooter);
+    const show = shouldShow(c);
+
+    if (!show){
+      if (footer){ c.remove(footer); c.requestRenderAll(); }
+      return;
+    }
+
+    if (!footer){
+      footer = new fabric.Textbox(FOOTER_TEXT, {
+        ...STYLE,
+        selectable:false, evented:false, hasControls:false,
+        _raBrandFooter:true, _raSys:true
+      });
+      c.add(footer);
+    } else {
+      footer.set(STYLE);
+    }
+    place(c, footer);
+    try { c.bringToFront(footer); } catch(_){}
+    try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
+    c.requestRenderAll();
+  }
+
+  function boot(){
+    const c = C(); if (!c) return setTimeout(boot, 120);
+    ensure();
+
+    if (!c.__raBrandFooterWired){
+      c.__raBrandFooterWired = true;
+      c.on('object:added',   ensure);
+      c.on('object:removed', ensure);
+      c.on('object:modified',ensure);
+      try {
+        const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+        new ResizeObserver(()=> ensure()).observe(el);
+      } catch(_){}
+    }
+
+    // React to app events that can change the base or state
+    document.addEventListener('ra-collection-change', ensure);
+    document.addEventListener('ra-wm-recalc', ensure);
+    document.addEventListener('ra-holder-update', ensure);
+  }
+
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
+  else { boot(); }
+})();
