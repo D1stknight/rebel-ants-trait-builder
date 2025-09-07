@@ -5055,109 +5055,99 @@ canvas.requestRenderAll();
   }, 150);
 })();
 
-/* ===================== RA_EXPORT_VIDEO_v5 — record the live Preview exactly ===================== */
-/* Drop-in patch: put this at the very bottom of app.js */
+/* ========== RA_EXPORT_VIDEO_v6 — fixed: black screen + wrong duration + matches Preview ========== */
+(function RA_EXPORT_VIDEO_v6(){
+  // Helper: find elements safely
+  const $ = (id)=> document.getElementById(id);
+  const qs = (sel)=> document.querySelector(sel);
 
-(() => {
-  // small helpers that don’t depend on your IDs
-  function $(id){ return document.getElementById(id); }
-  function findButtonByText(txt){
-    const want = String(txt).trim().toLowerCase();
-    return Array.from(document.querySelectorAll('button'))
-      .find(b => (b.textContent || '').trim().toLowerCase() === want);
-  }
-  function bestMime() {
-    const types = [
-      'video/mp4;codecs=avc1.42E01E', // Safari / H.264
-      'video/mp4',
-      'video/webm;codecs=vp9',        // Chrome/Edge
-      'video/webm;codecs=vp8',
-      'video/webm'
-    ];
-    for (const t of types) { try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; } catch(_){} }
-    return ''; // let the browser pick
-  }
-  function currentPresetLabel() {
-    // Find the select whose option text looks like our presets (Ken Burns / Pan / Zoom / Overlays / Base)
-    const rx = /(ken burns|pan |zoom |overlays|base )/i;
-    for (const s of document.querySelectorAll('select')) {
-      const t = (s.options[s.selectedIndex] && s.options[s.selectedIndex].textContent || '').trim();
-      if (rx.test(t)) return t;
-    }
-    return 'preview';
-  }
-  function currentDurationSec() {
-    // Try to read the Duration input near the Animate area; fall back to 6s if uncertain.
-    let dur = 6;
-    const root = $('exportVideo')?.closest('div') || document.body;
-    const nums = Array.from(root.querySelectorAll('input[type="number"]'));
-    for (const n of nums) {
-      const v = parseFloat(n.value);
-      if (Number.isFinite(v) && v > 0 && v <= 120) { dur = v; break; }
-    }
-    return dur;
-  }
-  function saveBlob(blob, name){
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  // Find the Export Video button by id or visible text
+  function findExportBtn(){
+    return $("exportVideoBtn")
+      || qs('#exportVideoBtn, [data-role="exportVideo"]')
+      || Array.from(document.querySelectorAll('button')).find(b => /export\s*video/i.test(b.textContent||""));
   }
 
-  async function exportVideoHandler(){
+  // Find the Preview button so we can drive the same animation you see
+  function findPreviewBtn(){
+    return $("previewBtn")
+      || qs('#previewBtn, [data-role="preview"]')
+      || Array.from(document.querySelectorAll('button')).find(b => /preview/i.test(b.textContent||""));
+  }
+
+  const btn = findExportBtn();
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
     try {
-      // 1) read UI state
-      const dur = currentDurationSec();
-      const preset = currentPresetLabel();
-      const ts = new Date().toISOString().replace(/[:.]/g,'');
-      const fps = 60;
+      // Read duration (seconds). Fallback to 6.
+      const durEl =
+        $("animDuration") ||
+        qs('#animDuration, [data-role="animDuration"], input[name="animDuration"]');
+      let durSec = parseFloat(durEl && durEl.value || "6");
+      if (!Number.isFinite(durSec) || durSec <= 0) durSec = 6;
+      durSec = Math.min(60, Math.max(1, durSec)); // clamp 1..60
 
-      // 2) make sure no selection boxes are visible
-      try { if (window.canvas) { canvas.discardActiveObject(); canvas.requestRenderAll(); } } catch(_){}
+      // Capture the REAL drawing layer (Fabric lower canvas), not the controls layer.
+      const capCanvas =
+        (window.canvas && (canvas.lowerCanvasEl || (canvas.getElement && canvas.getElement()))) ||
+        qs('canvas'); // last resort
+      if (!capCanvas || !capCanvas.captureStream) {
+        alert("Sorry, this browser cannot capture canvas video.");
+        return;
+      }
 
-      // 3) get the real drawing canvas and start recording
-      const el =
-        (window.canvas && (canvas.upperCanvasEl || canvas.lowerCanvasEl)) ||
-        document.querySelector('canvas');
-      if (!el || !el.captureStream) throw new Error('Your browser cannot capture the canvas stream.');
+      // Choose a recording type that works across Chrome/Safari
+      const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
+                : MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8'
+                : 'video/webm';
 
-      const stream = el.captureStream(fps);
-      const mime = bestMime();
-      const rec  = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 7_000_000 } : { videoBitsPerSecond: 7_000_000 });
+      const fps = 30;
+      const stream = capCanvas.captureStream(fps);
+      const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6_000_000 });
+
+      // Collect chunks
       const chunks = [];
-      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-      const done = new Promise(res => rec.onstop = res);
-      rec.start();
+      rec.ondataavailable = (e)=>{ if (e.data && e.data.size) chunks.push(e.data); };
+      const stopped = new Promise(res => rec.onstop = res);
 
-      // 4) trigger the SAME animation the UI uses for Preview
-      const previewBtn = $('previewAnim') || findButtonByText('preview');
-      if (previewBtn) previewBtn.click();
+      // Kick the same animation you preview (so export matches exactly).
+      // If your Preview button toggles, do a quick reset-click then play-click.
+      const previewBtn = findPreviewBtn();
+      if (previewBtn) {
+        try { previewBtn.click(); } catch(_) {}
+        await new Promise(r => setTimeout(r, 60)); // small gap to reset
+        try { previewBtn.click(); } catch(_) {}
+      }
 
-      // 5) wait a hair longer than duration so we don’t cut the last frame
-      await new Promise(r => setTimeout(r, Math.round(dur * 1000 + 500)));
+      // Some browsers pause rendering when nothing changes. Force frames.
+      let pumpTimer = 0;
+      const pump = ()=> {
+        try { window.canvas && canvas.requestRenderAll(); } catch(_){}
+        pumpTimer = setTimeout(pump, Math.round(1000/fps));
+      };
 
-      // 6) stop & save
+      pump();
+      rec.start(200); // request small chunks ~5 per second
+
+      // Record for exactly the UI duration (plus a tiny pad)
+      await new Promise(r => setTimeout(r, Math.round(durSec * 1000) + 180));
       rec.stop();
-      await done;
+      clearTimeout(pumpTimer);
+      await stopped;
 
-      const ext = (mime && mime.includes('mp4')) ? 'mp4' : 'webm';
-      const file = new Blob(chunks, { type: mime || `video/${ext}` });
-      const name = `rebel-ants-${(preset||'preview').toLowerCase().replace(/\s+/g,'-').replace(/[^\w\-]+/g,'').slice(0,40)}-${ts}.${ext}`;
-      saveBlob(file, name);
+      // Save file
+      const blob = new Blob(chunks, { type: (mime.split(';')[0] || 'video/webm') });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'rebel-ants-export.webm';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1000);
     } catch (err) {
-      alert('Export failed: ' + (err && err.message || err));
+      console.error(err);
+      alert("Export failed: " + (err && err.message || err));
     }
-  }
-
-  // 7) wire the handler to the Export button (id or by label, whichever exists)
-  const hook = () => {
-    const byId = $('exportVideo');
-    if (byId && !byId._raBound) { byId._raBound = true; byId.addEventListener('click', exportVideoHandler); return; }
-    const byText = findButtonByText('export video');
-    if (byText && !byText._raBound) { byText._raBound = true; byText.addEventListener('click', exportVideoHandler); }
-  };
-  // try now and also after small delay (covers cases where UI mounts late)
-  hook(); setTimeout(hook, 300);
+  }, { passive:true });
 })();
