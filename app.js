@@ -5603,204 +5603,6 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_TOKEN_LOAD_MULTI_COLLECTION_v2 — ETH via Reservoir, others via tokenURI (RPC) ========== */
-(()=>{
-  const $ = (id)=> document.getElementById(id);
-  const toLower = (s)=> (s||'').toLowerCase();
-
-  // --- small helpers ---
-  function ipfsToHttp(u){
-    if (!u) return u;
-    if (u.startsWith('ipfs://ipfs/')) return 'https://ipfs.io/ipfs/'+u.slice(12);
-    if (u.startsWith('ipfs://'))      return 'https://ipfs.io/ipfs/'+u.slice(7);
-    return u;
-  }
-  async function fetchJson(url){
-    const r = await fetch(url);
-    if (!r.ok) throw new Error('HTTP '+r.status);
-    return await r.json();
-  }
-  function hexPad64(hex){ return hex.replace(/^0x/,'').padStart(64,'0'); }
-  function decodeAbiString(hex){
-    // ABI-encoded string: [offset=32][length][data...]
-    hex = (hex||'').replace(/^0x/,'');
-    if (hex.length < 128) return '';
-    const len = parseInt(hex.slice(64,128), 16);
-    const data = hex.slice(128, 128 + len*2);
-    let out = '';
-    for (let i=0; i<data.length; i+=2) out += String.fromCharCode(parseInt(data.slice(i,i+2),16));
-    return out;
-  }
-
-  // --- ETH (Reservoir) path (no key required for basic image fetch) ---
-  async function fetchViaReservoir(contract, tokenId){
-    const id = String(tokenId).replace(/[^0-9]/g,'');
-    const q  = `https://api.reservoir.tools/tokens/v7?tokens=${contract}:${id}&includeTopBid=false&limit=1`;
-    const r  = await fetch(q);
-    const j  = await r.json();
-    const token = j && j.tokens && j.tokens[0] && j.tokens[0].token;
-    const imgUrl = token && (token.image || token.imageOriginal || token.imageSmall);
-    if (!imgUrl) throw new Error('Token image not found');
-    const img = await fabricFromURL(ipfsToHttp(imgUrl));
-    try {
-      img._isBase = true; img._kind='base';
-      img._tokenId = id;
-      img._tokenContract = toLower(contract);
-      img._tokenChainId  = '0x1';
-      img._tokenKind     = 'rebel';
-    } catch(_) {}
-    return img;
-  }
-
-  // --- Generic EVM path via RPC -> tokenURI -> metadata.image ---
-  async function fetchViaRPC(sel, tokenId){
-    const rpc = sel.rpcUrl;
-    const contract = toLower(sel.contract);
-    if (!rpc) throw new Error('No RPC URL configured for this collection.');
-
-    const idStr  = String(tokenId).replace(/[^0-9]/g,'') || '0';
-    const idHex  = '0x' + BigInt(idStr).toString(16);
-    const sig    = '0xc87b56dd'; // tokenURI(uint256)
-    const data   = sig + hexPad64(idHex);
-    const body   = { jsonrpc:'2.0', id:1, method:'eth_call', params:[{ to:contract, data }, 'latest'] };
-
-    const rr = await fetch(rpc, { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify(body) });
-    const jr = await rr.json();
-    if (!jr || !jr.result) throw new Error('tokenURI() failed');
-
-    const tokenURI = decodeAbiString(jr.result);
-    if (!tokenURI) throw new Error('Empty tokenURI');
-    const metaUrl  = ipfsToHttp(tokenURI);
-    const meta     = await fetchJson(metaUrl);
-
-    const imgUrl = ipfsToHttp(meta.image || meta.image_url || meta.imageUrl);
-    if (!imgUrl) throw new Error('metadata.image not found');
-
-    const img = await fabricFromURL(imgUrl);
-    try {
-      img._isBase = true; img._kind='base';
-      img._tokenId = idStr;
-      img._tokenContract = contract;
-      img._tokenChainId  = sel.chainId || '';
-      img._tokenKind     = sel.kind || 'friend';
-    } catch(_) {}
-    return img;
-  }
-
-  // Keep original (ETH-only) if present, but override with multi-chain
-  const origFetch = (typeof fetchImageByTokenId==='function') ? fetchImageByTokenId : null;
-
-  fetchImageByTokenId = async function(tokenId){
-    const sel = (window.__raActiveCollection || {});
-    const rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
-
-    // If nothing selected or same as Rebel + no rpcUrl => use Reservoir/old path
-    if (!sel.contract || (!sel.rpcUrl && toLower(sel.contract) === rebelContract)) {
-      if (origFetch) return await origFetch(tokenId);
-      return await fetchViaReservoir(rebelContract, tokenId);
-    }
-
-    // If explicitly ETH without rpcUrl, still try Reservoir
-    if ((sel.chainId === '0x1' || sel.chainId === 1 || sel.chainId === '1') && !sel.rpcUrl){
-      return await fetchViaReservoir(toLower(sel.contract), tokenId);
-    }
-
-    // Otherwise use RPC -> tokenURI -> image
-    return await fetchViaRPC(sel, tokenId);
-  };
-})();
-
-/* ========== RA_COLLECTION_PICKER_UI_MINI_v2 — tiny dropdown + remembers selection ========== */
-(()=>{
-  const $ = (id)=> document.getElementById(id);
-  const toLower = (s)=> (s||'').toLowerCase();
-
-  function findTokenRow(){
-    // try to find the row that contains the Token ID input + "Load by Token" button
-    // looks for an input with placeholder containing "token id"
-    const input = Array.from(document.querySelectorAll('input'))
-      .find(i => ((i.placeholder||'').toLowerCase().includes('token id')));
-    return input && input.parentElement ? input.parentElement : null;
-  }
-
-  async function fetchCollections(){
-    try{
-      const r = await fetch('/api/ra-collections');
-      const j = await r.json();
-      let arr = (j && j.collections) || [];
-      // make sure Rebel on ETH is present as a default
-      const rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
-      if (rebelContract && !arr.some(c => toLower(c.contract)===rebelContract)){
-        arr.unshift({
-          key:'rebel-eth', label:'Rebel Ants (Ethereum)',
-          contract: rebelContract, chainId:'0x1', kind:'rebel'
-        });
-      }
-      return arr;
-    }catch(_){ return []; }
-  }
-
-  function buildUI(row, list){
-    // container
-    const wrap = document.createElement('div');
-    wrap.style.display='flex';
-    wrap.style.gap='8px';
-    wrap.style.alignItems='center';
-    wrap.style.marginTop='6px';
-
-    wrap.innerHTML = `
-      <label style="font-size:12px;opacity:.8;">Collection</label>
-      <select id="raCollectionSel" style="flex:1; height:28px; border-radius:6px; background:#111; color:#eee; border:1px solid #333; padding:2px 6px;"></select>
-      <span id="raCollectionChain" style="font-size:12px; opacity:.7;"></span>
-    `;
-
-    // insert right under the token row
-    row.parentElement.insertBefore(wrap, row.nextSibling);
-
-    const sel = $('raCollectionSel');
-    const chainLbl = $('raCollectionChain');
-
-    // fill options
-    list.forEach(c=>{
-      const opt = document.createElement('option');
-      opt.value = c.key || (c.contract+'_'+(c.chainId||''));
-      opt.textContent = c.label || c.contract;
-      sel.appendChild(opt);
-    });
-
-    // restore previous choice or default to first
-    const saved = localStorage.getItem('ra:collectionKey');
-    if (saved && Array.from(sel.options).some(o=>o.value===saved)) sel.value = saved;
-
-    function apply(){
-      const chosen = list.find(c => (c.key===sel.value) || ((c.contract+'_'+(c.chainId||''))===sel.value)) || list[0];
-      window.__raActiveCollection = chosen || null;
-      localStorage.setItem('ra:collectionKey', sel.value);
-      // small chain label
-      chainLbl.textContent = chosen && chosen.chainId ? `Chain: ${chosen.chainId}` : '';
-      // let other patches know
-      document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: chosen }));
-    }
-    sel.addEventListener('change', apply);
-    apply();
-  }
-
-  async function init(){
-    const row = findTokenRow();
-    if (!row) return; // UI not found
-    const list = await fetchCollections();
-    if (!list.length) return;
-    buildUI(row, list);
-  }
-
-  // run after the page is ready
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
-})();
-
 /* ========== RA_BRAND_FOOTER_LIVE_MINI_v2 — auto footer for non‑Rebel tokens (live + export) ========== */
 (()=>{
   const FOOTER_TEXT = 'Powered by Rebel Studios';
@@ -5881,4 +5683,211 @@ const shouldShow =
 
   if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
   else { boot(); }
+})();
+
+/* ========== RA_COLLECTION_PICKER_UI_MINI_v3 — stable anchor + remembers choice ========== */
+(()=>{
+  const $ = (id)=> document.getElementById(id);
+
+  // Find the existing "Load by Token" button row and insert right after it
+  function findAnchor(){
+    const btn = $('loadToken');
+    if (btn && btn.parentElement) return btn.parentElement;
+    // fallback: try the token input
+    const inp = $('tokenIdInput');
+    return inp && inp.parentElement ? inp.parentElement : null;
+  }
+
+  async function getCollections(){
+    try{
+      const r = await fetch('/api/ra-collections', { cache:'no-store' });
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.collections) && j.collections.length) return j.collections;
+    }catch(_){}
+    // minimal fallback (so the UI still renders)
+    const rebel = (typeof CONTRACT==='string') ? CONTRACT : '';
+    return rebel ? [{ key:'rebel-eth', label:'Rebel Ants (Ethereum)', contract:rebel, chainId:'0x1', kind:'rebel' }] : [];
+  }
+
+  function insertUI(anchor, list){
+    if (!anchor || !list.length) return;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'raCollectionRow';
+    wrap.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:6px';
+
+    wrap.innerHTML = `
+      <label style="font-size:12px;opacity:.8;">Collection</label>
+      <select id="raCollectionSel" style="flex:1;height:28px;border-radius:6px;background:#111;color:#eee;border:1px solid #333;padding:2px 6px;"></select>
+      <span id="raCollectionChain" style="font-size:12px;opacity:.7;"></span>
+    `;
+
+    anchor.parentElement.insertBefore(wrap, anchor.nextSibling);
+
+    const sel = $('raCollectionSel');
+    const chainLbl = $('raCollectionChain');
+
+    // Build options
+    list.forEach(c=>{
+      const opt = document.createElement('option');
+      opt.value = c.key || (String(c.contract||'').toLowerCase() + '_' + (c.chainId||''));
+      opt.textContent = c.label || (c.contract?.slice(0,6)+'…'+c.contract?.slice(-4) || 'Collection');
+      sel.appendChild(opt);
+    });
+
+    // Restore previous choice
+    const saved = localStorage.getItem('ra:collectionKey');
+    if (saved && Array.from(sel.options).some(o=>o.value===saved)) sel.value = saved;
+
+    function apply(){
+      const chosen = list.find(c => (c.key===sel.value) || ((String(c.contract||'').toLowerCase()+'_'+(c.chainId||''))===sel.value)) || list[0];
+      window.__raActiveCollection = chosen || null;
+      localStorage.setItem('ra:collectionKey', sel.value);
+      chainLbl.textContent = chosen && chosen.chainId ? `Chain: ${chosen.chainId}` : '';
+      // let any listeners (footer, etc.) know
+      try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: chosen })); } catch(_){}
+    }
+
+    sel.addEventListener('change', apply);
+    apply();
+  }
+
+  async function boot(){
+    const anchor = findAnchor();
+    if (!anchor) return setTimeout(boot, 200);
+    const list = await getCollections();
+    insertUI(anchor, list);
+  }
+
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
+  else { boot(); }
+})();
+
+/* ========== RA_TOKEN_LOAD_MULTI_COLLECTION_COMPAT_v3 — ETH via Reservoir, others via RPC; returns URL string ========== */
+(()=>{
+  const toLower = s => (s||'').toLowerCase();
+
+  // Keep original for Rebel/ETH fallback if needed
+  const origFetch = (typeof fetchImageByTokenId==='function') ? fetchImageByTokenId : null;
+
+  // --- helpers ---
+  function ipfsToHttp(u){
+    if (!u) return u;
+    if (u.startsWith('ipfs://ipfs/')) return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(12);
+    if (u.startsWith('ipfs://'))      return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(7);
+    return u;
+  }
+  async function fetchJson(url){
+    const r = await fetch(url, { cache:'no-store' });
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json();
+  }
+  function hexPad64(hex){ return hex.replace(/^0x/,'').padStart(64,'0'); }
+  function decodeAbiString(hex){
+    hex = (hex||'').replace(/^0x/,'');
+    if (hex.length < 128) return '';
+    const len = parseInt(hex.slice(64,128), 16);
+    const data = hex.slice(128, 128 + len*2);
+    let out=''; for (let i=0;i<data.length;i+=2){ out += String.fromCharCode(parseInt(data.slice(i,i+2),16)); }
+    return out;
+  }
+  function decodeMaybeDataUri(u){
+    if (!u || !u.startsWith('data:')) return u;
+    const [, b64] = u.split(',', 2);
+    try { return JSON.parse(atob(b64||'')); } catch { return null; }
+  }
+
+  async function reservoirImageUrl(contract, tokenId){
+    const id = String(tokenId).replace(/[^0-9]/g,'');
+    const q  = `https://api.reservoir.tools/tokens/v7?tokens=${contract}:${id}&includeTopBid=false&limit=1`;
+    const r  = await fetch(q, { cache:'no-store' });
+    const j  = await r.json();
+    const t  = j && j.tokens && j.tokens[0] && j.tokens[0].token;
+    const url = t && (t.image || t.imageOriginal || t.imageSmall || (t.media && (t.media.original?.url || t.media.original?.mediaUrl)));
+    if (!url) throw new Error('Token image not found');
+    return ipfsToHttp(url);
+  }
+
+  async function rpcImageUrl(sel, tokenId){
+    const rpc = sel.rpcUrl;
+    const contract = toLower(sel.contract);
+    if (!rpc) throw new Error('No RPC URL configured');
+
+    const idStr = String(tokenId).replace(/[^0-9]/g,'') || '0';
+    const idHex = '0x' + BigInt(idStr).toString(16);
+
+    const sig  = '0xc87b56dd'; // tokenURI(uint256)
+    const data = sig + hexPad64(idHex);
+
+    const body = { jsonrpc:'2.0', id:1, method:'eth_call', params:[{ to:contract, data }, 'latest'] };
+    const rr = await fetch(rpc, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+    const jr = await rr.json();
+    if (!jr || !jr.result) throw new Error('tokenURI() failed');
+
+    let tokenURI = decodeAbiString(jr.result);
+    if (!tokenURI) throw new Error('Empty tokenURI');
+
+    // Handle data:application/json;base64,... tokenURI too
+    let meta;
+    if (tokenURI.startsWith('data:')){
+      meta = decodeMaybeDataUri(tokenURI);
+    } else {
+      meta = await fetchJson(ipfsToHttp(tokenURI));
+    }
+    if (!meta) throw new Error('Bad metadata');
+
+    const url = ipfsToHttp(meta.image || meta.image_url || meta.imageUrl);
+    if (!url) throw new Error('metadata.image missing');
+    return url;
+  }
+
+  // Override with same signature your app already calls: (contract, tokenId) → URL string
+  fetchImageByTokenId = async function(contractParam, tokenId){
+    const selected = (window.__raActiveCollection || {});
+    const rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
+    const pickedContract = toLower(selected.contract || contractParam || rebelContract);
+
+    // Remember selection so we can tag the base when it gets added
+    window.__raLastTokenMeta = {
+      contract: pickedContract,
+      chainId:  selected.chainId || '0x1',
+      kind:     selected.kind || (pickedContract===rebelContract ? 'rebel' : 'friend')
+    };
+
+    // ETH via Reservoir (no rpcUrl needed)
+    const isEth = (selected.chainId === '0x1' || selected.chainId === 1 || selected.chainId === '1' || !selected.chainId);
+    if (isEth && (!selected.rpcUrl || pickedContract===rebelContract)){
+      // If old original exists and we’re on Rebel, let it run; else use our Reservoir fetcher
+      if (pickedContract===rebelContract && typeof origFetch==='function'){
+        return await origFetch(pickedContract, tokenId);
+      }
+      return await reservoirImageUrl(pickedContract, tokenId);
+    }
+
+    // Otherwise: generic EVM via RPC tokenURI → metadata.image
+    return await rpcImageUrl(selected, tokenId);
+  };
+
+  // Tag the base object with the last token meta so the footer knows what it is
+  function wireTagger(){
+    const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+    if (!c || c.__raTokenTaggerBound) return setTimeout(wireTagger, 150);
+    c.__raTokenTaggerBound = true;
+
+    c.on('object:added', (e)=>{
+      const o = e && e.target;
+      if (!o || !o._isBase) return;
+      const meta = window.__raLastTokenMeta;
+      if (!meta) return;
+      try {
+        o._tokenContract = meta.contract;
+        o._tokenChainId  = meta.chainId;
+        o._tokenKind     = meta.kind;
+      } catch(_) {}
+      // one-shot once applied
+      window.__raLastTokenMeta = null;
+    });
+  }
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', wireTagger, {once:true}); }
+  else { wireTagger(); }
 })();
