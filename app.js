@@ -5844,45 +5844,66 @@ function netNameFromChainId(cidHex){
   }
 
   // Use Reservoir tokens API (same one you already use for Rebels) but with the selected contract
-  async function loadTokenFromCollection(tokenId, col){
-    const contract = (col && col.address) || '';
-    if (!contract){ alert('No contract for selected collection.'); return; }
-
-    // Reuse your existing RESERVOIR constant if present,
-    // else use a generic endpoint.
-    const hasRES = (typeof RESERVOIR === 'string' && RESERVOIR.length > 0);
-    const tokenKey = `${contract}:${tokenId}`;
-    const url = hasRES
-      ? (RESERVOIR + encodeURIComponent(tokenKey))
-      : (`https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}`);
-
-    // For non-Ethereum chains, add an override header (ApeChain later if supported)
-    const hdrs = {};
-    const chain = (col.chainId||'').toLowerCase();
-    if (chain && chain !== '0x1'){
-      // When you enable ApeChain image source, set the correct chain name here.
-      hdrs['x-reservoir-chain'] = (chain==='0x2105' ? 'apechain' : 'ethereum');
-    }
-
-    const r = await fetch(url, { headers: hdrs });
-    const j = await r.json();
-    const img =
-      j?.tokens?.[0]?.token?.image ||
-      j?.tokens?.[0]?.token?.imageLarge ||
-      j?.tokens?.[0]?.token?.imageSmall;
-
-    if (!img){
-      alert('Could not load that token on the selected collection.');
-      return;
-    }
-
-    // Reuse your existing base loader
-    if (window.loadBaseImage) {
-      await window.loadBaseImage(img);
-    } else if (window.loadBase && typeof window.loadBase === 'function') {
-      await window.loadBase(img);
-    }
+  function normalizeUrl(u){
+  if (!u) return null;
+  if (u.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + u.slice(7);
+  return u;
+}
+function annotateBase(meta){
+  const c = window.canvas; if (!c) return;
+  // Try to find the base image/group
+  const objs = c.getObjects ? c.getObjects() : [];
+  let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+  if (!base){
+    // Fallback: last image on canvas
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o._raBrandFooter);
+    base = imgs[imgs.length-1] || null;
   }
+  if (!base) return;
+  base._tokenContract = (meta.contract||'').toLowerCase();
+  base._tokenChain    = meta.chain;
+  base._tokenName     = meta.name;
+  try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
+  try { c.requestRenderAll(); } catch(_){}
+}
+
+async function loadTokenFromCollection(tokenId, col){
+  const contract = (col && col.address) || '';
+  if (!contract){ alert('No contract for selected collection.'); return; }
+
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
+  const tokenKey = `${contract}:${tokenId}`;
+  const url = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
+
+  const r = await fetch(url, { headers:{ 'accept':'application/json' }, cache:'no-store' });
+  if (!r.ok){ alert('Lookup failed for that token.'); return; }
+
+  const j = await r.json();
+  const t = j?.tokens?.[0]?.token || {};
+  const media = t.media || {};
+  const img = normalizeUrl(
+    (media.original && (media.original.url || media.original.mediaUrl)) ||
+    t.imageLarge || t.image || t.imageSmall
+  );
+  if (!img){ alert('No image found for that token.'); return; }
+
+  // Use your existing base loader
+  if (typeof window.loadBaseImage === 'function') {
+    await window.loadBaseImage(img, /*isToken*/ true);
+  } else if (typeof window.loadBase === 'function') {
+    await window.loadBase(img);
+  } else {
+    // very safe fallback
+    const i = new Image();
+    i.crossOrigin = 'anonymous';
+    await new Promise((res,rej)=>{ i.onload=res; i.onerror=rej; i.src=img; });
+    const base = new fabric.Image(i, { selectable:false, evented:false, _isBase:true });
+    const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+  }
+
+  // Tag the base so the footer/watermark can react
+  annotateBase({ contract, chain: slug, name: col.name });
+}
 
   function hookLoadByToken(){
     // Button
