@@ -4819,3 +4819,73 @@ canvas.requestRenderAll();
   window.addEventListener('orientationchange',()=> setTimeout(placeEmojiPop,100), {passive:true});
 })();
 
+/* ========== RA_ZOOM_TO_SELECTION_SAFE_v1 — +/– zoom to selection (else center) ========== */
+(() => {
+  if (window.__RA_ZOOM_TO_SELECTION_SAFE_v1__) return;
+  window.__RA_ZOOM_TO_SELECTION_SAFE_v1__ = true;
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  function whenReady(fn){
+    if (C() && window.fabric) return fn();
+    const t = setInterval(()=>{ if (C() && window.fabric){ clearInterval(t); fn(); } }, 120);
+  }
+
+  whenReady(() => {
+    const c = C();
+    const { fabric } = window;
+    const MIN = 0.25, MAX = 6;
+    const STEP = 1.10; // zoom speed; make 1.05 = slower, 1.2 = faster
+
+    function updateLabel(z){
+      const el = document.getElementById('zoomVal');
+      if (el) el.textContent = Math.round(z * 100) + '%';
+    }
+
+    // Pick anchor: selected object's center (screen coords) or canvas center
+    function anchorPoint(){
+      const o = c.getActiveObject && c.getActiveObject();
+      if (o && !o._isBgRect) {
+        try {
+          const center = o.getCenterPoint();
+          const vpt = c.viewportTransform || [1,0,0,1,0,0];
+          return fabric.util.transformPoint(center, vpt); // screen-space point for zoomToPoint
+        } catch(_) {}
+      }
+      // fallback: canvas center (screen coords == canvas coords when using zoomToPoint)
+      return new fabric.Point(c.getWidth()/2, c.getHeight()/2);
+    }
+
+    function setZoomSmart(nextZoom){
+      const cur = (typeof window.zoom === 'number' ? window.zoom : (c.getZoom?.() || 1));
+      const z = Math.max(MIN, Math.min(MAX, nextZoom ?? cur));
+      const pt = anchorPoint();
+      try { c.zoomToPoint(pt, z); } catch(_) { c.setZoom(z); }
+      window.zoom = z; // keep your global in sync
+      updateLabel(z);
+      c.requestRenderAll();
+    }
+
+    // expose so other code calling setZoom() benefits too
+    window.setZoom = setZoomSmart;
+
+    // Hijack the three buttons so old listeners don’t run
+    function hijack(id, fn){
+      const b = document.getElementById(id);
+      if (!b || b.__raZoomSmart) return;
+      b.__raZoomSmart = true;
+      b.addEventListener('click', (e)=>{
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        fn();
+      }, true); // capture phase
+    }
+
+    hijack('zoomIn',  ()=> setZoomSmart(((typeof window.zoom==='number'?window.zoom:(c.getZoom?.()||1)))*STEP));
+    hijack('zoomOut', ()=> setZoomSmart(((typeof window.zoom==='number'?window.zoom:(c.getZoom?.()||1)))/STEP));
+    hijack('zoomReset', ()=>{
+      // Reset transform and zoom back to 1. (Keeps simple behavior.)
+      try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
+      setZoomSmart(1);
+    });
+  });
+})();
