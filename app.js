@@ -5829,12 +5829,12 @@ function netNameFromChainId(cidHex){
     const col = currentCol();
     if (st) st.textContent = col ? `Using: ${col.name}` : '';
 
-    sel.onchange = ()=>{
-      S.selectedKey = sel.value;
-      const col = currentCol();
-      if ($(STATUS_ID)) $(STATUS_ID).textContent = col ? `Using: ${col.name}` : '';
-      window.dispatchEvent(new Event('ra-collection-change'));
-    };
+   sel.onchange = ()=>{
+  S.selectedKey = sel.value;
+  const col = currentCol();
+  if ($(STATUS_ID)) $(STATUS_ID).textContent = col ? `Using: ${col.name}` : '';
+  try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: col })); } catch(_){}
+};
 
     const ref = $(REFRESH_ID);
     if (ref) ref.onclick = async ()=>{
