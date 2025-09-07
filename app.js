@@ -5055,24 +5055,21 @@ canvas.requestRenderAll();
   }, 150);
 })();
 
-/* ========== RA_EXPORT_VIDEO_v6 — fixed: black screen + wrong duration + matches Preview ========== */
-(function RA_EXPORT_VIDEO_v6(){
-  // Helper: find elements safely
-  const $ = (id)=> document.getElementById(id);
+/* ========== RA_EXPORT_VIDEO_v7 — Safari-friendly export (MP4 if possible, fallback open tab) ========== */
+(function RA_EXPORT_VIDEO_v7(){
+  const $  = (id)=> document.getElementById(id);
   const qs = (sel)=> document.querySelector(sel);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
-  // Find the Export Video button by id or visible text
   function findExportBtn(){
     return $("exportVideoBtn")
       || qs('#exportVideoBtn, [data-role="exportVideo"]')
       || Array.from(document.querySelectorAll('button')).find(b => /export\s*video/i.test(b.textContent||""));
   }
-
-  // Find the Preview button so we can drive the same animation you see
   function findPreviewBtn(){
     return $("previewBtn")
       || qs('#previewBtn, [data-role="preview"]')
-      || Array.from(document.querySelectorAll('button')).find(b => /preview/i.test(b.textContent||""));
+      || Array.from(document.querySelectorAll('button')).find(b => /^preview$/i.test((b.textContent||"").trim()));
   }
 
   const btn = findExportBtn();
@@ -5080,47 +5077,64 @@ canvas.requestRenderAll();
 
   btn.addEventListener("click", async () => {
     try {
-      // Read duration (seconds). Fallback to 6.
+      // Duration (seconds) from UI (fallback 6)
       const durEl =
         $("animDuration") ||
         qs('#animDuration, [data-role="animDuration"], input[name="animDuration"]');
       let durSec = parseFloat(durEl && durEl.value || "6");
       if (!Number.isFinite(durSec) || durSec <= 0) durSec = 6;
-      durSec = Math.min(60, Math.max(1, durSec)); // clamp 1..60
+      durSec = Math.min(60, Math.max(1, durSec));
 
-      // Capture the REAL drawing layer (Fabric lower canvas), not the controls layer.
+      // Fabric drawing layer
       const capCanvas =
         (window.canvas && (canvas.lowerCanvasEl || (canvas.getElement && canvas.getElement()))) ||
-        qs('canvas'); // last resort
+        qs('canvas');
       if (!capCanvas || !capCanvas.captureStream) {
         alert("Sorry, this browser cannot capture canvas video.");
         return;
       }
 
-      // Choose a recording type that works across Chrome/Safari
-      const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
-                : MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8'
-                : 'video/webm';
+      // Choose a MIME that the browser can actually record
+      let mime = 'video/webm;codecs=vp9';
+      if (typeof MediaRecorder !== 'undefined') {
+        if (isSafari && MediaRecorder.isTypeSupported('video/mp4')) {
+          mime = 'video/mp4'; // prefer MP4 on Safari
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+          mime = 'video/webm;codecs=vp9';
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+          mime = 'video/webm;codecs=vp8';
+        } else if (MediaRecorder.isTypeSupported('video/webm')) {
+          mime = 'video/webm';
+        }
+      }
 
       const fps = 30;
       const stream = capCanvas.captureStream(fps);
-      const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6_000_000 });
 
-      // Collect chunks
+      let rec;
+      try {
+        rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6_000_000 });
+      } catch (e) {
+        // Fallback if Safari says yes but throws on creation
+        mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
+             : MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8'
+             : 'video/webm';
+        rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6_000_000 });
+      }
+
       const chunks = [];
-      rec.ondataavailable = (e)=>{ if (e.data && e.data.size) chunks.push(e.data); };
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
       const stopped = new Promise(res => rec.onstop = res);
 
-      // Kick the same animation you preview (so export matches exactly).
-      // If your Preview button toggles, do a quick reset-click then play-click.
+      // Drive the same animation you preview so export matches it
       const previewBtn = findPreviewBtn();
       if (previewBtn) {
         try { previewBtn.click(); } catch(_) {}
-        await new Promise(r => setTimeout(r, 60)); // small gap to reset
+        await new Promise(r => setTimeout(r, 60));
         try { previewBtn.click(); } catch(_) {}
       }
 
-      // Some browsers pause rendering when nothing changes. Force frames.
+      // Keep frames flowing
       let pumpTimer = 0;
       const pump = ()=> {
         try { window.canvas && canvas.requestRenderAll(); } catch(_){}
@@ -5128,23 +5142,36 @@ canvas.requestRenderAll();
       };
 
       pump();
-      rec.start(200); // request small chunks ~5 per second
+      rec.start(200);
 
-      // Record for exactly the UI duration (plus a tiny pad)
+      // Exact duration (+ tiny pad for encoder)
       await new Promise(r => setTimeout(r, Math.round(durSec * 1000) + 180));
       rec.stop();
       clearTimeout(pumpTimer);
       await stopped;
 
-      // Save file
+      const ext  = mime.includes('mp4') ? 'mp4' : 'webm';
       const blob = new Blob(chunks, { type: (mime.split(';')[0] || 'video/webm') });
-      const url = URL.createObjectURL(blob);
+      const url  = URL.createObjectURL(blob);
+
+      // Save file — Safari often ignores download for blob; open in a new tab as fallback
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'rebel-ants-export.webm';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1000);
+      a.download = `rebel-ants-export.${ext}`;
+
+      if (isSafari) {
+        // Try opening first (most reliable on Safari), user can Save As…
+        const w = window.open(url);
+        if (!w) { // popup blocked? fall back to download
+          document.body.appendChild(a);
+          a.click();
+        }
+      } else {
+        document.body.appendChild(a);
+        a.click();
+      }
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+
     } catch (err) {
       console.error(err);
       alert("Export failed: " + (err && err.message || err));
