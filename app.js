@@ -435,22 +435,39 @@ canvas.requestRenderAll();
     safeAddListener("deleteTokenId","click", ()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
 
     // -------- Custom text (optional UI)
-    safeAddListener("addCustomText","click", ()=>{
-      const val = (($("customText")||{}).value||"").trim(); if (!val) return;
-      const txt = new fabric.Textbox(val,{
-        left:canvas.getWidth()/2, top:canvas.getHeight()/2, originX:"center", originY:"center",
-        width: Math.floor(canvas.getWidth()*0.8), textAlign:"left",
-        fontFamily: ($("fontFamily")||{}).value || "Arial, sans-serif",
-        fontSize: parseInt(($("fontSize")||{}).value||"48",10),
-        fill: ($("fontColor")||{}).value || "#ffffff",
-        stroke: ($("strokeColor")||{}).value || "transparent",
-        strokeWidth: parseInt(($("strokeWidth")||{}).value||"0",10),
-        editable:true
-      });
-      txt._kind='customText';
-      canvas.add(txt).setActiveObject(txt);
-      bringInterfaceToFront(); canvas.requestRenderAll();
-    });
+   safeAddListener("addCustomText","click", ()=>{
+  const val = (($("customText")||{}).value||"").trim(); if (!val) return;
+
+  // Use IText (editable single-line) → tight bounds, no forced width
+  const txt = new fabric.IText(val, {
+    left: canvas.getWidth()/2,
+    top:  canvas.getHeight()/2,
+    originX: "center",
+    originY: "center",
+    textAlign: "left",
+    fontFamily: ($("fontFamily")||{}).value || "Arial, sans-serif",
+    fontSize: parseInt(($("fontSize")||{}).value||"48",10),
+    fill: ($("fontColor")||{}).value || "#ffffff",
+    stroke: ($("strokeColor")||{}).value || "transparent",
+    strokeWidth: parseInt(($("strokeWidth")||{}).value||"0",10),
+    strokeUniform: true,
+    paintFirst: "stroke",
+    objectCaching: false,
+    perPixelTargetFind: true
+    // editable: true is default for IText
+  });
+
+  // Tighten bounds (ensure no cached wide box)
+  txt.set({ width: undefined });
+  txt.initDimensions && txt.initDimensions();
+  txt.setCoords();
+
+  txt._kind = 'customText';
+  canvas.add(txt);
+  canvas.setActiveObject(txt);
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+});
     ["change","input"].forEach(ev=>{
       safeAddListener("fontFamily", ev, ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', $("fontFamily").value); canvas.requestRenderAll(); }});
       safeAddListener("fontSize", ev,   ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt($("fontSize").value||"48",10)); canvas.requestRenderAll(); }});
