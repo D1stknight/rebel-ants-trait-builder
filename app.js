@@ -5961,3 +5961,81 @@ const shouldShow =
   else init();
 })();
 
+/* ========== RA_MULTI_COLLECTION_LOADER_BIND_v5 — make loader honor picker ========== */
+(()=>{
+  const $ = (id)=> document.getElementById(id);
+
+  function getSelected(){
+    const sel = $('ra-col-sel');
+    return (window.RA_COLLECTIONS||[]).find(c => `${c.chain}:${c.contract}` === (sel && sel.value)) || null;
+  }
+
+  async function fetchTokenImage(chain, contract, tokenId){
+    // Reservoir works for Ethereum; we pass chain to be explicit
+    const u = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(contract+':'+tokenId)}&chain=${encodeURIComponent(chain)}&includeAttributes=false&limit=1`;
+    const r = await fetch(u);
+    if (!r.ok) throw new Error('Lookup failed');
+    const j = await r.json();
+    const t = j?.tokens?.[0]?.token;
+    const img = t?.image || t?.imageLarge || t?.imageSmall;
+    if (!img) throw new Error('No image found for that token');
+    return img;
+  }
+
+  async function loadSelectedToken(){
+    // Read token ID from the existing input
+    const tokenInput =
+      document.getElementById('tokenId') ||
+      document.querySelector('input[id*="token"]') ||
+      document.querySelector('input[placeholder*="Token"]');
+    const tokenId = (tokenInput && tokenInput.value.trim()) || '';
+    const col = getSelected();
+
+    if (!col) { alert('Pick a collection first.'); return; }
+    if (!tokenId) { alert('Type a token ID first.'); return; }
+
+    // Fetch image from the chosen collection
+    const imgURL = await fetchTokenImage(col.chain, col.contract, tokenId);
+
+    // Use your existing base-image loader (whichever exists)
+    const go = window.loadBaseImage || window.loadBaseFromURL || window.loadBase || window.loadBaseImageFromURL;
+    if (typeof go === 'function') {
+      await go(imgURL);
+    } else {
+      // Fallback (shouldn’t be needed)
+      const i = new Image();
+      i.crossOrigin = 'anonymous';
+      i.onload = ()=>{ try{
+        const base = new fabric.Image(i,{ selectable:false, evented:false, _isBase:true });
+        const c = window.canvas;
+        c && c.clear();
+        c && c.add(base);
+        c && c.requestRenderAll();
+      }catch(e){ console.error(e); } };
+      i.src = imgURL;
+    }
+
+    // Tell the footer which brand we’re showing
+    try{
+      document.dispatchEvent(new CustomEvent('ra-brand-footer', { detail: col }));
+    }catch(_){}
+  }
+
+  function bind(){
+    const btn = document.getElementById('loadByToken') || document.getElementById('loadTokenBtn');
+    if (!btn) return;
+    btn.addEventListener('click', (ev)=>{ ev.preventDefault(); loadSelectedToken(); });
+
+    // Also allow Enter in the token input
+    const tokenInput =
+      document.getElementById('tokenId') ||
+      document.querySelector('input[id*="token"]') ||
+      document.querySelector('input[placeholder*="Token"]');
+    tokenInput && tokenInput.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter'){ e.preventDefault(); loadSelectedToken(); }
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
