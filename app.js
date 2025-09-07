@@ -4789,40 +4789,91 @@
   window.addEventListener('orientationchange',()=> setTimeout(placeEmojiPop,100), {passive:true});
 })();
 
-/* === RA_TIGHT_TEXT_BOX_SAFE_v3 — tighten Token ID & Custom Text/Emoji boxes only === */
+/* === RA_TIGHT_TEXT_HITBOX_v1 — shrink helper rect around Token ID + Custom Text/Emoji === */
 (function(){
-  function whenCanvasReady(fn){
+  function whenReady(fn){
     if (window.canvas && window.fabric) return fn();
     const t = setInterval(()=>{ if (window.canvas && window.fabric){ clearInterval(t); fn(); } }, 120);
   }
 
-  whenCanvasReady(()=> {
+  whenReady(()=> {
     const { fabric } = window;
-    try {
-      // Make new text items use tiny padding
-      fabric.Text     && (fabric.Text.prototype.padding     = 2);
-      fabric.IText    && (fabric.IText.prototype.padding    = 2);
-      fabric.Textbox  && (fabric.Textbox.prototype.padding  = 2);
-    } catch(_) {}
 
-    const isText = o => !!o && (o.type === 'i-text' || o.type === 'text' || o.type === 'textbox');
+    // Small padding so the handles aren’t on top of letters
+    const PAD = 4;
 
-    function tighten(o){
-      if (!isText(o)) return;
-      try {
-        // Recompute actual width/height so the dotted box hugs the text
-        o._clearCache && o._clearCache();
-        o.initDimensions && o.initDimensions();
-        o.setCoords();
-      } catch(_) {}
+    const isText = o =>
+      !!o && (o.type === 'i-text' || o.type === 'text' || o.type === 'textbox');
+
+    // Is this a group that contains text + a rectangle (the hitbox)?
+    const isTextGroup = g => {
+      if (!g || g.type !== 'group' || !g._objects) return false;
+      let hasText = false, hasRect = false;
+      for (const k of g._objects) {
+        if (isText(k)) hasText = true;
+        if (k.type === 'rect') hasRect = true;
+      }
+      return hasText && hasRect;
+    };
+
+    // Find the text child and the (likely invisible) rect child
+    function getParts(g){
+      let txt = null, rect = null;
+      for (const k of (g._objects || [])) {
+        if (!txt && isText(k)) txt = k;
+        if (!rect && k.type === 'rect') rect = k;
+      }
+      return { txt, rect };
     }
 
-    // Tighten any text already on the canvas
-    try { canvas.getObjects().forEach(tighten); canvas.requestRenderAll(); } catch(_) {}
+    function measureText(o){
+      try {
+        o._clearCache && o._clearCache();
+        o.initDimensions && o.initDimensions();
+      } catch(_){}
+      // fabric gives width/height in local coords
+      const w = (o.width || 0) + PAD*2;
+      const h = (o.height || 0) + PAD*2;
+      return { w, h };
+    }
 
-    // Tighten whenever a text object is added/typed/edited
-    ['object:added','text:changed','editing:exited','object:modified'].forEach(evt => {
-      canvas.on(evt, e => tighten(e && e.target));
-    });
+    function tightenGroup(g){
+      if (!isTextGroup(g)) return;
+      const { txt, rect } = getParts(g);
+      if (!txt || !rect) return;
+
+      const { w, h } = measureText(txt);
+
+      // Make the helper rect match the text bounds
+      try {
+        rect.set({
+          width:  Math.max(1, w),
+          height: Math.max(1, h),
+          left:   txt.left,
+          top:    txt.top,
+          originX: txt.originX || 'left',
+          originY: txt.originY || 'top',
+          strokeWidth: 0
+        });
+      } catch(_){}
+
+      // Recompute the group’s own bounds
+      try { g._calcBounds && g._calcBounds(); g.setCoords(); } catch(_){}
+    }
+
+    function tightenTarget(t){
+      if (!t) return;
+      if (isText(t) && t.group) { tightenGroup(t.group); return; }
+      if (isTextGroup(t))        { tightenGroup(t);      return; }
+    }
+
+    // Apply to anything already on canvas
+    try { canvas.getObjects().forEach(tightenTarget); canvas.requestRenderAll(); } catch(_){}
+
+    // Keep it tight whenever things change
+    canvas.on('object:added',    e => { tightenTarget(e && e.target); canvas.requestRenderAll(); });
+    canvas.on('object:modified', e => { tightenTarget(e && e.target); canvas.requestRenderAll(); });
+    canvas.on('text:changed',    e => { tightenTarget(e && e.target); canvas.requestRenderAll(); });
+    canvas.on('editing:exited',  e => { tightenTarget(e && e.target); canvas.requestRenderAll(); });
   });
 })();
