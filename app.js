@@ -5460,3 +5460,258 @@ canvas.requestRenderAll();
   let tries = 0;
   const t = setInterval(()=>{ tries++; if (wireButton() || tries>60) clearInterval(t); }, 200);
 })();
+
+/* ================= RA_EXPORT_VIDEO_v3 — uses Preset choice + Safari MP4 fix ================= */
+(() => {
+  if (window.__RA_EXPORT_VIDEO_V3__) return;
+  window.__RA_EXPORT_VIDEO_V3__ = true;
+
+  const IS_SAFARI = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+  const $ = (id) => document.getElementById(id);
+  const clamp = (n,min,max)=> Math.min(max, Math.max(min, n));
+
+  // ---------- EASING
+  const ease = {
+    linear: t => t,
+    sine:   t => -(Math.cos(Math.PI*t) - 1) / 2,
+    in:     t => t*t,
+    out:    t => 1 - (1-t)*(1-t),
+    inout:  t => (t<.5? 2*t*t : 1 - Math.pow(-2*t+2,2)/2)
+  };
+
+  // ---------- Read Animate controls (works with native <select> or custom UI)
+  function textFromSelect(el){
+    if (!el) return '';
+    try {
+      if (el.tagName === 'SELECT') {
+        const opt = el.options[el.selectedIndex];
+        return (opt && (opt.text || opt.value) || '').trim().toLowerCase();
+      }
+      if ('value' in el && el.value) return String(el.value).trim().toLowerCase();
+      return (el.textContent || '').trim().toLowerCase();
+    } catch { return ''; }
+  }
+
+  function getPresetLabel(){
+    // 1) Common ids/names
+    const ids = ['animPreset','preset','animationPreset','videoPreset'];
+    for (const id of ids) {
+      const el = $(id) || document.querySelector(`[name="${id}"]`);
+      const t = textFromSelect(el);
+      if (/(ken|burns|pan|zoom|left|right|up|down|random|everything)/.test(t)) return t;
+    }
+    // 2) Any <select> that looks like our preset
+    for (const s of Array.from(document.querySelectorAll('select'))) {
+      const t = textFromSelect(s);
+      if (/(ken|burns|pan|zoom|left|right|up|down|random|everything)/.test(t)) return t;
+    }
+    // 3) Scrape label “Preset” and grab its control’s text/value
+    const all = Array.from(document.querySelectorAll('label,div,span,button'));
+    for (const el of all) {
+      const txt = (el.textContent||'').trim().toLowerCase();
+      if (/^preset\b/.test(txt)) {
+        const p = el.parentElement;
+        const cand = p && (p.querySelector('select, button, [role="listbox"], [aria-haspopup="listbox"]'));
+        const t = textFromSelect(cand);
+        if (/(ken|burns|pan|zoom|left|right|up|down|random|everything)/.test(t)) return t;
+      }
+    }
+    // fallback → empty (we’ll default later)
+    return '';
+  }
+
+  function getEasingFn(){
+    const txt =
+      textFromSelect($('animEasing')) ||
+      textFromSelect(document.querySelector('[name="animEasing"]')) ||
+      '';
+    const t = txt.toLowerCase();
+    if (t.includes('linear')) return ease.linear;
+    if (t.includes('in/out') || t.includes('in‑out') || t.includes('in out')) return ease.inout;
+    if (t.includes('in')) return ease.in;
+    if (t.includes('out')) return ease.out;
+    return ease.sine; // “Smooth (Sine)” default
+  }
+
+  function getAnimParams(){
+    const dur = parseFloat( ($('animDuration')||{}).value || '6' );
+    const fps = parseInt(   ($('animFps')||{}).value      || '30', 10 );
+    return {
+      duration: isFinite(dur) ? clamp(dur, 1, 60) : 6,
+      fps:      isFinite(fps) ? clamp(fps, 12, 60) : 30,
+      easing:   getEasingFn(),
+      preset:   getPresetLabel()
+    };
+  }
+
+  // ---------- Map preset text → camera motion
+  function motionFromPreset(label, W, H){
+    const center = new fabric.Point(W*0.5, H*0.5);
+    const leftC  = new fabric.Point(W*0.25, H*0.5);
+    const rightC = new fabric.Point(W*0.75, H*0.5);
+    const topC   = new fabric.Point(W*0.5, H*0.25);
+    const botC   = new fabric.Point(W*0.5, H*0.75);
+    const l = (label||'').toLowerCase().trim();
+
+    // defaults
+    let fromZoom=1.00, toZoom=1.00, fromPt=center, toPt=center;
+
+    const choose = (arr)=> arr[Math.floor(Math.random()*arr.length)];
+    if (!l || l === 'everything' || l.includes('random')) {
+      return motionFromPreset(choose(['ken in','ken out','pan left','pan right','pan up','pan down','zoom in','zoom out']), W, H);
+    }
+    if (l.includes('ken') || l.includes('burns')) {
+      const out = l.includes('out');
+      fromZoom = out ? 1.12 : 1.00;
+      toZoom   = out ? 1.00 : 1.12;
+      fromPt   = new fabric.Point(W*0.35, H*0.35);
+      toPt     = new fabric.Point(W*0.65, H*0.65);
+      return {fromZoom,toZoom,fromPt,toPt};
+    }
+    if (l.includes('pan') && l.includes('left'))  { fromPt=rightC; toPt=leftC;  return {fromZoom,toZoom,fromPt,toPt}; }
+    if (l.includes('pan') && l.includes('right')) { fromPt=leftC;  toPt=rightC; return {fromZoom,toZoom,fromPt,toPt}; }
+    if (l.includes('pan') && l.includes('up'))    { fromPt=botC;   toPt=topC;   return {fromZoom,toZoom,fromPt,toPt}; }
+    if (l.includes('pan') && l.includes('down'))  { fromPt=topC;   toPt=botC;   return {fromZoom,toZoom,fromPt,toPt}; }
+    if (l.includes('zoom') && l.includes('in'))   { fromZoom=1.00; toZoom=1.15; return {fromZoom,toZoom,fromPt:center,toPt:center}; }
+    if (l.includes('zoom') && l.includes('out'))  { fromZoom=1.15; toZoom=1.00; return {fromZoom,toZoom,fromPt:center,toPt:center}; }
+
+    // fallback → gentle ken burns in
+    fromZoom=1.00; toZoom=1.12;
+    fromPt = new fabric.Point(W*0.40, H*0.40);
+    toPt   = new fabric.Point(W*0.60, H*0.60);
+    return {fromZoom,toZoom,fromPt,toPt};
+  }
+
+  // ---------- Recording setup
+  function pickMime(){
+    // Prefer MP4 on Safari; WebM on Chromium
+    const wanted = IS_SAFARI
+      ? ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1','video/mp4']
+      : ['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4;codecs=avc1','video/mp4'];
+    for (const t of wanted) {
+      try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; } catch {}
+    }
+    return '';
+  }
+
+  // Some Safari builds like having an audio track (we add silent audio)
+  function addSilentAudio(stream, ms){
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      const osc = ctx.createOscillator();  // source
+      const gain = ctx.createGain();       // mute it
+      gain.gain.value = 0.00001;
+      osc.connect(gain); gain.connect(ctx.destination);
+      const dest = ctx.createMediaStreamDestination();
+      gain.disconnect(); gain.connect(dest);
+      osc.start();
+      const track = dest.stream.getAudioTracks()[0];
+      if (track) stream.addTrack(track);
+      // stop after recording
+      setTimeout(()=>{ try{ osc.stop(); ctx.close(); }catch{} }, ms + 500);
+    } catch {}
+  }
+
+  async function exportVideo(btn){
+    if (!window.fabric || !window.canvas || !canvas.lowerCanvasEl) {
+      alert('Canvas not ready'); return;
+    }
+    const { duration, fps, easing, preset } = getAnimParams();
+    const W = canvas.getWidth(), H = canvas.getHeight();
+
+    const old = btn.textContent; btn.textContent = 'Exporting…'; btn.disabled = true;
+
+    // Hide selection outlines while recording
+    try { canvas.discardActiveObject(); } catch {}
+    canvas.requestRenderAll();
+
+    const stream = canvas.lowerCanvasEl.captureStream ? canvas.lowerCanvasEl.captureStream(fps) : null;
+    if (!stream || !window.MediaRecorder) {
+      alert('This browser cannot record canvas video. Try latest Chrome/Edge or Safari.'); 
+      btn.textContent = old; btn.disabled = false; 
+      return;
+    }
+
+    if (IS_SAFARI) addSilentAudio(stream, duration*1000);
+
+    const mime = pickMime();
+    let chunks = [];
+    let recorder;
+    try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+    catch { recorder = new MediaRecorder(stream); }
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+
+    // Save current view, then animate
+    const savedVT = canvas.viewportTransform ? canvas.viewportTransform.slice() : null;
+    const savedZ  = canvas.getZoom ? canvas.getZoom() : 1;
+
+    const { fromZoom, toZoom, fromPt, toPt } = motionFromPreset(preset, W, H);
+
+    let t0 = 0;
+    function step(ts){
+      if (!t0) t0 = ts;
+      const p = clamp((ts - t0) / (duration*1000), 0, 1);
+      const k = easing(p);
+      const z  = fromZoom + (toZoom - fromZoom) * k;
+      const px = fromPt.x + (toPt.x - fromPt.x) * k;
+      const py = fromPt.y + (toPt.y - fromPt.y) * k;
+
+      try { canvas.zoomToPoint(new fabric.Point(px, py), z); } catch {}
+      canvas.requestRenderAll();
+
+      if (p < 1) requestAnimationFrame(step);
+      else {
+        setTimeout(() => {
+          try {
+            if (savedVT) canvas.setViewportTransform(savedVT);
+            if (savedZ)  canvas.setZoom(savedZ);
+          } catch {}
+          canvas.requestRenderAll();
+          recorder.stop();
+        }, 120);
+      }
+    }
+
+    const done = new Promise(res => { recorder.onstop = res; });
+    recorder.start();
+    requestAnimationFrame(step);
+    await done;
+
+    const type = recorder.mimeType || mime || (IS_SAFARI ? 'video/mp4' : 'video/webm');
+    const blob = new Blob(chunks, { type });
+    const url  = URL.createObjectURL(blob);
+    const ext  = (type.includes('mp4') ? 'mp4' : 'webm');
+    const name = `rebel-ants-${new Date().toISOString().replace(/[:T]/g,'-').slice(0,19)}.${ext}`;
+
+    // Update any “Manual link” if present
+    const manual = $('exportManualLink') || $('manualLink') ||
+      Array.from(document.querySelectorAll('a')).find(a => /manual\s*link/i.test((a.textContent||'')));
+    if (manual){ manual.href = url; manual.target='_blank'; manual.download = name; manual.textContent = `Download ${ext.toUpperCase()}`; }
+
+    // Auto-download
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=> URL.revokeObjectURL(url), 20000);
+
+    btn.textContent = old; btn.disabled = false;
+  }
+
+  function findExportButton(){
+    return $('exportVideo') ||
+      Array.from(document.querySelectorAll('button'))
+        .find(b => /export\s*video/i.test((b.textContent||'').trim()));
+  }
+
+  function wireButton(){
+    const btn = findExportButton();
+    if (!btn) return false;
+    const clone = btn.cloneNode(true);               // removes old listeners (token gate etc.)
+    btn.parentNode.replaceChild(clone, btn);
+    clone.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); exportVideo(clone); }, {capture:true});
+    return true;
+  }
+
+  let tries = 0;
+  const t = setInterval(()=>{ tries++; if (wireButton() || tries>60) clearInterval(t); }, 200);
+})();
