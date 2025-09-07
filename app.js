@@ -5178,3 +5178,168 @@ canvas.requestRenderAll();
     }
   }, { passive:true });
 })();
+
+/* ================= RA_COLLECTIONS_ADMIN_V1 — simple address manager (admin only) =================
+   - Shows a "Collections" panel when you open the app with ?admin=1
+   - Load / Save to /api/ra-collections (Upstash KV)
+   - Fields per row: Label, Chain (Ethereum / ApeChain), Contract, Group
+   - Use Group 'rebel-ants' to tie ETH + ApeChain together for either‑chain perks
+   ================================================================================================= */
+(() => {
+  if (window.__RA_COLL_ADMIN_V1__) return; window.__RA_COLL_ADMIN_V1__ = true;
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+
+  const CHAINS = [
+    { id:1,     name:'Ethereum Mainnet' },
+    { id:33139, name:'ApeChain' } // chain id per ApeChain docs
+  ];
+
+  if (!isAdmin) return; // only show to admin
+
+  function $(s, r=document){ return r.querySelector(s); }
+  function el(tag, props){ const e=document.createElement(tag); Object.assign(e, props||{}); return e; }
+
+  function rowTemplate(item, idx){
+    const tr = el('tr');
+    tr.innerHTML = `
+      <td><input class="raIn lab" value="${item.label||''}" placeholder="Label (e.g. Rebel Ants ETH)" /></td>
+      <td>
+        <select class="raSel chain">
+          ${CHAINS.map(c => `<option value="${c.id}" ${c.id===item.chainId?'selected':''}>${c.name}</option>`).join('')}
+        </select>
+      </td>
+      <td><input class="raIn addr" value="${item.contract||''}" placeholder="0x..." /></td>
+      <td><input class="raIn grp"  value="${item.group||''}" placeholder="group (e.g. rebel-ants)" /></td>
+      <td style="text-align:center"><button class="raDel">×</button></td>
+    `;
+    return tr;
+  }
+
+  function buildPanel(){
+    const host =
+      Array.from(document.querySelectorAll('h3')).find(h => /overlays|selection|export/i.test((h.textContent||'').trim()))?.parentNode
+      || document.body;
+
+    const card = el('section');
+    card.id = 'raCollectionsAdmin';
+    card.style.cssText = 'margin:12px 0;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea;padding:10px';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <strong>Collections</strong>
+        <div style="display:flex;gap:6px">
+          <button id="raCRefresh" class="btn small">Refresh</button>
+          <button id="raCSave"    class="btn small" style="background:#10b981;color:#08130e;border:0">Save to server</button>
+        </div>
+      </div>
+      <div style="font-size:12px;opacity:.75;margin-bottom:6px">
+        Tip: Use group <code>rebel-ants</code> for both ETH + ApeChain so holders get either‑chain perks.
+      </div>
+      <div style="overflow:auto">
+        <table id="raCTbl" style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="text-align:left;border-bottom:1px solid #2a2a2e">
+              <th style="padding:6px 4px">Label</th>
+              <th style="padding:6px 4px">Chain</th>
+              <th style="padding:6px 4px">Contract</th>
+              <th style="padding:6px 4px">Group</th>
+              <th style="padding:6px 4px;width:40px">Del</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <button id="raCAdd" class="btn small">Add row</button>
+        <span id="raCMsg" style="font-size:12px;opacity:.75"></span>
+      </div>
+      <style>
+        #raCollectionsAdmin .raIn{ width:100%; background:#12141a; color:#e7e7ea; border:1px solid #2a2a2e; border-radius:6px; padding:6px 8px; }
+        #raCollectionsAdmin .raSel{ background:#12141a; color:#e7e7ea; border:1px solid #2a2a2e; border-radius:6px; padding:6px 8px; }
+        #raCollectionsAdmin td{ padding:6px 4px; vertical-align:middle; border-bottom:1px solid #1c1e25; }
+        #raCollectionsAdmin .raDel{ background:#2a2a2e; color:#ddd; border:0; border-radius:6px; padding:4px 8px; cursor:pointer; }
+        #raCollectionsAdmin code{ background:#141722; padding:1px 6px; border-radius:6px; }
+      </style>
+    `;
+    host.appendChild(card);
+    return card;
+  }
+
+  let items = [];
+  let tbl, msg;
+
+  async function refresh(){
+    setMsg('Loading…');
+    try{
+      const r = await fetch('/api/ra-collections');
+      const j = await r.json();
+      items = Array.isArray(j.items) ? j.items : [];
+      draw();
+      setMsg('Loaded');
+      setTimeout(()=>setMsg(''), 800);
+    }catch(e){
+      setMsg('Failed to load');
+    }
+  }
+
+  function draw(){
+    const tb = tbl.querySelector('tbody'); tb.innerHTML = '';
+    items.forEach((it, idx) => {
+      const tr = rowTemplate(it, idx);
+      tb.appendChild(tr);
+      tr.querySelector('.raDel').onclick = ()=>{ items.splice(idx,1); draw(); };
+      tr.querySelector('.lab').oninput   = (e)=> it.label   = e.target.value;
+      tr.querySelector('.addr').oninput  = (e)=> it.contract= (e.target.value||'').trim().toLowerCase();
+      tr.querySelector('.grp').oninput   = (e)=> it.group   = (e.target.value||'').trim().toLowerCase();
+      tr.querySelector('.chain').onchange= (e)=> it.chainId = Number(e.target.value);
+    });
+  }
+
+  function setMsg(t){ if (msg) msg.textContent = t||''; }
+
+  async function save(){
+    setMsg('Saving…');
+    try{
+      // Basic cleanup
+      const out = items
+        .map(it => ({
+          label: (it.label||'').trim(),
+          chainId: Number(it.chainId||0),
+          contract: (it.contract||'').trim().toLowerCase(),
+          group: (it.group||'').trim().toLowerCase(),
+        }))
+        .filter(it => it.label && it.contract);
+
+      const r = await fetch('/api/ra-collections', {
+        method:'POST', headers:{ 'content-type':'application/json' },
+        body: JSON.stringify({ items: out })
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error||'save failed');
+      items = j.items || out;
+      draw();
+      setMsg('Saved ✓');
+      setTimeout(()=>setMsg(''), 1000);
+    }catch(e){
+      setMsg('Save failed');
+    }
+  }
+
+  function boot(){
+    const card = buildPanel();
+    tbl = $('#raCTbl', card);
+    msg = $('#raCMsg', card);
+    $('#raCRefresh', card).onclick = refresh;
+    $('#raCSave', card).onclick    = save;
+    $('#raCAdd', card).onclick     = ()=>{
+      items.push({ label:'New', chainId:1, contract:'0x', group:'' });
+      draw();
+    };
+    refresh();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
