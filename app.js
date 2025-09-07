@@ -5891,3 +5891,89 @@ const shouldShow =
   if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', wireTagger, {once:true}); }
   else { wireTagger(); }
 })();
+
+/* ========== RA_FORCE_LOAD_BY_SELECTED_COLLECTION_v1 — use selected collection on “Load by Token” ========== */
+(()=>{
+  // Grab element by id safely
+  function $(id){ return document.getElementById(id); }
+
+  // Best-effort way to read the current picker + list,
+  // regardless of which picker block you kept.
+  function getSelectedCollection(){
+    // Try the v3 mini picker state if present
+    const st = (window.__raColState || {});
+    if (st.list && st.list.length){
+      const idx = Number(st.index || 0);
+      return st.list[idx] || null;
+    }
+    // Fallback: look for a <select> we injected
+    const sel = document.querySelector('[data-ra-collection-select], #raCollectionSelect, #ra-collection-select');
+    const list = (window.__raCollections || []);
+    if (sel && list.length){
+      const idx = Number(sel.value || sel.selectedIndex || 0);
+      return list[idx] || null;
+    }
+    return null;
+  }
+
+  // Normalize chain id to hex “0x…” for nicer handling
+  function toHexChainId(v){
+    if (!v) return '0x1';
+    const s = String(v);
+    if (s.startsWith('0x')) return s.toLowerCase();
+    const n = Number(s);
+    return Number.isFinite(n) ? ('0x'+n.toString(16)) : '0x1';
+  }
+
+  // Pull an image URL from Reservoir for contract:tokenId on a given chain
+  async function fetchReservoirImage(contract, tokenId, chainHex){
+    const qs = `tokens=${encodeURIComponent(contract+':'+String(tokenId))}&includeTopBid=false&includeAttributes=false&limit=1`;
+    const url = `https://api.reservoir.tools/tokens/v7?${qs}`;
+    const headers = { 'Accept':'application/json' };
+
+    // If not Ethereum, hint the target chain (Reservoir convention)
+    const net = (typeof netNameFromChainId==='function' ? netNameFromChainId(chainHex) : '') || '';
+    const chainLower = net.toLowerCase();
+    if (chainLower && chainLower !== 'ethereum') headers['x-reservoir-chain'] = chainLower;
+
+    const r = await fetch(url, { headers });
+    if (!r.ok) throw new Error(`Reservoir ${r.status}`);
+    const j = await r.json();
+
+    const t = j && j.tokens && j.tokens[0] && j.tokens[0].token;
+    const img = t && (t.image || t.imageLarge || t.imageSmall || t.media);
+    return img || null;
+  }
+
+  async function loadSelectedByToken(){
+    // Read token id
+    const idInput = $('tokenId') || document.querySelector('input[name="tokenId"]');
+    const tokenId = parseInt((idInput && idInput.value) || '', 10);
+    if (!Number.isFinite(tokenId)){ alert('Enter a token number first'); return; }
+
+    // Read selected collection
+    const col = getSelectedCollection();
+    if (!col || !col.address){ alert('Pick a collection first'); return; }
+
+    const chainHex = toHexChainId(col.chainId || col.chain || '0x1');
+
+    try{
+      const imgUrl = await fetchReservoirImage(col.address, tokenId, chainHex);
+      if (!imgUrl){ alert('Could not find an image for that token.'); return; }
+      // Your existing function that sets the base image on the canvas:
+      await loadBaseImage(imgUrl);
+    }catch(e){
+      console.error(e);
+      alert('Load failed: '+(e && e.message || e));
+    }
+  }
+
+  // Attach to the existing “Load by Token” button.
+  // (This runs *in addition to* any old handler, but ours will load the right collection.)
+  if (typeof safeAddListener==='function'){
+    safeAddListener('loadByToken','click', loadSelectedByToken);
+  }else{
+    const btn = $('loadByToken');
+    if (btn) btn.addEventListener('click', loadSelectedByToken, { passive:true });
+  }
+})();
