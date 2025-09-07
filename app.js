@@ -5739,26 +5739,40 @@ function netNameFromChainId(cidHex){
   return 'Unknown';
 }
 
-  async function fetchCollections(){
-    try{
-      const r = await fetch('/api/ra-collections');
-      const j = await r.json();
-      const arr = (j && (j.collections||j.data||[])) || [];
-      return arr.map((x,i)=>({
-        key:   x.key || x.slug || (x.name||'col')+'_'+i,
-        name:  x.name || x.label || 'Unnamed',
-        address: (x.address || x.contract || '').trim(),
-        chainId: normalizeChainId(x.chainId || x.chain || x.network || x.net) || '0x1'
-      })).filter(x=>x.address);
-    }catch(_){
-      // Fallback so the UI still works even if the API has a hiccup
-      return [
-        { key:'rebel-eth',  name:'Rebel Ants',  address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1' },
-        { key:'sola-eth',   name:'Saints of LA',address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chainId:'0x1' },
-        // Add ApeChain/Chumpz here later once the image source is confirmed
-      ];
-    }
+ async function fetchCollections(){
+  try{
+    const r = await fetch('/api/ra-collections');
+    const j = await r.json();
+    const arr = (j && (j.collections||j.data||[])) || [];
+    const out = arr
+      .map((x,i)=>{
+        const chainId = normalizeChainId(x.chainId || x.chain || x.network || x.net) || '0x1';
+        return {
+          key:     x.key || x.slug || (x.name||'col')+'_'+i,
+          name:    (x.name || x.label || 'Unnamed').trim(),
+          address: (x.address || x.contract || '').trim(),
+          chainId,
+          slug:    chainSlugFromId(chainId), // 'ethereum' | 'base' | 'apechain'
+          tag:     (x.tag==='rebel' ? 'rebel' : 'friend')
+        };
+      })
+      .filter(x => x.address);
+
+    // Make Rebel the default/first, then the rest
+    out.sort((a,b)=>{
+      if (a.tag==='rebel' && b.tag!=='rebel') return -1;
+      if (b.tag==='rebel' && a.tag!=='rebel') return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return out;
+  }catch(_){
+    // Safe fallback
+    return [
+      { key:'rebel-eth',  name:'Rebel Ants',   address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1', slug:'ethereum', tag:'rebel'  },
+      { key:'sola-eth',   name:'Saints of LA', address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chainId:'0x1', slug:'ethereum', tag:'friend' }
+    ];
   }
+}
 
   function currentCol(){
     if (!S.list.length) return null;
