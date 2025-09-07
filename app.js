@@ -5685,210 +5685,6 @@ const shouldShow =
   else { boot(); }
 })();
 
-/* ========== RA_COLLECTION_PICKER_ALL_IN_ONE_v5 — place under Token ID + force loader + Enter + chain updates ========== */
-(() => {
-  // ---------- small helpers ----------
-  function $(id){ return document.getElementById(id); }
-  function toHex(v){ const s=String(v||'0x1'); if(s.startsWith('0x')) return s.toLowerCase(); const n=Number(s); return Number.isFinite(n)?('0x'+n.toString(16)):'0x1'; }
-  function netName(cid){ const h=(cid||'').toLowerCase(); if(h==='0x1') return 'Ethereum'; if(h==='0x2105') return 'Base'; return cid||'Unknown'; }
-  function normalizeURL(u){ if(!u) return u; return u.startsWith('ipfs://') ? ('https://ipfs.io/ipfs/'+u.slice(7).replace(/^ipfs\//,'')) : u; }
-
-  // Find the Token ID input reliably (id, sibling of the button, or by placeholder)
-  function getTokenInput(){
-    const byId = $('tokenId');
-    if (byId) return byId;
-    const btn = $('loadByToken');
-    if (btn){
-      const scope = btn.closest('div,section,form') || btn.parentElement || document;
-      const guess = scope.querySelector('input[type="number"], input[type="text"]');
-      if (guess) return guess;
-    }
-    const byPh = Array.from(document.querySelectorAll('input'))
-      .find(i => /token\s*id/i.test((i.placeholder||'')));
-    return byPh || null;
-  }
-
-  // ---------- UI row (picker) ----------
-  const ROW_ID = 'raColRowSimple';
-  const rowHTML = `
-    <div id="${ROW_ID}" style="margin-top:10px;display:flex;gap:8px;align-items:center;">
-      <span style="font-size:12px;opacity:.75;white-space:nowrap;">Collection</span>
-      <select id="raCollectionSelectSimple" style="flex:1;min-width:0;background:#111;border:1px solid #444;color:#eee;padding:4px 6px;border-radius:6px;"></select>
-      <button id="raColRefreshSimple" type="button" style="background:#1f1f1f;border:1px solid #444;color:#ddd;padding:4px 8px;border-radius:6px;">Refresh</button>
-      <span id="raColStatus" style="font-size:12px;opacity:.6;margin-left:6px;white-space:nowrap;"></span>
-    </div>`;
-
-  function placeRow(){
-    // Create or move the row so it sits immediately after the Token ID input
-    let row = $(ROW_ID);
-    const tokenInput = getTokenInput();
-    const afterEl = tokenInput || $('loadByToken');
-
-    if (!row){
-      if (afterEl){
-        afterEl.insertAdjacentHTML('afterend', rowHTML);
-      } else {
-        // Temporary fallback if panel hasn't rendered yet
-        document.body.insertAdjacentHTML('afterbegin', `<div style="padding:8px 10px;background:#0f0f0f;border:1px solid #444;border-radius:8px;margin:10px;">${rowHTML}</div>`);
-      }
-    } else if (afterEl && row.previousElementSibling !== afterEl){
-      // Move into correct spot if it was created elsewhere
-      row.remove();
-      afterEl.insertAdjacentHTML('afterend', rowHTML);
-    }
-  }
-
-  // Try now and again shortly (some parts render late)
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', placeRow); else placeRow();
-  setTimeout(placeRow, 200);
-  setTimeout(placeRow, 800);
-
-  // ---------- collections state ----------
-  async function fetchCollections(){
-    let chain = (window.ethereum && window.ethereum.chainId) || '0x1';
-    const sel    = $('raCollectionSelectSimple');
-    const status = $('raColStatus');
-
-    let raw = [];
-    try {
-      const r = await fetch('/api/ra-collections');
-      const j = await r.json();
-      raw = (j && (j.collections || j.list || j.items)) || [];
-    } catch(_){}
-
-    const all = raw.map(c=>({
-      name: c.name || c.label || 'Unnamed',
-      address: (c.address || c.contract || '').toLowerCase(),
-      chainId: toHex(c.chainId || c.chain || '0x1'),
-      type: c.type || 'friend'
-    })).filter(c=>c.address);
-
-    let list = all.filter(c => c.chainId === toHex(chain));
-    if (!list.length) list = all;
-
-    window.__raColState = { list, index: 0 };
-
-    if (sel){
-      sel.innerHTML = '';
-      list.forEach((c,i)=>{
-        const o = document.createElement('option');
-        o.value = String(i);
-        o.textContent = `${c.name} — ${netName(c.chainId)}`;
-        sel.appendChild(o);
-      });
-    }
-    if (status && list[0]) status.textContent = `Using: ${list[0].name}`;
-  }
-
-  function currentCol(){
-    const st = window.__raColState || {};
-    if (!st.list || !st.list.length) return null;
-    const i = Number(st.index||0);
-    return st.list[i] || st.list[0];
-  }
-
-  // ---------- loader (Reservoir) ----------
-  async function fetchReservoirImage(contract, tokenId, chainHex){
-    const qs = `tokens=${encodeURIComponent(contract+':'+String(tokenId))}&limit=1`;
-    const url = `https://api.reservoir.tools/tokens/v7?${qs}`;
-    const headers = { 'Accept': 'application/json' };
-    // ETH works without header; Base (when we add it) would use x-chain-id
-    if (chainHex && chainHex.toLowerCase() !== '0x1'){
-      headers['x-chain-id'] = parseInt(chainHex, 16);
-    }
-    const r = await fetch(url, { headers });
-    if (!r.ok) throw new Error(`Reservoir ${r.status}`);
-    const j = await r.json();
-    const tok = j && j.tokens && j.tokens[0] && j.tokens[0].token;
-    const img = tok && (tok.image || tok.imageLarge || tok.imageSmall || tok.media);
-    return normalizeURL(img || '');
-  }
-
-  async function loadFromPicker(ev){
-    try { ev && ev.preventDefault(); ev && ev.stopPropagation(); ev && ev.stopImmediatePropagation(); } catch(_){}
-    const inp = getTokenInput();
-    const id  = parseInt((inp && inp.value)||'', 10);
-    if (!Number.isFinite(id)) { alert('Enter a token number'); return; }
-
-    const col = currentCol();
-    if (!col) { alert('Pick a collection first'); return; }
-
-    try {
-      // Fetch image for the selected collection + id
-      const imgUrl = await fetchReservoirImage(col.address, id, col.chainId);
-      if (!imgUrl) { alert(`No image for ${col.name} #${id}`); return; }
-
-      // Set as base using whichever function your app exposes
-      if (typeof loadBaseImage === 'function') {
-        await loadBaseImage(imgUrl);
-      } else if (typeof setBaseImage === 'function') {
-        await setBaseImage(imgUrl);
-      }
-
-      // Update the token label & notify other features (watermark/footer rules)
-      try { if (typeof addOrUpdateTokenLabel==='function') addOrUpdateTokenLabel(id); } catch(_){}
-      try {
-        window.__raLastCollection = col;
-        document.dispatchEvent(new CustomEvent('ra-base-updated', { detail: col }));
-        document.dispatchEvent(new Event('ra-holder-update'));
-      } catch(_){}
-    } catch(e){
-      console.error(e);
-      alert('Load failed: ' + (e && e.message || e));
-    }
-  }
-
-  // ---------- bind UI: picker, button, Enter ----------
-  document.addEventListener('change', (e)=>{
-    if (e.target && e.target.id === 'raCollectionSelectSimple'){
-      const idx = Number(e.target.value||0);
-      if (window.__raColState) window.__raColState.index = idx;
-      const c = currentCol();
-      const status = $('raColStatus');
-      if (status && c) status.textContent = `Using: ${c.name}`;
-    }
-  });
-  document.addEventListener('click', (e)=>{
-    if (e.target && e.target.id === 'raColRefreshSimple'){
-      e.preventDefault(); fetchCollections();
-    }
-  });
-
-  function bindButtonAndEnter(){
-    // Hard‑bind the button to our loader (replace any old listeners)
-    const btn = $('loadByToken');
-    if (btn){
-      const clone = btn.cloneNode(true);
-      btn.parentNode.replaceChild(clone, btn);
-      clone.addEventListener('click', loadFromPicker, { capture:true });
-      clone.addEventListener('click', e=>{ e.stopImmediatePropagation(); }, { capture:true });
-    }
-    // Bind Enter on the Token ID input
-    const inp = getTokenInput();
-    if (inp){
-      inp.addEventListener('keydown', (e)=>{
-        if (e.key === 'Enter'){
-          e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-          loadFromPicker(e);
-        }
-      }, { capture:true });
-    }
-  }
-
-  // Initial build & bindings
-  fetchCollections();
-  bindButtonAndEnter();
-
-  // Re‑apply after UI settles / on network changes
-  setTimeout(()=>{ placeRow(); bindButtonAndEnter(); }, 300);
-  setTimeout(()=>{ placeRow(); bindButtonAndEnter(); }, 900);
-
-  if (window.ethereum){
-    window.ethereum.on?.('chainChanged', ()=>{ fetchCollections(); setTimeout(bindButtonAndEnter, 100); });
-    window.ethereum.on?.('accountsChanged', ()=>{ fetchCollections(); });
-  }
-})();
-
 /* ========== RA_COLLECTION_ROW_FIX_v1 — tidy row + load names ========== */
 (()=>{
   const $ = (id)=> document.getElementById(id);
@@ -6188,4 +5984,216 @@ const shouldShow =
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
   else init();
+})();
+
+/* ========== RA_COLLECTIONS_RESET_v1 — single dropdown + clean CSS + multi-collection loader ========== */
+(()=>{
+  // ----- config (no changes needed) -----
+  const ROW_ID = 'raColRow';
+  const SELECT_ID = 'raColSelect';
+  const STATUS_ID = 'raColStatus';
+  const REFRESH_ID = 'raColRefresh';
+
+  // Tiny CSS to make the row look right and full-width inside the Upload card
+  try{
+    if (!document.getElementById('raColCss')){
+      const st = document.createElement('style');
+      st.id = 'raColCss';
+      st.textContent = `
+        #${ROW_ID}{display:flex; gap:8px; align-items:center; margin-top:8px;}
+        #${ROW_ID} label{min-width:76px; opacity:.75}
+        #${ROW_ID} select{flex:1; height:32px; border:1px solid #313131; background:#121212; color:#fff; border-radius:6px; padding:4px 8px;}
+        #${ROW_ID} button{height:32px; padding:0 10px;}
+        #${STATUS_ID}{display:block; margin-top:6px; font-size:12px; opacity:.66;}
+      `;
+      document.head.appendChild(st);
+    }
+  }catch(_){}
+
+  const S = { list:[], selectedKey:null };
+
+  // --- helpers ---
+  const $ = (id)=>document.getElementById(id);
+
+  function normalizeChainId(v){
+    if (!v && v!==0) return null;
+    if (typeof v==='number') return '0x'+v.toString(16);
+    if (typeof v==='string'){
+      if (v.startsWith('0x')) return v.toLowerCase();
+      const n = parseInt(v,10); if (Number.isFinite(n)) return '0x'+n.toString(16);
+    }
+    return null;
+  }
+  function netNameFromChainId(cid){
+    const c = (cid||'').toLowerCase();
+    if (c==='0x1') return 'Ether';
+    if (c==='0x2105') return 'ApeChain';
+    return 'Unknown';
+  }
+
+  async function fetchCollections(){
+    try{
+      const r = await fetch('/api/ra-collections');
+      const j = await r.json();
+      const arr = (j && (j.collections||j.data||[])) || [];
+      return arr.map((x,i)=>({
+        key:   x.key || x.slug || (x.name||'col')+'_'+i,
+        name:  x.name || x.label || 'Unnamed',
+        address: (x.address || x.contract || '').trim(),
+        chainId: normalizeChainId(x.chainId || x.chain || x.network || x.net) || '0x1'
+      })).filter(x=>x.address);
+    }catch(_){
+      // Fallback so the UI still works even if the API has a hiccup
+      return [
+        { key:'rebel-eth',  name:'Rebel Ants',  address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1' },
+        { key:'sola-eth',   name:'Saints of LA',address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chainId:'0x1' },
+        // Add ApeChain/Chumpz here later once the image source is confirmed
+      ];
+    }
+  }
+
+  function currentCol(){
+    if (!S.list.length) return null;
+    if (S.selectedKey){
+      const found = S.list.find(c=>c.key===S.selectedKey);
+      if (found) return found;
+    }
+    return S.list[0] || null;
+  }
+
+  function findTokenIdInput(){
+    return $('tokenId') ||
+           document.querySelector('input#token') ||
+           document.querySelector('input[name="token"]') ||
+           document.querySelector('input[placeholder*="Token"]');
+  }
+
+  async function ensureUI(){
+    // Anchor under the Token ID row
+    const tokenInput = findTokenIdInput();
+    if (!tokenInput || !tokenInput.parentElement) return;
+
+    // Create row once
+    let row = $(ROW_ID);
+    if (!row){
+      row = document.createElement('div');
+      row.id = ROW_ID;
+      row.innerHTML = `
+        <label>Collection</label>
+        <select id="${SELECT_ID}"></select>
+        <button id="${REFRESH_ID}" type="button">Refresh</button>
+        <span id="${STATUS_ID}"></span>
+      `;
+      // Put it as a sibling right under the token input’s container
+      const anchor = tokenInput.parentElement;
+      (anchor.parentElement || anchor).appendChild(row);
+    }
+
+    // Fill options
+    const sel = $(SELECT_ID);
+    sel.innerHTML = '';
+    S.list.forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c.key;
+      o.textContent = `${c.name} — ${netNameFromChainId(c.chainId)}`;
+      sel.appendChild(o);
+    });
+    // Restore/choose selection
+    if (S.selectedKey) sel.value = S.selectedKey;
+    else { S.selectedKey = sel.value; }
+
+    // Status text
+    const st = $(STATUS_ID);
+    const col = currentCol();
+    if (st) st.textContent = col ? `Using: ${col.name}` : '';
+
+    sel.onchange = ()=>{
+      S.selectedKey = sel.value;
+      const col = currentCol();
+      if ($(STATUS_ID)) $(STATUS_ID).textContent = col ? `Using: ${col.name}` : '';
+      window.dispatchEvent(new Event('ra-collection-change'));
+    };
+
+    const ref = $(REFRESH_ID);
+    if (ref) ref.onclick = async ()=>{
+      S.list = await fetchCollections();
+      await ensureUI();
+    };
+  }
+
+  // Use Reservoir tokens API (same one you already use for Rebels) but with the selected contract
+  async function loadTokenFromCollection(tokenId, col){
+    const contract = (col && col.address) || '';
+    if (!contract){ alert('No contract for selected collection.'); return; }
+
+    // Reuse your existing RESERVOIR constant if present,
+    // else use a generic endpoint.
+    const hasRES = (typeof RESERVOIR === 'string' && RESERVOIR.length > 0);
+    const tokenKey = `${contract}:${tokenId}`;
+    const url = hasRES
+      ? (RESERVOIR + encodeURIComponent(tokenKey))
+      : (`https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}`);
+
+    // For non-Ethereum chains, add an override header (ApeChain later if supported)
+    const hdrs = {};
+    const chain = (col.chainId||'').toLowerCase();
+    if (chain && chain !== '0x1'){
+      // When you enable ApeChain image source, set the correct chain name here.
+      hdrs['x-reservoir-chain'] = (chain==='0x2105' ? 'apechain' : 'ethereum');
+    }
+
+    const r = await fetch(url, { headers: hdrs });
+    const j = await r.json();
+    const img =
+      j?.tokens?.[0]?.token?.image ||
+      j?.tokens?.[0]?.token?.imageLarge ||
+      j?.tokens?.[0]?.token?.imageSmall;
+
+    if (!img){
+      alert('Could not load that token on the selected collection.');
+      return;
+    }
+
+    // Reuse your existing base loader
+    if (window.loadBaseImage) {
+      await window.loadBaseImage(img);
+    } else if (window.loadBase && typeof window.loadBase === 'function') {
+      await window.loadBase(img);
+    }
+  }
+
+  function hookLoadByToken(){
+    // Button
+    const btn = $('loadByToken') ||
+                Array.from(document.querySelectorAll('button')).find(b=>/load by token/i.test(b.textContent||''));
+    if (!btn) return;
+
+    const handler = async (e)=>{
+      try{ e.preventDefault(); e.stopImmediatePropagation(); }catch(_){}
+      const inp = findTokenIdInput();
+      const tokenId = (inp && inp.value || '').trim();
+      if (!tokenId){ alert('Enter a token ID first.'); return; }
+      const col = currentCol();
+      if (!col){ alert('Pick a collection first.'); return; }
+      await loadTokenFromCollection(tokenId, col);
+    };
+
+    // Bind in capture mode so we override earlier listeners that hard‑coded Rebels
+    btn.addEventListener('click', handler, true);
+
+    // Also bind Enter on the token id input
+    const inp = findTokenIdInput();
+    if (inp){
+      inp.addEventListener('keydown', (e)=>{ if (e.key === 'Enter'){ handler(e); }});
+    }
+  }
+
+  async function boot(){
+    S.list = await fetchCollections();
+    await ensureUI();
+    hookLoadByToken();
+  }
+
+  // kick off
+  boot();
 })();
