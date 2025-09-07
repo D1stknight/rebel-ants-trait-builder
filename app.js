@@ -6040,136 +6040,152 @@ const shouldShow =
   else bind();
 })();
 
-/* ========== RA_COLLECTION_ROW_FIT_v3 — tidy row + populate names ========== */
+/* ========== RA_COLLECTION_UI_AND_BIND_v5 — under Token ID, tidy layout, correct loader ========== */
 (()=>{
-  const $ = (id)=> document.getElementById(id);
+  const $=id=>document.getElementById(id);
+  let LIST=[], SELECTED_KEY=null;
 
-  async function getCollections(){
-    if (Array.isArray(window.RA_COLLECTIONS) && window.RA_COLLECTIONS.length) return window.RA_COLLECTIONS;
-    try {
-      const r = await fetch('/api/ra-collections'); const j = await r.json();
-      window.RA_COLLECTIONS = j.collections || j || [];
-    } catch { window.RA_COLLECTIONS = window.RA_COLLECTIONS || []; }
-    return window.RA_COLLECTIONS;
+  function normalize(c){
+    const chain = c.chain || c.network || (String(c.chainId||'')==='1'?'ethereum':'');
+    const name  = c.name || c.displayName || c.shortName || '';
+    const contract = c.contract || c.address || c.contractAddress || '';
+    return { chain, name, contract };
+  }
+  async function fetchList(){
+    try{
+      const r=await fetch('/api/ra-collections'); const j=await r.json();
+      const arr=(j.collections||j||[]).map(normalize).filter(x=>x.contract);
+      if (arr.length) LIST = arr;
+    }catch(e){ /* ignore */ }
+    if (!LIST.length && Array.isArray(window.RA_COLLECTIONS)) LIST = window.RA_COLLECTIONS.map(normalize);
+    window.RA_COLLECTIONS = LIST; // mirror
+    return LIST;
+  }
+  function chainLabel(c){
+    if (c.networkName) return c.networkName;
+    if (c.chain==='ethereum') return 'Ether';
+    if (c.chain==='apechain') return 'ApeChain';
+    if (c.chain==='base') return 'Base';
+    return c.chain || '';
+  }
+  function tokenInput(){
+    return document.getElementById('tokenId')
+        || document.querySelector('input[id*="token"]')
+        || document.querySelector('input[placeholder*="Token"]');
+  }
+  function tokenGroup(){
+    const inp = tokenInput(); if (!inp) return null;
+    // Walk up to the first container that also holds the "Load by Token" button
+    let n = inp;
+    for (let i=0;i<5 && n;i++){
+      if (n.querySelector && Array.from(n.querySelectorAll('button')).some(b=>/load/i.test(b.textContent||''))) return n;
+      n = n.parentElement;
+    }
+    return inp.parentElement || inp.closest('div');
+  }
+  function loadBtn(){
+    const grp=tokenGroup(); if (!grp) return null;
+    return Array.from(grp.querySelectorAll('button')).find(b=>/load/i.test(b.textContent||'')) || null;
   }
 
-  function findLoadBtn(){
-    return document.getElementById('loadByToken')
-        || document.getElementById('loadTokenBtn')
-        || Array.from(document.querySelectorAll('button')).find(b=>/load by token/i.test(b.textContent||''));
-  }
-
-  function ensureRow(){
-    const btn = findLoadBtn(); if (!btn) return;
-    let row = document.getElementById('ra-col-row');
+  function buildRow(){
+    const grp = tokenGroup(); const btn = loadBtn(); if (!grp || !btn) return;
+    let row = $('ra-col-row');
     if (!row){
       row = document.createElement('div');
       row.id = 'ra-col-row';
       row.className = 'ra-collection-row';
-      btn.parentElement.insertBefore(row, btn);
+      // Insert the row inside the same small group, *above* the Load by Token button
+      grp.insertBefore(row, btn);
     }
     row.innerHTML = `
-      <span class="ra-mini">Collection</span>
+      <label class="ra-mini">Collection</label>
       <select id="ra-col-sel"></select>
       <button id="ra-col-refresh" type="button" class="mini">Refresh</button>
       <small id="ra-col-using" class="ra-mini">Using: —</small>
     `;
   }
 
-  function renderOptions(list){
+  function fillOptions(){
     const sel = $('ra-col-sel'); if (!sel) return;
     sel.innerHTML = '';
-    list.forEach(c=>{
+    LIST.forEach((c,i)=>{
       const opt = document.createElement('option');
-      opt.value = `${c.chain}:${c.contract}`;
-      opt.textContent = `${c.name} — ${c.chain==='ethereum'?'Ether':c.chain}`;
+      const key = `${c.chain||''}:${c.contract}`;
+      opt.value = key;
+      opt.textContent = `${c.name} — ${chainLabel(c)}`;
       sel.appendChild(opt);
+      if (!SELECTED_KEY && i===0) SELECTED_KEY = key;
     });
+    if (SELECTED_KEY) sel.value = SELECTED_KEY;
     updateUsing();
   }
-
   function selected(){
     const sel = $('ra-col-sel');
-    return (window.RA_COLLECTIONS||[]).find(c => `${c.chain}:${c.contract}` === (sel && sel.value)) || null;
+    const key = sel ? sel.value : SELECTED_KEY;
+    SELECTED_KEY = key;
+    return (LIST||[]).find(c => `${c.chain||''}:${c.contract}` === key) || null;
   }
-
   function updateUsing(){
-    const s = selected();
-    const el = $('ra-col-using');
+    const s = selected(); const el = $('ra-col-using');
     if (el) el.textContent = s ? `Using: ${s.name}` : 'Using: —';
   }
 
-  async function init(){
-    ensureRow();
-    const list = await getCollections();
-    if (list.length) renderOptions(list);
-    $('ra-col-sel')?.addEventListener('change', updateUsing);
-    $('ra-col-refresh')?.addEventListener('click', ()=> renderOptions(window.RA_COLLECTIONS||[]));
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-  else init();
-})();
-
-/* ========== RA_LOADER_HARDBIND_v2 — replace Load-by-Token handler ========== */
-(()=>{
-  const $ = (id)=> document.getElementById(id);
-
-  function findLoadBtn(){
-    return document.getElementById('loadByToken')
-        || document.getElementById('loadTokenBtn')
-        || Array.from(document.querySelectorAll('button')).find(b=>/load by token/i.test(b.textContent||''));
-  }
-  function findTokenInput(){
-    return document.getElementById('tokenId')
-        || document.querySelector('input[id*="token"]')
-        || document.querySelector('input[placeholder*="Token"]');
-  }
-  function sel(){
-    const k = ($('ra-col-sel')||{}).value;
-    return (window.RA_COLLECTIONS||[]).find(c => `${c.chain}:${c.contract}` === k) || null;
-  }
   async function tokenImage(chain, contract, tokenId){
-    const u = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(contract+':'+tokenId)}&chain=${encodeURIComponent(chain)}&limit=1`;
-    const r = await fetch(u); const j = await r.json();
-    const t = j?.tokens?.[0]?.token; const img = t?.image || t?.imageLarge || t?.imageSmall;
-    if (!img) throw new Error('No image for that token'); return img;
+    // Ethereum & Base via Reservoir
+    if (chain==='ethereum' || chain==='base'){
+      const u = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(contract+':'+tokenId)}&chain=${encodeURIComponent(chain)}&limit=1`;
+      const r = await fetch(u); const j = await r.json();
+      const t = j?.tokens?.[0]?.token; const img = t?.image || t?.imageLarge || t?.imageSmall;
+      if (!img) throw new Error('No image for that token');
+      return img;
+    }
+    throw new Error('This chain is not yet supported for token image lookup.');
   }
 
-  async function loadFromSelection(){
-    const s = sel(); const inp = findTokenInput();
+  async function doLoad(){
+    const s = selected(); const inp = tokenInput();
     const tokenId = (inp && inp.value.trim()) || '';
     if (!s){ alert('Pick a collection first.'); return; }
     if (!tokenId){ alert('Type a token ID first.'); return; }
 
-    const url = await tokenImage(s.chain, s.contract, tokenId);
-
-    const go = window.loadBaseImage || window.loadBaseFromURL || window.loadBase || window.loadBaseImageFromURL;
-    if (typeof go === 'function') await go(url);
-    else {
-      const img = new Image(); img.crossOrigin='anonymous';
-      img.onload=()=>{ try{
-        const base = new fabric.Image(img,{selectable:false,evented:false,_isBase:true});
-        const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
-      }catch(e){ console.error(e); } };
-      img.src = url;
+    try{
+      const url = await tokenImage(s.chain, s.contract, tokenId);
+      const go = window.loadBaseImage || window.loadBaseFromURL || window.loadBase || window.loadBaseImageFromURL;
+      if (typeof go === 'function') await go(url);
+      else {
+        const img = new Image(); img.crossOrigin='anonymous';
+        img.onload=()=>{ try{
+          const base = new fabric.Image(img,{selectable:false,evented:false,_isBase:true});
+          const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+        }catch(e){ console.error(e); } };
+        img.src = url;
+      }
+      try{ document.dispatchEvent(new CustomEvent('ra-brand-footer',{ detail:s })); }catch(_){}
+    }catch(e){
+      console.error(e);
+      alert('Could not load that token on the selected collection.');
     }
-    try{ document.dispatchEvent(new CustomEvent('ra-brand-footer',{ detail:s })); }catch(_){}
   }
 
-  function bind(){
-    const oldBtn = findLoadBtn(); if (!oldBtn) return;
-
-    // Strip any old listeners by replacing the node
-    const btn = oldBtn.cloneNode(true);
-    oldBtn.replaceWith(btn);
-
-    btn.addEventListener('click', (e)=>{ e.preventDefault(); loadFromSelection(); });
-
-    const inp = findTokenInput();
-    inp && inp.addEventListener('keydown', (e)=>{ if (e.key==='Enter'){ e.preventDefault(); loadFromSelection(); }});
+  function rebind(){
+    const b = loadBtn(); const inp = tokenInput(); if (!b || !inp) return;
+    // Replace the button node to drop any previous listeners
+    const clone = b.cloneNode(true);
+    b.replaceWith(clone);
+    clone.addEventListener('click', (e)=>{ e.preventDefault(); doLoad(); });
+    inp.addEventListener('keydown', (e)=>{ if (e.key==='Enter'){ e.preventDefault(); doLoad(); }});
   }
 
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind);
-  else bind();
+  async function init(){
+    buildRow();
+    await fetchList();
+    fillOptions();
+    $('ra-col-sel')?.addEventListener('change', ()=>{ SELECTED_KEY = $('ra-col-sel').value; updateUsing(); });
+    $('ra-col-refresh')?.addEventListener('click', ()=> fillOptions());
+    rebind();
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 })();
