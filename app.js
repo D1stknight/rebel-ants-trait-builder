@@ -5579,3 +5579,28 @@ const shouldShow =
   // optional: try a silent refresh on load
   (async ()=>{ try{ await refresh(); }catch(_){} })();
 })();
+
+/* ========== RA_WM_HOLDER_GATING_v1 — wallet → watermark behavior ========== */
+(()=>{
+  function applyFromHolder(detail){
+    // detail = { checked, hasRebel, hasFriend, matches:[...] }
+    // Rule: Rebel holders => watermark OFF locally (doesn’t change your admin values)
+    if (detail && detail.hasRebel) {
+      window.__raWMForce = { off: true };
+    } else {
+      // No special override; obey admin toggles
+      window.__raWMForce = null;
+    }
+    // Nudge the watermark block to re-evaluate (in case it hasn’t heard the event)
+    try { document.dispatchEvent(new Event('ra-holder-update')); } catch(_){}
+    try { window.canvas && window.canvas.requestRenderAll(); } catch(_){}
+  }
+
+  // Listen to the wallet box (it already dispatches 'ra-holder-update')
+  document.addEventListener('ra-holder-update', (e)=> applyFromHolder(e.detail||{}));
+
+  // Also run once on load if the wallet already refreshed itself
+  if (window.RA_HOLDER_STATE && window.RA_HOLDER_STATE.checked){
+    applyFromHolder(window.RA_HOLDER_STATE);
+  }
+})();
