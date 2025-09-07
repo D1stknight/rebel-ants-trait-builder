@@ -5054,3 +5054,185 @@ canvas.requestRenderAll();
     if (place() || tries > 50) clearInterval(t);
   }, 150);
 })();
+
+/* ================== RA_EXPORT_VIDEO_WEBREC_v1 — real video export, no gate ================== */
+(() => {
+  if (window.__RA_EXPORT_VIDEO__) return;
+  window.__RA_EXPORT_VIDEO__ = true;
+
+  // --- small helpers
+  const $id = (s) => document.getElementById(s);
+  const findBtn = () =>
+    $id('exportVideo') ||
+    Array.from(document.querySelectorAll('button')).find(b => /export\s*video/i.test((b.textContent||'').trim()));
+
+  const easeInOutSine = t => -(Math.cos(Math.PI*t) - 1) / 2;
+  const clamp = (n,min,max)=> Math.min(max, Math.max(min, n));
+
+  function pickMime() {
+    const want = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4;codecs=h264',
+      'video/mp4'
+    ];
+    for (const t of want) {
+      try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; } catch {}
+    }
+    return ''; // let browser pick, or we’ll detect unsupported below
+  }
+
+  function hijackButton() {
+    const btn = findBtn();
+    if (!btn) return false;
+
+    // Replace node to strip any old listeners (removes token gate handlers too)
+    const clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+
+    clone.addEventListener('click', (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      startExport(clone).catch(err => {
+        alert('Video export failed: ' + (err && err.message || err));
+      });
+    }, {capture:true});
+
+    return true;
+  }
+
+  // Read UI knobs if present; otherwise use safe defaults
+  function readAnimSettings() {
+    const dur = parseFloat(($id('animDuration')||{}).value || '6'); // seconds
+    const preset = (($id('animPreset')||{}).value || '').toLowerCase();
+    const easing = (($id('animEasing')||{}).value || 'sine').toLowerCase();
+    const fps = parseInt(($id('animFps')||{}).value || '30', 10);
+
+    return {
+      duration: isFinite(dur) ? clamp(dur, 1, 60) : 6,
+      preset:   (preset.includes('out') ? 'out' : 'in'), // support "Ken Burns — in/out"
+      easing:   easing, // (currently always sine)
+      fps:      isFinite(fps) ? clamp(fps, 12, 60) : 30
+    };
+  }
+
+  async function startExport(btn) {
+    if (!window.fabric || !window.canvas || !canvas.lowerCanvasEl) {
+      throw new Error('Canvas not ready.');
+    }
+
+    const mime = pickMime();
+    if (!window.MediaRecorder || !canvas.lowerCanvasEl.captureStream) {
+      alert('In‑browser video export is not supported here. Try latest Chrome/Edge or Safari.');
+      return;
+    }
+
+    const { duration, preset, fps } = readAnimSettings();
+
+    // UI: indicate progress
+    const originalText = btn.textContent;
+    btn.textContent = 'Exporting…';
+    btn.disabled = true;
+
+    // Make sure no selection borders show up
+    try { canvas.discardActiveObject(); } catch {}
+    canvas.requestRenderAll();
+
+    // Capture the canvas stream
+    const stream   = canvas.lowerCanvasEl.captureStream(fps);
+    const options  = mime ? { mimeType: mime } : undefined;
+    let chunks = [];
+    let recorder;
+
+    try {
+      recorder = new MediaRecorder(stream, options);
+    } catch (e) {
+      // Fallback with no options
+      recorder = new MediaRecorder(stream);
+    }
+
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+
+    // Save camera, then run a Ken Burns animation while recording
+    const savedVT  = canvas.viewportTransform ? canvas.viewportTransform.slice() : null;
+    const savedZ   = canvas.getZoom ? canvas.getZoom() : 1;
+
+    const W = canvas.getWidth();
+    const H = canvas.getHeight();
+
+    // From/to points (slight pan) and zooms
+    const fromZoom = (preset === 'out') ? 1.12 : 1.00;
+    const toZoom   = (preset === 'out') ? 1.00 : 1.12;
+    const fromPt   = new fabric.Point(W*0.35, H*0.35);
+    const toPt     = new fabric.Point(W*0.65, H*0.65);
+
+    let startTs = 0;
+
+    function step(ts) {
+      if (!startTs) startTs = ts;
+      const t = clamp((ts - startTs) / (duration*1000), 0, 1);
+      const k = easeInOutSine(t);
+
+      const z = fromZoom + (toZoom - fromZoom) * k;
+      const px = fromPt.x + (toPt.x - fromPt.x) * k;
+      const py = fromPt.y + (toPt.y - fromPt.y) * k;
+
+      try { canvas.zoomToPoint(new fabric.Point(px, py), z); } catch {}
+      canvas.requestRenderAll();
+
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        // Finish a couple frames later to flush
+        setTimeout(() => {
+          try {
+            if (savedVT) canvas.setViewportTransform(savedVT);
+            if (savedZ)  canvas.setZoom(savedZ);
+          } catch {}
+          canvas.requestRenderAll();
+          recorder.stop();
+        }, 100);
+      }
+    }
+
+    // Start recording + animation
+    const done = new Promise(resolve => { recorder.onstop = resolve; });
+    recorder.start();
+    requestAnimationFrame(step);
+
+    await done;
+
+    // Build file + download
+    const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'video/webm' });
+    const url  = URL.createObjectURL(blob);
+    const ext  = ((recorder.mimeType || mime || '').includes('mp4')) ? 'mp4' : 'webm';
+    const name = `rebel-ants-${new Date().toISOString().replace(/[:T]/g,'-').slice(0,19)}.${ext}`;
+
+    // Update the small "Manual link" helper if it exists
+    const manualLink = $id('exportManualLink') || $id('manualLink') ||
+      Array.from(document.querySelectorAll('a')).find(a => /manual\s*link/i.test((a.textContent||'')));
+
+    if (manualLink) {
+      manualLink.href = url;
+      manualLink.target = '_blank';
+      manualLink.download = name;
+      manualLink.textContent = `Download ${ext.toUpperCase()} (${Math.ceil(blob.size/1024)} KB)`;
+    }
+
+    // Auto-download
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=> URL.revokeObjectURL(url), 20000);
+
+    // UI restore
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+
+  // Wait for the DOM then hijack the button
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    if (hijackButton() || tries > 60) clearInterval(t);
+  }, 200);
+})();
