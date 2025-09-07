@@ -5055,310 +5055,109 @@ canvas.requestRenderAll();
   }, 150);
 })();
 
-/* ================= RA_EXPORT_VIDEO_v4 — uses chosen Preset + Safari MP4 + toast ================= */
+/* ===================== RA_EXPORT_VIDEO_v5 — record the live Preview exactly ===================== */
+/* Drop-in patch: put this at the very bottom of app.js */
+
 (() => {
-  if (window.__RA_EXPORT_VIDEO_V4__) return;
-  window.__RA_EXPORT_VIDEO_V4__ = true;
-
-  const IS_SAFARI = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  const $ = (id)=>document.getElementById(id);
-  const clamp = (n,min,max)=> Math.min(max, Math.max(min,n));
-
-  // --- tiny toast so you see what preset we detected
-  function toast(msg){
-    try{
-      let t = document.getElementById('__ra_toast');
-      if (!t){
-        t = document.createElement('div');
-        t.id='__ra_toast';
-        Object.assign(t.style,{
-          position:'fixed', left:'12px', bottom:'12px',
-          background:'rgba(0,0,0,.75)', color:'#fff',
-          padding:'6px 10px', borderRadius:'6px',
-          font:'12px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif',
-          zIndex:99999, pointerEvents:'none'
-        });
-        document.body.appendChild(t);
-      }
-      t.textContent = msg;
-      t.style.opacity='1';
-      clearTimeout(t.__h);
-      t.__h = setTimeout(()=>{ t.style.opacity='0'; }, 1800);
-    }catch{}
+  // small helpers that don’t depend on your IDs
+  function $(id){ return document.getElementById(id); }
+  function findButtonByText(txt){
+    const want = String(txt).trim().toLowerCase();
+    return Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent || '').trim().toLowerCase() === want);
+  }
+  function bestMime() {
+    const types = [
+      'video/mp4;codecs=avc1.42E01E', // Safari / H.264
+      'video/mp4',
+      'video/webm;codecs=vp9',        // Chrome/Edge
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ];
+    for (const t of types) { try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; } catch(_){} }
+    return ''; // let the browser pick
+  }
+  function currentPresetLabel() {
+    // Find the select whose option text looks like our presets (Ken Burns / Pan / Zoom / Overlays / Base)
+    const rx = /(ken burns|pan |zoom |overlays|base )/i;
+    for (const s of document.querySelectorAll('select')) {
+      const t = (s.options[s.selectedIndex] && s.options[s.selectedIndex].textContent || '').trim();
+      if (rx.test(t)) return t;
+    }
+    return 'preview';
+  }
+  function currentDurationSec() {
+    // Try to read the Duration input near the Animate area; fall back to 6s if uncertain.
+    let dur = 6;
+    const root = $('exportVideo')?.closest('div') || document.body;
+    const nums = Array.from(root.querySelectorAll('input[type="number"]'));
+    for (const n of nums) {
+      const v = parseFloat(n.value);
+      if (Number.isFinite(v) && v > 0 && v <= 120) { dur = v; break; }
+    }
+    return dur;
+  }
+  function saveBlob(blob, name){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
   }
 
-  // --- easing
-  const ease = {
-    linear: t=>t,
-    sine:   t=>-(Math.cos(Math.PI*t)-1)/2,
-    in:     t=>t*t,
-    out:    t=>1-(1-t)*(1-t),
-    inout:  t=>(t<.5? 2*t*t : 1-Math.pow(-2*t+2,2)/2)
+  async function exportVideoHandler(){
+    try {
+      // 1) read UI state
+      const dur = currentDurationSec();
+      const preset = currentPresetLabel();
+      const ts = new Date().toISOString().replace(/[:.]/g,'');
+      const fps = 60;
+
+      // 2) make sure no selection boxes are visible
+      try { if (window.canvas) { canvas.discardActiveObject(); canvas.requestRenderAll(); } } catch(_){}
+
+      // 3) get the real drawing canvas and start recording
+      const el =
+        (window.canvas && (canvas.upperCanvasEl || canvas.lowerCanvasEl)) ||
+        document.querySelector('canvas');
+      if (!el || !el.captureStream) throw new Error('Your browser cannot capture the canvas stream.');
+
+      const stream = el.captureStream(fps);
+      const mime = bestMime();
+      const rec  = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 7_000_000 } : { videoBitsPerSecond: 7_000_000 });
+      const chunks = [];
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      const done = new Promise(res => rec.onstop = res);
+      rec.start();
+
+      // 4) trigger the SAME animation the UI uses for Preview
+      const previewBtn = $('previewAnim') || findButtonByText('preview');
+      if (previewBtn) previewBtn.click();
+
+      // 5) wait a hair longer than duration so we don’t cut the last frame
+      await new Promise(r => setTimeout(r, Math.round(dur * 1000 + 500)));
+
+      // 6) stop & save
+      rec.stop();
+      await done;
+
+      const ext = (mime && mime.includes('mp4')) ? 'mp4' : 'webm';
+      const file = new Blob(chunks, { type: mime || `video/${ext}` });
+      const name = `rebel-ants-${(preset||'preview').toLowerCase().replace(/\s+/g,'-').replace(/[^\w\-]+/g,'').slice(0,40)}-${ts}.${ext}`;
+      saveBlob(file, name);
+    } catch (err) {
+      alert('Export failed: ' + (err && err.message || err));
+    }
+  }
+
+  // 7) wire the handler to the Export button (id or by label, whichever exists)
+  const hook = () => {
+    const byId = $('exportVideo');
+    if (byId && !byId._raBound) { byId._raBound = true; byId.addEventListener('click', exportVideoHandler); return; }
+    const byText = findButtonByText('export video');
+    if (byText && !byText._raBound) { byText._raBound = true; byText.addEventListener('click', exportVideoHandler); }
   };
-
-  function textFromSelect(el){
-    if (!el) return '';
-    try{
-      if (el.tagName==='SELECT'){
-        const o = el.options[el.selectedIndex];
-        return (o && (o.text||o.value) || '').trim().toLowerCase();
-      }
-      if ('value' in el && el.value) return String(el.value).trim().toLowerCase();
-      return (el.textContent||'').trim().toLowerCase();
-    }catch{ return ''; }
-  }
-
-  function getEasingFn(){
-    const txt =
-      textFromSelect($('animEasing')) ||
-      textFromSelect(document.querySelector('[name="animEasing"]')) || '';
-    const t = txt.toLowerCase();
-    if (t.includes('linear')) return ease.linear;
-    if (t.includes('in/out') || t.includes('in‑out') || t.includes('in out')) return ease.inout;
-    if (t.includes('in')) return ease.in;
-    if (t.includes('out')) return ease.out;
-    return ease.sine; // “Smooth (Sine)” default
-  }
-
-  function getAnimParams(){
-    const dur = parseFloat( ($('animDuration')||{}).value || '6' );
-    const fps = parseInt(   ($('animFps')||{}).value      || '30',10 );
-    return {
-      duration: isFinite(dur)? clamp(dur,1,60) : 6,
-      fps:      isFinite(fps)? clamp(fps,12,60) : 30,
-      easing:   getEasingFn()
-    };
-  }
-
-  // ------- PRESET capture (robust)
-  // We keep the last seen preset string here:
-  let CURRENT_PRESET = 'ken in';  // default
-
-  // Normalize any text (from your dropdown/button) to a short keyword
-  function normalizePreset(s){
-    const t = (s||'').toLowerCase();
-    const has = k=>t.includes(k);
-    if (has('ken') || has('burns')){
-      return has('out') ? 'ken out' : 'ken in';
-    }
-    if (has('pan')){
-      if (has('left'))  return 'pan left';
-      if (has('right')) return 'pan right';
-      if (has('up'))    return 'pan up';
-      if (has('down'))  return 'pan down';
-      return 'pan right';
-    }
-    if (has('zoom')){
-      return has('out') ? 'zoom out' : 'zoom in';
-    }
-    if (has('random') || has('everything')) return 'random';
-    return '';
-  }
-
-  // A) Try to read from obvious controls
-  function readPresetDirect(){
-    const ids = ['animPreset','preset','animationPreset','videoPreset'];
-    for (const id of ids){
-      const el = $(id) || document.querySelector(`[name="${id}"]`);
-      const t = textFromSelect(el);
-      const n = normalizePreset(t);
-      if (n) return n;
-    }
-    // any <select> that looks like a preset
-    for (const s of Array.from(document.querySelectorAll('select'))){
-      const t = textFromSelect(s);
-      const n = normalizePreset(t);
-      if (n) return n;
-    }
-    return '';
-  }
-
-  // B) Look at the “Animate” panel text near the word “Preset”
-  function readPresetFromPanel(){
-    const blocks = Array.from(document.querySelectorAll('section,div'));
-    for (const el of blocks){
-      const txt = (el.textContent||'').toLowerCase();
-      if (txt.includes('animate') && txt.includes('preset') && /(ken|burns|pan|zoom|random|everything)/.test(txt)){
-        const n = normalizePreset(txt);
-        if (n) return n;
-      }
-    }
-    return '';
-  }
-
-  // C) Listen for clicks on dropdown items and remember
-  document.addEventListener('click', (e)=>{
-    const t = (e.target && (e.target.textContent||e.target.value) || '').toLowerCase();
-    if (/(ken|burns|pan|zoom|left|right|up|down|in|out|random|everything)/.test(t)){
-      const n = normalizePreset(t);
-      if (n){ CURRENT_PRESET = n; }
-    }
-  }, true);
-
-  function getPreset(){
-    const a = readPresetDirect();
-    if (a) return a;
-    const b = readPresetFromPanel();
-    if (b) return b;
-    return CURRENT_PRESET || 'ken in';
-  }
-
-  // ------- Define camera motion for each preset
-  function motionFromPreset(label, W, H){
-    const center = new fabric.Point(W*0.5, H*0.5);
-    const leftC  = new fabric.Point(W*0.25, H*0.5);
-    const rightC = new fabric.Point(W*0.75, H*0.5);
-    const topC   = new fabric.Point(W*0.5, H*0.25);
-    const botC   = new fabric.Point(W*0.5, H*0.75);
-    const pick = arr => arr[Math.floor(Math.random()*arr.length)];
-
-    let l = (label||'').toLowerCase();
-    if (!l || l==='random' || l==='everything'){
-      l = pick(['ken in','ken out','pan left','pan right','pan up','pan down','zoom in','zoom out']);
-    }
-
-    let fromZoom=1.00, toZoom=1.00, fromPt=center, toPt=center;
-
-    if (l==='ken in' || l==='ken out'){
-      const out = (l==='ken out');
-      fromZoom = out ? 1.12 : 1.00;
-      toZoom   = out ? 1.00 : 1.12;
-      fromPt   = new fabric.Point(W*0.35, H*0.35);
-      toPt     = new fabric.Point(W*0.65, H*0.65);
-      return {fromZoom,toZoom,fromPt,toPt};
-    }
-    if (l==='pan left')  return {fromZoom,toZoom,fromPt:rightC,toPt:leftC};
-    if (l==='pan right') return {fromZoom,toZoom,fromPt:leftC, toPt:rightC};
-    if (l==='pan up')    return {fromZoom,toZoom,fromPt:botC,  toPt:topC};
-    if (l==='pan down')  return {fromZoom,toZoom,fromPt:topC,  toPt:botC};
-    if (l==='zoom in')   return {fromZoom:1.00,toZoom:1.15,fromPt:center,toPt:center};
-    if (l==='zoom out')  return {fromZoom:1.15,toZoom:1.00,fromPt:center,toPt:center};
-
-    // fallback
-    return {fromZoom:1.00,toZoom:1.12,fromPt:new fabric.Point(W*0.40,H*0.40),toPt:new fabric.Point(W*0.60,H*0.60)};
-  }
-
-  // ------- Recorder helpers
-  function pickMime(){
-    const wanted = IS_SAFARI
-      ? ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1','video/mp4']
-      : ['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4;codecs=avc1','video/mp4'];
-    for (const t of wanted){
-      try{ if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; }catch{}
-    }
-    return '';
-  }
-
-  function addSilentAudio(stream, ms){
-    try{
-      const AC = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AC();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      gain.gain.value = 0.00001;
-      osc.connect(gain); gain.connect(ctx.destination);
-      const dest = ctx.createMediaStreamDestination();
-      gain.disconnect(); gain.connect(dest);
-      osc.start();
-      const track = dest.stream.getAudioTracks()[0];
-      if (track) stream.addTrack(track);
-      setTimeout(()=>{ try{ osc.stop(); ctx.close(); }catch{} }, ms+500);
-    }catch{}
-  }
-
-  async function exportVideo(btn){
-    if (!window.fabric || !window.canvas || !canvas.lowerCanvasEl){
-      alert('Canvas not ready'); return;
-    }
-    const { duration, fps, easing } = getAnimParams();
-    const preset = getPreset();
-    const W = canvas.getWidth(), H = canvas.getHeight();
-
-    toast('Using preset: ' + preset);
-
-    const old = btn.textContent; btn.textContent = 'Exporting…'; btn.disabled = true;
-
-    try { canvas.discardActiveObject(); } catch {}
-    canvas.requestRenderAll();
-
-    const stream = canvas.lowerCanvasEl.captureStream ? canvas.lowerCanvasEl.captureStream(fps) : null;
-    if (!stream || !window.MediaRecorder){
-      alert('This browser cannot record canvas video.'); 
-      btn.textContent = old; btn.disabled = false; 
-      return;
-    }
-    if (IS_SAFARI) addSilentAudio(stream, duration*1000);
-
-    const mime = pickMime();
-    let chunks = [];
-    let rec;
-    try{ rec = mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream); }
-    catch{ rec = new MediaRecorder(stream); }
-    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-
-    const savedVT = canvas.viewportTransform ? canvas.viewportTransform.slice() : null;
-    const savedZ  = canvas.getZoom ? canvas.getZoom() : 1;
-
-    const {fromZoom,toZoom,fromPt,toPt} = motionFromPreset(preset, W, H);
-
-    let t0 = 0;
-    function step(ts){
-      if (!t0) t0 = ts;
-      const p = clamp((ts - t0)/(duration*1000), 0, 1);
-      const k = easing(p);
-      const z = fromZoom + (toZoom - fromZoom)*k;
-      const px = fromPt.x + (toPt.x - fromPt.x)*k;
-      const py = fromPt.y + (toPt.y - fromPt.y)*k;
-
-      try{ canvas.zoomToPoint(new fabric.Point(px,py), z); }catch{}
-      canvas.requestRenderAll();
-
-      if (p<1) requestAnimationFrame(step);
-      else{
-        setTimeout(()=>{
-          try{
-            if (savedVT) canvas.setViewportTransform(savedVT);
-            if (savedZ)  canvas.setZoom(savedZ);
-          }catch{}
-          canvas.requestRenderAll();
-          rec.stop();
-        },120);
-      }
-    }
-
-    const done = new Promise(res => { rec.onstop = res; });
-    rec.start();
-    requestAnimationFrame(step);
-    await done;
-
-    const type = rec.mimeType || mime || (IS_SAFARI ? 'video/mp4' : 'video/webm');
-    const blob = new Blob(chunks, { type });
-    const url  = URL.createObjectURL(blob);
-    const ext  = type.includes('mp4') ? 'mp4' : 'webm';
-    const name = `rebel-ants-${new Date().toISOString().replace(/[:T]/g,'-').slice(0,19)}.${ext}`;
-
-    const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url), 20000);
-
-    btn.textContent = old; btn.disabled = false;
-  }
-
-  function findExportButton(){
-    return $('exportVideo') ||
-      Array.from(document.querySelectorAll('button'))
-        .find(b => /export\s*video/i.test((b.textContent||'').trim()));
-  }
-
-  function wireButton(){
-    const btn = findExportButton();
-    if (!btn) return false;
-    const clone = btn.cloneNode(true); // drop old listeners
-    btn.parentNode.replaceChild(clone, btn);
-    clone.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); exportVideo(clone); }, {capture:true});
-    return true;
-  }
-
-  // Keep trying until the UI is ready
-  let tries = 0;
-  const iv = setInterval(()=>{ tries++; if (wireButton() || tries>60) clearInterval(iv); }, 200);
+  // try now and also after small delay (covers cases where UI mounts late)
+  hook(); setTimeout(hook, 300);
 })();
