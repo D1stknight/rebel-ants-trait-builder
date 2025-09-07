@@ -1,16 +1,17 @@
-// Vercel serverless endpoint for managing NFT collections + chains.
-// Uses the same env vars as your other KV endpoint:
+// /api/ra-collections.js
+// Stores & serves your “collections to check” list.
+// Uses the same KV/Upstash env vars as your other endpoints:
 //
-//  - UPSTASH_REDIS_REST_URL  or  KV_REST_API_URL
-//  - UPSTASH_REDIS_REST_TOKEN or KV_REST_API_TOKEN
+// - UPSTASH_REDIS_REST_URL   (or KV_REST_API_URL)
+// - UPSTASH_REDIS_REST_TOKEN (or KV_REST_API_TOKEN)
 //
-// GET  /api/ra-collections    -> { ok:true, items:[...] }
-// POST /api/ra-collections    -> body: { items:[...] }  (overwrites)
+// GET  -> { ok:true, collections:[...] }
+// POST -> body: { collections:[{name,address,chainId,tag,rpcUrl?}, ...] }
 
 module.exports = async (req, res) => {
   const url =
     process.env.UPSTASH_REDIS_REST_URL ||
-    process.env.KV_REST_API_URL;        // Vercel KV alias
+    process.env.KV_REST_API_URL;
 
   const token =
     process.env.UPSTASH_REDIS_REST_TOKEN ||
@@ -20,84 +21,89 @@ module.exports = async (req, res) => {
     res.status(500).json({ ok:false, error:'Missing UPSTASH/KV env vars' });
     return;
   }
-  const headers = { Authorization: `Bearer ${token}` };
 
-  const KEY = 'ra:collections';
+  const headers = { Authorization: `Bearer ${token}` };
 
   try {
     if (req.method === 'GET') {
-      // Read
-      const r = await fetch(`${url}/get/${encodeURIComponent(KEY)}`, { headers });
-      const j = await r.json();
+      const r = await fetch(`${url}/get/ra:collections`, { headers });
+      const j = await r.json().catch(()=>({}));
       let saved = [];
       try { saved = JSON.parse(j.result || '[]'); } catch { saved = []; }
 
-      // If empty, return defaults prefilled from your message (lowercased)
-      if (!Array.isArray(saved) || !saved.length) saved = defaults();
-
-      return res.status(200).json({ ok:true, items: normalizeAll(saved) });
+      // If old rows didn’t have chainId, assume Ethereum mainnet (0x1)
+      const norm = normalizeList(saved.length ? saved : seedList());
+      return res.status(200).json({ ok:true, collections: norm });
     }
 
     if (req.method === 'POST') {
-      // Read JSON body
+      // Read body safely
       const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
+      for await (const c of req) chunks.push(c);
       let body = {};
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch {}
+      const incoming = Array.isArray(body) ? body : (body.collections || []);
+      const norm = normalizeList(incoming);
 
-      const items = Array.isArray(body.items) ? body.items : [];
-      if (!items.length || items.length > 100) {
-        return res.status(400).json({ ok:false, error:'items must be 1..100' });
-      }
-
-      const safe = normalizeAll(items);
-      // Basic validation
-      for (const it of safe) {
-        if (![1,33139].includes(it.chainId)) {
-          return res.status(400).json({ ok:false, error:`Unsupported chainId ${it.chainId}` });
-        }
-        if (!/^0x[0-9a-f]{40}$/.test(it.contract)) {
-          return res.status(400).json({ ok:false, error:`Bad contract ${it.contract}` });
-        }
-        if (!it.label || !it.slug) {
-          return res.status(400).json({ ok:false, error:'label/slug required' });
-        }
-      }
-
-      const value = encodeURIComponent(JSON.stringify(safe));
-      const r = await fetch(`${url}/set/${encodeURIComponent(KEY)}/${value}`, { method:'POST', headers });
-      const j = await r.json();
-      return res.status(200).json({ ok:true, items: safe, upstash:j });
+      const value = encodeURIComponent(JSON.stringify(norm));
+      const r = await fetch(`${url}/set/ra:collections/${value}`, { method:'POST', headers });
+      const j = await r.json().catch(()=>({}));
+      return res.status(200).json({ ok:true, collections: norm, upstash:j });
     }
 
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ ok:false, error:'Method Not Allowed' });
 
   } catch (e) {
-    return res.status(500).json({ ok:false, error: String(e && e.message || e) });
-  }
-
-  function normalizeAll(arr){ return arr.map(nItem).filter(Boolean); }
-
-  function nItem(s){
-    if (!s) return null;
-    const label = String(s.label||'').trim();
-    const chainId = Number(s.chainId||0);
-    const contract = String(s.contract||'').trim().toLowerCase();
-    const slug = String(s.slug || slugify(label)).trim().toLowerCase();
-    const group = String(s.group||'').trim().toLowerCase(); // use 'rebel-ants' to group ETH+Ape as one entitlement
-    return { slug, label, chainId, contract, group };
-  }
-
-  function slugify(t){ return String(t||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); }
-
-  function defaults(){
-    return normalizeAll([
-      { label:'Rebel Ants (ETH)',    chainId:1,     contract:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', group:'rebel-ants' },
-      // Add Rebel Ants (ApeChain) later when you have it:
-      // { label:'Rebel Ants (ApeChain)', chainId:33139, contract:'0x________', group:'rebel-ants' },
-      { label:'Saints of LA (ETH)', chainId:1,     contract:'0xbed2470ded2519c13eaaf3bd970015ef404d3d20', group:'saints' },
-      { label:'Chumpz (ApeChain)',  chainId:33139, contract:'0xa9a1d086623475595a02991664742e4a1cbafcb8', group:'chumpz' },
-    ]);
+    return res.status(500).json({ ok:false, error:String(e && e.message || e) });
   }
 };
+
+function seedList(){
+  // Safe defaults you can edit later in the admin box
+  return [
+    { name:'Rebel Ants',          address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1',    tag:'rebel'  },
+    { name:'Saints of LA',        address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chainId:'0x1',    tag:'friend' },
+    { name:'Chumpz (ApeChain)',   address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chainId:'0x8173', tag:'friend',
+      rpcUrl:'https://apechain.calderachain.xyz/http' } // public RPC from ApeChain docs
+  ];
+}
+
+function normalizeList(arr){
+  const out = [];
+  for (const raw of (arr||[])) {
+    const name = String(raw.name||'').trim().slice(0,80);
+    const address = normAddr(raw.address);
+    const chainId = normChain(raw.chainId);
+    const tag = (String(raw.tag||'friend').toLowerCase()==='rebel') ? 'rebel' : 'friend';
+    const rpcUrl = normUrl(raw.rpcUrl);
+
+    if (name && address && chainId) {
+      out.push({ name, address, chainId, tag, ...(rpcUrl?{rpcUrl}:{}) });
+    }
+  }
+  return out;
+}
+
+function normAddr(v){
+  if (!v) return '';
+  const s = String(v).trim();
+  return /^0x[a-fA-F0-9]{40}$/.test(s) ? s.toLowerCase() : '';
+}
+
+function normChain(v){
+  if (!v && v!==0) return '';
+  let s = String(v).trim();
+  // Accept decimal like "1" and convert → "0x1"
+  if (/^[0-9]+$/.test(s)) {
+    try { s = '0x' + BigInt(s).toString(16); } catch { return ''; }
+  }
+  if (!/^0x[0-9a-fA-F]+$/.test(s)) return '';
+  return s.toLowerCase();
+}
+
+function normUrl(v){
+  if (!v) return '';
+  const s = String(v).trim();
+  return /^https?:\/\/\S+$/i.test(s) ? s : '';
+}
