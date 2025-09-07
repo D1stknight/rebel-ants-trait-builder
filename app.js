@@ -6293,3 +6293,184 @@ const shouldShow =
   // initial fill
   fetchCollections();
 })();
+
+/* ========== RA_COLLECTION_PICKER_FIX_v3 — place row + force loader + Enter key ========== */
+(()=>{
+  function $(id){ return document.getElementById(id); }
+  function toHex(v){ const s=String(v||'0x1'); if(s.startsWith('0x')) return s.toLowerCase(); const n=Number(s); return Number.isFinite(n)?('0x'+n.toString(16)):'0x1'; }
+  function netName(cid){ const h=(cid||'').toLowerCase(); if(h==='0x1') return 'Ethereum'; if(h==='0x2105') return 'Base'; return cid||'Unknown'; }
+  function normalizeURL(u){ if(!u) return u; return u.startsWith('ipfs://') ? ('https://ipfs.io/ipfs/'+u.slice(7).replace(/^ipfs\//,'')) : u; }
+
+  // ---- row template (picker + small status) ----
+  const ROW_ID = 'raColRowSimple';
+  const rowHTML = `
+    <div id="${ROW_ID}" style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+      <span style="font-size:12px;opacity:.75;white-space:nowrap;">Collection</span>
+      <select id="raCollectionSelectSimple" style="flex:1;min-width:0;background:#111;border:1px solid #444;color:#eee;padding:4px 6px;border-radius:6px;"></select>
+      <button id="raColRefreshSimple" type="button" style="background:#1f1f1f;border:1px solid #444;color:#ddd;padding:4px 8px;border-radius:6px;">Refresh</button>
+      <span id="raColStatus" style="font-size:12px;opacity:.6;margin-left:6px;white-space:nowrap;"></span>
+    </div>`;
+
+  // Insert (or move) the row just under the Token ID controls once they exist
+  function placeRow(){
+    let row = $(ROW_ID);
+    const wantAfter = $('loadByToken') || $('tokenId') || document.querySelector('#tokenId') || null;
+    if (!row){
+      if (wantAfter){ wantAfter.insertAdjacentHTML('afterend', rowHTML); }
+      else {
+        // Temporary fallback at the very top; we'll move it later
+        (document.body).insertAdjacentHTML('afterbegin',
+          `<div style="padding:8px 10px;background:#0f0f0f;border:1px solid #444;border-radius:8px;margin:10px;">${rowHTML}</div>`);
+      }
+    } else if (wantAfter && row.previousElementSibling !== wantAfter){
+      // Move into correct spot if it was created in fallback
+      row.remove();
+      wantAfter.insertAdjacentHTML('afterend', rowHTML);
+    }
+  }
+
+  // Try now, then again after DOM settles
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', placeRow);
+  } else {
+    placeRow();
+  }
+  setTimeout(placeRow, 200);
+  setTimeout(placeRow, 800);
+
+  async function fetchCollections(){
+    let chain = (window.ethereum && window.ethereum.chainId) || '0x1';
+    const sel = $('raCollectionSelectSimple');
+    const status = $('raColStatus');
+
+    let raw = [];
+    try {
+      const r = await fetch('/api/ra-collections');
+      const j = await r.json();
+      raw = (j && (j.collections || j.list || j.items)) || [];
+    } catch(_){}
+
+    const all = raw.map(c=>({
+      name: c.name || c.label || 'Unnamed',
+      address: (c.address || c.contract || '').toLowerCase(),
+      chainId: toHex(c.chainId || c.chain || '0x1'),
+      type: c.type || 'friend'
+    })).filter(c=>c.address);
+
+    let list = all.filter(c => c.chainId === toHex(chain));
+    if (!list.length) list = all;
+
+    window.__raColState = { list, index: 0 };
+
+    if (sel){
+      sel.innerHTML = '';
+      list.forEach((c,i)=>{
+        const o = document.createElement('option');
+        o.value = String(i);
+        o.textContent = `${c.name} — ${netName(c.chainId)}`;
+        sel.appendChild(o);
+      });
+    }
+    if (status && list[0]) status.textContent = `Using: ${list[0].name}`;
+  }
+
+  function currentCol(){
+    const st = window.__raColState || {};
+    if (!st.list || !st.list.length) return null;
+    const i = Number(st.index||0);
+    return st.list[i] || st.list[0];
+  }
+
+  // Picker events
+  document.addEventListener('change', (e)=>{
+    if (e.target && e.target.id === 'raCollectionSelectSimple'){
+      const idx = Number(e.target.value||0);
+      if (window.__raColState) window.__raColState.index = idx;
+      const c = currentCol();
+      const status = $('raColStatus');
+      if (status && c) status.textContent = `Using: ${c.name}`;
+    }
+  });
+  document.addEventListener('click', (e)=>{
+    if (e.target && e.target.id === 'raColRefreshSimple'){
+      e.preventDefault(); fetchCollections();
+    }
+  });
+
+  async function fetchReservoirImage(contract, tokenId, chainHex){
+    const qs = `tokens=${encodeURIComponent(contract+':'+String(tokenId))}&limit=1`;
+    const url = `https://api.reservoir.tools/tokens/v7?${qs}`;
+    const headers = { 'Accept': 'application/json' };
+    // ETH works without this, but we set it explicitly so future Base will be easy:
+    if (chainHex && chainHex.toLowerCase() !== '0x1'){
+      // NOTE: we’re not loading Base here yet; this is just future‑proof.
+      headers['x-chain-id'] = parseInt(chainHex, 16);
+    }
+    const r = await fetch(url, { headers });
+    if (!r.ok) throw new Error(`Reservoir ${r.status}`);
+    const j = await r.json();
+    const tok = j && j.tokens && j.tokens[0] && j.tokens[0].token;
+    const img = tok && (tok.image || tok.imageLarge || tok.imageSmall || tok.media);
+    return normalizeURL(img || '');
+  }
+
+  // Unified loader we will hard‑bind to the button and the Enter key
+  async function loadFromPicker(ev){
+    try { ev && ev.preventDefault(); ev && ev.stopPropagation(); ev && ev.stopImmediatePropagation(); } catch(_){}
+    const inp = $('tokenId') || document.querySelector('input[name="tokenId"]');
+    const id = parseInt((inp && inp.value)||'', 10);
+    if (!Number.isFinite(id)) { alert('Enter a token number'); return; }
+    const col = currentCol();
+    if (!col) { alert('Pick a collection first'); return; }
+
+    try {
+      const imgUrl = await fetchReservoirImage(col.address, id, col.chainId);
+      if (!imgUrl) { alert(`No image for ${col.name} #${id}`); return; }
+
+      if (typeof loadBaseImage === 'function') {
+        await loadBaseImage(imgUrl);
+      } else if (typeof setBaseImage === 'function') {
+        await setBaseImage(imgUrl);
+      }
+
+      // Update token label & notify brand/footer + watermark rules
+      try { if (typeof addOrUpdateTokenLabel==='function') addOrUpdateTokenLabel(id); } catch(_){}
+      try {
+        window.__raLastCollection = col;
+        document.dispatchEvent(new CustomEvent('ra-base-updated', { detail: col }));
+        document.dispatchEvent(new Event('ra-holder-update'));
+      } catch(_){}
+    } catch(e){
+      console.error(e);
+      alert('Load failed: ' + (e && e.message || e));
+    }
+  }
+
+  // Hard‑bind: replace old click handler on the button
+  function bindButton(){
+    const btn = $('loadByToken');
+    if (!btn) return;
+    const clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+    clone.addEventListener('click', loadFromPicker, { capture:true });
+    clone.addEventListener('click', e=>{ e.stopImmediatePropagation(); }, { capture:true });
+  }
+
+  // Bind Enter on the token field too (and cancel any old submission)
+  function bindEnter(){
+    const inp = $('tokenId') || document.querySelector('input[name="tokenId"]');
+    if (!inp) return;
+    inp.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter'){
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        loadFromPicker(e);
+      }
+    }, { capture:true });
+  }
+
+  // Initial load & bindings (and retry shortly in case UI renders late)
+  fetchCollections();
+  bindButton(); bindEnter();
+  setTimeout(()=>{ placeRow(); bindButton(); bindEnter(); }, 300);
+  setTimeout(()=>{ placeRow(); bindButton(); bindEnter(); }, 900);
+})();
