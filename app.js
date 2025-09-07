@@ -4982,3 +4982,46 @@ canvas.requestRenderAll();
     };
   });
 })();
+
+/* === RA_CLICK_ZOOM_PLACEMENT_FIX_v1 — move + shrink Click Zoom button === */
+(() => {
+  if (window.__RA_CZ_PLACE_v1__) return;
+  window.__RA_CZ_PLACE_v1__ = true;
+
+  function ready(fn){
+    const t = setInterval(() => {
+      const btn = document.getElementById('raClickZoomToggle');
+      const guides = document.getElementById('guides');      // Selection panel
+      const zr = document.getElementById('zoomReset');       // Canvas panel
+      if (btn && (guides || zr)) { clearInterval(t); fn(btn, guides, zr); }
+    }, 120);
+  }
+
+  ready((btn, guides, zr) => {
+    // Make it compact
+    btn.style.whiteSpace = 'nowrap';
+    btn.style.fontSize   = '12px';
+    btn.style.padding    = '6px 8px';
+
+    // Shorter label
+    try {
+      const on = !!(window.raClickZoom && window.raClickZoom.on && window.raClickZoom.on());
+      btn.textContent = on ? '🔍 Zoom On' : '🔍 Zoom Off';
+    } catch (_) {}
+
+    // Prefer placing it beside "Guides" in the Selection panel
+    if (guides && guides.parentNode) {
+      guides.parentNode.appendChild(btn);
+      btn.style.marginLeft = '8px';
+      btn.style.marginTop  = '0';
+      return;
+    }
+
+    // Fallback: put it on a new line right after Reset (so it won't crowd the row)
+    if (zr) {
+      zr.insertAdjacentElement('afterend', btn);
+      btn.style.display = 'block';
+      btn.style.margin  = '6px 0 0 0';
+    }
+  });
+})();
