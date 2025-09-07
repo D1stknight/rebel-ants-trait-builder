@@ -5714,21 +5714,30 @@ const shouldShow =
   // --- helpers ---
   const $ = (id)=>document.getElementById(id);
 
-  function normalizeChainId(v){
-    if (!v && v!==0) return null;
-    if (typeof v==='number') return '0x'+v.toString(16);
-    if (typeof v==='string'){
-      if (v.startsWith('0x')) return v.toLowerCase();
-      const n = parseInt(v,10); if (Number.isFinite(n)) return '0x'+n.toString(16);
-    }
-    return null;
+ function normalizeChainId(v){
+  if (v == null) return null;
+  if (typeof v === 'number') return '0x' + v.toString(16);
+  if (typeof v === 'string'){
+    if (/^0x/i.test(v)) return v.toLowerCase();
+    const n = parseInt(v, 10);
+    if (Number.isFinite(n)) return '0x' + n.toString(16);
   }
-  function netNameFromChainId(cid){
-    const c = (cid||'').toLowerCase();
-    if (c==='0x1') return 'Ether';
-    if (c==='0x2105') return 'ApeChain';
-    return 'Unknown';
-  }
+  return null;
+}
+function chainSlugFromId(cidHex){
+  const c = (cidHex||'').toLowerCase();
+  if (c === '0x1')    return 'ethereum';
+  if (c === '0x2105') return 'base';
+  if (c === '0x8173') return 'apechain';
+  return 'ethereum'; // safe default
+}
+function netNameFromChainId(cidHex){
+  const c = (cidHex||'').toLowerCase();
+  if (c === '0x1')    return 'Ether';
+  if (c === '0x2105') return 'Base';
+  if (c === '0x8173') return 'ApeChain';
+  return 'Unknown';
+}
 
   async function fetchCollections(){
     try{
