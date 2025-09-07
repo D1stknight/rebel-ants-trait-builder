@@ -5679,6 +5679,7 @@ const shouldShow =
     document.addEventListener('ra-collection-change', ensure);
     document.addEventListener('ra-wm-recalc', ensure);
     document.addEventListener('ra-holder-update', ensure);
+    document.addEventListener('ra-brand-footer', ensure); // in case other code dispatches this older event  
   }
 
   if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
