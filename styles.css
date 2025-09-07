@@ -40,3 +40,11 @@ input[type=range]{width:100%}
 .ra-collection-row .ra-mini{opacity:.75;font-size:12px;white-space:nowrap}
 .ra-collection-row select{min-width:180px;flex:1 1 auto}
 .ra-collection-row button.mini{padding:4px 8px;font-size:12px}
+/* Collection row under Token ID */
+.ra-collection-row{
+  display:grid; grid-template-columns:72px minmax(160px,1fr) auto;
+  gap:8px; align-items:center; margin-top:8px
+}
+.ra-collection-row .ra-mini{opacity:.75;font-size:12px;white-space:nowrap}
+.ra-collection-row select{min-width:180px}
+.ra-collection-row #ra-col-using{grid-column:1/-1;font-size:12px;opacity:.7}
