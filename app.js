@@ -5685,84 +5685,6 @@ const shouldShow =
   else { boot(); }
 })();
 
-/* ========== RA_COLLECTION_PICKER_UI_MINI_v3 — stable anchor + remembers choice ========== */
-(()=>{
-  const $ = (id)=> document.getElementById(id);
-
-  // Find the existing "Load by Token" button row and insert right after it
-  function findAnchor(){
-    const btn = $('loadToken');
-    if (btn && btn.parentElement) return btn.parentElement;
-    // fallback: try the token input
-    const inp = $('tokenIdInput');
-    return inp && inp.parentElement ? inp.parentElement : null;
-  }
-
-  async function getCollections(){
-    try{
-      const r = await fetch('/api/ra-collections', { cache:'no-store' });
-      const j = await r.json();
-      if (j && j.ok && Array.isArray(j.collections) && j.collections.length) return j.collections;
-    }catch(_){}
-    // minimal fallback (so the UI still renders)
-    const rebel = (typeof CONTRACT==='string') ? CONTRACT : '';
-    return rebel ? [{ key:'rebel-eth', label:'Rebel Ants (Ethereum)', contract:rebel, chainId:'0x1', kind:'rebel' }] : [];
-  }
-
-  function insertUI(anchor, list){
-    if (!anchor || !list.length) return;
-
-    const wrap = document.createElement('div');
-    wrap.id = 'raCollectionRow';
-    wrap.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:6px';
-
-    wrap.innerHTML = `
-      <label style="font-size:12px;opacity:.8;">Collection</label>
-      <select id="raCollectionSel" style="flex:1;height:28px;border-radius:6px;background:#111;color:#eee;border:1px solid #333;padding:2px 6px;"></select>
-      <span id="raCollectionChain" style="font-size:12px;opacity:.7;"></span>
-    `;
-
-    anchor.parentElement.insertBefore(wrap, anchor.nextSibling);
-
-    const sel = $('raCollectionSel');
-    const chainLbl = $('raCollectionChain');
-
-    // Build options
-    list.forEach(c=>{
-      const opt = document.createElement('option');
-      opt.value = c.key || (String(c.contract||'').toLowerCase() + '_' + (c.chainId||''));
-      opt.textContent = c.label || (c.contract?.slice(0,6)+'…'+c.contract?.slice(-4) || 'Collection');
-      sel.appendChild(opt);
-    });
-
-    // Restore previous choice
-    const saved = localStorage.getItem('ra:collectionKey');
-    if (saved && Array.from(sel.options).some(o=>o.value===saved)) sel.value = saved;
-
-    function apply(){
-      const chosen = list.find(c => (c.key===sel.value) || ((String(c.contract||'').toLowerCase()+'_'+(c.chainId||''))===sel.value)) || list[0];
-      window.__raActiveCollection = chosen || null;
-      localStorage.setItem('ra:collectionKey', sel.value);
-      chainLbl.textContent = chosen && chosen.chainId ? `Chain: ${chosen.chainId}` : '';
-      // let any listeners (footer, etc.) know
-      try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: chosen })); } catch(_){}
-    }
-
-    sel.addEventListener('change', apply);
-    apply();
-  }
-
-  async function boot(){
-    const anchor = findAnchor();
-    if (!anchor) return setTimeout(boot, 200);
-    const list = await getCollections();
-    insertUI(anchor, list);
-  }
-
-  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
-  else { boot(); }
-})();
-
 /* ========== RA_TOKEN_LOAD_MULTI_COLLECTION_COMPAT_v3 — ETH via Reservoir, others via RPC; returns URL string ========== */
 (()=>{
   const toLower = s => (s||'').toLowerCase();
@@ -5892,31 +5814,9 @@ const shouldShow =
   else { wireTagger(); }
 })();
 
-/* ========== RA_FORCE_LOAD_BY_SELECTED_COLLECTION_v1 — use selected collection on “Load by Token” ========== */
+/* ========== RA_COLLECTION_SELECT_REBUILD_v1 — simple dropdown + refresh ========== */
 (()=>{
-  // Grab element by id safely
   function $(id){ return document.getElementById(id); }
-
-  // Best-effort way to read the current picker + list,
-  // regardless of which picker block you kept.
-  function getSelectedCollection(){
-    // Try the v3 mini picker state if present
-    const st = (window.__raColState || {});
-    if (st.list && st.list.length){
-      const idx = Number(st.index || 0);
-      return st.list[idx] || null;
-    }
-    // Fallback: look for a <select> we injected
-    const sel = document.querySelector('[data-ra-collection-select], #raCollectionSelect, #ra-collection-select');
-    const list = (window.__raCollections || []);
-    if (sel && list.length){
-      const idx = Number(sel.value || sel.selectedIndex || 0);
-      return list[idx] || null;
-    }
-    return null;
-  }
-
-  // Normalize chain id to hex “0x…” for nicer handling
   function toHexChainId(v){
     if (!v) return '0x1';
     const s = String(v);
@@ -5924,56 +5824,167 @@ const shouldShow =
     const n = Number(s);
     return Number.isFinite(n) ? ('0x'+n.toString(16)) : '0x1';
   }
+  function netNameFromChainId(hex){
+    const h = (hex||'').toLowerCase();
+    if (h==='0x1') return 'Ethereum';
+    if (h==='0x2105') return 'Base';
+    // Add more as you go…
+    return hex || 'Unknown';
+  }
 
-  // Pull an image URL from Reservoir for contract:tokenId on a given chain
+  // Hide any older "collection row" if it exists
+  const oldRow = document.getElementById('raCollectionRow');
+  if (oldRow) oldRow.style.display = 'none';
+
+  // Insert our row right under the "Load by Token" button
+  const anchor = $('loadByToken') || $('tokenId');
+  if (!anchor) return;
+
+  const html = `
+    <div id="raColRowSimple" style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+      <span style="font-size:12px;opacity:.75;white-space:nowrap;">Collection</span>
+      <select id="raCollectionSelectSimple" style="flex:1;min-width:0;background:#111;border:1px solid #444;color:#eee;padding:4px 6px;border-radius:6px;"></select>
+      <button id="raColRefreshSimple" type="button" style="background:#1f1f1f;border:1px solid #444;color:#ddd;padding:4px 8px;border-radius:6px;">Refresh</button>
+    </div>`;
+  anchor.insertAdjacentHTML('afterend', html);
+
+  const sel = $('raCollectionSelectSimple');
+  const refreshBtn = $('raColRefreshSimple');
+
+  async function fetchAndFill(){
+    // Current chain (default Ethereum)
+    let chainHex = '0x1';
+    try { chainHex = (window.ethereum && (window.ethereum.chainId || '0x1')) || '0x1'; } catch(_){}
+
+    // Pull collections from your API
+    let listRaw = [];
+    try {
+      const r = await fetch('/api/ra-collections');
+      const j = await r.json();
+      listRaw = (j && (j.collections || j.list || j.items)) || [];
+    } catch(_){}
+
+    // Normalize
+    const list = listRaw.map(c=>({
+      name: c.name || c.label || 'Unnamed',
+      address: (c.address || c.contract || '').toLowerCase(),
+      chainId: toHexChainId(c.chainId || c.chain || '0x1'),
+      type: c.type || 'friend'
+    })).filter(c=>c.address);
+
+    // Prefer current chain; if none, show all
+    let filtered = list.filter(c=>c.chainId===toHexChainId(chainHex));
+    if (!filtered.length) filtered = list;
+
+    window.__raCollections = filtered;
+    window.__raColState = { list: filtered, index: 0 };
+
+    // Fill dropdown
+    sel.innerHTML = '';
+    filtered.forEach((c,i)=>{
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = `${c.name} — ${netNameFromChainId(c.chainId)}`;
+      sel.appendChild(opt);
+    });
+  }
+
+  sel?.addEventListener('change', (e)=>{
+    const idx = Number(e.target.value || 0);
+    if (window.__raColState) window.__raColState.index = idx;
+  });
+  refreshBtn?.addEventListener('click', (e)=>{ e.preventDefault(); fetchAndFill(); });
+
+  fetchAndFill();
+})();
+
+/* ========== RA_REBIND_LOAD_BY_TOKEN_v2 — force loader to use selected collection ========== */
+(()=>{
+  function $(id){ return document.getElementById(id); }
+  function toHexChainId(v){
+    if (!v) return '0x1';
+    const s = String(v);
+    if (s.startsWith('0x')) return s.toLowerCase();
+    const n = Number(s);
+    return Number.isFinite(n) ? ('0x'+n.toString(16)) : '0x1';
+  }
+  function normalizeURL(u){
+    if (!u) return u;
+    if (u.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + u.slice(7).replace(/^ipfs\//,'');
+    return u;
+  }
+
+  function getSelectedCollection(){
+    const st = (window.__raColState || {});
+    if (st.list && st.list.length) {
+      const idx = Number(st.index || 0);
+      return st.list[idx] || st.list[0];
+    }
+    const list = (window.__raCollections || []);
+    const sel = document.getElementById('raCollectionSelectSimple');
+    const idx = Number((sel && sel.value) || 0);
+    return list[idx] || list[0] || null;
+  }
+
   async function fetchReservoirImage(contract, tokenId, chainHex){
     const qs = `tokens=${encodeURIComponent(contract+':'+String(tokenId))}&includeTopBid=false&includeAttributes=false&limit=1`;
     const url = `https://api.reservoir.tools/tokens/v7?${qs}`;
     const headers = { 'Accept':'application/json' };
 
-    // If not Ethereum, hint the target chain (Reservoir convention)
-    const net = (typeof netNameFromChainId==='function' ? netNameFromChainId(chainHex) : '') || '';
-    const chainLower = net.toLowerCase();
-    if (chainLower && chainLower !== 'ethereum') headers['x-reservoir-chain'] = chainLower;
+    // If not Ethereum, hint the chain (ETH is default on Reservoir)
+    const ch = (chainHex||'').toLowerCase();
+    if (ch && ch!=='0x1') {
+      // If you later support Base/ApeChain via Reservoir, set x-reservoir-chain accordingly.
+      // Example: headers['x-reservoir-chain'] = 'base';
+    }
 
     const r = await fetch(url, { headers });
     if (!r.ok) throw new Error(`Reservoir ${r.status}`);
     const j = await r.json();
-
-    const t = j && j.tokens && j.tokens[0] && j.tokens[0].token;
-    const img = t && (t.image || t.imageLarge || t.imageSmall || t.media);
-    return img || null;
+    const tok = j && j.tokens && j.tokens[0] && j.tokens[0].token;
+    const img = tok && (tok.image || tok.imageLarge || tok.imageSmall || tok.media);
+    return normalizeURL(img || '');
   }
 
-  async function loadSelectedByToken(){
-    // Read token id
+  async function onLoadByToken(ev){
+    try { ev && ev.preventDefault && ev.preventDefault(); } catch(_){}
+    try { ev && ev.stopPropagation && ev.stopPropagation(); } catch(_){}
+
     const idInput = $('tokenId') || document.querySelector('input[name="tokenId"]');
     const tokenId = parseInt((idInput && idInput.value) || '', 10);
-    if (!Number.isFinite(tokenId)){ alert('Enter a token number first'); return; }
+    if (!Number.isFinite(tokenId)) { alert('Enter a token number first'); return; }
 
-    // Read selected collection
     const col = getSelectedCollection();
-    if (!col || !col.address){ alert('Pick a collection first'); return; }
+    if (!col || !col.address) { alert('Pick a collection first'); return; }
 
-    const chainHex = toHexChainId(col.chainId || col.chain || '0x1');
+    const chainHex = toHexChainId(col.chainId || '0x1');
 
-    try{
+    try {
       const imgUrl = await fetchReservoirImage(col.address, tokenId, chainHex);
-      if (!imgUrl){ alert('Could not find an image for that token.'); return; }
-      // Your existing function that sets the base image on the canvas:
-      await loadBaseImage(imgUrl);
-    }catch(e){
+      if (!imgUrl) { alert('No image found for that token.'); return; }
+
+      if (typeof loadBaseImage === 'function') {
+        await loadBaseImage(imgUrl);
+      } else if (typeof setBaseImage === 'function') {
+        await setBaseImage(imgUrl);
+      }
+
+      // Update the on‑canvas token label if your helper exists
+      try { if (typeof addOrUpdateTokenLabel==='function') addOrUpdateTokenLabel(tokenId); } catch(_){}
+      // Re‑evaluate watermark/footer if you use those hooks
+      try { document.dispatchEvent(new Event('ra-holder-update')); } catch(_){}
+
+    } catch(e) {
       console.error(e);
-      alert('Load failed: '+(e && e.message || e));
+      alert('Load failed: ' + (e && e.message || e));
     }
   }
 
-  // Attach to the existing “Load by Token” button.
-  // (This runs *in addition to* any old handler, but ours will load the right collection.)
-  if (typeof safeAddListener==='function'){
-    safeAddListener('loadByToken','click', loadSelectedByToken);
-  }else{
-    const btn = $('loadByToken');
-    if (btn) btn.addEventListener('click', loadSelectedByToken, { passive:true });
+  // Strip any previous listeners by cloning the button, then attach ours
+  const btn = $('loadByToken');
+  if (btn && btn.parentNode){
+    const clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+    clone.addEventListener('click', onLoadByToken);
   }
 })();
