@@ -4983,58 +4983,74 @@ canvas.requestRenderAll();
   });
 })();
 
-/* === RA_CLICK_ZOOM_PLACEMENT_FIX_v2 — put Click‑Zoom where it won't crowd Canvas === */
+/* === RA_CANVAS_CONTROLS_LAYOUT_v1 — put Reset + Click Zoom on their own line === */
 (() => {
-  if (window.__RA_CZ_PLACE_v2__) return;
-  window.__RA_CZ_PLACE_v2__ = true;
+  if (window.__RA_CANVAS_LAYOUT_V1) return;
+  window.__RA_CANVAS_LAYOUT_V1 = true;
 
-  function place() {
-    const btn = document.getElementById('raClickZoomToggle');
-    if (!btn) return false;
-
-    // Make it compact
-    btn.style.whiteSpace = 'nowrap';
-    btn.style.fontSize   = '12px';
-    btn.style.padding    = '6px 8px';
-    btn.style.maxWidth   = '100px';
-
-    // First choice: beside "Guides" in Selection panel (more room there)
-    const guides = document.getElementById('guides');
-    if (guides && guides.parentNode) {
-      guides.parentNode.appendChild(btn);
-      btn.style.marginLeft = '8px';
-      btn.style.marginTop  = '0';
-      return true;
-    }
-
-    // Fallback: put it on its own line BELOW the Reset button in the Canvas panel
-    const reset =
+  function findResetButton() {
+    let el =
       document.getElementById('zoomReset') ||
       document.getElementById('resetZoom') ||
       document.getElementById('reset');
-
-    if (reset) {
-      // Move it OUT of the flex row so it doesn't steal space
-      const row   = reset.closest ? (reset.closest('.row') || reset.parentNode) : reset.parentNode;
-      const panel = row && row.parentNode ? row.parentNode : null;
-      if (panel) {
-        const wrap = document.createElement('div');
-        wrap.style.display   = 'block';
-        wrap.style.marginTop = '6px';
-        panel.insertBefore(wrap, row.nextSibling); // new line after the row
-        wrap.appendChild(btn);
-        btn.style.margin = '0';
-        return true;
-      }
-    }
-
-    return false;
+    if (el) return el;
+    const btns = Array.from(document.querySelectorAll('button'));
+    return btns.find(b => /reset/i.test((b.textContent || '').trim()));
   }
 
-  // Try until both the button and targets exist
+  function place() {
+    const reset = findResetButton();
+    if (!reset) return false;
+
+    // Try to find the row Reset was in, and the Canvas panel that contains it
+    const row   = reset.closest ? (reset.closest('.row') || reset.parentNode) : reset.parentNode;
+    const panel = row && row.parentNode ? row.parentNode : null;
+    if (!panel) return false;
+
+    // Create a small toolbar right BELOW that row
+    let bar = document.getElementById('raCanvasBottomBar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'raCanvasBottomBar';
+      bar.style.display    = 'flex';
+      bar.style.flexWrap   = 'wrap';
+      bar.style.gap        = '8px';
+      bar.style.marginTop  = '6px';
+      panel.insertBefore(bar, row.nextSibling);
+    }
+
+    // Move RESET into the new toolbar
+    bar.appendChild(reset);
+    reset.style.margin   = '0';
+    reset.style.fontSize = '12px';
+    reset.style.padding  = '6px 8px';
+
+    // If our Click‑Zoom toggle exists, move it next to Reset
+    const cz = document.getElementById('raClickZoomToggle');
+    if (cz) {
+      bar.appendChild(cz);
+      cz.style.margin   = '0';
+      cz.style.fontSize = '12px';
+      cz.style.padding  = '6px 8px';
+      cz.style.whiteSpace = 'nowrap';
+      cz.style.maxWidth = '120px';
+    }
+
+    // Let the first row wrap if it ever needs to (prevents overflow on small widths)
+    if (row && row.style) {
+      row.style.display   = 'flex';
+      row.style.flexWrap  = 'wrap';
+      row.style.gap       = '6px';
+      row.style.alignItems = 'center';
+    }
+
+    return true;
+  }
+
+  // Try until the elements exist
   let tries = 0;
   const t = setInterval(() => {
     tries++;
-    if (place() || tries > 40) clearInterval(t);
+    if (place() || tries > 50) clearInterval(t);
   }, 150);
 })();
