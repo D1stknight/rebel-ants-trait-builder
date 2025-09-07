@@ -3037,10 +3037,14 @@ canvas.requestRenderAll();
     const hasBase = !!base;
     const isToken = baseIsToken(base);
 
-    const shouldShow =
-      STATE.enabled &&
-      hasBase &&
-      ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads));
+    const force = (window && window.__raWMForce) || null;
+// Personal override (from wallet) wins; else fall back to admin toggles
+const shouldShow =
+  hasBase && (
+    (force && force.off) ? false :
+    (force && force.on)  ? true  :
+    (STATE.enabled && ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads)))
+  );
 
     let wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
     if (!shouldShow){
@@ -3150,6 +3154,9 @@ canvas.requestRenderAll();
 
       c.on('object:modified', ()=> ensureCenteredWM(c));
       c.on('object:removed',  ()=> ensureCenteredWM(c));
+
+    // 🔔 Wallet holder status changed → re-evaluate watermark
+    document.addEventListener('ra-holder-update', ()=> ensureCenteredWM(c));      
     }
 
     // 4) keep WM scaled if canvas element resizes
