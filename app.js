@@ -5343,3 +5343,212 @@ canvas.requestRenderAll();
     boot();
   }
 })();
+
+/* ========== RA_WALLET_CONNECT_MINI_v1 — simple connect + holder check (current chain only) ========== */
+(()=>{
+  // Small helpers (kept local so we don't clash with anything else)
+  const qs  = (sel,root=document) => root.querySelector(sel);
+  const qsa = (sel,root=document) => Array.from(root.querySelectorAll(sel));
+
+  // Create the mini panel UI
+  const box = document.createElement('div');
+  box.id = 'ra-wallet-mini';
+  box.innerHTML = `
+    <div class="panel" style="
+      margin:12px 0; padding:10px; border-radius:8px; background:#121317; 
+      border:1px solid rgba(255,255,255,0.08); color:#e6e6e6; font-size:12px; line-height:1.4;
+    ">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <strong style="font-size:13px;">Wallet</strong>
+        <button id="raW_connect" class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,0.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;">Connect</button>
+      </div>
+
+      <div id="raW_row1" style="margin-top:8px; display:none;">
+        <div><span style="opacity:.65;">Address:</span> <span id="raW_addr" style="font-family:ui-monospace, SFMono-Regular, Menlo, monospace;"></span></div>
+        <div><span style="opacity:.65;">Network:</span> <span id="raW_chain"></span></div>
+      </div>
+
+      <div id="raW_actions" style="margin-top:10px; display:none;">
+        <button id="raW_check" class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,0.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;">Check holdings</button>
+        <button id="raW_clear" class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,0.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;float:right;">Clear</button>
+      </div>
+
+      <div id="raW_out" style="margin-top:10px; white-space:pre-wrap;"></div>
+    </div>
+  `;
+
+  // Try to place it nicely at the top of the left column
+  const leftCol = qs('#left, .left, .sidebar, .panels, .controls, .col-left');
+  if (leftCol && leftCol.firstChild) {
+    leftCol.insertBefore(box, leftCol.firstChild);
+  } else {
+    document.body.insertBefore(box, document.body.firstChild);
+    box.style.position = 'relative';
+    box.style.zIndex = 5;
+  }
+
+  // Elements
+  const btnConnect = qs('#raW_connect', box);
+  const btnCheck   = qs('#raW_check',   box);
+  const btnClear   = qs('#raW_clear',   box);
+  const row1       = qs('#raW_row1',    box);
+  const actions    = qs('#raW_actions', box);
+  const out        = qs('#raW_out',     box);
+  const addrEl     = qs('#raW_addr',    box);
+  const chainEl    = qs('#raW_chain',   box);
+
+  // Public state we can reuse elsewhere (e.g., watermark/voting later)
+  window.RA_WALLET_STATE = { connected:false, address:null, chainId:null, provider:null };
+  window.RA_HOLDER_STATE = { checked:false, hasRebel:false, hasFriend:false, matches:[] };
+
+  // ---- Chain name map (includes Base)
+  function netNameFromChainId(cidHex){
+    const map = {
+      '0x1':      'Ethereum',
+      '0xaa36a7': 'Sepolia',
+      '0x2105':   'Base',          // 8453
+      '0x14a33':  'Base Sepolia',  // 84532
+      '0xa4b1':   'Arbitrum One',
+      '0x89':     'Polygon'
+    };
+    const k = (cidHex||'').toLowerCase();
+    return map[k] || cidHex;
+  }
+
+  // Short address for display
+  const short = (a)=>!a ? '' : (a.slice(0,6)+'…'+a.slice(-4));
+
+  // Connect wallet
+  async function connect(){
+    const eth = window.ethereum;
+    if (!eth) {
+      out.textContent = 'No wallet detected. Use MetaMask or Coinbase Wallet (extension or in‑app browser).';
+      return;
+    }
+    try {
+      const accounts = await eth.request({ method:'eth_requestAccounts' });
+      const chainId  = await eth.request({ method:'eth_chainId' });
+      const address  = (accounts && accounts[0]) || null;
+
+      window.RA_WALLET_STATE = { connected: !!address, address, chainId, provider: eth };
+
+      btnConnect.textContent = address ? 'Connected' : 'Connect';
+      row1.style.display  = address ? '' : 'none';
+      actions.style.display = address ? '' : 'none';
+      addrEl.textContent  = short(address);
+      chainEl.textContent = netNameFromChainId(chainId);
+
+      out.textContent = address
+        ? 'Connected. Click “Check holdings” to see if this wallet is eligible.'
+        : 'Not connected.';
+    } catch (e) {
+      out.textContent = 'Connect cancelled or failed.';
+    }
+  }
+
+  // Clear state
+  function clearState(){
+    window.RA_HOLDER_STATE = { checked:false, hasRebel:false, hasFriend:false, matches:[] };
+    out.textContent = 'Cleared. (Wallet stays connected.)';
+  }
+
+  // Fetch collections list from API, else fallback to your ETH contracts
+  async function getCollectionsFor(chainIdHex){
+    // Expecting /api/ra-collections -> { ok:true, collections:[{address, chainId, tag, name}] }
+    try {
+      const r = await fetch('/api/ra-collections');
+      if (r.ok) {
+        const j = await r.json();
+        const list = (j.collections||[]).filter(c =>
+          (c.chainId||'').toLowerCase() === (chainIdHex||'').toLowerCase()
+        );
+        if (list.length) return list;
+      }
+    } catch(_) {}
+
+    // Fallback (ETH only) — edit later as needed
+    const fallback = [
+      { address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1', tag:'rebel',  name:'Rebel Ants' },
+      { address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chainId:'0x1', tag:'friend', name:'Saints of LA' }
+      // Add more later, once you know their chainId
+    ];
+    return fallback.filter(c => c.chainId.toLowerCase() === (chainIdHex||'').toLowerCase());
+  }
+
+  // Minimal ERC‑721 balanceOf(addr) call via provider
+  async function balanceOf(provider, contract, owner){
+    // 0x70a08231 + 12*0 + addr (32‑byte)
+    const methodId = '0x70a08231';
+    const data = methodId + owner.replace(/^0x/, '').padStart(64,'0');
+    const hex = await provider.request({
+      method:'eth_call',
+      params:[ { to: contract, data }, 'latest' ]
+    });
+    try { return (BigInt(hex) > 0n); } catch { return false; }
+  }
+
+  // Check holdings on current chain
+  async function checkHoldings(){
+    const { provider, address, chainId } = window.RA_WALLET_STATE || {};
+    if (!provider || !address || !chainId){
+      out.textContent = 'Connect your wallet first.';
+      return;
+    }
+    out.textContent = 'Checking…';
+
+    const cols = await getCollectionsFor(chainId);
+    if (!cols.length){
+      out.textContent = `No collections configured for ${netNameFromChainId(chainId)}.`;
+      window.RA_HOLDER_STATE = { checked:true, hasRebel:false, hasFriend:false, matches:[] };
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE }));
+      return;
+    }
+
+    const results = [];
+    for (const c of cols){
+      let ok = false;
+      try { ok = await balanceOf(provider, c.address, address); } catch(_){}
+      results.push({ ...c, holds: ok });
+    }
+
+    const hasRebel  = results.some(r => r.holds && (r.tag==='rebel'));
+    const hasFriend = results.some(r => r.holds && (r.tag!=='rebel'));
+
+    window.RA_HOLDER_STATE = { checked:true, hasRebel, hasFriend, matches: results };
+    document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE }));
+
+    // Pretty print
+    const lines = [
+      `Chain: ${netNameFromChainId(chainId)}`,
+      `Address: ${short(address)}`,
+      '',
+      ...results.map(r => `• ${r.name||r.address} — ${r.holds ? '✅ holds' : '—'}`),
+      '',
+      `Summary: ${hasRebel ? 'Rebel holder' : 'No Rebel'}${hasFriend ? ' + Friend collection' : ''}`
+    ];
+    out.textContent = lines.join('\n');
+  }
+
+  // Wire up buttons
+  btnConnect.addEventListener('click', connect);
+  btnCheck  .addEventListener('click', checkHoldings);
+  btnClear  .addEventListener('click', clearState);
+
+  // React to chain/account changes
+  if (window.ethereum){
+    ethereum.on?.('accountsChanged', ()=>{ 
+      // Reset UI on account change
+      window.RA_WALLET_STATE.connected = false;
+      btnConnect.textContent = 'Connect';
+      row1.style.display = 'none';
+      actions.style.display = 'none';
+      out.textContent = 'Account changed. Please connect again.'; 
+    });
+    ethereum.on?.('chainChanged', (cid)=>{
+      if (window.RA_WALLET_STATE.connected){
+        chainEl.textContent = netNameFromChainId(cid);
+      }
+      out.textContent = 'Network changed. Click “Check holdings” again.';
+    });
+  }
+})();
