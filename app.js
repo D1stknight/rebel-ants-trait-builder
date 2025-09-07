@@ -288,28 +288,41 @@
     const text = formatTokenId("#"+id, fmt);
 
     const style = {
-      fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-      fontSize: parseInt(($("idSize")||{}).value||"52",10),
-      fill: ($("idColor")||{}).value || "#ffffff",
-      stroke: ($("idStrokeColor")||{}).value || "transparent",
-      strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
-    };
+  fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+  fontSize: parseInt(($("idSize")||{}).value||"52",10),
+  fill: ($("idColor")||{}).value || "#ffffff",
+  stroke: ($("idStrokeColor")||{}).value || "transparent",
+  strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
+};
 
-    if(!idLabel){
-      idLabel = new fabric.Textbox(text, {
-        left: canvas.getWidth()/2, top: 40, originX:"center", originY:"top",
-        width: Math.floor(canvas.getWidth()*0.8), textAlign:"center",
-        editable:false, ...style
-      });
-      idLabel._kind='tokenId';
-      canvas.add(idLabel);
-    }else{
-      idLabel.text = text;
-      idLabel.set(style);
-    }
-    bringInterfaceToFront();
-    idLabel.setCoords();
-    canvas.requestRenderAll();
+if (!idLabel) {
+  // Use single-line Text (tight bounds), no forced width
+  idLabel = new fabric.Text(text, {
+    left: canvas.getWidth()/2,
+    top: 40,
+    originX: "center",
+    originY: "top",
+    textAlign: "center",
+    editable: false,               // stays non-editable
+    strokeUniform: true,
+    paintFirst: "stroke",
+    objectCaching: false,
+    perPixelTargetFind: true,
+    ...style
+  });
+  idLabel._kind = 'tokenId';
+  canvas.add(idLabel);
+} else {
+  idLabel.set({ text, ...style });
+}
+
+// Force Fabric to recompute tight bounds
+idLabel.set({ width: undefined });
+idLabel.initDimensions && idLabel.initDimensions();
+idLabel.setCoords();
+
+bringInterfaceToFront();
+canvas.requestRenderAll();
   }
 
   function formatTokenId(displayVal, fmt){
@@ -422,22 +435,39 @@
     safeAddListener("deleteTokenId","click", ()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
 
     // -------- Custom text (optional UI)
-    safeAddListener("addCustomText","click", ()=>{
-      const val = (($("customText")||{}).value||"").trim(); if (!val) return;
-      const txt = new fabric.Textbox(val,{
-        left:canvas.getWidth()/2, top:canvas.getHeight()/2, originX:"center", originY:"center",
-        width: Math.floor(canvas.getWidth()*0.8), textAlign:"left",
-        fontFamily: ($("fontFamily")||{}).value || "Arial, sans-serif",
-        fontSize: parseInt(($("fontSize")||{}).value||"48",10),
-        fill: ($("fontColor")||{}).value || "#ffffff",
-        stroke: ($("strokeColor")||{}).value || "transparent",
-        strokeWidth: parseInt(($("strokeWidth")||{}).value||"0",10),
-        editable:true
-      });
-      txt._kind='customText';
-      canvas.add(txt).setActiveObject(txt);
-      bringInterfaceToFront(); canvas.requestRenderAll();
-    });
+   safeAddListener("addCustomText","click", ()=>{
+  const val = (($("customText")||{}).value||"").trim(); if (!val) return;
+
+  // Use IText (editable single-line) → tight bounds, no forced width
+  const txt = new fabric.IText(val, {
+    left: canvas.getWidth()/2,
+    top:  canvas.getHeight()/2,
+    originX: "center",
+    originY: "center",
+    textAlign: "left",
+    fontFamily: ($("fontFamily")||{}).value || "Arial, sans-serif",
+    fontSize: parseInt(($("fontSize")||{}).value||"48",10),
+    fill: ($("fontColor")||{}).value || "#ffffff",
+    stroke: ($("strokeColor")||{}).value || "transparent",
+    strokeWidth: parseInt(($("strokeWidth")||{}).value||"0",10),
+    strokeUniform: true,
+    paintFirst: "stroke",
+    objectCaching: false,
+    perPixelTargetFind: true
+    // editable: true is default for IText
+  });
+
+  // Tighten bounds (ensure no cached wide box)
+  txt.set({ width: undefined });
+  txt.initDimensions && txt.initDimensions();
+  txt.setCoords();
+
+  txt._kind = 'customText';
+  canvas.add(txt);
+  canvas.setActiveObject(txt);
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+});
     ["change","input"].forEach(ev=>{
       safeAddListener("fontFamily", ev, ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', $("fontFamily").value); canvas.requestRenderAll(); }});
       safeAddListener("fontSize", ev,   ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt($("fontSize").value||"48",10)); canvas.requestRenderAll(); }});
@@ -4789,3 +4819,238 @@
   window.addEventListener('orientationchange',()=> setTimeout(placeEmojiPop,100), {passive:true});
 })();
 
+/* === RA_CLICK_ZOOM + BUTTONS_v3 — click-to-zoom + integrated +/-/Reset === */
+(() => {
+  if (window.__RA_CLICK_ZOOM_BUTTONS_v3__) return;
+  window.__RA_CLICK_ZOOM_BUTTONS_v3__ = true;
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  function whenReady(fn){
+    if (C() && window.fabric) return fn();
+    const t = setInterval(()=>{ if (C() && window.fabric){ clearInterval(t); fn(); } }, 120);
+  }
+
+  whenReady(() => {
+    const c = C();
+    const { fabric } = window;
+
+    // Limits & speeds
+    const MIN = 0.25, MAX = 6;
+    const BTN_STEP = 1.12;      // +/- normal click speed
+    const BTN_FAST = 1.25;      // hold Shift or Alt for faster +/- 
+    const CLICK_STEP = 1.20;    // click-to-zoom step
+
+    // State
+    let toolOn = false;
+    let lastAnchor = null;      // screen-space point (relative to canvas element)
+
+    // Save/restore interaction while tool is on
+    const saved = { selection:true, skip:false, cursor:'', hover:'' };
+
+    // Helpers
+    const curZoom = () => (typeof window.zoom === 'number' ? window.zoom : (c.getZoom?.() || 1));
+    function updateLabel(z){
+      const el = document.getElementById('zoomVal');
+      if (el) el.textContent = Math.round((z ?? curZoom()) * 100) + '%';
+    }
+    function resolveAnchor(){
+      // Prefer the last clicked point from the tool; else canvas center
+      return lastAnchor || new fabric.Point(c.getWidth()/2, c.getHeight()/2);
+    }
+    function zoomAt(point, next){
+      const z = Math.max(MIN, Math.min(MAX, next));
+      try { c.zoomToPoint(point, z); } catch(_) { c.setZoom(z); }
+      window.zoom = z;
+      updateLabel(z);
+      c.requestRenderAll();
+    }
+    function setZoomSmart(next){
+      zoomAt(resolveAnchor(), next);
+    }
+    // Make other code benefit too
+    window.setZoom = setZoomSmart;
+
+    // Hijack +/-/Reset so old listeners don’t run
+    function hijack(id, fn){
+      const b = document.getElementById(id);
+      if (!b || b.__raCZ3) return;
+      b.__raCZ3 = true;
+      b.addEventListener('click', (e)=>{
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        fn(e || {});
+      }, true); // capture phase
+    }
+    hijack('zoomIn', (e)=>{
+      const step = (e.shiftKey || e.altKey) ? BTN_FAST : BTN_STEP;
+      setZoomSmart(curZoom() * step);
+    });
+    hijack('zoomOut', (e)=>{
+      const step = (e.shiftKey || e.altKey) ? BTN_FAST : BTN_STEP;
+      setZoomSmart(curZoom() / step);
+    });
+    hijack('zoomReset', ()=>{
+      try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
+      window.zoom = 1;
+      lastAnchor = null; // clear saved click anchor
+      updateLabel(1);
+      c.requestRenderAll();
+    });
+
+    // --- Click‑to‑Zoom tool (toggle) ---
+    function onMouseDown(opt){
+      const ev = opt && opt.e; if (!ev) return;
+      ev.preventDefault && ev.preventDefault();
+
+      const rect = c.upperCanvasEl.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+
+      // Save this as the new anchor for +/- buttons too
+      lastAnchor = new fabric.Point(x, y);
+
+      const zoomOut = ev.altKey || ev.metaKey || ev.ctrlKey || ev.button === 2; // Alt/⌥/Ctrl/⌘ or right-click
+      const step = zoomOut ? (1/CLICK_STEP) : CLICK_STEP;
+      zoomAt(lastAnchor, curZoom() * step);
+    }
+    function blockContext(e){ e.preventDefault(); }
+    function onEsc(e){
+      if (e.key === 'Escape'){ disableTool(); setBtnText('Click Zoom: Off'); }
+    }
+
+    function enableTool(){
+      if (toolOn) return; toolOn = true;
+      saved.selection   = c.selection;
+      saved.skip        = !!c.skipTargetFind;
+      saved.cursor      = c.defaultCursor || '';
+      saved.hover       = c.hoverCursor   || '';
+
+      c.selection = false;
+      c.skipTargetFind = true;
+      c.defaultCursor = 'zoom-in';
+      c.hoverCursor   = 'zoom-in';
+
+      c.on('mouse:down', onMouseDown);
+      c.upperCanvasEl && c.upperCanvasEl.addEventListener('contextmenu', blockContext);
+      document.addEventListener('keydown', onEsc, true);
+    }
+    function disableTool(){
+      if (!toolOn) return; toolOn = false;
+      try { c.off('mouse:down', onMouseDown); } catch(_){}
+      try { c.upperCanvasEl && c.upperCanvasEl.removeEventListener('contextmenu', blockContext); } catch(_){}
+      document.removeEventListener('keydown', onEsc, true);
+
+      c.selection      = saved.selection;
+      c.skipTargetFind = saved.skip;
+      c.defaultCursor  = saved.cursor;
+      c.hoverCursor    = saved.hover;
+
+      c.requestRenderAll();
+    }
+    function toggleTool(){ toolOn ? disableTool() : enableTool(); }
+    function setBtnText(txt){ const b=document.getElementById('raClickZoomToggle'); if (b) b.textContent = txt; }
+
+    // Place a small toggle button next to your zoom controls
+    (function placeButton(){
+      const zi = document.getElementById('zoomIn');
+      const holder = (zi && zi.parentNode) || document.getElementById('raSnapRow') || document.body;
+      const btn = document.createElement('button');
+      btn.id = 'raClickZoomToggle';
+      btn.className = 'btn small';
+      btn.style.marginLeft = '8px';
+      btn.textContent = 'Click Zoom: Off';
+      btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); toggleTool(); setBtnText(toolOn?'Click Zoom: On':'Click Zoom: Off'); });
+      holder.appendChild(btn);
+    })();
+
+    // Keyboard shortcut: press “Z” to toggle tool
+    document.addEventListener('keydown', (e)=>{
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (e.key.toLowerCase() === 'z' && !e.metaKey && !e.ctrlKey && tag!=='input' && tag!=='textarea' && tag!=='select' && !e.target?.isContentEditable){
+        e.preventDefault();
+        toggleTool();
+        setBtnText(toolOn ? 'Click Zoom: On' : 'Click Zoom: Off');
+      }
+    }, true);
+
+    // Expose minimal API if you ever want to control it elsewhere
+    window.raClickZoom = {
+      on: ()=>toolOn,
+      setAnchor: (x,y)=>{ lastAnchor = new fabric.Point(x,y); },
+      clearAnchor: ()=>{ lastAnchor = null; },
+      enable: enableTool, disable: disableTool, toggle: toggleTool
+    };
+  });
+})();
+
+/* === RA_CANVAS_CONTROLS_LAYOUT_v1 — put Reset + Click Zoom on their own line === */
+(() => {
+  if (window.__RA_CANVAS_LAYOUT_V1) return;
+  window.__RA_CANVAS_LAYOUT_V1 = true;
+
+  function findResetButton() {
+    let el =
+      document.getElementById('zoomReset') ||
+      document.getElementById('resetZoom') ||
+      document.getElementById('reset');
+    if (el) return el;
+    const btns = Array.from(document.querySelectorAll('button'));
+    return btns.find(b => /reset/i.test((b.textContent || '').trim()));
+  }
+
+  function place() {
+    const reset = findResetButton();
+    if (!reset) return false;
+
+    // Try to find the row Reset was in, and the Canvas panel that contains it
+    const row   = reset.closest ? (reset.closest('.row') || reset.parentNode) : reset.parentNode;
+    const panel = row && row.parentNode ? row.parentNode : null;
+    if (!panel) return false;
+
+    // Create a small toolbar right BELOW that row
+    let bar = document.getElementById('raCanvasBottomBar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'raCanvasBottomBar';
+      bar.style.display    = 'flex';
+      bar.style.flexWrap   = 'wrap';
+      bar.style.gap        = '8px';
+      bar.style.marginTop  = '6px';
+      panel.insertBefore(bar, row.nextSibling);
+    }
+
+    // Move RESET into the new toolbar
+    bar.appendChild(reset);
+    reset.style.margin   = '0';
+    reset.style.fontSize = '12px';
+    reset.style.padding  = '6px 8px';
+
+    // If our Click‑Zoom toggle exists, move it next to Reset
+    const cz = document.getElementById('raClickZoomToggle');
+    if (cz) {
+      bar.appendChild(cz);
+      cz.style.margin   = '0';
+      cz.style.fontSize = '12px';
+      cz.style.padding  = '6px 8px';
+      cz.style.whiteSpace = 'nowrap';
+      cz.style.maxWidth = '120px';
+    }
+
+    // Let the first row wrap if it ever needs to (prevents overflow on small widths)
+    if (row && row.style) {
+      row.style.display   = 'flex';
+      row.style.flexWrap  = 'wrap';
+      row.style.gap       = '6px';
+      row.style.alignItems = 'center';
+    }
+
+    return true;
+  }
+
+  // Try until the elements exist
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    if (place() || tries > 50) clearInterval(t);
+  }, 150);
+})();
