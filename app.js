@@ -4983,45 +4983,58 @@ canvas.requestRenderAll();
   });
 })();
 
-/* === RA_CLICK_ZOOM_PLACEMENT_FIX_v1 — move + shrink Click Zoom button === */
+/* === RA_CLICK_ZOOM_PLACEMENT_FIX_v2 — put Click‑Zoom where it won't crowd Canvas === */
 (() => {
-  if (window.__RA_CZ_PLACE_v1__) return;
-  window.__RA_CZ_PLACE_v1__ = true;
+  if (window.__RA_CZ_PLACE_v2__) return;
+  window.__RA_CZ_PLACE_v2__ = true;
 
-  function ready(fn){
-    const t = setInterval(() => {
-      const btn = document.getElementById('raClickZoomToggle');
-      const guides = document.getElementById('guides');      // Selection panel
-      const zr = document.getElementById('zoomReset');       // Canvas panel
-      if (btn && (guides || zr)) { clearInterval(t); fn(btn, guides, zr); }
-    }, 120);
-  }
+  function place() {
+    const btn = document.getElementById('raClickZoomToggle');
+    if (!btn) return false;
 
-  ready((btn, guides, zr) => {
     // Make it compact
     btn.style.whiteSpace = 'nowrap';
     btn.style.fontSize   = '12px';
     btn.style.padding    = '6px 8px';
+    btn.style.maxWidth   = '100px';
 
-    // Shorter label
-    try {
-      const on = !!(window.raClickZoom && window.raClickZoom.on && window.raClickZoom.on());
-      btn.textContent = on ? '🔍 Zoom On' : '🔍 Zoom Off';
-    } catch (_) {}
-
-    // Prefer placing it beside "Guides" in the Selection panel
+    // First choice: beside "Guides" in Selection panel (more room there)
+    const guides = document.getElementById('guides');
     if (guides && guides.parentNode) {
       guides.parentNode.appendChild(btn);
       btn.style.marginLeft = '8px';
       btn.style.marginTop  = '0';
-      return;
+      return true;
     }
 
-    // Fallback: put it on a new line right after Reset (so it won't crowd the row)
-    if (zr) {
-      zr.insertAdjacentElement('afterend', btn);
-      btn.style.display = 'block';
-      btn.style.margin  = '6px 0 0 0';
+    // Fallback: put it on its own line BELOW the Reset button in the Canvas panel
+    const reset =
+      document.getElementById('zoomReset') ||
+      document.getElementById('resetZoom') ||
+      document.getElementById('reset');
+
+    if (reset) {
+      // Move it OUT of the flex row so it doesn't steal space
+      const row   = reset.closest ? (reset.closest('.row') || reset.parentNode) : reset.parentNode;
+      const panel = row && row.parentNode ? row.parentNode : null;
+      if (panel) {
+        const wrap = document.createElement('div');
+        wrap.style.display   = 'block';
+        wrap.style.marginTop = '6px';
+        panel.insertBefore(wrap, row.nextSibling); // new line after the row
+        wrap.appendChild(btn);
+        btn.style.margin = '0';
+        return true;
+      }
     }
-  });
+
+    return false;
+  }
+
+  // Try until both the button and targets exist
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    if (place() || tries > 40) clearInterval(t);
+  }, 150);
 })();
