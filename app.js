@@ -6039,3 +6039,74 @@ const shouldShow =
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
   else bind();
 })();
+
+/* ========== RA_COLLECTION_ROW_FIT_v3 — tidy row + populate names ========== */
+(()=>{
+  const $ = (id)=> document.getElementById(id);
+
+  async function getCollections(){
+    if (Array.isArray(window.RA_COLLECTIONS) && window.RA_COLLECTIONS.length) return window.RA_COLLECTIONS;
+    try {
+      const r = await fetch('/api/ra-collections'); const j = await r.json();
+      window.RA_COLLECTIONS = j.collections || j || [];
+    } catch { window.RA_COLLECTIONS = window.RA_COLLECTIONS || []; }
+    return window.RA_COLLECTIONS;
+  }
+
+  function findLoadBtn(){
+    return document.getElementById('loadByToken')
+        || document.getElementById('loadTokenBtn')
+        || Array.from(document.querySelectorAll('button')).find(b=>/load by token/i.test(b.textContent||''));
+  }
+
+  function ensureRow(){
+    const btn = findLoadBtn(); if (!btn) return;
+    let row = document.getElementById('ra-col-row');
+    if (!row){
+      row = document.createElement('div');
+      row.id = 'ra-col-row';
+      row.className = 'ra-collection-row';
+      btn.parentElement.insertBefore(row, btn);
+    }
+    row.innerHTML = `
+      <span class="ra-mini">Collection</span>
+      <select id="ra-col-sel"></select>
+      <button id="ra-col-refresh" type="button" class="mini">Refresh</button>
+      <small id="ra-col-using" class="ra-mini">Using: —</small>
+    `;
+  }
+
+  function renderOptions(list){
+    const sel = $('ra-col-sel'); if (!sel) return;
+    sel.innerHTML = '';
+    list.forEach(c=>{
+      const opt = document.createElement('option');
+      opt.value = `${c.chain}:${c.contract}`;
+      opt.textContent = `${c.name} — ${c.chain==='ethereum'?'Ether':c.chain}`;
+      sel.appendChild(opt);
+    });
+    updateUsing();
+  }
+
+  function selected(){
+    const sel = $('ra-col-sel');
+    return (window.RA_COLLECTIONS||[]).find(c => `${c.chain}:${c.contract}` === (sel && sel.value)) || null;
+  }
+
+  function updateUsing(){
+    const s = selected();
+    const el = $('ra-col-using');
+    if (el) el.textContent = s ? `Using: ${s.name}` : 'Using: —';
+  }
+
+  async function init(){
+    ensureRow();
+    const list = await getCollections();
+    if (list.length) renderOptions(list);
+    $('ra-col-sel')?.addEventListener('change', updateUsing);
+    $('ra-col-refresh')?.addEventListener('click', ()=> renderOptions(window.RA_COLLECTIONS||[]));
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
