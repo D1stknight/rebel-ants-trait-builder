@@ -288,28 +288,41 @@
     const text = formatTokenId("#"+id, fmt);
 
     const style = {
-      fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-      fontSize: parseInt(($("idSize")||{}).value||"52",10),
-      fill: ($("idColor")||{}).value || "#ffffff",
-      stroke: ($("idStrokeColor")||{}).value || "transparent",
-      strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
-    };
+  fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+  fontSize: parseInt(($("idSize")||{}).value||"52",10),
+  fill: ($("idColor")||{}).value || "#ffffff",
+  stroke: ($("idStrokeColor")||{}).value || "transparent",
+  strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
+};
 
-    if(!idLabel){
-      idLabel = new fabric.Textbox(text, {
-        left: canvas.getWidth()/2, top: 40, originX:"center", originY:"top",
-        width: Math.floor(canvas.getWidth()*0.8), textAlign:"center",
-        editable:false, ...style
-      });
-      idLabel._kind='tokenId';
-      canvas.add(idLabel);
-    }else{
-      idLabel.text = text;
-      idLabel.set(style);
-    }
-    bringInterfaceToFront();
-    idLabel.setCoords();
-    canvas.requestRenderAll();
+if (!idLabel) {
+  // Use single-line Text (tight bounds), no forced width
+  idLabel = new fabric.Text(text, {
+    left: canvas.getWidth()/2,
+    top: 40,
+    originX: "center",
+    originY: "top",
+    textAlign: "center",
+    editable: false,               // stays non-editable
+    strokeUniform: true,
+    paintFirst: "stroke",
+    objectCaching: false,
+    perPixelTargetFind: true,
+    ...style
+  });
+  idLabel._kind = 'tokenId';
+  canvas.add(idLabel);
+} else {
+  idLabel.set({ text, ...style });
+}
+
+// Force Fabric to recompute tight bounds
+idLabel.set({ width: undefined });
+idLabel.initDimensions && idLabel.initDimensions();
+idLabel.setCoords();
+
+bringInterfaceToFront();
+canvas.requestRenderAll();
   }
 
   function formatTokenId(displayVal, fmt){
