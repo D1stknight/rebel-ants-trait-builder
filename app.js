@@ -4789,3 +4789,40 @@
   window.addEventListener('orientationchange',()=> setTimeout(placeEmojiPop,100), {passive:true});
 })();
 
+/* === RA_TIGHT_TEXT_BOX_SAFE_v3 — tighten Token ID & Custom Text/Emoji boxes only === */
+(function(){
+  function whenCanvasReady(fn){
+    if (window.canvas && window.fabric) return fn();
+    const t = setInterval(()=>{ if (window.canvas && window.fabric){ clearInterval(t); fn(); } }, 120);
+  }
+
+  whenCanvasReady(()=> {
+    const { fabric } = window;
+    try {
+      // Make new text items use tiny padding
+      fabric.Text     && (fabric.Text.prototype.padding     = 2);
+      fabric.IText    && (fabric.IText.prototype.padding    = 2);
+      fabric.Textbox  && (fabric.Textbox.prototype.padding  = 2);
+    } catch(_) {}
+
+    const isText = o => !!o && (o.type === 'i-text' || o.type === 'text' || o.type === 'textbox');
+
+    function tighten(o){
+      if (!isText(o)) return;
+      try {
+        // Recompute actual width/height so the dotted box hugs the text
+        o._clearCache && o._clearCache();
+        o.initDimensions && o.initDimensions();
+        o.setCoords();
+      } catch(_) {}
+    }
+
+    // Tighten any text already on the canvas
+    try { canvas.getObjects().forEach(tighten); canvas.requestRenderAll(); } catch(_) {}
+
+    // Tighten whenever a text object is added/typed/edited
+    ['object:added','text:changed','editing:exited','object:modified'].forEach(evt => {
+      canvas.on(evt, e => tighten(e && e.target));
+    });
+  });
+})();
