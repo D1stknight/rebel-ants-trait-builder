@@ -5610,7 +5610,11 @@ const shouldShow =
   const PAD = 10;
 
   const toLower = s => (s||'').toLowerCase();
-  const rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
+  let rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
+if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
+  const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
+  if (r) rebelContract = toLower(r.address || r.contract);
+}
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
   function findBase(c){ return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null; }
@@ -5700,12 +5704,12 @@ const shouldShow =
       const st = document.createElement('style');
       st.id = 'raColCss';
       st.textContent = `
-        #${ROW_ID}{display:flex; gap:8px; align-items:center; margin-top:8px;}
-        #${ROW_ID} label{min-width:76px; opacity:.75}
-        #${ROW_ID} select{flex:1; height:32px; border:1px solid #313131; background:#121212; color:#fff; border-radius:6px; padding:4px 8px;}
-        #${ROW_ID} button{height:32px; padding:0 10px;}
-        #${STATUS_ID}{display:block; margin-top:6px; font-size:12px; opacity:.66;}
-      `;
+  #${ROW_ID}{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px;}
+  #${ROW_ID} label{flex:1 1 auto; min-width:76px; opacity:.75}
+  #${ROW_ID} button{height:32px; padding:0 10px;}
+  #${ROW_ID} select{flex:1 1 100%; height:32px; border:1px solid #313131; background:#121212; color:#fff; border-radius:6px; padding:4px 8px;}
+  #${STATUS_ID}{flex-basis:100%; display:block; margin-top:6px; font-size:12px; opacity:.66;}
+`;
       document.head.appendChild(st);
     }
   }catch(_){}
@@ -5802,11 +5806,11 @@ function netNameFromChainId(cidHex){
       row = document.createElement('div');
       row.id = ROW_ID;
       row.innerHTML = `
-        <label>Collection</label>
-        <select id="${SELECT_ID}"></select>
-        <button id="${REFRESH_ID}" type="button">Refresh</button>
-        <span id="${STATUS_ID}"></span>
-      `;
+  <label>Collection</label>
+  <button id="${REFRESH_ID}" type="button">Refresh</button>
+  <select id="${SELECT_ID}"></select>
+  <span id="${STATUS_ID}"></span>
+`;
       // Put it as a sibling right under the token input’s container
       const anchor = tokenInput.parentElement;
       (anchor.parentElement || anchor).appendChild(row);
@@ -5822,8 +5826,12 @@ function netNameFromChainId(cidHex){
       sel.appendChild(o);
     });
     // Restore/choose selection
-    if (S.selectedKey) sel.value = S.selectedKey;
-    else { S.selectedKey = sel.value; }
+    if (S.selectedKey && Array.from(sel.options).some(o => o.value === S.selectedKey)) {
+  sel.value = S.selectedKey;
+} else {
+  S.selectedKey = sel.options[0] ? sel.options[0].value : null;
+  sel.value = S.selectedKey || '';
+}
 
     // Status text
     const st = $(STATUS_ID);
@@ -5902,8 +5910,25 @@ async function loadTokenFromCollection(tokenId, col){
     const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
   }
 
+  function autoFitBase(){
+  const c = window.canvas; if (!c) return;
+  const base = (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect);
+  if (!base || !base.width || !base.height) return;
+
+  const maxW = c.getWidth(), maxH = c.getHeight();
+  const scale = Math.min(maxW / base.width, maxH / base.height);
+
+  base.set({
+    scaleX: scale, scaleY: scale,
+    left: (maxW - base.width * scale) / 2,
+    top:  (maxH - base.height * scale) / 2
+  });
+  base.setCoords();
+  try{ c.requestRenderAll(); }catch(_){}
+}
   // Tag the base so the footer/watermark can react
   annotateBase({ contract, chain: slug, name: col.name });
+  autoFitBase();
 }
 
   function hookLoadByToken(){
@@ -5912,16 +5937,24 @@ async function loadTokenFromCollection(tokenId, col){
                 Array.from(document.querySelectorAll('button')).find(b=>/load by token/i.test(b.textContent||''));
     if (!btn) return;
 
-    const handler = async (e)=>{
-      try{ e.preventDefault(); e.stopImmediatePropagation(); }catch(_){}
-      const inp = findTokenIdInput();
-      const tokenId = (inp && inp.value || '').trim();
-      if (!tokenId){ alert('Enter a token ID first.'); return; }
-      const col = currentCol();
-      if (!col){ alert('Pick a collection first.'); return; }
-      await loadTokenFromCollection(tokenId, col);
-    };
+  const handler = async (e)=>{
+  try{ e.preventDefault(); e.stopImmediatePropagation(); }catch(_){}
+  const inp = findTokenIdInput();
+  const tokenId = (inp && inp.value || '').trim();
+  if (!tokenId){ alert('Enter a token ID first.'); return; }
+  const col = currentCol();
+  if (!col){ alert('Pick a collection first.'); return; }
 
+  const st = document.getElementById('raColStatus');
+  if (st) st.textContent = `Fetching ${col.name} #${tokenId}…`;
+
+  try{
+    await loadTokenFromCollection(tokenId, col);
+    if (st) st.textContent = `Loaded ${col.name} #${tokenId}`;
+  }catch(_){
+    if (st) st.textContent = `Failed to load ${col.name} #${tokenId}`;
+  }
+};
     // Bind in capture mode so we override earlier listeners that hard‑coded Rebels
     btn.addEventListener('click', handler, true);
 
