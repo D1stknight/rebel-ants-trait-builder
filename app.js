@@ -5975,36 +5975,72 @@ async function loadTokenFromCollection(tokenId, col){
   boot();
 })();
 
-/* ========== RA_TOKEN_ID_LOAD_BUTTON_v1 — adds "Load Token ID" button and places text layer ========== */
+/* ========== RA_TOKEN_ID_TEXT_CONTROL_v2 — Load/Style/Delete Token ID (wired to UI) ========== */
 (()=>{
-  function qsAll(sel,root=document){ return Array.from(root.querySelectorAll(sel)); }
+  const $all = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const $one = (s,root=document)=>root.querySelector(s);
 
-  // Find the Token ID input field
-  function findTokenIdInput(){
-    return document.getElementById('tokenId') ||
-           document.querySelector('input#token') ||
-           document.querySelector('input[name="token"]') ||
-           document.querySelector('input[placeholder*="Token"]');
+  function C(){ return window.canvas || null; }
+
+  // Find the “Token ID Styles” panel by its heading text
+  function findTokenIdPanel(){
+    const heads = $all('h1,h2,h3,h4,strong,legend');
+    const h = heads.find(el => /token id styles/i.test(el.textContent||''));
+    if (!h) return null;
+    let p = h.parentElement;
+    for (let i=0;i<5 && p;i++){
+      if ((p.className||'').match(/\b(card|panel)\b/i)) return p;
+      p = p.parentElement;
+    }
+    return h.parentElement;
   }
 
-  // Find the existing "Delete Token ID" button so we can sit next to it
-  function findDeleteBtn(){
-    return qsAll('button').find(b => /delete token id/i.test(b.textContent||''));
+  // Grab controls inside that panel (robust by text/options)
+  function getCtrls(panel){
+    const ctrls = {};
+    ctrls.panel = panel;
+
+    // format <select> has an option that mentions “Roman”
+    ctrls.format = $all('select', panel)
+      .find(s => $all('option', s).some(o => /roman/i.test(o.textContent||o.label||o.value)));
+
+    // small text box with “#—” style prefix (first text input in the panel)
+    ctrls.prefix = $one('input[type="text"]', panel);
+
+    // “Size” number box (first number input in the panel)
+    ctrls.size = $one('input[type="number"]', panel);
+
+    // Outline color (first color input in the panel that sits near a label “Outline”, else any color input)
+    ctrls.outlineColor =
+      $one('input[type="color"][name*="outline" i]', panel) ||
+      $one('input[type="color"]', panel);
+
+    // Outline width (first range in the panel)
+    ctrls.outlineWidth = $one('input[type="range"]', panel);
+
+    // Buttons
+    ctrls.deleteBtn = $all('button', panel).find(b => /delete token id/i.test(b.textContent||''));
+    ctrls.loadBtn   = $all('button', panel).find(b => /load token id/i.test(b.textContent||''));
+
+    return ctrls;
   }
 
-  // Create or update the Token ID text layer on the canvas
-  function addOrUpdateTokenIdLayer(tokenId){
-    const c = window.canvas;
-    if (!c || !window.fabric) return alert('Canvas not ready yet.');
-    if (!tokenId) return alert('Type a token ID first.');
+  // Where we read the numeric Token ID from (same box you use to “Load by Token”)
+  function readTokenIdValue(){
+    const inp = document.getElementById('tokenId')
+             || document.querySelector('input#token')
+             || document.querySelector('input[name="token"]')
+             || document.querySelector('input[placeholder*="Token"]');
+    return (inp && inp.value.trim()) || '';
+  }
 
-    const objs = c.getObjects() || [];
-    let layer = objs.find(o => o && o._raTokenId);
-
-    if (layer){
-      layer.text = String(tokenId);
-    } else {
-      layer = new fabric.Textbox(String(tokenId), {
+  // Create or fetch the Token ID layer on the Fabric canvas
+  function getOrCreateLayer(){
+    const c = C(); if (!c || !window.fabric) { alert('Canvas not ready'); return null; }
+    const objs = c.getObjects()||[];
+    let layer = objs.find(o => o && o._raTokenId === true);
+    if (!layer){
+      layer = new fabric.Textbox('0', {
         left: 24, top: 24,
         fontFamily: 'Inter, Arial, sans-serif',
         fontSize: 64,
@@ -6017,43 +6053,120 @@ async function loadTokenFromCollection(tokenId, col){
       });
       c.add(layer);
     }
+    return layer;
+  }
 
-    try{ c.setActiveObject(layer); }catch(_){}
+  // Format helpers
+  function toRoman(num){
+    if (!(num>0)) return String(num);
+    const map = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+    let n = num, out = '';
+    for (const [v,s] of map){ while (n>=v){ out+=s; n-=v; } }
+    return out;
+  }
+  function formatDisplay(raw, fmtText, prefix){
+    const n = parseInt(raw,10);
+    const p = prefix || '';
+    const fmt = (fmtText||'').toLowerCase();
+    if (!Number.isFinite(n)) return p + String(raw||'');
+    if (/roman/.test(fmt))             return p + toRoman(n);
+    if (/hex/.test(fmt))               return p + '0x' + n.toString(16).toUpperCase();
+    if (/binary/.test(fmt))            return p + n.toString(2);
+    if (/leading\s*zeros/.test(fmt))   return p + String(n).padStart(4,'0');
+    return p + String(n);
+  }
+
+  // Apply style from controls to the layer
+  function applyStyleFromCtrls(layer, ctrls){
+    if (!layer) return;
+
+    // Font size
+    const fs = parseInt(ctrls.size && ctrls.size.value, 10);
+    if (Number.isFinite(fs) && fs>0) layer.set({ fontSize: fs });
+
+    // Outline width
+    const sw = parseFloat(ctrls.outlineWidth && ctrls.outlineWidth.value);
+    if (Number.isFinite(sw) && sw>=0) layer.set({ strokeWidth: sw });
+
+    // Outline color
+    if (ctrls.outlineColor && ctrls.outlineColor.value) {
+      layer.set({ stroke: ctrls.outlineColor.value });
+    }
+  }
+
+  // Recompute text + style and render
+  function recompute(ctrls){
+    const c = C(); if (!c) return;
+    const layer = getOrCreateLayer(); if (!layer) return;
+
+    const raw = readTokenIdValue();
+    const fmtText = ctrls.format
+      ? (ctrls.format.options[ctrls.format.selectedIndex]?.text || ctrls.format.value || '')
+      : '';
+    const prefix = ctrls.prefix ? ctrls.prefix.value || '' : '';
+
+    layer.set({ text: formatDisplay(raw, fmtText, prefix) });
+    applyStyleFromCtrls(layer, ctrls);
+
+    try { c.setActiveObject(layer); } catch(_){}
     c.requestRenderAll();
   }
 
-  // Build and insert the "Load Token ID" button next to "Delete Token ID"
-  function ensureButton(){
-    if (document.getElementById('raLoadTokenIdBtn')) return; // already added
-    const del = findDeleteBtn();
-    if (!del || !del.parentElement) return; // UI not ready yet; we'll retry
+  // Remove the Token ID layer
+  function deleteLayer(){
+    const c = C(); if (!c) return;
+    const objs = c.getObjects()||[];
+    const layer = objs.find(o => o && o._raTokenId);
+    if (layer){ c.remove(layer); c.requestRenderAll(); }
+  }
 
-    const btn = document.createElement('button');
-    btn.id = 'raLoadTokenIdBtn';
-    btn.className = del.className || 'btn';
-    btn.textContent = 'Load Token ID';
-    btn.style.marginRight = '6px';
+  // Ensure there is a “Load Token ID” button (if yours already exists, we reuse it)
+  function ensureLoadButton(ctrls){
+    if (!ctrls.deleteBtn) return; // need an anchor
+    let btn = ctrls.loadBtn;
+    if (!btn){
+      btn = document.createElement('button');
+      btn.id = 'raLoadTokenIdBtn';
+      btn.className = ctrls.deleteBtn.className || 'btn';
+      btn.textContent = 'Load Token ID';
+      btn.style.marginLeft = '8px';
+      ctrls.deleteBtn.parentElement.insertBefore(btn, ctrls.deleteBtn);
+    }
+    btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopImmediatePropagation(); recompute(ctrls); }, {capture:true});
+  }
 
-    del.parentElement.insertBefore(btn, del); // show it just before "Delete Token ID"
+  // Wire everything
+  function wire(){
+    const panel = findTokenIdPanel(); if (!panel) return;
+    const ctrls = getCtrls(panel);
 
-    btn.addEventListener('click', ()=>{
-      const input = findTokenIdInput();
-      const tokenId = (input && input.value || '').trim();
-      addOrUpdateTokenIdLayer(tokenId);
-    });
+    // Delete button (override any old handler)
+    if (ctrls.deleteBtn){
+      ctrls.deleteBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopImmediatePropagation(); deleteLayer(); }, {capture:true});
+    }
+
+    // Load button
+    ensureLoadButton(ctrls);
+
+    // Live update when controls change (no need to re‑click Load)
+    if (ctrls.format)       ctrls.format.addEventListener('change', ()=>recompute(ctrls));
+    if (ctrlls = ctrls, ctrls.size)         ctrls.size.addEventListener('input', ()=>recompute(ctrlls));
+    if (ctrls.prefix)       ctrls.prefix.addEventListener('input', ()=>recompute(ctrls));
+    if (ctrls.outlineColor) ctrls.outlineColor.addEventListener('input', ()=>recompute(ctrls));
+    if (ctrls.outlineWidth) ctrls.outlineWidth.addEventListener('input', ()=>recompute(ctrls));
   }
 
   function boot(){
-    ensureButton();
-    // In case the right panel renders a bit later
+    wire();
+    // Retry a few times in case the right panel finishes rendering later
     let tries = 0;
     const iv = setInterval(()=>{
-      if (document.getElementById('raLoadTokenIdBtn')) return clearInterval(iv);
-      if (++tries > 20) return clearInterval(iv);
-      ensureButton();
+      const ok = document.getElementById('raLoadTokenIdBtn');
+      if (ok || ++tries>20) return clearInterval(iv);
+      wire();
     }, 400);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
