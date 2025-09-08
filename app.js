@@ -5974,3 +5974,86 @@ async function loadTokenFromCollection(tokenId, col){
   // kick off
   boot();
 })();
+
+/* ========== RA_TOKEN_ID_LOAD_BUTTON_v1 — adds "Load Token ID" button and places text layer ========== */
+(()=>{
+  function qsAll(sel,root=document){ return Array.from(root.querySelectorAll(sel)); }
+
+  // Find the Token ID input field
+  function findTokenIdInput(){
+    return document.getElementById('tokenId') ||
+           document.querySelector('input#token') ||
+           document.querySelector('input[name="token"]') ||
+           document.querySelector('input[placeholder*="Token"]');
+  }
+
+  // Find the existing "Delete Token ID" button so we can sit next to it
+  function findDeleteBtn(){
+    return qsAll('button').find(b => /delete token id/i.test(b.textContent||''));
+  }
+
+  // Create or update the Token ID text layer on the canvas
+  function addOrUpdateTokenIdLayer(tokenId){
+    const c = window.canvas;
+    if (!c || !window.fabric) return alert('Canvas not ready yet.');
+    if (!tokenId) return alert('Type a token ID first.');
+
+    const objs = c.getObjects() || [];
+    let layer = objs.find(o => o && o._raTokenId);
+
+    if (layer){
+      layer.text = String(tokenId);
+    } else {
+      layer = new fabric.Textbox(String(tokenId), {
+        left: 24, top: 24,
+        fontFamily: 'Inter, Arial, sans-serif',
+        fontSize: 64,
+        fill: '#ffffff',
+        stroke: '#000000',
+        strokeWidth: 2,
+        shadow: 'rgba(0,0,0,0.25) 2px 2px 3px',
+        _raTokenId: true,
+        name: 'Token ID'
+      });
+      c.add(layer);
+    }
+
+    try{ c.setActiveObject(layer); }catch(_){}
+    c.requestRenderAll();
+  }
+
+  // Build and insert the "Load Token ID" button next to "Delete Token ID"
+  function ensureButton(){
+    if (document.getElementById('raLoadTokenIdBtn')) return; // already added
+    const del = findDeleteBtn();
+    if (!del || !del.parentElement) return; // UI not ready yet; we'll retry
+
+    const btn = document.createElement('button');
+    btn.id = 'raLoadTokenIdBtn';
+    btn.className = del.className || 'btn';
+    btn.textContent = 'Load Token ID';
+    btn.style.marginRight = '6px';
+
+    del.parentElement.insertBefore(btn, del); // show it just before "Delete Token ID"
+
+    btn.addEventListener('click', ()=>{
+      const input = findTokenIdInput();
+      const tokenId = (input && input.value || '').trim();
+      addOrUpdateTokenIdLayer(tokenId);
+    });
+  }
+
+  function boot(){
+    ensureButton();
+    // In case the right panel renders a bit later
+    let tries = 0;
+    const iv = setInterval(()=>{
+      if (document.getElementById('raLoadTokenIdBtn')) return clearInterval(iv);
+      if (++tries > 20) return clearInterval(iv);
+      ensureButton();
+    }, 400);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
