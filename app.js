@@ -5975,16 +5975,17 @@ async function loadTokenFromCollection(tokenId, col){
   boot();
 })();
 
-/* ========== RA_TOKEN_ID_LOAD_v4 — add Load button + readout (reuse existing Delete) ========== */
+/* ========== RA_TOKEN_ID_LOAD_v5 — Load button (reuse your display) + keep Custom Text clean ========== */
 (()=>{
   function onReady(fn){
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
     else fn();
   }
+
   const STATE = { id:null, text:null, ui:null };
   const C = ()=> window.canvas || null;
 
-  // Find the "Token ID Styles" card by its heading text
+  // --- find the Token ID Styles card by its heading
   function findCard(){
     const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
       .find(el => /token id styles/i.test(el.textContent||''));
@@ -5993,7 +5994,7 @@ async function loadTokenFromCollection(tokenId, col){
       .find(el => /token id styles/i.test(el.textContent||'')) || null;
   }
 
-  // The main Token ID input (near Upload Image)
+  // --- the main Token ID input (in the Upload area)
   function mainTokenInput(){
     return document.getElementById('tokenId')
         || document.querySelector('input#token')
@@ -6006,56 +6007,56 @@ async function loadTokenFromCollection(tokenId, col){
     return Number.isFinite(n) ? n : null;
   }
 
- // Build just the Load button (reuse your existing "#—" display; do NOT add another)
-function ensureUI(card){
-  if (!card) return null;
+  // --- locate your existing small "#—" field; add only the Load button
+  function ensureUI(card){
+    if (!card) return null;
 
-  // 1) Find your existing small "#—" field if present (input or output)
-  let readout =
-    card.querySelector('#raTokenIdDisplay') ||
-    Array.from(card.querySelectorAll('input[type="text"],input:not([type]),output')).find(el=>{
-      const t = ((el.value ?? el.textContent ?? el.placeholder) || '').toString().trim();
-      return t.startsWith('#') || (el.placeholder||'').toString().trim().startsWith('#');
-    }) || null;
+    // Reuse your existing small display if present (input or output)
+    let readout =
+      card.querySelector('#raTokenIdDisplay') ||
+      Array.from(card.querySelectorAll('input[type="text"],input:not([type]),output')).find(el=>{
+        const t = ((el.value ?? el.textContent ?? el.placeholder) || '').toString().trim();
+        return t.startsWith('#') || (el.placeholder||'').toString().trim().startsWith('#');
+      }) || null;
 
-  // If we found an input, make it read‑only and tag it so we can update it
-  if (readout && readout.tagName && readout.tagName.toLowerCase()==='input'){
-    readout.readOnly = true;
-    if (!readout.id) readout.id = 'raTokenIdDisplay';
-  }
-
-  // 2) Delete any stray output box we may have created earlier so you don’t see two
-  Array.from(card.querySelectorAll('output#raTokenIdDisplay')).forEach(o=>{
-    if (o !== readout) o.remove();
-  });
-
-  // 3) Ensure the Load button exists; place it right after the readout if possible
-  let loadBtn = card.querySelector('#raLoadTokenIdBtn') ||
-    Array.from(card.querySelectorAll('button')).find(b=>/load token id/i.test(b.textContent||''));
-  if (!loadBtn){
-    loadBtn = document.createElement('button');
-    loadBtn.id = 'raLoadTokenIdBtn';
-    loadBtn.className = 'btn danger';
-    loadBtn.textContent = 'Load Token ID';
-    if (readout && readout.parentElement){
-      readout.parentElement.insertBefore(loadBtn, readout.nextSibling);
-    } else {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.style.gap = '10px';
-      row.appendChild(loadBtn);
-      card.insertBefore(row, card.firstElementChild?.nextSibling || card.firstChild);
+    // If it’s an input, make it read‑only and tag it
+    if (readout && readout.tagName && readout.tagName.toLowerCase()==='input'){
+      readout.readOnly = true;
+      if (!readout.id) readout.id = 'raTokenIdDisplay';
     }
+
+    // Remove any stray extra output we might have made before (prevents the second box)
+    Array.from(card.querySelectorAll('output#raTokenIdDisplay')).forEach(o=>{
+      if (o !== readout) o.remove();
+    });
+
+    // Ensure the Load button exists, placed right after the readout if possible
+    let loadBtn = card.querySelector('#raLoadTokenIdBtn') ||
+      Array.from(card.querySelectorAll('button')).find(b=>/load token id/i.test(b.textContent||''));
+    if (!loadBtn){
+      loadBtn = document.createElement('button');
+      loadBtn.id = 'raLoadTokenIdBtn';
+      loadBtn.className = 'btn danger';
+      loadBtn.textContent = 'Load Token ID';
+      if (readout && readout.parentElement){
+        readout.parentElement.insertBefore(loadBtn, readout.nextSibling);
+      } else {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.style.gap = '10px';
+        row.appendChild(loadBtn);
+        card.insertBefore(row, card.firstElementChild?.nextSibling || card.firstChild);
+      }
+    }
+
+    // Use the existing Delete button on the card (we never add a second one)
+    const delBtn = Array.from(card.querySelectorAll('button'))
+      .find(b => /delete token id/i.test(b.textContent||''));
+
+    return { card, loadBtn, delBtn, readout };
   }
 
-  // Reuse the existing Delete button on the card (we never add a second one)
-  const delBtn = Array.from(card.querySelectorAll('button'))
-    .find(b => /delete token id/i.test(b.textContent||''));
-
-  return { card, loadBtn, delBtn, readout };
-}
-
-  // Find the existing style controls on this card
+  // --- find the style controls already on this card
   function findStyleCtrls(card){
     const fmt = Array.from(card.querySelectorAll('select')).find(s=>{
       const txt = Array.from(s.options||[]).map(o => (o.textContent||'').toLowerCase()).join('|');
@@ -6082,7 +6083,7 @@ function ensureUI(card){
     return { fmt, size, fill, stroke, width };
   }
 
-  // Formatting helpers
+  // --- helpers to format the number
   function roman(n){
     if (!Number.isFinite(n) || n<=0) return String(n);
     const map = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
@@ -6102,13 +6103,13 @@ function ensureUI(card){
     return String(n); // Standard
   }
 
-  // Create one (and only one) Fabric text for the token ID
+  // --- create a single token‑ID Fabric text (marked so other UI can ignore it)
   function ensureTokenText(){
     const c = C(); if (!c || typeof fabric==='undefined') return null;
 
     if (STATE.text && STATE.text.canvas) return STATE.text;
 
-    // clear any stale token‑id texts made by older code
+    // remove any stale token‑id texts made by older code
     (c.getObjects?.()||[]).forEach(o=>{
       if (o && o._raTokenId && o !== STATE.text){ try{ c.remove(o); }catch(_){} }
     });
@@ -6121,12 +6122,35 @@ function ensureUI(card){
       selectable:true, evented:true, hasControls:true,
       _raTokenId:true, _raSys:true
     });
-    c.add(t); STATE.text=t;
-    try{ c.bringToFront(t);}catch(_){}
-    c.requestRenderAll();
+    const ccv = C(); ccv.add(t); STATE.text=t;
+    try{ ccv.bringToFront(t);}catch(_){}
+    ccv.requestRenderAll();
     return t;
   }
 
+  // --- find the “Custom Text → Type your message” box
+  function findCustomTextInput(){
+    const cardTitle = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el=>/custom text/i.test(el.textContent||''));
+    const card = cardTitle ? (cardTitle.closest('.card') || cardTitle.parentElement) : null;
+    if (!card) return null;
+    // textarea or large input for message
+    return card.querySelector('textarea, input[type="text"], input:not([type])');
+  }
+
+  // --- if that box shows our token string, blank it (so the token id never “moves into” Custom Text)
+  function scrubCustomTextBox(tokenShown){
+    const msg = findCustomTextInput(); if (!msg) return;
+    const val = (msg.value||'').trim();
+    // only clear when it matches the token id we just rendered
+    if (val === tokenShown){
+      msg.value = '';
+      try{ msg.dispatchEvent(new Event('input', {bubbles:true})); }catch(_){}
+      try{ msg.dispatchEvent(new Event('change', {bubbles:true})); }catch(_){}
+    }
+  }
+
+  // --- apply styles + keep Custom Text clean
   function applyStyles(){
     if (STATE.id==null || !STATE.ui) return;
     const c = C(); const t = ensureTokenText(); if (!c || !t) return;
@@ -6149,9 +6173,17 @@ function ensureUI(card){
     t.set({ padding:0, lineHeight:1, dirty:true, noScaleCache:true });
     t.setCoords(); c.requestRenderAll();
 
-    if (readout) readout.textContent = shown;
+    if (readout){
+      if (readout.tagName && readout.tagName.toLowerCase()==='input'){ readout.value = shown; }
+      else { readout.textContent = shown; }
+    }
+
+    // keep the Custom Text message box empty if it picked up our token text
+    scrubCustomTextBox(shown);
+    setTimeout(()=> scrubCustomTextBox(shown), 30); // run again after app’s own sync
   }
 
+  // --- wire everything
   function wire(){
     const card = findCard(); if (!card) return false;
 
@@ -6168,12 +6200,15 @@ function ensureUI(card){
       applyStyles();
     }, true);
 
-    // Hook your existing Delete Token ID button (don’t create another)
+    // Hook your existing Delete Token ID button
     base.delBtn && base.delBtn.addEventListener('click', ()=>{
       const c = C();
       if (STATE.text && STATE.text.canvas){ try{ STATE.text.canvas.remove(STATE.text); }catch(_){} }
       STATE.text = null;
-      if (STATE.ui && STATE.ui.readout) STATE.ui.readout.textContent = '#—';
+      if (STATE.ui && STATE.ui.readout){
+        if (STATE.ui.readout.tagName && STATE.ui.readout.tagName.toLowerCase()==='input') STATE.ui.readout.value = '#—';
+        else STATE.ui.readout.textContent = '#—';
+      }
       c?.requestRenderAll();
     }, true);
 
@@ -6192,6 +6227,17 @@ function ensureUI(card){
       if (n!=null){ STATE.id = n; applyStyles(); }
     });
 
+    // If selection switches to the token‑ID object, keep the Custom Text box clean
+    const c = C();
+    const scrubIfToken = ()=> {
+      if (!STATE.text) return;
+      const a = c?.getActiveObject?.();
+      const uiText = '#'+formatId(STATE.id, styles.fmt);
+      if (a && a._raTokenId) { scrubCustomTextBox(uiText); }
+    };
+    c?.on?.('selection:created', scrubIfToken);
+    c?.on?.('selection:updated', scrubIfToken);
+
     return true;
   }
 
@@ -6203,7 +6249,7 @@ function ensureUI(card){
     }
   }
 
-  onReady(boot);
+  onReady(boot));
 })();
 
 /* ========== RA_CURVED_STABILITY_v1 — keep Custom Text visible after Curved toggle ========== */
@@ -6281,4 +6327,27 @@ function ensureUI(card){
   } else {
     boot();
   }
+})();
+
+/* ========== RA_TEXT_FRONT_GUARD_v1 — keep new text (incl. Curved) above the base ========== */
+(()=>{
+  const C = ()=> window.canvas || null;
+
+  function bringFrontIfNeeded(o){
+    if (!o) return;
+    // skip base and system items (footer, token-id text, etc.)
+    if (o._isBase || o._raBrandFooter || o._raSys) return;
+    try { C()?.bringToFront(o); } catch(_){}
+    try { C()?.requestRenderAll(); } catch(_){}
+  }
+
+  function boot(){
+    const c = C();
+    if (!c){ setTimeout(boot, 200); return; }
+    // Whenever Curved (or any tool) creates a fresh object, keep it above the base image
+    c.on('object:added', e => bringFrontIfNeeded(e?.target));
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
 })();
