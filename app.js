@@ -5975,151 +5975,168 @@ async function loadTokenFromCollection(tokenId, col){
   boot();
 })();
 
-/* ========== RA_TOKEN_ID_FIX_v3 — make Token ID load + style work (fill/outline correct, no dash) ========== */
+/* ========== RA_TOKEN_ID_CLEAN_v1 — Load/Style Token ID (no conflicts) ========== */
 (()=>{
-  // Wait until canvas + the "Token ID Styles" card exist
+  function onReady(fn){
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
+    else fn();
+  }
+  const STATE = { text: null, controls: null, id: null };
   function C(){ return window.canvas || null; }
-
-  function findCardByHeading(title){
-    // Find the card whose header text is exactly "Token ID Styles"
-    const all = Array.from(document.querySelectorAll('.card, section, .panel'));
-    for (const el of all){
-      const head = Array.from(el.querySelectorAll('h2,h3,h4,strong,.title'))
-        .find(h => (h.textContent||'').trim().toLowerCase() === String(title).toLowerCase());
-      if (head) return el;
-    }
-    return null;
-  }
-  function findButton(scope, label){
-    return Array.from(scope.querySelectorAll('button'))
-      .find(b => (b.textContent||'').trim().toLowerCase() === label.toLowerCase());
-  }
-  function getControls(){
-    const card = findCardByHeading('Token ID Styles');
-    if (!card) return null;
-    // Heuristics: first text input in this card is the little "#—" box
-    const txtInput    = card.querySelector('input[type="text"]');
-    const fmtSel      = card.querySelector('select');                // the Format dropdown
-    const sizeInput   = card.querySelector('input[type="number"]');  // the Size field
-    const colors      = Array.from(card.querySelectorAll('input[type="color"]'));
-    const fillInput   = colors[0] || null; // "Color"
-    const strokeInput = colors[1] || null; // "Outline"
-    const widthInput  = card.querySelector('input[type="range"]');   // Outline width slider
-    const btnLoad     = findButton(card, 'load token id');
-    const btnDel      = findButton(card, 'delete token id');
-
-    // Make the token label input read-only so it won't hijack Custom Text,
-    // and stop other listeners from using it.
-    if (txtInput){
-      txtInput.readOnly = true;
-      ['keydown','keyup','input','change'].forEach(evt=>{
-        txtInput.addEventListener(evt, e=>{ e.stopImmediatePropagation(); }, true);
-      });
-    }
-    return { card, txtInput, fmtSel, sizeInput, fillInput, strokeInput, widthInput, btnLoad, btnDel };
-  }
-
-  // Find the main "Token ID" field you type 1111 into (the one near "Load by Token")
-  function mainTokenField(){
+  function getMainTokenInput(){
     return document.getElementById('tokenId')
         || document.querySelector('input#token')
         || document.querySelector('input[name="token"]')
         || document.querySelector('input[placeholder*="Token"]');
   }
 
-  // ----- formatting helpers -----
-  function toRoman(num){
-    let n = parseInt(num,10) || 0; if (n<=0) return '0';
+  // ---- find the controls in the "Token ID Styles" card (robust selectors) ----
+  function findControls(){
+    const loadBtn = Array.from(document.querySelectorAll('button')).find(b => /load token id/i.test(b.textContent||''));
+    const delBtn  = Array.from(document.querySelectorAll('button')).find(b => /delete token id/i.test(b.textContent||''));
+    if (!loadBtn || !delBtn) return null;
+    const card = loadBtn.closest('.card') || loadBtn.parentElement;
+
+    // small display field on that card
+    const display = card && (
+      card.querySelector('input[placeholder^="#"]') ||
+      card.querySelector('input[type="text"]')
+    );
+
+    // color pickers (first = fill, second = outline)
+    const colors = card ? Array.from(card.querySelectorAll('input[type="color"]')) : [];
+    const fill   = colors[0] || null;
+    const stroke = colors[1] || null;
+
+    // size input (any number input on this card that isn’t the tiny display)
+    let size = null;
+    const nums = card ? Array.from(card.querySelectorAll('input[type="number"]')) : [];
+    if (nums.length) size = nums.find(n => n !== display) || nums[0];
+
+    // outline width slider
+    const sw = card ? card.querySelector('input[type="range"]') : null;
+
+    // format select (looks for options like Roman/Hex/Binary/Leading Zeros)
+    let fmt = null;
+    const selects = card ? Array.from(card.querySelectorAll('select')) : [];
+    fmt = selects.find(s=>{
+      const txt = Array.from(s.options||[]).map(o => (o.textContent||'').toLowerCase()).join('|');
+      return /roman|hex|binary|leading|standard/.test(txt);
+    }) || null;
+
+    return { card, loadBtn, delBtn, display, fill, stroke, size, sw, fmt };
+  }
+
+  // ---- format helpers ----
+  function roman(n){
+    if (!Number.isFinite(n) || n<=0) return String(n);
     const map = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
-    let out=''; for (const [v,s] of map){ while(n>=v){ out+=s; n-=v; } } return out;
+    let out='', x=Math.floor(n);
+    for (const [v,s] of map){ while (x>=v){ out+=s; x-=v; } }
+    return out;
   }
-  function formatTokenLabel(id, mode){
-    const n = parseInt(id,10);
-    if (!Number.isFinite(n)) return '#—';
-    switch((mode||'std').toLowerCase()){
-      case 'roman numerals': case 'roman': return '#'+toRoman(n);
-      case 'hex (0x...)': case 'hex':      return '0x'+n.toString(16);
-      case 'binary':       case 'bin':     return '0b'+n.toString(2);
-      case 'leading zeros (4)': case 'zero4': return '#'+String(n).padStart(4,'0');
-      default: return '#'+n; // Standard
-    }
+  const toBinary = n => (n>>>0).toString(2);
+  const toHex    = n => '0x'+(n>>>0).toString(16).toUpperCase();
+  const pad4     = n => String(Math.max(0, Math.floor(n))).padStart(4,'0');
+  function formatId(n, fmt){
+    const f=(fmt||'').toLowerCase();
+    if (f.includes('roman'))  return roman(n);
+    if (f.includes('hex'))    return toHex(n);
+    if (f.includes('binary')) return toBinary(n);
+    if (f.includes('leading') || f.includes('zeros')) return pad4(n);
+    return String(n); // Standard
   }
 
-  // ----- the on-canvas text object -----
-  let TOKEN_OBJ = null;
-  function ensureTokenObject(text){
-    const c = C(); if (!c) return;
-    if (!TOKEN_OBJ){
-      TOKEN_OBJ = new fabric.Text(text, {
-        left: 24, top: 24,
-        fontFamily: 'Impact, Inter, Arial, sans-serif',
-        fontSize: 52,
-        fill: '#ffffff',           // inside of the letters
-        stroke: '#000000',         // outline color
-        strokeWidth: 2,            // outline width
-        strokeUniform: true,       // keep outline constant when scaled
-        objectCaching: false,
-        padding: 0,                // make the selection box hug the text
-        _raTokenId:true, _raSys:true
-      });
-      c.add(TOKEN_OBJ);
-      try { c.bringToFront(TOKEN_OBJ); } catch(_){}
-      c.setActiveObject(TOKEN_OBJ);
-    } else {
-      TOKEN_OBJ.set('text', text);
-    }
+  // ---- create (or reuse) the single-line token text ----
+  function ensureText(){
+    const c = C(); if (!c || typeof fabric==='undefined') return null;
+    if (STATE.text && STATE.text.canvas) return STATE.text;
+    const t = new fabric.Text('#', {
+      left:24, top:24, originX:'left', originY:'top',
+      fontFamily:'Impact, system-ui, Arial, Helvetica, sans-serif',
+      fontWeight:'bold', lineHeight:1, charSpacing:0, padding:0,
+      fill:'#ffffff', stroke:'#000000', strokeWidth:2, strokeUniform:true,
+      selectable:true, evented:true, hasControls:true,
+      _raTokenId:true, _raSys:true
+    });
+    c.add(t); STATE.text=t; try{ c.bringToFront(t);}catch(_){}
     c.requestRenderAll();
-  }
-  function applyStyleFromControls(){
-    if (!TOKEN_OBJ) return;
-    const ui = getControls(); if (!ui) return;
-    if (ui.sizeInput)   TOKEN_OBJ.set('fontSize', parseInt(ui.sizeInput.value,10) || 52);
-    if (ui.fillInput)   TOKEN_OBJ.set('fill', ui.fillInput.value || '#ffffff');      // Color -> fill
-    if (ui.strokeInput) TOKEN_OBJ.set('stroke', ui.strokeInput.value || '#000000');  // Outline -> stroke
-    if (ui.widthInput)  TOKEN_OBJ.set('strokeWidth', Math.max(0, parseFloat(ui.widthInput.value)||0));
-    TOKEN_OBJ.set({ strokeUniform:true, padding:0, charSpacing:0 });
-    C()?.requestRenderAll();
+    return t;
   }
 
-  // Keep the little "#…" field in sync (read-only)
-  let LAST_TOKEN_ID = null;
-  function updateTinyField(){
-    const ui = getControls(); if (!ui) return;
-    const mode = ui.fmtSel ? (ui.fmtSel.value||'').toLowerCase() : 'std';
-    const text = formatTokenLabel(LAST_TOKEN_ID, mode);
-    if (ui.txtInput) ui.txtInput.value = text; // no dash injected
+  function readTokenFromMain(){
+    const inp = getMainTokenInput();
+    if (!inp) return null;
+    const v = (inp.value||'').trim();
+    if (!v) return null;
+    const n = parseInt(v,10);
+    return Number.isFinite(n) ? n : null;
   }
 
-  async function onLoadClick(){
-    const inp = mainTokenField();
-    const id = (inp && inp.value.trim()) || '';
-    if (!id){ alert('Enter a token ID first.'); return; }
-    LAST_TOKEN_ID = id;
-    updateTinyField();
-    const ui = getControls(); const mode = ui && ui.fmtSel ? ui.fmtSel.value : 'Standard';
-    ensureTokenObject( formatTokenLabel(id, mode) );
-    applyStyleFromControls();
-  }
-  function onDeleteClick(){
-    const c = C();
-    if (TOKEN_OBJ && c){ try{ c.remove(TOKEN_OBJ); }catch(_){ } c.requestRenderAll(); }
-    TOKEN_OBJ = null;
-    const ui = getControls(); if (ui && ui.txtInput) ui.txtInput.value = '#—';
+  function apply(){
+    if (STATE.id==null) return;
+    const t = ensureText(); const c = C(); if (!t || !c) return;
+    const {fmt, size, fill, stroke, sw, display} = STATE.controls;
+
+    const textStr = '#'+formatId(STATE.id, fmt && fmt.value);
+    t.set({ text:textStr });
+    if (size){ const fs = parseInt(size.value,10); if (Number.isFinite(fs) && fs>0) t.set('fontSize', fs); }
+    if (fill && fill.value)   t.set('fill',   fill.value);    // inside color
+    if (stroke && stroke.value) t.set('stroke', stroke.value); // outline color
+    if (sw){ const w=parseFloat(sw.value); if (Number.isFinite(w)) t.set('strokeWidth', w); }
+
+    // make the selection box hug the glyphs
+    t.set({ padding:0, lineHeight:1, dirty:true, noScaleCache:true });
+    t.setCoords(); c.requestRenderAll();
+
+    if (display){ display.value = textStr; display.readOnly = true; }
   }
 
-  function bind(){
-    const ui = getControls(); if (!ui) return;
-    ui.btnLoad   && ui.btnLoad.addEventListener('click',  e=>{ e.preventDefault(); onLoadClick(); }, true);
-    ui.btnDel    && ui.btnDel .addEventListener('click',  e=>{ e.preventDefault(); onDeleteClick(); }, true);
-    ui.fmtSel    && ui.fmtSel.addEventListener('change',  ()=>{ updateTinyField(); if (TOKEN_OBJ && LAST_TOKEN_ID){ TOKEN_OBJ.set('text', formatTokenLabel(LAST_TOKEN_ID, ui.fmtSel.value)); C()?.requestRenderAll(); }});
-    ui.sizeInput && ui.sizeInput.addEventListener('input', applyStyleFromControls);
-    ui.fillInput && ui.fillInput.addEventListener('input', applyStyleFromControls);
-    ui.strokeInput&&ui.strokeInput.addEventListener('input', applyStyleFromControls);
-    ui.widthInput&& ui.widthInput.addEventListener('input', applyStyleFromControls);
+  function wire(){
+    const ctrls = findControls(); if (!ctrls) return false;
+    STATE.controls = ctrls;
+
+    // Load Token ID (from the main Token ID field in Upload Image)
+    ctrls.loadBtn.addEventListener('click', (e)=>{
+      try{ e.preventDefault(); e.stopPropagation(); }catch(_){}
+      const n = readTokenFromMain();
+      if (n==null){ alert('Type a number in the main Token ID field (e.g., 1111) and then click “Load Token ID”.'); return; }
+      STATE.id = n; apply();
+    }, true);
+
+    // Delete Token ID
+    ctrls.delBtn.addEventListener('click', (e)=>{
+      try{ e.preventDefault(); e.stopPropagation(); }catch(_){}
+      if (STATE.text && STATE.text.canvas){ STATE.text.canvas.remove(STATE.text); }
+      STATE.text=null;
+      if (STATE.controls.display){ STATE.controls.display.value = '#—'; }
+      C()?.requestRenderAll();
+    }, true);
+
+    // Live style updates
+    [ctrls.fmt, ctrls.size, ctrls.fill, ctrls.stroke, ctrls.sw].forEach(el=>{
+      if (!el) return;
+      el.addEventListener('input',  ()=>{ if (STATE.text) apply(); });
+      el.addEventListener('change', ()=>{ if (STATE.text) apply(); });
+    });
+
+    // If the main token field changes after loading, clicking Load again will refresh the number
+    const main = getMainTokenInput();
+    if (main){
+      main.addEventListener('change', ()=>{ if (STATE.text){ const n = readTokenFromMain(); if (n!=null){ STATE.id=n; apply(); }}});
+    }
+    return true;
   }
 
-  (function boot(){
-    if (!window.fabric || !C() || !getControls()){ setTimeout(boot, 120); return; }
-    bind();
-  })();
+  function boot(){
+    if (!wire()){
+      // if UI mounts late, keep trying briefly
+      let tries = 0;
+      const iv = setInterval(()=>{
+        if (wire() || (++tries>40)) clearInterval(iv); // ~8s max
+      }, 200);
+    }
+  }
+
+  onReady(boot);
 })();
