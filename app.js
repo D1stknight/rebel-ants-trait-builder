@@ -6006,50 +6006,54 @@ async function loadTokenFromCollection(tokenId, col){
     return Number.isFinite(n) ? n : null;
   }
 
-  // Build just the Load button + small readout (do NOT add another Delete)
-  function ensureUI(card){
-    if (!card) return null;
+ // Build just the Load button (reuse your existing "#—" display; do NOT add another)
+function ensureUI(card){
+  if (!card) return null;
 
-    // Reuse if these already exist
-    let loadBtn = card.querySelector('#raLoadTokenIdBtn')
-             || Array.from(card.querySelectorAll('button')).find(b=>/load token id/i.test(b.textContent||''));
-    let readout = card.querySelector('#raTokenIdDisplay')
-             || card.querySelector('output#raTokenIdDisplay');
+  // 1) Find your existing small "#—" field if present (input or output)
+  let readout =
+    card.querySelector('#raTokenIdDisplay') ||
+    Array.from(card.querySelectorAll('input[type="text"],input:not([type]),output')).find(el=>{
+      const t = ((el.value ?? el.textContent ?? el.placeholder) || '').toString().trim();
+      return t.startsWith('#') || (el.placeholder||'').toString().trim().startsWith('#');
+    }) || null;
 
-    if (!loadBtn || !readout){
+  // If we found an input, make it read‑only and tag it so we can update it
+  if (readout && readout.tagName && readout.tagName.toLowerCase()==='input'){
+    readout.readOnly = true;
+    if (!readout.id) readout.id = 'raTokenIdDisplay';
+  }
+
+  // 2) Delete any stray output box we may have created earlier so you don’t see two
+  Array.from(card.querySelectorAll('output#raTokenIdDisplay')).forEach(o=>{
+    if (o !== readout) o.remove();
+  });
+
+  // 3) Ensure the Load button exists; place it right after the readout if possible
+  let loadBtn = card.querySelector('#raLoadTokenIdBtn') ||
+    Array.from(card.querySelectorAll('button')).find(b=>/load token id/i.test(b.textContent||''));
+  if (!loadBtn){
+    loadBtn = document.createElement('button');
+    loadBtn.id = 'raLoadTokenIdBtn';
+    loadBtn.className = 'btn danger';
+    loadBtn.textContent = 'Load Token ID';
+    if (readout && readout.parentElement){
+      readout.parentElement.insertBefore(loadBtn, readout.nextSibling);
+    } else {
       const row = document.createElement('div');
       row.className = 'row';
       row.style.gap = '10px';
-
-      if (!readout){
-        readout = document.createElement('output');
-        readout.id = 'raTokenIdDisplay';
-        readout.textContent = '#—';               // shows #1111 after load
-        // make it look like your inputs (no CSS file changes needed)
-        Object.assign(readout.style, {
-          display:'block', flex:'1', padding:'10px 12px',
-          border:'1px solid rgba(255,255,255,.07)', background:'#0f1117',
-          borderRadius:'10px', color:'inherit', font:'inherit'
-        });
-      }
-      if (!loadBtn){
-        loadBtn = document.createElement('button');
-        loadBtn.id = 'raLoadTokenIdBtn';
-        loadBtn.className = 'btn danger';
-        loadBtn.textContent = 'Load Token ID';
-      }
-      row.appendChild(readout);
       row.appendChild(loadBtn);
-      // insert right under the card header
       card.insertBefore(row, card.firstElementChild?.nextSibling || card.firstChild);
     }
-
-    // Use the existing Delete button on this card (don’t create a new one)
-    const delBtn = Array.from(card.querySelectorAll('button'))
-      .find(b => /delete token id/i.test(b.textContent||''));
-
-    return { card, loadBtn, delBtn, readout };
   }
+
+  // Reuse the existing Delete button on the card (we never add a second one)
+  const delBtn = Array.from(card.querySelectorAll('button'))
+    .find(b => /delete token id/i.test(b.textContent||''));
+
+  return { card, loadBtn, delBtn, readout };
+}
 
   // Find the existing style controls on this card
   function findStyleCtrls(card){
@@ -6200,4 +6204,81 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   onReady(boot);
+})();
+
+/* ========== RA_CURVED_STABILITY_v1 — keep Custom Text visible after Curved toggle ========== */
+(()=>{
+  const C = ()=> window.canvas || null;
+
+  function findCustomTextCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent||''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+  function findCurvedCheckbox(card){
+    if (!card) return null;
+    // Look for a checkbox whose label says "Curved"
+    const cbs = Array.from(card.querySelectorAll('input[type="checkbox"]'));
+    for (const cb of cbs){
+      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
+      const txt = (lab && lab.textContent) ? lab.textContent.toLowerCase() : '';
+      if (txt.includes('curved')) return cb;
+    }
+    return null;
+  }
+
+  function lastUserText(c){
+    const objs = (c.getObjects?.() || []);
+    // pick the latest object that is not a system/base/footer/token-id text
+    for (let i = objs.length - 1; i >= 0; i--){
+      const o = objs[i];
+      if (!o) continue;
+      if (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) continue;
+      if (o.type === 'textbox' || o.type === 'text' || o.type === 'group') return o;
+    }
+    return null;
+  }
+
+  function fixIfInvisible(){
+    const c = C(); if (!c) return;
+    setTimeout(()=>{ // wait for Curved logic to run
+      let o = c.getActiveObject() || lastUserText(c);
+      if (!o) return;
+
+      // ensure visible & on-screen
+      if (o.visible === false) o.visible = true;
+      if (typeof o.opacity === 'number' && o.opacity <= 0) o.opacity = 1;
+
+      const W = c.getWidth(), H = c.getHeight();
+      const bb = o.getBoundingRect ? o.getBoundingRect(true,true) : {left:o.left||0, top:o.top||0, width:o.width||0, height:o.height||0};
+      const offscreen =
+        (bb.left + bb.width  < -20) || (bb.top + bb.height < -20) ||
+        (bb.left > W + 20)   || (bb.top > H + 20);
+
+      if (offscreen){
+        const w = Math.max(1, bb.width || 200);
+        const h = Math.max(1, bb.height|| 80);
+        o.left = (W - w)/2;
+        o.top  = (H - h)/2;
+      }
+
+      try { c.setActiveObject(o); } catch(_){}
+      try { o.set({ dirty:true }); o.setCoords(); } catch(_){}
+      try { c.requestRenderAll(); } catch(_){}
+    }, 35);
+  }
+
+  function boot(){
+    const card = findCustomTextCard();
+    const curved = findCurvedCheckbox(card);
+    if (!curved){ setTimeout(boot, 300); return; }
+
+    curved.addEventListener('change', fixIfInvisible, true);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
 })();
