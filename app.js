@@ -6275,3 +6275,131 @@ delBtn.addEventListener('click', (e)=>{
   onReady(boot);
 })();
 
+/* ========== RA_CURVED_TEXT_MINI_v1 — keep Curved text visible + on top (no global hooks) ========== */
+(()=>{
+
+  function onReady(fn){
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once:true });
+    } else { fn(); }
+  }
+
+  const C = ()=> window.canvas || null;
+
+  // Find the "Custom Text" card by its heading text
+  function findCustomCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,strong,label'))
+      .find(el => /custom text/i.test(el.textContent||''));
+    return (h && (h.closest('.card') || h.parentElement)) || null;
+  }
+
+  // Grab the Color, Outline, Outline width controls on that card
+  function getStyleControls(card){
+    if (!card) return { fill:null, stroke:null, width:null, curved:null };
+    const colors = Array.from(card.querySelectorAll('input[type="color"]'));
+    const fill   = colors[0] || null; // inside
+    const stroke = colors[1] || null; // outline
+    const width  = card.querySelector('input[type="range"]') || null; // outline width
+
+    // “Curved” checkbox (by its label text)
+    let curved = null;
+    const checks = Array.from(card.querySelectorAll('input[type="checkbox"]'));
+    curved = checks.find(ch => /curved/i.test((ch.closest('label')?.textContent || ch.parentElement?.textContent || ''))) || null;
+    return { fill, stroke, width, curved };
+  }
+
+  // Heuristics for a curved text object (no plugin names required)
+  function isText(o){ return !!o && (o.type==='text' || o.type==='i-text' || o.type==='textbox'); }
+  function isCurvedCandidate(o){
+    if (!o) return false;
+    if (o.type==='curvedText' || o.type==='arcText' || o.type==='circleText') return true;
+    if (o.type==='group' && Array.isArray(o._objects) && o._objects.length>0 && o._objects.every(isText)) return true;
+    if (o._isCurved || o._curve || o._raCurved) return true;
+    return false;
+  }
+
+  function newestCurved(){
+    const c=C(); if (!c || !c.getObjects) return null;
+    const arr=c.getObjects();
+    for (let i=arr.length-1;i>=0;i--){
+      const o=arr[i];
+      if (isCurvedCandidate(o) && !o._raTokenId && !o._raBrandFooter) return o;
+    }
+    return null;
+  }
+
+  function applyStylesAndShow(obj, ctrls){
+    if (!obj) return;
+    const c=C(); if (!c) return;
+
+    const fill   = (ctrls.fill   && ctrls.fill.value)   || '#ffffff';
+    const stroke = (ctrls.stroke && ctrls.stroke.value) || '#000000';
+    const swVal  = parseFloat(ctrls.width && ctrls.width.value);
+    const sw     = Number.isFinite(swVal) ? swVal : 0;
+
+    // Make sure it’s visible
+    obj.visible = true; obj.opacity = 1;
+
+    // Apply color/outline. If it’s a group of letters, style children (fast; usually < 50).
+    if (obj.type==='group' && Array.isArray(obj._objects) && obj._objects.length <= 100){
+      obj._objects.forEach(ch=>{
+        ch.set({ fill, stroke, strokeWidth:sw, strokeUniform:true, objectCaching:false, opacity:1, visible:true });
+      });
+    } else {
+      obj.set({ fill, stroke, strokeWidth:sw, strokeUniform:true, objectCaching:false, opacity:1, visible:true });
+    }
+
+    // If it’s off-screen, place it centered near the top
+    const cw = c.getWidth?.() || 700, ch = c.getHeight?.() || 700;
+    const box = obj.getBoundingRect?.() || { left:obj.left||0, top:obj.top||0, width:obj.width||0, height:obj.height||0 };
+    const off = (box.left+box.width<0) || (box.top+box.height<0) || (box.left>cw) || (box.top>ch);
+    if (off || !obj._raPlacedOnce){
+      obj.set({ originX:'center', originY:'top', left:cw/2, top:40 });
+      obj._raPlacedOnce = true;
+    }
+
+    // Bring to front and select
+    try{ c.bringToFront(obj); }catch(_){}
+    try{ window.bringInterfaceToFront && window.bringInterfaceToFront(); }catch(_){}
+    c.setActiveObject?.(obj);
+    obj.set({ dirty:true });
+    obj.setCoords();
+    c.requestRenderAll();
+  }
+
+  function wire(){
+    const card = findCustomCard(); if (!card) return false;
+    const ctrls = getStyleControls(card);
+
+    // Only attach to the Curved checkbox. No global canvas hooks.
+    if (ctrls.curved && !ctrls.curved.__raMiniWired){
+      ctrls.curved.__raMiniWired = true;
+      ctrls.curved.addEventListener('change', ()=>{
+        // Give the app a tick to build the curved object
+        setTimeout(()=>{
+          const obj = C()?.getActiveObject?.() || newestCurved();
+          applyStylesAndShow(obj, ctrls);
+        }, 140);
+      });
+    }
+
+    // If user tweaks Color/Outline/Width afterwards, reapply to current curved text
+    [ctrls.fill, ctrls.stroke, ctrls.width].forEach(el=>{
+      if (!el || el.__raMiniWired) return;
+      el.__raMiniWired = true;
+      const doUpdate = ()=> {
+        const obj = C()?.getActiveObject?.() || newestCurved();
+        if (obj && isCurvedCandidate(obj)) applyStylesAndShow(obj, ctrls);
+      };
+      el.addEventListener('input', doUpdate);
+      el.addEventListener('change', doUpdate);
+    });
+
+    return true;
+  }
+
+  onReady(()=>{
+    let tries=0; const iv=setInterval(()=>{ if (wire() || (++tries>40)) clearInterval(iv); }, 200);
+  });
+
+})();
