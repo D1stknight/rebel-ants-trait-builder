@@ -6275,13 +6275,14 @@ delBtn.addEventListener('click', (e)=>{
   onReady(boot);
 })();
 
-/* ========== RA_CUSTOM_TEXT_CURVE_FIX_v2 — keep Curved text visible, styled, and on top ========== */
+/* ========== RA_CURVED_TEXT_RESTORE_v3 — make Curved text visible, centered, styled ========== */
 (()=>{
-  // Run when the page is ready
-  function ready(fn){ if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',fn,{once:true}); else fn(); }
+
+  // Run once the page is ready
+  function ready(fn){ if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', fn, {once:true}); else fn(); }
   const C = ()=> window.canvas || null;
 
-  // Find the "Custom Text" card and its color/width controls
+  // ——— Find the "Custom Text" card and its controls (Color, Outline, Outline width, Curved checkbox) ———
   function findCustomCard(){
     const h = Array.from(document.querySelectorAll('h1,h2,h3,strong,label'))
       .find(el => /custom text/i.test(el.textContent||''));
@@ -6290,51 +6291,56 @@ delBtn.addEventListener('click', (e)=>{
   function getCustomControls(card){
     if (!card) return { fill:null, stroke:null, width:null, curved:null };
     const colors = Array.from(card.querySelectorAll('input[type="color"]'));
-    const fill   = colors[0] || null;   // inside color
-    const stroke = colors[1] || null;   // outline color
+    const fill   = colors[0] || null; // inside color
+    const stroke = colors[1] || null; // outline color
     const width  = card.querySelector('input[type="range"]') || null; // outline width
-
-    // Try to find the "Curved" checkbox (optional for our fix)
-    let curved=null;
+    // The Curved checkbox (if available)
+    let curved = null;
     const checks = Array.from(card.querySelectorAll('input[type="checkbox"]'));
     curved = checks.find(ch => /curved/i.test((ch.closest('label')?.textContent || ch.parentElement?.textContent || ''))) || null;
-
     return { fill, stroke, width, curved };
   }
 
-  // Identify the curved text that the app creates
-  function isOneCharText(o){
-    return !!o && (o.type==='text' || o.type==='i-text' || o.type==='textbox') &&
-           typeof o.text==='string' && o.text.length===1;
+  // ——— Identify curved text objects in Fabric ———
+  function isTextNode(o){
+    return !!o && (o.type==='text' || o.type==='i-text' || o.type==='textbox');
   }
-  function isCurvedObject(o){
+  function groupHasOnlyText(o){
+    return !!o && o.type==='group' && Array.isArray(o._objects) && o._objects.length>0 && o._objects.every(isTextNode);
+  }
+  function looksCurved(o){
     if (!o) return false;
-    // Common cases: plugin makes a group of single-letter text nodes
-    if (o.type==='group' && Array.isArray(o._objects) && o._objects.length>0 && o._objects.every(isOneCharText)) return true;
-    // Some plugins use special types/flags or radius/arc properties
     if (o.type==='curvedText' || o.type==='circleText' || o.type==='arcText') return true;
-    if (typeof o.radius==='number' && (typeof o.arc!=='undefined' || typeof o.spacing!=='undefined')) return true;
+    if (groupHasOnlyText(o) && (typeof o.radius==='number' || typeof o.arc!=='undefined' || typeof o.spacing!=='undefined')) return true;
     if (o._isCurved || o._curve || o._raCurved) return true;
+    // Some plugins mark each letter with angle/offset; treat a text-only group as curved when it’s just been added
+    if (groupHasOnlyText(o)) return true;
     return false;
   }
   function newestCurved(){
-    const c=C(); if(!c||!c.getObjects) return null;
-    const objs=c.getObjects();
-    for(let i=objs.length-1;i>=0;i--){ if(isCurvedObject(objs[i])) return objs[i]; }
+    const c=C(); if(!c || !c.getObjects) return null;
+    const objs = c.getObjects();
+    for (let i=objs.length-1;i>=0;i--){
+      const o = objs[i];
+      if (looksCurved(o) && !o._raTokenId && !o._raBrandFooter) return o;
+    }
     return null;
   }
 
-  // Apply style and bring to front so it doesn't look like it vanished
-  function styleCurved(obj, fillEl, strokeEl, widthEl){
+  // ——— Style + position curved text so it’s visible and on top ———
+  function styleCurved(obj, ctrls){
     if (!obj) return;
     const c=C(); if(!c) return;
 
-    const fill   = (fillEl && fillEl.value)   || '#ffffff';
-    const stroke = (strokeEl && strokeEl.value)|| '#000000';
-    const swRaw  = parseFloat(widthEl && widthEl.value);
+    const fill   = (ctrls.fill   && ctrls.fill.value)   || '#ffffff';
+    const stroke = (ctrls.stroke && ctrls.stroke.value) || '#000000';
+    const swRaw  = parseFloat(ctrls.width && ctrls.width.value);
     const sw     = Number.isFinite(swRaw) ? swRaw : 0;
 
+    // Ensure fully visible
     obj.visible = true; obj.opacity = 1;
+
+    // Apply color/outline to all child letters or to the object itself
     if (obj.type==='group' && Array.isArray(obj._objects)){
       obj._objects.forEach(ch=>{
         ch.set({ fill, stroke, strokeWidth: sw, strokeUniform: true, opacity:1, visible:true, objectCaching:false });
@@ -6343,38 +6349,77 @@ delBtn.addEventListener('click', (e)=>{
       obj.set({ fill, stroke, strokeWidth: sw, strokeUniform: true, opacity:1, visible:true, objectCaching:false });
     }
 
-    // Make sure it's on top and refresh
+    // Center near the top if it’s off screen or newly created
+    const cw = c.getWidth?.() || 700, ch = c.getHeight?.() || 700;
+    const bbox = obj.getBoundingRect?.() || { left: obj.left||0, top: obj.top||0, width: obj.width||0, height: obj.height||0 };
+    const outOfView =
+      bbox.left + bbox.width < 0 || bbox.top + bbox.height < 0 ||
+      bbox.left > cw || bbox.top > ch;
+    if (outOfView || !obj._raPlacedOnce){
+      obj.set({ originX:'center', originY:'top', left: cw/2, top: 40 });
+      obj._raPlacedOnce = true;
+    }
+
+    // On top & active
     try { c.bringToFront(obj); } catch(_){}
     try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
+    c.setActiveObject?.(obj);
     obj.set({ dirty:true });
     obj.setCoords();
-    c.setActiveObject?.(obj);
     c.requestRenderAll();
   }
 
-  function wire(){
-    const card = findCustomCard(); if(!card) return false;
-    const { fill, stroke, width, curved } = getCustomControls(card);
+  // ——— Add a small helper button inside the Custom Text card ———
+  function ensureHelperButton(card, ctrls){
+    if (!card) return;
+    if (card.querySelector('#raShowCurvedBtn')) return;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.marginTop = '6px';
+    const btn = document.createElement('button');
+    btn.id = 'raShowCurvedBtn';
+    btn.className = 'btn ghost';
+    btn.textContent = 'Show Curved Text';
+    btn.addEventListener('click', (e)=>{ try{e.preventDefault();e.stopPropagation();}catch(_){}
+      styleCurved(newestCurved(), ctrls);
+    });
+    row.appendChild(btn);
+    // Put the button near the Curved controls; if we can’t find them, just append at the end of the card
+    const curvedRow = Array.from(card.querySelectorAll('label,div')).find(el => /curved/i.test(el.textContent||''))?.closest('div');
+    (curvedRow && curvedRow.parentElement) ? curvedRow.parentElement.appendChild(row) : card.appendChild(row);
+  }
 
-    // 1) When the app adds the curved object to the canvas, fix its style/z‑order immediately
+  // ——— Wire everything ———
+  function wire(){
+    const card = findCustomCard(); if (!card) return false;
+    const ctrls = getCustomControls(card);
+    ensureHelperButton(card, ctrls);
+
     const c=C(); if(!c) return false;
-    if (!c.__raCurveFixWired){
-      c.__raCurveFixWired = true;
-      c.on('object:added', e=>{
+
+    // When any object is added, if it looks like curved text, fix it right away
+    if (!c.__raCurvedRestoreWired){
+      c.__raCurvedRestoreWired = true;
+      c.on('object:added', (e)=>{
         const o = e && e.target;
-        if (isCurvedObject(o)) styleCurved(o, fill, stroke, width);
+        if (looksCurved(o)) {
+          // Tiny delay lets the plugin finish building the group
+          setTimeout(()=> styleCurved(o, ctrls), 40);
+        }
       });
     }
 
-    // 2) If the user ticks/unticks "Curved", wait for the app to build the object, then fix it
-    if (curved){
-      curved.addEventListener('change', ()=>{ setTimeout(()=> styleCurved(newestCurved(), fill, stroke, width), 60); });
+    // If the user toggles the Curved checkbox, try again shortly after
+    if (ctrls.curved){
+      ctrls.curved.addEventListener('change', ()=>{
+        setTimeout(()=> styleCurved(newestCurved(), ctrls), 120);
+      });
     }
 
-    // 3) If the user changes color/outline/width later, update the current curved text
-    [fill, stroke, width].forEach(el=>{
+    // If the user changes color/outline/width later, reapply to the current curved object
+    [ctrls.fill, ctrls.stroke, ctrls.width].forEach(el=>{
       if (!el) return;
-      const update = ()=>{ const g = newestCurved(); if (g) styleCurved(g, fill, stroke, width); };
+      const update = ()=>{ const o=newestCurved(); if (o) styleCurved(o, ctrls); };
       el.addEventListener('input',  update);
       el.addEventListener('change', update);
     });
@@ -6384,6 +6429,7 @@ delBtn.addEventListener('click', (e)=>{
 
   ready(()=>{
     let tries=0;
-    const iv=setInterval(()=>{ if(wire() || (++tries>40)) clearInterval(iv); },200);
+    const iv=setInterval(()=>{ if (wire() || (++tries>40)) clearInterval(iv); }, 200);
   });
+
 })();
