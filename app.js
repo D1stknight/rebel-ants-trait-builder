@@ -5975,198 +5975,151 @@ async function loadTokenFromCollection(tokenId, col){
   boot();
 })();
 
-/* ========== RA_TOKEN_ID_TEXT_CONTROL_v2 — Load/Style/Delete Token ID (wired to UI) ========== */
+/* ========== RA_TOKEN_ID_FIX_v3 — make Token ID load + style work (fill/outline correct, no dash) ========== */
 (()=>{
-  const $all = (s,root=document)=>Array.from(root.querySelectorAll(s));
-  const $one = (s,root=document)=>root.querySelector(s);
-
+  // Wait until canvas + the "Token ID Styles" card exist
   function C(){ return window.canvas || null; }
 
-  // Find the “Token ID Styles” panel by its heading text
-  function findTokenIdPanel(){
-    const heads = $all('h1,h2,h3,h4,strong,legend');
-    const h = heads.find(el => /token id styles/i.test(el.textContent||''));
-    if (!h) return null;
-    let p = h.parentElement;
-    for (let i=0;i<5 && p;i++){
-      if ((p.className||'').match(/\b(card|panel)\b/i)) return p;
-      p = p.parentElement;
+  function findCardByHeading(title){
+    // Find the card whose header text is exactly "Token ID Styles"
+    const all = Array.from(document.querySelectorAll('.card, section, .panel'));
+    for (const el of all){
+      const head = Array.from(el.querySelectorAll('h2,h3,h4,strong,.title'))
+        .find(h => (h.textContent||'').trim().toLowerCase() === String(title).toLowerCase());
+      if (head) return el;
     }
-    return h.parentElement;
+    return null;
   }
-
-  // Grab controls inside that panel (robust by text/options)
-  function getCtrls(panel){
-    const ctrls = {};
-    ctrls.panel = panel;
-
-    // format <select> has an option that mentions “Roman”
-    ctrls.format = $all('select', panel)
-      .find(s => $all('option', s).some(o => /roman/i.test(o.textContent||o.label||o.value)));
-
-    // small text box with “#—” style prefix (first text input in the panel)
-    ctrls.prefix = $one('input[type="text"]', panel);
-
-    // “Size” number box (first number input in the panel)
-    ctrls.size = $one('input[type="number"]', panel);
-
-    // Outline color (first color input in the panel that sits near a label “Outline”, else any color input)
-    ctrls.outlineColor =
-      $one('input[type="color"][name*="outline" i]', panel) ||
-      $one('input[type="color"]', panel);
-
-    // Outline width (first range in the panel)
-    ctrls.outlineWidth = $one('input[type="range"]', panel);
-
-    // Buttons
-    ctrls.deleteBtn = $all('button', panel).find(b => /delete token id/i.test(b.textContent||''));
-    ctrls.loadBtn   = $all('button', panel).find(b => /load token id/i.test(b.textContent||''));
-
-    return ctrls;
+  function findButton(scope, label){
+    return Array.from(scope.querySelectorAll('button'))
+      .find(b => (b.textContent||'').trim().toLowerCase() === label.toLowerCase());
   }
+  function getControls(){
+    const card = findCardByHeading('Token ID Styles');
+    if (!card) return null;
+    // Heuristics: first text input in this card is the little "#—" box
+    const txtInput    = card.querySelector('input[type="text"]');
+    const fmtSel      = card.querySelector('select');                // the Format dropdown
+    const sizeInput   = card.querySelector('input[type="number"]');  // the Size field
+    const colors      = Array.from(card.querySelectorAll('input[type="color"]'));
+    const fillInput   = colors[0] || null; // "Color"
+    const strokeInput = colors[1] || null; // "Outline"
+    const widthInput  = card.querySelector('input[type="range"]');   // Outline width slider
+    const btnLoad     = findButton(card, 'load token id');
+    const btnDel      = findButton(card, 'delete token id');
 
-  // Where we read the numeric Token ID from (same box you use to “Load by Token”)
-  function readTokenIdValue(){
-    const inp = document.getElementById('tokenId')
-             || document.querySelector('input#token')
-             || document.querySelector('input[name="token"]')
-             || document.querySelector('input[placeholder*="Token"]');
-    return (inp && inp.value.trim()) || '';
-  }
-
-  // Create or fetch the Token ID layer on the Fabric canvas
-  function getOrCreateLayer(){
-    const c = C(); if (!c || !window.fabric) { alert('Canvas not ready'); return null; }
-    const objs = c.getObjects()||[];
-    let layer = objs.find(o => o && o._raTokenId === true);
-    if (!layer){
-      layer = new fabric.Textbox('0', {
-        left: 24, top: 24,
-        fontFamily: 'Inter, Arial, sans-serif',
-        fontSize: 64,
-        fill: '#ffffff',
-        stroke: '#000000',
-        strokeWidth: 2,
-        shadow: 'rgba(0,0,0,0.25) 2px 2px 3px',
-        _raTokenId: true,
-        name: 'Token ID'
+    // Make the token label input read-only so it won't hijack Custom Text,
+    // and stop other listeners from using it.
+    if (txtInput){
+      txtInput.readOnly = true;
+      ['keydown','keyup','input','change'].forEach(evt=>{
+        txtInput.addEventListener(evt, e=>{ e.stopImmediatePropagation(); }, true);
       });
-      c.add(layer);
     }
-    return layer;
+    return { card, txtInput, fmtSel, sizeInput, fillInput, strokeInput, widthInput, btnLoad, btnDel };
   }
 
-  // Format helpers
+  // Find the main "Token ID" field you type 1111 into (the one near "Load by Token")
+  function mainTokenField(){
+    return document.getElementById('tokenId')
+        || document.querySelector('input#token')
+        || document.querySelector('input[name="token"]')
+        || document.querySelector('input[placeholder*="Token"]');
+  }
+
+  // ----- formatting helpers -----
   function toRoman(num){
-    if (!(num>0)) return String(num);
+    let n = parseInt(num,10) || 0; if (n<=0) return '0';
     const map = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
-    let n = num, out = '';
-    for (const [v,s] of map){ while (n>=v){ out+=s; n-=v; } }
-    return out;
+    let out=''; for (const [v,s] of map){ while(n>=v){ out+=s; n-=v; } } return out;
   }
-  function formatDisplay(raw, fmtText, prefix){
-    const n = parseInt(raw,10);
-    const p = prefix || '';
-    const fmt = (fmtText||'').toLowerCase();
-    if (!Number.isFinite(n)) return p + String(raw||'');
-    if (/roman/.test(fmt))             return p + toRoman(n);
-    if (/hex/.test(fmt))               return p + '0x' + n.toString(16).toUpperCase();
-    if (/binary/.test(fmt))            return p + n.toString(2);
-    if (/leading\s*zeros/.test(fmt))   return p + String(n).padStart(4,'0');
-    return p + String(n);
-  }
-
-  // Apply style from controls to the layer
-  function applyStyleFromCtrls(layer, ctrls){
-    if (!layer) return;
-
-    // Font size
-    const fs = parseInt(ctrls.size && ctrls.size.value, 10);
-    if (Number.isFinite(fs) && fs>0) layer.set({ fontSize: fs });
-
-    // Outline width
-    const sw = parseFloat(ctrls.outlineWidth && ctrls.outlineWidth.value);
-    if (Number.isFinite(sw) && sw>=0) layer.set({ strokeWidth: sw });
-
-    // Outline color
-    if (ctrls.outlineColor && ctrls.outlineColor.value) {
-      layer.set({ stroke: ctrls.outlineColor.value });
+  function formatTokenLabel(id, mode){
+    const n = parseInt(id,10);
+    if (!Number.isFinite(n)) return '#—';
+    switch((mode||'std').toLowerCase()){
+      case 'roman numerals': case 'roman': return '#'+toRoman(n);
+      case 'hex (0x...)': case 'hex':      return '0x'+n.toString(16);
+      case 'binary':       case 'bin':     return '0b'+n.toString(2);
+      case 'leading zeros (4)': case 'zero4': return '#'+String(n).padStart(4,'0');
+      default: return '#'+n; // Standard
     }
   }
 
-  // Recompute text + style and render
-  function recompute(ctrls){
+  // ----- the on-canvas text object -----
+  let TOKEN_OBJ = null;
+  function ensureTokenObject(text){
     const c = C(); if (!c) return;
-    const layer = getOrCreateLayer(); if (!layer) return;
-
-    const raw = readTokenIdValue();
-    const fmtText = ctrls.format
-      ? (ctrls.format.options[ctrls.format.selectedIndex]?.text || ctrls.format.value || '')
-      : '';
-    const prefix = ctrls.prefix ? ctrls.prefix.value || '' : '';
-
-    layer.set({ text: formatDisplay(raw, fmtText, prefix) });
-    applyStyleFromCtrls(layer, ctrls);
-
-    try { c.setActiveObject(layer); } catch(_){}
+    if (!TOKEN_OBJ){
+      TOKEN_OBJ = new fabric.Text(text, {
+        left: 24, top: 24,
+        fontFamily: 'Impact, Inter, Arial, sans-serif',
+        fontSize: 52,
+        fill: '#ffffff',           // inside of the letters
+        stroke: '#000000',         // outline color
+        strokeWidth: 2,            // outline width
+        strokeUniform: true,       // keep outline constant when scaled
+        objectCaching: false,
+        padding: 0,                // make the selection box hug the text
+        _raTokenId:true, _raSys:true
+      });
+      c.add(TOKEN_OBJ);
+      try { c.bringToFront(TOKEN_OBJ); } catch(_){}
+      c.setActiveObject(TOKEN_OBJ);
+    } else {
+      TOKEN_OBJ.set('text', text);
+    }
     c.requestRenderAll();
   }
-
-  // Remove the Token ID layer
-  function deleteLayer(){
-    const c = C(); if (!c) return;
-    const objs = c.getObjects()||[];
-    const layer = objs.find(o => o && o._raTokenId);
-    if (layer){ c.remove(layer); c.requestRenderAll(); }
+  function applyStyleFromControls(){
+    if (!TOKEN_OBJ) return;
+    const ui = getControls(); if (!ui) return;
+    if (ui.sizeInput)   TOKEN_OBJ.set('fontSize', parseInt(ui.sizeInput.value,10) || 52);
+    if (ui.fillInput)   TOKEN_OBJ.set('fill', ui.fillInput.value || '#ffffff');      // Color -> fill
+    if (ui.strokeInput) TOKEN_OBJ.set('stroke', ui.strokeInput.value || '#000000');  // Outline -> stroke
+    if (ui.widthInput)  TOKEN_OBJ.set('strokeWidth', Math.max(0, parseFloat(ui.widthInput.value)||0));
+    TOKEN_OBJ.set({ strokeUniform:true, padding:0, charSpacing:0 });
+    C()?.requestRenderAll();
   }
 
-  // Ensure there is a “Load Token ID” button (if yours already exists, we reuse it)
-  function ensureLoadButton(ctrls){
-    if (!ctrls.deleteBtn) return; // need an anchor
-    let btn = ctrls.loadBtn;
-    if (!btn){
-      btn = document.createElement('button');
-      btn.id = 'raLoadTokenIdBtn';
-      btn.className = ctrls.deleteBtn.className || 'btn';
-      btn.textContent = 'Load Token ID';
-      btn.style.marginLeft = '8px';
-      ctrls.deleteBtn.parentElement.insertBefore(btn, ctrls.deleteBtn);
-    }
-    btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopImmediatePropagation(); recompute(ctrls); }, {capture:true});
+  // Keep the little "#…" field in sync (read-only)
+  let LAST_TOKEN_ID = null;
+  function updateTinyField(){
+    const ui = getControls(); if (!ui) return;
+    const mode = ui.fmtSel ? (ui.fmtSel.value||'').toLowerCase() : 'std';
+    const text = formatTokenLabel(LAST_TOKEN_ID, mode);
+    if (ui.txtInput) ui.txtInput.value = text; // no dash injected
   }
 
-  // Wire everything
-  function wire(){
-    const panel = findTokenIdPanel(); if (!panel) return;
-    const ctrls = getCtrls(panel);
-
-    // Delete button (override any old handler)
-    if (ctrls.deleteBtn){
-      ctrls.deleteBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopImmediatePropagation(); deleteLayer(); }, {capture:true});
-    }
-
-    // Load button
-    ensureLoadButton(ctrls);
-
-    // Live update when controls change (no need to re‑click Load)
-    if (ctrls.format)       ctrls.format.addEventListener('change', ()=>recompute(ctrls));
-    if (ctrlls = ctrls, ctrls.size)         ctrls.size.addEventListener('input', ()=>recompute(ctrlls));
-    if (ctrls.prefix)       ctrls.prefix.addEventListener('input', ()=>recompute(ctrls));
-    if (ctrls.outlineColor) ctrls.outlineColor.addEventListener('input', ()=>recompute(ctrls));
-    if (ctrls.outlineWidth) ctrls.outlineWidth.addEventListener('input', ()=>recompute(ctrls));
+  async function onLoadClick(){
+    const inp = mainTokenField();
+    const id = (inp && inp.value.trim()) || '';
+    if (!id){ alert('Enter a token ID first.'); return; }
+    LAST_TOKEN_ID = id;
+    updateTinyField();
+    const ui = getControls(); const mode = ui && ui.fmtSel ? ui.fmtSel.value : 'Standard';
+    ensureTokenObject( formatTokenLabel(id, mode) );
+    applyStyleFromControls();
+  }
+  function onDeleteClick(){
+    const c = C();
+    if (TOKEN_OBJ && c){ try{ c.remove(TOKEN_OBJ); }catch(_){ } c.requestRenderAll(); }
+    TOKEN_OBJ = null;
+    const ui = getControls(); if (ui && ui.txtInput) ui.txtInput.value = '#—';
   }
 
-  function boot(){
-    wire();
-    // Retry a few times in case the right panel finishes rendering later
-    let tries = 0;
-    const iv = setInterval(()=>{
-      const ok = document.getElementById('raLoadTokenIdBtn');
-      if (ok || ++tries>20) return clearInterval(iv);
-      wire();
-    }, 400);
+  function bind(){
+    const ui = getControls(); if (!ui) return;
+    ui.btnLoad   && ui.btnLoad.addEventListener('click',  e=>{ e.preventDefault(); onLoadClick(); }, true);
+    ui.btnDel    && ui.btnDel .addEventListener('click',  e=>{ e.preventDefault(); onDeleteClick(); }, true);
+    ui.fmtSel    && ui.fmtSel.addEventListener('change',  ()=>{ updateTinyField(); if (TOKEN_OBJ && LAST_TOKEN_ID){ TOKEN_OBJ.set('text', formatTokenLabel(LAST_TOKEN_ID, ui.fmtSel.value)); C()?.requestRenderAll(); }});
+    ui.sizeInput && ui.sizeInput.addEventListener('input', applyStyleFromControls);
+    ui.fillInput && ui.fillInput.addEventListener('input', applyStyleFromControls);
+    ui.strokeInput&&ui.strokeInput.addEventListener('input', applyStyleFromControls);
+    ui.widthInput&& ui.widthInput.addEventListener('input', applyStyleFromControls);
   }
 
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  (function boot(){
+    if (!window.fabric || !C() || !getControls()){ setTimeout(boot, 120); return; }
+    bind();
+  })();
 })();
