@@ -6274,3 +6274,91 @@ delBtn.addEventListener('click', (e)=>{
 
   onReady(boot);
 })();
+
+/* ========== RA_CUSTOM_TEXT_CURVE_FIX_v1 — keep Curved text visible & styled ========== */
+(()=>{
+  function onReady(fn){ if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', fn, {once:true}); else fn(); }
+  const C = ()=> window.canvas || null;
+
+  // Find the “Custom Text” card by its heading
+  function findCustomCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,strong,label'))
+      .find(el => /custom text/i.test(el.textContent||''));
+    return (h && (h.closest('.card') || h.parentElement)) || null;
+  }
+
+  // Grab Fill, Outline, Outline width, and the Curved checkbox on that card
+  function findControls(card){
+    const colors = card ? Array.from(card.querySelectorAll('input[type="color"]')) : [];
+    const fill   = colors[0] || null;
+    const stroke = colors[1] || null;
+    const width  = card ? (card.querySelector('input[type="range"]') || null) : null;
+
+    let curved = null;
+    const checks = card ? Array.from(card.querySelectorAll('input[type="checkbox"]')) : [];
+    curved = checks.find(ch => /curved/i.test((ch.closest('label')?.textContent || ch.parentElement?.textContent || ''))) || null;
+
+    return { fill, stroke, width, curved };
+  }
+
+  // Identify the “letters group” the app builds for curved text
+  function isCurvedGroup(g){
+    if (!g || g.type!=='group' || !Array.isArray(g._objects)) return false;
+    return g._objects.length>0 &&
+           g._objects.every(o => (o.type==='text'||o.type==='i-text'||o.type==='textbox') && typeof o.text==='string' && o.text.length===1);
+  }
+  function tryFindCurvedGroup(){
+    const c=C(); if(!c) return null;
+    const objs=c.getObjects?c.getObjects():[];
+    for (let i=objs.length-1;i>=0;i--){ if (isCurvedGroup(objs[i])) return objs[i]; }
+    return null;
+  }
+
+  // Paint the letters so they’re visible, and bring them forward
+  function applyStyleToCurved(fillEl, strokeEl, widthEl){
+    const c=C(); if(!c) return;
+    const active=c.getActiveObject();
+    const g = isCurvedGroup(active) ? active : tryFindCurvedGroup();
+    if (!g) return;
+
+    const fill   = (fillEl && fillEl.value)   || '#ffffff';
+    const stroke = (strokeEl && strokeEl.value) || '#000000';
+    const sw     = parseFloat(widthEl && widthEl.value);
+    const strokeW= Number.isFinite(sw) ? sw : 0;
+
+    g.visible = true; g.opacity = 1;
+    (g._objects||[]).forEach(ch=>{
+      ch.set({ fill, stroke, strokeWidth: strokeW, strokeUniform:true, opacity:1, visible:true });
+    });
+    try { c.bringToFront(g);} catch(_){}
+    g.setCoords(); c.requestRenderAll();
+  }
+
+  function wire(){
+    const card = findCustomCard(); if (!card) return false;
+    const { fill, stroke, width, curved } = findControls(card);
+    if (!curved) return false;
+
+    // When you toggle Curved, ensure the result is visible & colored
+    curved.addEventListener('change', ()=>{
+      setTimeout(()=> applyStyleToCurved(fill, stroke, width), 40);
+    });
+
+    // If you tweak Fill/Outline/Width while curved text is selected, update it live
+    [fill, stroke, width].forEach(el=>{
+      if (!el) return;
+      el.addEventListener('input',  ()=> applyStyleToCurved(fill, stroke, width));
+      el.addEventListener('change', ()=> applyStyleToCurved(fill, stroke, width));
+    });
+
+    return true;
+  }
+
+  onReady(()=>{
+    if (!wire()){
+      // UI can mount late; try briefly
+      let tries=0;
+      const iv=setInterval(()=>{ if (wire() || (++tries>40)) clearInterval(iv); }, 200);
+    }
+  });
+})();
