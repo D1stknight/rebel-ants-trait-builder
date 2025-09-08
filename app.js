@@ -6140,3 +6140,256 @@ async function loadTokenFromCollection(tokenId, col){
 
   onReady(boot);
 })();
+
+/* ========== RA_TOKEN_ID_UI_AND_BEHAVIOR_v2 — add missing buttons + wiring ========== */
+(()=>{
+  // Run when the page is ready
+  function onReady(fn){
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
+    else fn();
+  }
+
+  const IDS = {
+    load:   'raLoadTokenIdBtn',
+    del:    'raDeleteTokenIdBtn',
+    display:'raTokenIdDisplay'
+  };
+
+  const STATE = { id:null, text:null, ctrls:null };
+
+  // Your Fabric canvas
+  const C = ()=> window.canvas || null;
+
+  // Find the Token ID Styles card/container by its heading text
+  function findTokenIdCard(){
+    const heading = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /token id styles/i.test(el.textContent||''));
+    if (heading) return heading.closest('.card') || heading.parentElement;
+    // Fallback: any card-like element containing that phrase
+    const cards = Array.from(document.querySelectorAll('.card,section,div'));
+    return cards.find(el => /token id styles/i.test(el.textContent||'')) || null;
+  }
+
+  // The main “Token ID” input near Upload Image
+  function mainTokenInput(){
+    return document.getElementById('tokenId')
+        || document.querySelector('input#token')
+        || document.querySelector('input[name="token"]')
+        || document.querySelector('input[placeholder*="Token"]');
+  }
+  function readMainTokenId(){
+    const inp = mainTokenInput(); if (!inp) return null;
+    const n = parseInt((inp.value||'').trim(),10);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // Create UI row(s) if missing
+  function ensureUI(card){
+    if (!card) return null;
+
+    // If we already inserted our row, reuse it
+    let loadBtn  = card.querySelector('#'+IDS.load);
+    let delBtn   = card.querySelector('#'+IDS.del);
+    let display  = card.querySelector('#'+IDS.display);
+
+    // A tidy row at the top: [ small display ][ Load Token ID ]
+    if (!loadBtn || !display){
+      const row1 = document.createElement('div');
+      row1.className = 'row'; // uses your existing .row style
+      row1.style.gap = '10px';
+
+      display = display || document.createElement('input');
+      display.type = 'text';
+      display.id = IDS.display;
+      display.placeholder = '#—';
+      display.readOnly = true;
+      display.style.flex = '1';
+
+      loadBtn = loadBtn || document.createElement('button');
+      loadBtn.id = IDS.load;
+      loadBtn.className = 'btn';
+      loadBtn.textContent = 'Load Token ID';
+      // give it the nice red style you’ve been using for action buttons
+      loadBtn.classList.add('danger');
+
+      row1.appendChild(display);
+      row1.appendChild(loadBtn);
+
+      // Insert as the first controls in the card
+      card.insertBefore(row1, card.firstElementChild?.nextSibling || card.firstChild);
+    }
+
+    // Second row: [ Delete Token ID ]
+    if (!delBtn){
+      const row2 = document.createElement('div');
+      row2.className = 'row';
+      delBtn = document.createElement('button');
+      delBtn.id = IDS.del;
+      delBtn.textContent = 'Delete Token ID';
+      delBtn.className = 'btn danger';
+      row2.appendChild(delBtn);
+      // Put this just under row1
+      loadBtn.parentElement.after(row2);
+    }
+
+    return { card, loadBtn, delBtn, display };
+  }
+
+  // Find the style controls that already exist on the card (format/size/colors/width)
+  function findStyleControls(card, display){
+    // Format select (options contain Roman/Hex/Binary/Leading Zeros/Standard)
+    const fmt = Array.from(card.querySelectorAll('select')).find(s=>{
+      const txt = Array.from(s.options||[]).map(o => (o.textContent||'').toLowerCase()).join('|');
+      return /roman|hex|binary|leading|standard/.test(txt);
+    }) || null;
+
+    // Size number input (prefer one labelled “Size”)
+    let size = null;
+    const sizeLabel = Array.from(card.querySelectorAll('label')).find(l => /size/i.test(l.textContent||''));
+    if (sizeLabel){
+      const wrap = sizeLabel.parentElement;
+      size = wrap && (wrap.querySelector('input[type="number"]') || wrap.querySelector('input'));
+    }
+    if (!size){
+      // Fallback: first number input on the card that isn’t our small display
+      const nums = Array.from(card.querySelectorAll('input[type="number"]'));
+      size = nums.find(n => n !== display) || nums[0] || null;
+    }
+
+    // Color pickers: first = Fill, second = Outline
+    const colors = Array.from(card.querySelectorAll('input[type="color"]'));
+    const fill   = colors[0] || null;
+    const stroke = colors[1] || null;
+
+    // Outline width slider (range)
+    const sw = card.querySelector('input[type="range"]') || null;
+
+    return { fmt, size, fill, stroke, sw };
+  }
+
+  // Formatting helpers
+  function roman(n){
+    if (!Number.isFinite(n) || n<=0) return String(n);
+    const map = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+    let out='', x=Math.floor(n);
+    for (const [v,s] of map){ while (x>=v){ out+=s; x-=v; } }
+    return out;
+  }
+  const toBinary = n => (n>>>0).toString(2);
+  const toHex    = n => '0x'+(n>>>0).toString(16).toUpperCase();
+  const pad4     = n => String(Math.max(0,Math.floor(n))).padStart(4,'0');
+  function formatId(n, fmtSel){
+    const f = (fmtSel && fmtSel.value || '').toLowerCase();
+    if (f.includes('roman'))  return roman(n);
+    if (f.includes('hex'))    return toHex(n);
+    if (f.includes('binary')) return toBinary(n);
+    if (f.includes('leading') || f.includes('zeros')) return pad4(n);
+    return String(n); // Standard
+  }
+
+  // Create/Reuse the single-line Fabric text that shows the token ID
+  function ensureText(){
+    const c = C(); if (!c || typeof fabric==='undefined') return null;
+    if (STATE.text && STATE.text.canvas) return STATE.text;
+    const t = new fabric.Text('#', {
+      left:24, top:24, originX:'left', originY:'top',
+      fontFamily:'Impact, system-ui, Arial, Helvetica, sans-serif',
+      fontWeight:'bold', lineHeight:1, charSpacing:0, padding:0,
+      fill:'#ffffff', stroke:'#000000', strokeWidth:2, strokeUniform:true,
+      selectable:true, evented:true, hasControls:true,
+      _raTokenId:true, _raSys:true
+    });
+    c.add(t); STATE.text=t; try{ c.bringToFront(t);}catch(_){}
+    c.requestRenderAll();
+    return t;
+  }
+
+  // Apply current settings to the Fabric text and to the small display box
+  function apply(){
+    if (STATE.id==null || !STATE.ctrls) return;
+    const c = C(); const t = ensureText(); if (!c || !t) return;
+
+    const { fmt, size, fill, stroke, sw, display } = STATE.ctrls;
+
+    const shown = '#'+formatId(STATE.id, fmt);
+    t.set({ text: shown });
+
+    // Size
+    const fs = parseInt(size && size.value, 10);
+    if (Number.isFinite(fs) && fs>0) t.set('fontSize', fs);
+
+    // Colors
+    if (fill && fill.value)   t.set('fill', fill.value);      // inside
+    if (stroke && stroke.value) t.set('stroke', stroke.value); // outline
+
+    // Outline width
+    const w = parseFloat(sw && sw.value);
+    if (Number.isFinite(w)) t.set('strokeWidth', w);
+
+    // Make the selection box “hug” the text
+    t.set({ padding:0, lineHeight:1, dirty:true, noScaleCache:true });
+    t.setCoords(); c.requestRenderAll();
+
+    if (display){ display.value = shown; display.readOnly = true; }
+  }
+
+  // Wire up everything (and create UI if missing)
+  function wire(){
+    const card = findTokenIdCard(); if (!card) return false;
+
+    // Build/ensure the top buttons + small display
+    const base = ensureUI(card);
+    if (!base) return false;
+
+    // Find the format/size/color/width controls already on this card
+    const styles = findStyleControls(base.card, base.display);
+    STATE.ctrls = { ...base, ...styles };
+
+    // Button: Load Token ID
+    base.loadBtn.addEventListener('click', (e)=>{
+      try{ e.preventDefault(); e.stopPropagation(); }catch(_){}
+      const n = readMainTokenId();
+      if (n==null){ alert('Type a number in the main “Token ID” field (e.g., 1111) and click “Load Token ID”.'); return; }
+      STATE.id = n;
+      apply();
+    }, true);
+
+    // Button: Delete Token ID
+    base.delBtn.addEventListener('click', (e)=>{
+      try{ e.preventDefault(); e.stopPropagation(); }catch(_){}
+      if (STATE.text && STATE.text.canvas){ STATE.text.canvas.remove(STATE.text); }
+      STATE.text = null;
+      if (STATE.ctrls.display) STATE.ctrls.display.value = '#—';
+      C()?.requestRenderAll();
+    }, true);
+
+    // Live updates when you change format, size, color, outline, width
+    [styles.fmt, styles.size, styles.fill, styles.stroke, styles.sw].forEach(el=>{
+      if (!el) return;
+      el.addEventListener('input',  ()=>{ if (STATE.text) apply(); });
+      el.addEventListener('change', ()=>{ if (STATE.text) apply(); });
+    });
+
+    // If the main number changes later, clicking “Load” again refreshes it
+    const main = mainTokenInput();
+    if (main){
+      main.addEventListener('change', ()=>{
+        if (!STATE.text) return;
+        const n = readMainTokenId();
+        if (n!=null){ STATE.id = n; apply(); }
+      });
+    }
+
+    return true;
+  }
+
+  function boot(){
+    if (!wire()){
+      // If the panel mounts a little later, try for a few seconds
+      let tries = 0;
+      const iv = setInterval(()=>{ if (wire() || (++tries>40)) clearInterval(iv); }, 200);
+    }
+  }
+
+  onReady(boot);
+})();
