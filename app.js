@@ -6184,56 +6184,81 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   // Create UI row(s) if missing
-  function ensureUI(card){
-    if (!card) return null;
+function ensureUI(card){
+  if (!card) return null;
 
-    // If we already inserted our row, reuse it
-    let loadBtn  = card.querySelector('#'+IDS.load);
-    let delBtn   = card.querySelector('#'+IDS.del);
-    let display  = card.querySelector('#'+IDS.display);
+  // Reuse anything that already exists on the card
+  let loadBtn = card.querySelector('#'+IDS.load);
+  let delBtn  = card.querySelector('#'+IDS.del)
+               || Array.from(card.querySelectorAll('button'))
+                    .find(b => /delete token id/i.test(b.textContent||''));
+  let display = card.querySelector('#'+IDS.display)
+               || Array.from(card.querySelectorAll('input[type="text"],input:not([type])'))
+                    .find(i => ((i.placeholder||'').trim().startsWith('#')
+                             || (i.value||'').trim().startsWith('#')));
 
-    // A tidy row at the top: [ small display ][ Load Token ID ]
-    if (!loadBtn || !display){
-      const row1 = document.createElement('div');
-      row1.className = 'row'; // uses your existing .row style
-      row1.style.gap = '10px';
+  // Create row 1 if either control is missing
+  if (!loadBtn || !display){
+    const row1 = document.createElement('div');
+    row1.className = 'row';
+    row1.style.gap = '10px';
 
-      display = display || document.createElement('input');
+    if (!display){
+      display = document.createElement('input');
       display.type = 'text';
       display.id = IDS.display;
       display.placeholder = '#—';
       display.readOnly = true;
       display.style.flex = '1';
+    } else {
+      // Normalize an existing display
+      display.readOnly = true;
+      if (!display.placeholder) display.placeholder = '#—';
+    }
 
-      loadBtn = loadBtn || document.createElement('button');
+    if (!loadBtn){
+      loadBtn = document.createElement('button');
       loadBtn.id = IDS.load;
-      loadBtn.className = 'btn';
+      loadBtn.className = 'btn danger';
       loadBtn.textContent = 'Load Token ID';
-      // give it the nice red style you’ve been using for action buttons
-      loadBtn.classList.add('danger');
-
-      row1.appendChild(display);
-      row1.appendChild(loadBtn);
-
-      // Insert as the first controls in the card
-      card.insertBefore(row1, card.firstElementChild?.nextSibling || card.firstChild);
     }
 
-    // Second row: [ Delete Token ID ]
-    if (!delBtn){
-      const row2 = document.createElement('div');
-      row2.className = 'row';
-      delBtn = document.createElement('button');
-      delBtn.id = IDS.del;
-      delBtn.textContent = 'Delete Token ID';
-      delBtn.className = 'btn danger';
-      row2.appendChild(delBtn);
-      // Put this just under row1
-      loadBtn.parentElement.after(row2);
-    }
-
-    return { card, loadBtn, delBtn, display };
+    row1.appendChild(display);
+    row1.appendChild(loadBtn);
+    card.insertBefore(row1, card.firstElementChild?.nextSibling || card.firstChild);
+  } else {
+    // If both existed already, make sure the display is read‑only and consistent
+    display.readOnly = true;
+    if (!display.placeholder) display.placeholder = '#—';
   }
+
+  // Create row 2 if delete button is missing
+  if (!delBtn){
+    const row2 = document.createElement('div');
+    row2.className = 'row';
+    delBtn = document.createElement('button');
+    delBtn.id = IDS.del;
+    delBtn.className = 'btn danger';
+    delBtn.textContent = 'Delete Token ID';
+    row2.appendChild(delBtn);
+    const row1 = loadBtn.parentElement;
+    (row1 && row1.nextSibling)
+      ? row1.parentElement.insertBefore(row2, row1.nextSibling)
+      : row1.parentElement.appendChild(row2);
+  }
+
+  // De‑dup: remove any other “Delete Token ID” buttons or extra “#…” boxes
+  Array.from(card.querySelectorAll('button')).forEach(b=>{
+    if (/delete token id/i.test(b.textContent||'') && b !== delBtn){ b.remove(); }
+  });
+  Array.from(card.querySelectorAll('input[type="text"],input:not([type])')).forEach(i=>{
+    const looksLikeDisplay = ((i.placeholder||'').trim().startsWith('#')
+                           || (i.value||'').trim().startsWith('#'));
+    if (looksLikeDisplay && i !== display){ i.remove(); }
+  });
+
+  return { card, loadBtn, delBtn, display };
+}
 
   // Find the style controls that already exist on the card (format/size/colors/width)
   function findStyleControls(card, display){
