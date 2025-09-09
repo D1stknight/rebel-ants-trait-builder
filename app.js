@@ -6249,7 +6249,7 @@ async function loadTokenFromCollection(tokenId, col){
     }
   }
 
-  onReady(boot));
+ onReady(boot);
 })();
 
 /* ========== RA_CURVED_STABILITY_v1 — keep Custom Text visible after Curved toggle ========== */
