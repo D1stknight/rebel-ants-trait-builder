@@ -6325,29 +6325,6 @@ async function loadTokenFromCollection(tokenId, col){
   }
 })();
 
-/* ========== RA_TEXT_FRONT_GUARD_v1 — keep new text (incl. Curved) above the base ========== */
-(()=>{
-  const C = ()=> window.canvas || null;
-
-  function bringFrontIfNeeded(o){
-    if (!o) return;
-    // skip base and system items (footer, token-id text, etc.)
-    if (o._isBase || o._raBrandFooter || o._raSys) return;
-    try { C()?.bringToFront(o); } catch(_){}
-    try { C()?.requestRenderAll(); } catch(_){}
-  }
-
-  function boot(){
-    const c = C();
-    if (!c){ setTimeout(boot, 200); return; }
-    // Whenever Curved (or any tool) creates a fresh object, keep it above the base image
-    c.on('object:added', e => bringFrontIfNeeded(e?.target));
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
-  else boot();
-})();
-
 /* ========== RA_SAFE_SCRUB_v1 — stop the Custom Text box from mirroring the Token‑ID text ========== */
 (()=>{
   function C(){ return window.canvas || null; }
