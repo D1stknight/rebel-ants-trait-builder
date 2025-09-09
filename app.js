@@ -6384,3 +6384,20 @@ async function loadTokenFromCollection(tokenId, col){
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
+
+/* ========== RA_FRONT_GUARD_MINI_v1 — keep new text/curved text above the base ========== */
+(()=>{
+  function C(){ return window.canvas || null; }
+  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raSys)); }
+
+  function boot(){
+    const c = C(); if (!c){ setTimeout(boot,200); return; }
+    c.on('object:added', e=>{
+      const o = e && e.target;
+      if (!o || isSys(o)) return;      // ignore base, footer, token‑id, etc.
+      try{ c.bringToFront(o); c.requestRenderAll(); }catch(_){}
+    });
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+})();
