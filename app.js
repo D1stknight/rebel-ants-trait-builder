@@ -6385,19 +6385,49 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_FRONT_GUARD_MINI_v1 — keep new text/curved text above the base ========== */
+/* ========== RA_FRONT_GUARD_MINI_v2 — keep new text/curved text above the base ========== */
 (()=>{
   function C(){ return window.canvas || null; }
   function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raSys)); }
 
-  function boot(){
-    const c = C(); if (!c){ setTimeout(boot,200); return; }
-    c.on('object:added', e=>{
-      const o = e && e.target;
-      if (!o || isSys(o)) return;      // ignore base, footer, token‑id, etc.
-      try{ c.bringToFront(o); c.requestRenderAll(); }catch(_){}
-    });
+  // Detect text, including grouped/curved text that’s wrapped in a Group
+  function containsText(o){
+    if (!o) return false;
+    if ((o.type||'').toLowerCase().includes('text')) return true;
+    if (typeof o.getObjects === 'function'){
+      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
+      catch(_){ /* ignore */ }
+    }
+    return false;
   }
 
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+  function toFront(o){
+    const c = C(); if (!c || !o || isSys(o)) return;
+    // If something set it invisible during rebuild, ensure it’s visible
+    if (o.visible === false) { try{ o.visible = true; }catch(_){ } }
+    try { c.bringToFront(o); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function bumpActive(){
+    const c = C(); if (!c) return;
+    const a = c.getActiveObject && c.getActiveObject();
+    if (a && !isSys(a)) toFront(a);
+  }
+
+  function boot(){
+    const c = C(); if (!c){ setTimeout(boot, 200); return; }
+
+    // When Curved rebuilds, a fresh object gets added (text or a group with text)
+    c.on('object:added',   e => { const o = e && e.target; if (containsText(o) && !isSys(o)) setTimeout(()=>toFront(o),0); });
+    c.on('object:modified',e => { const o = e && e.target; if (containsText(o) && !isSys(o)) setTimeout(()=>toFront(o),0); });
+
+    // Also bump the selected item after UI interactions
+    c.on('selection:created', ()=> setTimeout(bumpActive,0));
+    c.on('selection:updated', ()=> setTimeout(bumpActive,0));
+    c.on('mouse:up',          ()=> setTimeout(bumpActive,0));
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
 })();
