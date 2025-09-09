@@ -6248,83 +6248,6 @@ async function loadTokenFromCollection(tokenId, col){
  onReady(boot);
 })();
 
-/* ========== RA_CURVED_STABILITY_v1 — keep Custom Text visible after Curved toggle ========== */
-(()=>{
-  const C = ()=> window.canvas || null;
-
-  function findCustomTextCard(){
-    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el => /custom text/i.test(el.textContent||''));
-    return h ? (h.closest('.card') || h.parentElement) : null;
-  }
-  function findCurvedCheckbox(card){
-    if (!card) return null;
-    // Look for a checkbox whose label says "Curved"
-    const cbs = Array.from(card.querySelectorAll('input[type="checkbox"]'));
-    for (const cb of cbs){
-      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
-      const txt = (lab && lab.textContent) ? lab.textContent.toLowerCase() : '';
-      if (txt.includes('curved')) return cb;
-    }
-    return null;
-  }
-
-  function lastUserText(c){
-    const objs = (c.getObjects?.() || []);
-    // pick the latest object that is not a system/base/footer/token-id text
-    for (let i = objs.length - 1; i >= 0; i--){
-      const o = objs[i];
-      if (!o) continue;
-      if (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) continue;
-      if (o.type === 'textbox' || o.type === 'text' || o.type === 'group') return o;
-    }
-    return null;
-  }
-
-  function fixIfInvisible(){
-    const c = C(); if (!c) return;
-    setTimeout(()=>{ // wait for Curved logic to run
-      let o = c.getActiveObject() || lastUserText(c);
-      if (!o) return;
-
-      // ensure visible & on-screen
-      if (o.visible === false) o.visible = true;
-      if (typeof o.opacity === 'number' && o.opacity <= 0) o.opacity = 1;
-
-      const W = c.getWidth(), H = c.getHeight();
-      const bb = o.getBoundingRect ? o.getBoundingRect(true,true) : {left:o.left||0, top:o.top||0, width:o.width||0, height:o.height||0};
-      const offscreen =
-        (bb.left + bb.width  < -20) || (bb.top + bb.height < -20) ||
-        (bb.left > W + 20)   || (bb.top > H + 20);
-
-      if (offscreen){
-        const w = Math.max(1, bb.width || 200);
-        const h = Math.max(1, bb.height|| 80);
-        o.left = (W - w)/2;
-        o.top  = (H - h)/2;
-      }
-
-      try { c.setActiveObject(o); } catch(_){}
-      try { o.set({ dirty:true }); o.setCoords(); } catch(_){}
-      try { c.requestRenderAll(); } catch(_){}
-    }, 35);
-  }
-
-  function boot(){
-    const card = findCustomTextCard();
-    const curved = findCurvedCheckbox(card);
-    if (!curved){ setTimeout(boot, 300); return; }
-
-    curved.addEventListener('change', fixIfInvisible, true);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
-})();
-
 /* ========== RA_SAFE_SCRUB_v1 — stop the Custom Text box from mirroring the Token‑ID text ========== */
 (()=>{
   function C(){ return window.canvas || null; }
@@ -6409,6 +6332,41 @@ async function loadTokenFromCollection(tokenId, col){
     c.on('mouse:up',          ()=> setTimeout(bumpActive,0));
     c.on('selection:created', ()=> setTimeout(bumpActive,0));
     c.on('selection:updated', ()=> setTimeout(bumpActive,0));
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+})();
+
+/* ========== RA_FRONT_GUARD_SAFE_v3 — only on selection change (safe for Curved) ========== */
+(()=>{
+  const C = ()=> window.canvas || null;
+  const isSys = o => !!(o && (o._isBase || o._raBrandFooter || o._raSys));
+  const hasText = o => {
+    if (!o) return false;
+    const t = (o.type||'').toLowerCase();
+    if (t.includes('text')) return true;
+    if (typeof o.getObjects === 'function'){
+      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
+      catch(_){}
+    }
+    return false;
+  };
+
+  function bumpSelected(){
+    const c = C(); if (!c) return;
+    const a = c.getActiveObject && c.getActiveObject();
+    if (!a || isSys(a) || !hasText(a)) return;
+    try { c.bringToFront(a); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function boot(){
+    const c = C(); if (!c){ setTimeout(boot, 200); return; }
+    // Only react when the user changes selection or releases the mouse.
+    c.on('selection:created', ()=> setTimeout(bumpSelected,0));
+    c.on('selection:updated', ()=> setTimeout(bumpSelected,0));
+    c.on('mouse:up',          ()=> setTimeout(bumpSelected,0));
   }
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
