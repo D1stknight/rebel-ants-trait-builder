@@ -6404,3 +6404,64 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
   else boot();
 })();
+
+/* ========== RA_CURVED_CACHE_OFF_v1 — stop ghost/duplicate tiles on Curved text ========== */
+(()=>{
+  function C(){ return window.canvas || null; }
+  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys)); }
+
+  // "Curved" in your app is usually a fabric.Group that contains text children.
+  function looksLikeCurved(o){
+    if (!o || isSys(o)) return false;
+    const t = (o.type||'').toLowerCase();
+
+    // If it's a group, check if it contains any text children
+    if (typeof o.getObjects === 'function'){
+      try {
+        const kids = o.getObjects();
+        if (kids && kids.some(ch => ((ch.type||'').toLowerCase().includes('text')))) return true;
+      } catch(_){}
+    }
+
+    // If it's a text-like object and has arc/radius-ish hints, treat as curved too
+    if (t.includes('text') && (o.radius!=null || o.arc!=null || o._curved)) return true;
+
+    return false;
+  }
+
+  function disableCache(o){
+    if (!o || isSys(o)) return;
+    try { o.objectCaching = false; o.noScaleCache = true; o.dirty = true; } catch(_){}
+    if (typeof o.getObjects === 'function'){
+      try {
+        o.getObjects().forEach(ch=>{
+          try { ch.objectCaching = false; ch.noScaleCache = true; ch.dirty = true; } catch(_){}
+        });
+      } catch(_){}
+    }
+  }
+
+  function handle(o){
+    if (!o) return;
+    if (looksLikeCurved(o)){
+      disableCache(o);
+      try { C()?.requestRenderAll(); } catch(_){}
+    }
+  }
+
+  function boot(){
+    const c = C(); if (!c){ setTimeout(boot, 200); return; }
+    if (c.__raCurvedCacheOff) return; // guard against double-wire
+    c.__raCurvedCacheOff = true;
+
+    c.on('object:added',    e => handle(e && e.target));
+    c.on('object:modified', e => handle(e && e.target));
+
+    // Also catch selection changes (some tools rebuild the object then select it)
+    c.on('selection:created', ()=> handle(c.getActiveObject && c.getActiveObject()));
+    c.on('selection:updated', ()=> handle(c.getActiveObject && c.getActiveObject()));
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+})();
