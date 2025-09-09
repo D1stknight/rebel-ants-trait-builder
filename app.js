@@ -6315,3 +6315,72 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
   else boot();
 })();
+
+/* ========== RA_CURVED_REQUIRE_ADD_v1 — require "Add Text" before Curved ========== */
+(()=>{
+  const C = ()=> window.canvas || null;
+
+  function findCustomTextCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent||''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+  function findCurvedCheckbox(card){
+    if (!card) return null;
+    const cbs = Array.from(card.querySelectorAll('input[type="checkbox"]'));
+    for (const cb of cbs){
+      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
+      const txt = (lab && lab.textContent || '').toLowerCase();
+      if (txt.includes('curved')) return cb;
+    }
+    return null;
+  }
+
+  function hasUserTextOnCanvas(){
+    const c = C(); if (!c) return false;
+    const objs = c.getObjects?.() || [];
+    return objs.some(o=>{
+      if (!o) return false;
+      // Ignore base image, watermark/footer, token‑ID text, or our own system items
+      if (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) return false;
+      const t = (o.type||'').toLowerCase();
+      if (t==='text' || t==='textbox' || t==='i-text') return true;
+      if (t==='group'){
+        try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
+        catch(_){ /* ignore */ }
+      }
+      return false;
+    });
+  }
+
+  function boot(){
+    const card = findCustomTextCard(); if (!card){ setTimeout(boot,300); return; }
+    const curved = findCurvedCheckbox(card); if (!curved){ setTimeout(boot,300); return; }
+
+    // A tiny hint below the curved controls
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:12px;color:#9ca3af;opacity:.85;margin-top:6px;display:none';
+    hint.textContent = 'Add Text first, then enable Curved.';
+    (curved.closest('.row')?.parentElement || card).appendChild(hint);
+
+    // If user tries to turn Curved on before any text exists, block it and show the hint
+    let aboutToCheck = false;
+    curved.addEventListener('click', (e)=>{
+      // This fires before the checkbox state flips; remember the intent
+      aboutToCheck = !curved.checked;
+    }, true);
+
+    curved.addEventListener('change', (e)=>{
+      if (aboutToCheck && curved.checked && !hasUserTextOnCanvas()){
+        try{ e.preventDefault(); e.stopImmediatePropagation(); }catch(_){}
+        curved.checked = false;
+        hint.style.display = '';
+        setTimeout(()=> hint.style.display = 'none', 2000);
+      }
+      aboutToCheck = false;
+    }, true);
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+})();
