@@ -5668,22 +5668,18 @@ if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
     const c = C(); if (!c) return setTimeout(boot, 120);
     ensure();
 
-    if (!c.__raBrandFooterWired){
-      c.__raBrandFooterWired = true;
-      c.on('object:added',   ensure);
-      c.on('object:removed', ensure);
-      c.on('object:modified',ensure);
-      try {
-        const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-        new ResizeObserver(()=> ensure()).observe(el);
-      } catch(_){}
-    }
+   if (!c.__raBrandFooterWired){
+  c.__raBrandFooterWired = true;
+  // Do NOT hook per-object Fabric events — they spam during curved text edits.
+  try {
+    const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+    new ResizeObserver(()=> requestAnimationFrame(ensure)).observe(el);
+  } catch(_){}
+}
 
-    // React to app events that can change the base or state
-    document.addEventListener('ra-collection-change', ensure);
-    document.addEventListener('ra-wm-recalc', ensure);
-    document.addEventListener('ra-holder-update', ensure);
-    document.addEventListener('ra-brand-footer', ensure); // in case other code dispatches this older event  
+// Only respond to high-level app events (throttled)
+['ra-collection-change','ra-wm-recalc','ra-holder-update','ra-brand-footer']
+  .forEach(ev => document.addEventListener(ev, ()=> requestAnimationFrame(ensure)));
   }
 
   if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
