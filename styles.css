@@ -35,3 +35,10 @@ input[type=range]{width:100%}
 .dropzone.drag{border-color:#22d3ee;background:rgba(34,211,238,.06)}
 .hidden{display:none}
 @media (max-width:1100px){.app{grid-template-columns:1fr;height:auto}.panel.right{order:3}.stage{order:2}.panel.left{order:1}.canvas-wrap{max-width:100%;overflow:auto}}
+/* Collection row (placed under Token ID) */
+.ra-collection-row{
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px;
+}
+.ra-collection-row .ra-mini{opacity:.75; font-size:12px}
+.ra-collection-row select{min-width:200px}
+.ra-collection-row #ra-col-using{flex-basis:100%; font-size:12px; opacity:.7}

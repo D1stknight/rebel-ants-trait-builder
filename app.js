@@ -3037,10 +3037,14 @@ canvas.requestRenderAll();
     const hasBase = !!base;
     const isToken = baseIsToken(base);
 
-    const shouldShow =
-      STATE.enabled &&
-      hasBase &&
-      ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads));
+    const force = (window && window.__raWMForce) || null;
+// Personal override (from wallet) wins; else fall back to admin toggles
+const shouldShow =
+  hasBase && (
+    (force && force.off) ? false :
+    (force && force.on)  ? true  :
+    (STATE.enabled && ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads)))
+  );
 
     let wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
     if (!shouldShow){
@@ -3150,6 +3154,10 @@ canvas.requestRenderAll();
 
       c.on('object:modified', ()=> ensureCenteredWM(c));
       c.on('object:removed',  ()=> ensureCenteredWM(c));
+
+    // 🔔 Wallet holder status changed → re-evaluate watermark
+    document.addEventListener('ra-holder-update', ()=> ensureCenteredWM(c)); 
+    document.addEventListener('ra-wm-recalc',    ()=> ensureCenteredWM(c));
     }
 
     // 4) keep WM scaled if canvas element resizes
@@ -5177,4 +5185,1560 @@ canvas.requestRenderAll();
       alert("Export failed: " + (err && err.message || err));
     }
   }, { passive:true });
+})();
+
+/* ========== RA_COLLECTIONS_ADMIN_v1.2 — adds Chain (hex) + RPC URL columns ========== */
+(()=> {
+  if (!/\badmin=1\b/i.test(location.search)) return;
+
+  // Build panel
+  const card = document.createElement('section');
+  card.id = 'raCollPanel';
+  card.style.cssText = 'margin:12px 0;padding:10px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea';
+  card.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <strong>Collections (wallet holder check)</strong>
+      <div>
+        <button id="raCollReload" class="btn small">Reload</button>
+        <button id="raCollSave" class="btn small">Save to server</button>
+      </div>
+    </div>
+    <div style="opacity:.7;font-size:12px;margin-top:6px">
+      Use <b>hex</b> Chain IDs (e.g., 0x1 Ethereum, 0x8173 ApeChain). RPC URL is optional (helps custom chains).
+    </div>
+    <div style="overflow:auto;margin-top:8px">
+      <table id="raCollTable" style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="text-align:left;border-bottom:1px solid #23242a">
+            <th style="padding:6px 4px;min-width:140px">Name</th>
+            <th style="padding:6px 4px;min-width:360px">Contract address</th>
+            <th style="padding:6px 4px;min-width:90px">Chain (hex)</th>
+            <th style="padding:6px 4px;min-width:90px">Tag</th>
+            <th style="padding:6px 4px;min-width:280px">RPC URL (optional)</th>
+            <th style="padding:6px 4px;min-width:40px"></th>
+          </tr>
+        </thead>
+        <tbody id="raCollBody"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button id="raCollAdd" class="btn small">+ Add row</button>
+      <button id="raCollSeed" class="btn small">Quick add sample rows</button>
+      <span id="raCollMsg" style="font-size:12px;opacity:.75"></span>
+    </div>
+  `;
+  // Try to place near other admin boxes
+  const leftCol = document.querySelector('#left, .left, .sidebar, .panels, .controls, .col-left');
+  (leftCol || document.body).appendChild(card);
+
+  const body = card.querySelector('#raCollBody');
+  const msg  = card.querySelector('#raCollMsg');
+
+  let rows = [];
+
+  function setMsg(t){ msg.textContent = t||''; if (t) setTimeout(()=>{ if (msg.textContent===t) msg.textContent=''; }, 2000); }
+
+  function mkInput(val, placeholder, width){
+    const i = document.createElement('input');
+    i.type = 'text';
+    i.value = val || '';
+    i.placeholder = placeholder || '';
+    i.style.cssText = `width:${width||'100%'};box-sizing:border-box;background:#12151c;border:1px solid #2a2e37;border-radius:6px;color:#e7e7ea;padding:6px`;
+    return i;
+  }
+  function mkSelect(val){
+    const s = document.createElement('select');
+    s.innerHTML = `<option value="rebel">rebel</option><option value="friend">friend</option>`;
+    s.value = (val==='rebel' ? 'rebel' : 'friend');
+    s.style.cssText = 'background:#12151c;border:1px solid #2a2e37;border-radius:6px;color:#e7e7ea;padding:6px';
+    return s;
+  }
+  function render(){
+    body.innerHTML = '';
+    rows.forEach((r, idx)=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td style="padding:6px 4px"></td>
+        <td style="padding:6px 4px"></td>
+        <td style="padding:6px 4px"></td>
+        <td style="padding:6px 4px"></td>
+        <td style="padding:6px 4px"></td>
+        <td style="padding:6px 4px;text-align:right"></td>
+      `;
+      const td = tr.querySelectorAll('td');
+
+      const inName = mkInput(r.name, 'Chumpz (ApeChain)', '100%');
+      const inAddr = mkInput(r.address, '0x…40 hex', '100%');
+      const inChain= mkInput(r.chainId || '0x1', '0x1 / 0x2105 / 0x8173', '110px');
+      const selTag = mkSelect(r.tag);
+      const inRpc  = mkInput(r.rpcUrl || '', 'https://...', '100%');
+
+      td[0].appendChild(inName);
+      td[1].appendChild(inAddr);
+      td[2].appendChild(inChain);
+      td[3].appendChild(selTag);
+      td[4].appendChild(inRpc);
+
+      const del = document.createElement('button');
+      del.textContent = '×';
+      del.className = 'btn small';
+      del.style.cssText = 'padding:4px 8px';
+      del.onclick = ()=>{ rows.splice(idx,1); render(); };
+      td[5].appendChild(del);
+
+      // Keep rows in sync
+      [inName,inAddr,inChain,selTag,inRpc].forEach(el=>{
+        el.addEventListener('input', ()=>{
+          r.name    = inName.value.trim();
+          r.address = inAddr.value.trim();
+          r.chainId = inChain.value.trim();
+          r.tag     = selTag.value;
+          r.rpcUrl  = inRpc.value.trim();
+        });
+      });
+
+      body.appendChild(tr);
+    });
+  }
+
+  async function load(){
+    setMsg('Loading…');
+    try{
+      const r = await fetch('/api/ra-collections');
+      const j = await r.json();
+      rows = Array.isArray(j.collections) ? j.collections.slice() : [];
+      // If any row lacks chainId (old saves), default to 0x1 so it’s visible/editable.
+      rows.forEach(r => { if (!r.chainId) r.chainId = '0x1'; });
+      render();
+      setMsg('Loaded');
+    }catch(_){ setMsg('Load failed'); }
+  }
+
+  async function save(){
+    setMsg('Saving…');
+
+    // quick validate
+    const okAddr = x => /^0x[a-fA-F0-9]{40}$/.test(x||'');
+    const okHex  = x => /^0x[0-9a-fA-F]+$/.test(x||'');
+    const okUrl  = x => !x || /^https?:\/\/\S+$/i.test(x);
+
+    const cleaned = rows
+      .map(r => ({
+        name: (r.name||'').trim().slice(0,80),
+        address: (r.address||'').trim(),
+        chainId: (r.chainId||'').trim().toLowerCase(),
+        tag: (r.tag==='rebel'?'rebel':'friend'),
+        rpcUrl: (r.rpcUrl||'').trim()
+      }))
+      .filter(r => r.name && okAddr(r.address) && okHex(r.chainId) && okUrl(r.rpcUrl));
+
+    try{
+      const r = await fetch('/api/ra-collections', {
+        method: 'POST',
+        headers: { 'content-type':'application/json' },
+        body: JSON.stringify({ collections: cleaned })
+      });
+      if (!r.ok) throw new Error('bad');
+      setMsg('Saved');
+    }catch(_){ setMsg('Save failed'); }
+  }
+
+  function addRow(){
+    rows.push({ name:'', address:'', chainId:'0x1', tag:'friend', rpcUrl:'' });
+    render();
+  }
+  function seed(){
+    rows = [
+      { name:'Rebel Ants',        address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1',    tag:'rebel'  },
+      { name:'Saints of LA',      address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chainId:'0x1',    tag:'friend' },
+      { name:'Chumpz (ApeChain)', address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chainId:'0x8173', tag:'friend',
+        rpcUrl:'https://apechain.calderachain.xyz/http' }
+    ];
+    render();
+    setMsg('Sample rows added — edit then Save to server.');
+  }
+
+  card.querySelector('#raCollReload').onclick = load;
+  card.querySelector('#raCollSave').onclick   = save;
+  card.querySelector('#raCollAdd').onclick    = addRow;
+  card.querySelector('#raCollSeed').onclick   = seed;
+
+  // First load
+  load();
+})();
+
+/* ========== RA_WALLET_CONNECT_MINI_v1 — connect + refresh + disconnect + robust check ========== */
+(()=>{
+  const qs  = (s,r=document)=>r.querySelector(s);
+
+  // --- UI ---
+  const box = document.createElement('div');
+  box.id = 'ra-wallet-mini';
+  box.innerHTML = `
+    <div class="panel" style="margin:12px 0;padding:10px;border-radius:8px;background:#121317;border:1px solid rgba(255,255,255,.08);color:#e6e6e6;font-size:12px;line-height:1.4;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <strong style="font-size:13px;">Wallet</strong>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button id="raW_refresh"   class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;display:none;">Refresh</button>
+          <button id="raW_disconnect"class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;display:none;">Disconnect</button>
+          <button id="raW_connect"   class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;">Connect</button>
+        </div>
+      </div>
+
+      <div id="raW_row1" style="margin-top:8px; display:none;">
+        <div><span style="opacity:.65;">Address:</span> <span id="raW_addr" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"></span></div>
+        <div><span style="opacity:.65;">Network:</span> <span id="raW_chain"></span></div>
+      </div>
+
+      <div id="raW_actions" style="margin-top:10px; display:none;">
+        <button id="raW_check" class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;">Check holdings</button>
+        <span id="raW_hint" style="margin-left:8px;opacity:.65;font-size:11px;"></span>
+      </div>
+
+      <div id="raW_out" style="margin-top:10px; white-space:pre-wrap;"></div>
+    </div>
+  `;
+  const leftCol = qs('#left, .left, .sidebar, .panels, .controls, .col-left');
+  (leftCol && leftCol.firstChild) ? leftCol.insertBefore(box, leftCol.firstChild)
+                                  : document.body.insertBefore(box, document.body.firstChild);
+
+  // --- Els
+  const btnConnect = qs('#raW_connect',    box);
+  const btnRefresh = qs('#raW_refresh',    box);
+  const btnDisc    = qs('#raW_disconnect', box);
+  const btnCheck   = qs('#raW_check',      box);
+  const row1       = qs('#raW_row1',       box);
+  const actions    = qs('#raW_actions',    box);
+  const out        = qs('#raW_out',        box);
+  const addrEl     = qs('#raW_addr',       box);
+  const chainEl    = qs('#raW_chain',      box);
+  const hintEl     = qs('#raW_hint',       box);
+
+  // --- State
+  window.RA_WALLET_STATE = { connected:false, address:null, chainId:null, provider:null };
+  window.RA_HOLDER_STATE = { checked:false, hasRebel:false, hasFriend:false, matches:[] };
+
+  // --- Chain names (includes ApeChain + Base)
+  function netNameFromChainId(cidHex){
+    const map = {
+      '0x1':      'Ethereum',
+      '0xaa36a7': 'Sepolia',
+      '0x2105':   'Base',
+      '0x14a33':  'Base Sepolia',
+      '0xa4b1':   'Arbitrum One',
+      '0x89':     'Polygon',
+      '0x8173':   'ApeChain'     // <— added
+    };
+    const k = (cidHex||'').toLowerCase();
+    return map[k] || cidHex;
+  }
+  const short = a => !a ? '' : (a.slice(0,6)+'…'+a.slice(-4));
+
+  // --- Collections API
+  async function getCollectionsFor(chainIdHex){
+    try{
+      const r = await fetch('/api/ra-collections');
+      if (r.ok){
+        const j = await r.json();
+        return (j.collections||[]).filter(c => (c.chainId||'').toLowerCase() === (chainIdHex||'').toLowerCase());
+      }
+    }catch(_){}
+    return [];
+  }
+
+  // --- ERC-721 balanceOf via wallet provider
+  async function balanceOf(provider, contract, owner){
+    const data = '0x70a08231' + owner.replace(/^0x/,'').padStart(64,'0');
+    const hex = await provider.request({ method:'eth_call', params:[{ to:contract, data }, 'latest'] });
+    try { return (BigInt(hex) > 0n); } catch { return false; }
+  }
+
+  // --- ERC-721 balanceOf via raw RPC (fallback for custom networks)
+  async function balanceOfRpc(rpcUrl, contract, owner){
+    if (!rpcUrl) return false;
+    const data = '0x70a08231' + owner.replace(/^0x/,'').padStart(64,'0');
+    try{
+      const r = await fetch(rpcUrl, {
+        method:'POST',
+        headers:{ 'content-type':'application/json' },
+        body: JSON.stringify({ id:1, jsonrpc:'2.0', method:'eth_call', params:[ { to:contract, data }, 'latest' ] })
+      });
+      const j = await r.json();
+      const hex = j && j.result;
+      if (!hex) return false;
+      return (BigInt(hex) > 0n);
+    }catch(_){ return false; }
+  }
+
+  // --- Connect / Refresh / Disconnect
+  async function connect(){
+    const eth = window.ethereum;
+    if (!eth){ out.textContent='No wallet detected (MetaMask/Coinbase).'; return; }
+    try{
+      const accounts = await eth.request({ method:'eth_requestAccounts' });
+      const chainId  = await eth.request({ method:'eth_chainId' });
+      const address  = accounts?.[0] || null;
+      setConnected(!!address, address, chainId, eth, 'Connected. Click “Check holdings”.');
+    }catch(_){ out.textContent = 'Connect cancelled or failed.'; }
+  }
+  async function refresh(){
+    const eth = window.ethereum;
+    if (!eth){ out.textContent='No wallet detected.'; return; }
+    try{
+      const accounts = await eth.request({ method:'eth_accounts' }); // no popup
+      const chainId  = await eth.request({ method:'eth_chainId' });
+      const address  = accounts?.[0] || null;
+      if (!address){
+        setDisconnected('No active account. Click Connect.');
+      } else {
+        setConnected(true, address, chainId, eth, 'Refreshed. Click “Check holdings”.');
+      }
+    }catch(_){ out.textContent='Refresh failed.'; }
+  }
+  function disconnect(){
+    // Soft disconnect: clear our UI/state. For a full revoke, user disconnects in wallet UI.
+    setDisconnected('Disconnected in app. (Use the wallet menu to fully disconnect this site.)');
+  }
+
+  function setConnected(ok, address, chainId, provider, msg){
+    window.RA_WALLET_STATE = { connected: ok, address, chainId, provider };
+    qs('#raW_connect', box).style.display  = ok ? 'none' : '';
+    btnRefresh.style.display = ok ? '' : 'none';
+    btnDisc.style.display    = ok ? '' : 'none';
+    row1.style.display       = ok ? '' : 'none';
+    actions.style.display    = ok ? '' : 'none';
+    addrEl.textContent       = short(address||'');
+    chainEl.textContent      = netNameFromChainId(chainId||'');
+    hintEl.textContent       = ok ? 'Switch accounts/networks? Click Refresh.' : '';
+    out.textContent          = msg || '';
+  }
+  function setDisconnected(msg){
+    window.RA_WALLET_STATE = { connected:false, address:null, chainId:null, provider:null };
+    qs('#raW_connect', box).style.display  = '';
+    btnRefresh.style.display = 'none';
+    btnDisc.style.display    = 'none';
+    row1.style.display       = 'none';
+    actions.style.display    = 'none';
+    out.textContent          = msg || '';
+  }
+
+  // --- Holdings
+  async function checkHoldings(){
+    const { provider, address, chainId } = window.RA_WALLET_STATE || {};
+    if (!provider || !address || !chainId){ out.textContent='Connect your wallet first.'; return; }
+    out.textContent = 'Checking…';
+
+    const cols = await getCollectionsFor(chainId);
+    if (!cols.length){
+      out.textContent = `No collections configured for ${netNameFromChainId(chainId)}.`;
+      window.RA_HOLDER_STATE = { checked:true, hasRebel:false, hasFriend:false, matches:[] };
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE }));
+      return;
+    }
+
+    const matches = [];
+    for (const c of cols){
+      let ok = false;
+      // try wallet provider first
+      try { ok = await balanceOf(provider, c.address, address); } catch(_){}
+      // fallback to RPC if provided (helps custom networks like ApeChain)
+      if (!ok && c.rpcUrl) {
+        try { ok = await balanceOfRpc(c.rpcUrl, c.address, address); } catch(_){}
+      }
+      matches.push({ ...c, holds: ok });
+    }
+
+    const hasRebel  = matches.some(m => m.holds && m.tag==='rebel');
+    const hasFriend = matches.some(m => m.holds && m.tag!=='rebel');
+
+    window.RA_HOLDER_STATE = { checked:true, hasRebel, hasFriend, matches };
+    document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE }));
+
+    const lines = [
+      `Chain: ${netNameFromChainId(chainId)}`,
+      `Address: ${short(address)}`,
+      '',
+      ...matches.map(r => `• ${r.name||r.address} — ${r.holds ? '✅ holds' : '—'}`),
+      '',
+      `Summary: ${hasRebel ? 'Rebel holder' : 'No Rebel'}${hasFriend ? ' + Friend collection' : ''}`
+    ];
+    out.textContent = lines.join('\n');
+  }
+
+  // --- Wire
+  qs('#raW_connect', box).addEventListener('click', connect);
+  btnRefresh.addEventListener('click', refresh);
+  btnDisc.addEventListener('click', disconnect);
+  btnCheck  .addEventListener('click', checkHoldings);
+
+  // update on wallet events
+  if (window.ethereum){
+    ethereum.on?.('accountsChanged', ()=>{ hintEl.textContent='Account changed — click Refresh.'; });
+    ethereum.on?.('chainChanged',   cid=>{ chainEl.textContent = netNameFromChainId(cid); hintEl.textContent='Network changed — click Refresh.'; });
+  }
+
+  // optional: try a silent refresh on load
+  (async ()=>{ try{ await refresh(); }catch(_){} })();
+})();
+
+/* ========== RA_WM_HOLDER_GATING_v2 — wallet → watermark behavior (no loops) ========== */
+(()=>{
+  function apply(detail){
+    // keep last known state around for other bits if needed
+    window.RA_HOLDER_STATE = detail || window.RA_HOLDER_STATE || {};
+
+    // Rebel holders: locally force watermark OFF (doesn't change admin toggles)
+    if (detail && detail.hasRebel) {
+      window.__raWMForce = { off: true };
+    } else {
+      window.__raWMForce = null; // obey admin toggles again
+    }
+
+    // Tell the watermark block to recompute using the new flag
+    try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
+    try { window.canvas && window.canvas.requestRenderAll(); } catch(_) {}
+  }
+
+  // Wallet checker emits 'ra-holder-update' with detail: { hasRebel, hasFriend, ... }
+  document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
+})();
+
+/* ========== RA_BRAND_FOOTER_LIVE_MINI_v2 — auto footer for non‑Rebel tokens (live + export) ========== */
+(()=>{
+  const FOOTER_TEXT = 'Powered by Rebel Studios';
+  const STYLE = { fontFamily: "Inter, Arial, sans-serif", fontSize: 12, fill: "#cfcfcf", opacity: 0.88 };
+  const PAD = 10;
+
+  const toLower = s => (s||'').toLowerCase();
+  let rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
+if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
+  const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
+  if (r) rebelContract = toLower(r.address || r.contract);
+}
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  function findBase(c){ return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null; }
+
+  function shouldShow(c){
+    const base = findBase(c);
+    if (!base) return false;
+    // Only friend tokens: needs the loader to set _tokenContract
+    const cc = toLower(base._tokenContract||'');
+    if (!cc) return false;                      // unknown → assume Rebel / no footer
+    return (rebelContract && cc !== rebelContract);
+  }
+
+  function place(c, footer){
+    footer.set({
+      originX:'right', originY:'bottom',
+      left: c.getWidth() - PAD,
+      top:  c.getHeight() - PAD
+    });
+    footer.setCoords();
+  }
+
+  function ensure(){
+    const c = C(); if (!c) return;
+
+    let footer = (c.getObjects()||[]).find(o => o && o._raBrandFooter);
+    const show = shouldShow(c);
+
+    if (!show){
+      if (footer){ c.remove(footer); c.requestRenderAll(); }
+      return;
+    }
+
+    if (!footer){
+      footer = new fabric.Textbox(FOOTER_TEXT, {
+        ...STYLE,
+        selectable:false, evented:false, hasControls:false,
+        _raBrandFooter:true, _raSys:true
+      });
+      c.add(footer);
+    } else {
+      footer.set(STYLE);
+    }
+    place(c, footer);
+    try { c.bringToFront(footer); } catch(_){}
+    try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
+    c.requestRenderAll();
+  }
+
+  function boot(){
+    const c = C(); if (!c) return setTimeout(boot, 120);
+    ensure();
+
+   if (!c.__raBrandFooterWired){
+  c.__raBrandFooterWired = true;
+  // Do NOT hook per-object Fabric events — they spam during curved text edits.
+  try {
+    const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+    new ResizeObserver(()=> requestAnimationFrame(ensure)).observe(el);
+  } catch(_){}
+}
+
+// Only respond to high-level app events (throttled)
+['ra-collection-change','ra-wm-recalc','ra-holder-update','ra-brand-footer']
+  .forEach(ev => document.addEventListener(ev, ()=> requestAnimationFrame(ensure)));
+  }
+
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
+  else { boot(); }
+})();
+
+/* ========== RA_COLLECTIONS_RESET_v1 — single dropdown + clean CSS + multi-collection loader ========== */
+(()=>{
+  // ----- config (no changes needed) -----
+  const ROW_ID = 'raColRow';
+  const SELECT_ID = 'raColSelect';
+  const STATUS_ID = 'raColStatus';
+  const REFRESH_ID = 'raColRefresh';
+
+  // Tiny CSS to make the row look right and full-width inside the Upload card
+  try{
+    if (!document.getElementById('raColCss')){
+      const st = document.createElement('style');
+      st.id = 'raColCss';
+      st.textContent = `
+  #${ROW_ID}{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px;}
+  #${ROW_ID} label{flex:1 1 auto; min-width:76px; opacity:.75}
+  #${ROW_ID} button{height:32px; padding:0 10px;}
+  #${ROW_ID} select{flex:1 1 100%; height:32px; border:1px solid #313131; background:#121212; color:#fff; border-radius:6px; padding:4px 8px;}
+  #${STATUS_ID}{flex-basis:100%; display:block; margin-top:6px; font-size:12px; opacity:.66;}
+`;
+      document.head.appendChild(st);
+    }
+  }catch(_){}
+
+  const S = { list:[], selectedKey:null };
+
+  // --- helpers ---
+  const $ = (id)=>document.getElementById(id);
+
+ function normalizeChainId(v){
+  if (v == null) return null;
+  if (typeof v === 'number') return '0x' + v.toString(16);
+  if (typeof v === 'string'){
+    if (/^0x/i.test(v)) return v.toLowerCase();
+    const n = parseInt(v, 10);
+    if (Number.isFinite(n)) return '0x' + n.toString(16);
+  }
+  return null;
+}
+function chainSlugFromId(cidHex){
+  const c = (cidHex||'').toLowerCase();
+  if (c === '0x1')    return 'ethereum';
+  if (c === '0x2105') return 'base';
+  if (c === '0x8173') return 'apechain';
+  return 'ethereum'; // safe default
+}
+function netNameFromChainId(cidHex){
+  const c = (cidHex||'').toLowerCase();
+  if (c === '0x1')    return 'Ether';
+  if (c === '0x2105') return 'Base';
+  if (c === '0x8173') return 'ApeChain';
+  return 'Unknown';
+}
+
+ async function fetchCollections(){
+  try{
+    const r = await fetch('/api/ra-collections');
+    const j = await r.json();
+    const arr = (j && (j.collections||j.data||[])) || [];
+    const out = arr
+      .map((x,i)=>{
+        const chainId = normalizeChainId(x.chainId || x.chain || x.network || x.net) || '0x1';
+        return {
+          key:     x.key || x.slug || (x.name||'col')+'_'+i,
+          name:    (x.name || x.label || 'Unnamed').trim(),
+          address: (x.address || x.contract || '').trim(),
+          chainId,
+          slug:    chainSlugFromId(chainId), // 'ethereum' | 'base' | 'apechain'
+          tag:     (x.tag==='rebel' ? 'rebel' : 'friend')
+        };
+      })
+      .filter(x => x.address);
+
+    // Make Rebel the default/first, then the rest
+    out.sort((a,b)=>{
+      if (a.tag==='rebel' && b.tag!=='rebel') return -1;
+      if (b.tag==='rebel' && a.tag!=='rebel') return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return out;
+  }catch(_){
+    // Safe fallback
+    return [
+      { key:'rebel-eth',  name:'Rebel Ants',   address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1', slug:'ethereum', tag:'rebel'  },
+      { key:'sola-eth',   name:'Saints of LA', address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chainId:'0x1', slug:'ethereum', tag:'friend' }
+    ];
+  }
+}
+
+  function currentCol(){
+    if (!S.list.length) return null;
+    if (S.selectedKey){
+      const found = S.list.find(c=>c.key===S.selectedKey);
+      if (found) return found;
+    }
+    return S.list[0] || null;
+  }
+
+  function findTokenIdInput(){
+    return $('tokenId') ||
+           document.querySelector('input#token') ||
+           document.querySelector('input[name="token"]') ||
+           document.querySelector('input[placeholder*="Token"]');
+  }
+
+  async function ensureUI(){
+    // Anchor under the Token ID row
+    const tokenInput = findTokenIdInput();
+    if (!tokenInput || !tokenInput.parentElement) return;
+
+    // Create row once
+    let row = $(ROW_ID);
+    if (!row){
+      row = document.createElement('div');
+      row.id = ROW_ID;
+      row.innerHTML = `
+  <label>Collection</label>
+  <button id="${REFRESH_ID}" type="button">Refresh</button>
+  <select id="${SELECT_ID}"></select>
+  <span id="${STATUS_ID}"></span>
+`;
+      // Put it as a sibling right under the token input’s container
+      const anchor = tokenInput.parentElement;
+      (anchor.parentElement || anchor).appendChild(row);
+    }
+
+    // Fill options
+    const sel = $(SELECT_ID);
+    sel.innerHTML = '';
+    S.list.forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c.key;
+      o.textContent = `${c.name} — ${netNameFromChainId(c.chainId)}`;
+      sel.appendChild(o);
+    });
+    // Restore/choose selection
+    if (S.selectedKey && Array.from(sel.options).some(o => o.value === S.selectedKey)) {
+  sel.value = S.selectedKey;
+} else {
+  S.selectedKey = sel.options[0] ? sel.options[0].value : null;
+  sel.value = S.selectedKey || '';
+}
+
+    // Status text
+    const st = $(STATUS_ID);
+    const col = currentCol();
+    if (st) st.textContent = col ? `Using: ${col.name}` : '';
+
+   sel.onchange = ()=>{
+  S.selectedKey = sel.value;
+  const col = currentCol();
+  if ($(STATUS_ID)) $(STATUS_ID).textContent = col ? `Using: ${col.name}` : '';
+  try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: col })); } catch(_){}
+};
+
+    const ref = $(REFRESH_ID);
+    if (ref) ref.onclick = async ()=>{
+      S.list = await fetchCollections();
+      await ensureUI();
+    };
+  }
+
+  // Use Reservoir tokens API (same one you already use for Rebels) but with the selected contract
+  function normalizeUrl(u){
+  if (!u) return null;
+  if (u.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + u.slice(7);
+  return u;
+}
+function annotateBase(meta){
+  const c = window.canvas; if (!c) return;
+  // Try to find the base image/group
+  const objs = c.getObjects ? c.getObjects() : [];
+  let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+  if (!base){
+    // Fallback: last image on canvas
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o._raBrandFooter);
+    base = imgs[imgs.length-1] || null;
+  }
+  if (!base) return;
+  base._tokenContract = (meta.contract||'').toLowerCase();
+  base._tokenChain    = meta.chain;
+  base._tokenName     = meta.name;
+  try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
+  try { c.requestRenderAll(); } catch(_){}
+}
+
+async function loadTokenFromCollection(tokenId, col){
+  const contract = (col && col.address) || '';
+  if (!contract){ alert('No contract for selected collection.'); return; }
+
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
+  const tokenKey = `${contract}:${tokenId}`;
+  const url = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
+
+  const r = await fetch(url, { headers:{ 'accept':'application/json' }, cache:'no-store' });
+  if (!r.ok){ alert('Lookup failed for that token.'); return; }
+
+  const j = await r.json();
+  const t = j?.tokens?.[0]?.token || {};
+  const media = t.media || {};
+  const img = normalizeUrl(
+    (media.original && (media.original.url || media.original.mediaUrl)) ||
+    t.imageLarge || t.image || t.imageSmall
+  );
+  if (!img){ alert('No image found for that token.'); return; }
+
+  // Use your existing base loader
+  if (typeof window.loadBaseImage === 'function') {
+    await window.loadBaseImage(img, /*isToken*/ true);
+  } else if (typeof window.loadBase === 'function') {
+    await window.loadBase(img);
+  } else {
+    // very safe fallback
+    const i = new Image();
+    i.crossOrigin = 'anonymous';
+    await new Promise((res,rej)=>{ i.onload=res; i.onerror=rej; i.src=img; });
+    const base = new fabric.Image(i, { selectable:false, evented:false, _isBase:true });
+    const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+  }
+
+  function autoFitBase(){
+  const c = window.canvas; if (!c) return;
+  const base = (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect);
+  if (!base || !base.width || !base.height) return;
+
+  const maxW = c.getWidth(), maxH = c.getHeight();
+  const scale = Math.min(maxW / base.width, maxH / base.height);
+
+  base.set({
+    scaleX: scale, scaleY: scale,
+    left: (maxW - base.width * scale) / 2,
+    top:  (maxH - base.height * scale) / 2
+  });
+  base.setCoords();
+  try{ c.requestRenderAll(); }catch(_){}
+}
+  // Tag the base so the footer/watermark can react
+  annotateBase({ contract, chain: slug, name: col.name });
+  autoFitBase();
+}
+
+  function hookLoadByToken(){
+    // Button
+    const btn = $('loadByToken') ||
+                Array.from(document.querySelectorAll('button')).find(b=>/load by token/i.test(b.textContent||''));
+    if (!btn) return;
+
+  const handler = async (e)=>{
+  try{ e.preventDefault(); e.stopImmediatePropagation(); }catch(_){}
+  const inp = findTokenIdInput();
+  const tokenId = (inp && inp.value || '').trim();
+  if (!tokenId){ alert('Enter a token ID first.'); return; }
+  const col = currentCol();
+  if (!col){ alert('Pick a collection first.'); return; }
+
+  const st = document.getElementById('raColStatus');
+  if (st) st.textContent = `Fetching ${col.name} #${tokenId}…`;
+
+  try{
+    await loadTokenFromCollection(tokenId, col);
+    if (st) st.textContent = `Loaded ${col.name} #${tokenId}`;
+  }catch(_){
+    if (st) st.textContent = `Failed to load ${col.name} #${tokenId}`;
+  }
+};
+    // Bind in capture mode so we override earlier listeners that hard‑coded Rebels
+    btn.addEventListener('click', handler, true);
+
+    // Also bind Enter on the token id input
+    const inp = findTokenIdInput();
+    if (inp){
+      inp.addEventListener('keydown', (e)=>{ if (e.key === 'Enter'){ handler(e); }});
+    }
+  }
+
+  async function boot(){
+    S.list = await fetchCollections();
+    await ensureUI();
+    hookLoadByToken();
+  }
+
+  // kick off
+  boot();
+})();
+
+/* ========== RA_TOKEN_ID_LOAD_v5 — Load button (reuse your display) + keep Custom Text clean ========== */
+(()=>{
+  function onReady(fn){
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
+    else fn();
+  }
+
+  const STATE = { id:null, text:null, ui:null };
+  const C = ()=> window.canvas || null;
+
+  // --- find the Token ID Styles card by its heading
+  function findCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /token id styles/i.test(el.textContent||''));
+    if (h) return h.closest('.card') || h.parentElement;
+    return Array.from(document.querySelectorAll('.card,section,div'))
+      .find(el => /token id styles/i.test(el.textContent||'')) || null;
+  }
+
+  // --- the main Token ID input (in the Upload area)
+  function mainTokenInput(){
+    return document.getElementById('tokenId')
+        || document.querySelector('input#token')
+        || document.querySelector('input[name="token"]')
+        || document.querySelector('input[placeholder*="Token"]');
+  }
+  function readMainToken(){
+    const el = mainTokenInput(); if (!el) return null;
+    const n = parseInt((el.value||'').trim(),10);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // --- locate your existing small "#—" field; add only the Load button
+  function ensureUI(card){
+    if (!card) return null;
+
+    // Reuse your existing small display if present (input or output)
+    let readout =
+      card.querySelector('#raTokenIdDisplay') ||
+      Array.from(card.querySelectorAll('input[type="text"],input:not([type]),output')).find(el=>{
+        const t = ((el.value ?? el.textContent ?? el.placeholder) || '').toString().trim();
+        return t.startsWith('#') || (el.placeholder||'').toString().trim().startsWith('#');
+      }) || null;
+
+    // If it’s an input, make it read‑only and tag it
+    if (readout && readout.tagName && readout.tagName.toLowerCase()==='input'){
+      readout.readOnly = true;
+      if (!readout.id) readout.id = 'raTokenIdDisplay';
+    }
+
+    // Remove any stray extra output we might have made before (prevents the second box)
+    Array.from(card.querySelectorAll('output#raTokenIdDisplay')).forEach(o=>{
+      if (o !== readout) o.remove();
+    });
+
+    // Ensure the Load button exists, placed right after the readout if possible
+    let loadBtn = card.querySelector('#raLoadTokenIdBtn') ||
+      Array.from(card.querySelectorAll('button')).find(b=>/load token id/i.test(b.textContent||''));
+    if (!loadBtn){
+      loadBtn = document.createElement('button');
+      loadBtn.id = 'raLoadTokenIdBtn';
+      loadBtn.className = 'btn danger';
+      loadBtn.textContent = 'Load Token ID';
+      if (readout && readout.parentElement){
+        readout.parentElement.insertBefore(loadBtn, readout.nextSibling);
+      } else {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.style.gap = '10px';
+        row.appendChild(loadBtn);
+        card.insertBefore(row, card.firstElementChild?.nextSibling || card.firstChild);
+      }
+    }
+
+    // Use the existing Delete button on the card (we never add a second one)
+    const delBtn = Array.from(card.querySelectorAll('button'))
+      .find(b => /delete token id/i.test(b.textContent||''));
+
+    return { card, loadBtn, delBtn, readout };
+  }
+
+  // --- find the style controls already on this card
+  function findStyleCtrls(card){
+    const fmt = Array.from(card.querySelectorAll('select')).find(s=>{
+      const txt = Array.from(s.options||[]).map(o => (o.textContent||'').toLowerCase()).join('|');
+      return /roman|hex|binary|leading|standard/.test(txt);
+    }) || null;
+
+    let size = null;
+    const sizeLabel = Array.from(card.querySelectorAll('label')).find(l=>/size/i.test(l.textContent||''));
+    if (sizeLabel){
+      const wrap = sizeLabel.parentElement;
+      size = wrap && (wrap.querySelector('input[type="number"]') || wrap.querySelector('input'));
+    }
+    if (!size){
+      const nums = Array.from(card.querySelectorAll('input[type="number"]'));
+      size = nums[0] || null;
+    }
+
+    const colors = Array.from(card.querySelectorAll('input[type="color"]')); // [fill, stroke]
+    const fill   = colors[0] || null;
+    const stroke = colors[1] || null;
+
+    const width  = card.querySelector('input[type="range"]') || null;
+
+    return { fmt, size, fill, stroke, width };
+  }
+
+  // --- helpers to format the number
+  function roman(n){
+    if (!Number.isFinite(n) || n<=0) return String(n);
+    const map = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+    let out='', x=Math.floor(n);
+    for (const [v,s] of map){ while (x>=v){ out+=s; x-=v; } }
+    return out;
+  }
+  const toBinary = n => (n>>>0).toString(2);
+  const toHex    = n => '0x'+(n>>>0).toString(16).toUpperCase();
+  const pad4     = n => String(Math.max(0,Math.floor(n))).padStart(4,'0');
+  function formatId(n, sel){
+    const f = (sel && sel.value || '').toLowerCase();
+    if (f.includes('roman'))  return roman(n);
+    if (f.includes('hex'))    return toHex(n);
+    if (f.includes('binary')) return toBinary(n);
+    if (f.includes('leading') || f.includes('zeros')) return pad4(n);
+    return String(n); // Standard
+  }
+
+  // --- create a single token‑ID Fabric text (marked so other UI can ignore it)
+  function ensureTokenText(){
+    const c = C(); if (!c || typeof fabric==='undefined') return null;
+
+    if (STATE.text && STATE.text.canvas) return STATE.text;
+
+    // remove any stale token‑id texts made by older code
+    (c.getObjects?.()||[]).forEach(o=>{
+      if (o && o._raTokenId && o !== STATE.text){ try{ c.remove(o); }catch(_){} }
+    });
+
+    const t = new fabric.Text('#', {
+      left:24, top:24, originX:'left', originY:'top',
+      fontFamily:'Impact, system-ui, Arial, Helvetica, sans-serif',
+      fontWeight:'bold', lineHeight:1, charSpacing:0, padding:0,
+      fill:'#ffffff', stroke:'#000000', strokeWidth:2, strokeUniform:true,
+      selectable:true, evented:true, hasControls:true,
+      _raTokenId:true, _raSys:true
+    });
+    const ccv = C(); ccv.add(t); STATE.text=t;
+    try{ ccv.bringToFront(t);}catch(_){}
+    ccv.requestRenderAll();
+    return t;
+  }
+
+  // --- find the “Custom Text → Type your message” box
+  function findCustomTextInput(){
+    const cardTitle = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el=>/custom text/i.test(el.textContent||''));
+    const card = cardTitle ? (cardTitle.closest('.card') || cardTitle.parentElement) : null;
+    if (!card) return null;
+    // textarea or large input for message
+    return card.querySelector('textarea, input[type="text"], input:not([type])');
+  }
+
+  // --- if that box shows our token string, blank it (so the token id never “moves into” Custom Text)
+  function scrubCustomTextBox(tokenShown){
+    const msg = findCustomTextInput(); if (!msg) return;
+    const val = (msg.value||'').trim();
+    // only clear when it matches the token id we just rendered
+    if (val === tokenShown){
+      msg.value = '';
+      try{ msg.dispatchEvent(new Event('input', {bubbles:true})); }catch(_){}
+      try{ msg.dispatchEvent(new Event('change', {bubbles:true})); }catch(_){}
+    }
+  }
+
+  // --- apply styles + keep Custom Text clean
+  function applyStyles(){
+    if (STATE.id==null || !STATE.ui) return;
+    const c = C(); const t = ensureTokenText(); if (!c || !t) return;
+
+    const { fmt, size, fill, stroke, width, readout } = STATE.ui;
+
+    const shown = '#'+formatId(STATE.id, fmt);
+    t.set({ text: shown });
+
+    const fs = parseInt(size && size.value, 10);
+    if (Number.isFinite(fs) && fs>0) t.set('fontSize', fs);
+
+    if (fill   && fill.value)   t.set('fill',   fill.value);   // inside color
+    if (stroke && stroke.value) t.set('stroke', stroke.value); // outline color
+
+    const w = parseFloat(width && width.value);
+    if (Number.isFinite(w)) t.set('strokeWidth', w);
+
+    // make the selection box “hug” the glyphs
+    t.set({ padding:0, lineHeight:1, dirty:true, noScaleCache:true });
+    t.setCoords(); c.requestRenderAll();
+
+    if (readout){
+      if (readout.tagName && readout.tagName.toLowerCase()==='input'){ readout.value = shown; }
+      else { readout.textContent = shown; }
+    }
+
+    // keep the Custom Text message box empty if it picked up our token text
+    scrubCustomTextBox(shown);
+    setTimeout(()=> scrubCustomTextBox(shown), 30); // run again after app’s own sync
+  }
+
+  // --- wire everything
+  function wire(){
+    const card = findCard(); if (!card) return false;
+
+    const base = ensureUI(card); if (!base) return false;
+    const styles = findStyleCtrls(base.card);
+    STATE.ui = { ...base, ...styles };
+
+    // Load Token ID
+    base.loadBtn.addEventListener('click', (e)=>{
+      try{ e.preventDefault(); e.stopPropagation(); }catch(_){}
+      const n = readMainToken();
+      if (n==null){ alert('Type a number in the main “Token ID” field (e.g., 1111), then click “Load Token ID”.'); return; }
+      STATE.id = n;
+      applyStyles();
+    }, true);
+
+    // Hook your existing Delete Token ID button
+    base.delBtn && base.delBtn.addEventListener('click', ()=>{
+      const c = C();
+      if (STATE.text && STATE.text.canvas){ try{ STATE.text.canvas.remove(STATE.text); }catch(_){} }
+      STATE.text = null;
+      if (STATE.ui && STATE.ui.readout){
+        if (STATE.ui.readout.tagName && STATE.ui.readout.tagName.toLowerCase()==='input') STATE.ui.readout.value = '#—';
+        else STATE.ui.readout.textContent = '#—';
+      }
+      c?.requestRenderAll();
+    }, true);
+
+    // Live style updates — only affect the token‑ID text
+    [styles.fmt, styles.size, styles.fill, styles.stroke, styles.width].forEach(el=>{
+      if (!el) return;
+      el.addEventListener('input',  ()=>{ if (STATE.text) applyStyles(); });
+      el.addEventListener('change', ()=>{ if (STATE.text) applyStyles(); });
+    });
+
+    // If you change the number later, click Load again to refresh it
+    const main = mainTokenInput();
+    main && main.addEventListener('change', ()=>{
+      if (!STATE.text) return;
+      const n = readMainToken();
+      if (n!=null){ STATE.id = n; applyStyles(); }
+    });
+
+    // If selection switches to the token‑ID object, keep the Custom Text box clean
+    const c = C();
+    const scrubIfToken = ()=> {
+      if (!STATE.text) return;
+      const a = c?.getActiveObject?.();
+      const uiText = '#'+formatId(STATE.id, styles.fmt);
+      if (a && a._raTokenId) { scrubCustomTextBox(uiText); }
+    };
+    c?.on?.('selection:created', scrubIfToken);
+    c?.on?.('selection:updated', scrubIfToken);
+
+    return true;
+  }
+
+  function boot(){
+    if (!wire()){
+      // if the card appears late, try briefly
+      let tries = 0;
+      const iv = setInterval(()=>{ if (wire() || (++tries>40)) clearInterval(iv); }, 200);
+    }
+  }
+
+ onReady(boot);
+})();
+
+/* ========== RA_SAFE_SCRUB_v1 — stop the Custom Text box from mirroring the Token‑ID text ========== */
+(()=>{
+  function C(){ return window.canvas || null; }
+
+  function findCustomBox(){
+    const t = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el=>/custom text/i.test(el.textContent||''));
+    const card = t ? (t.closest('.card')||t.parentElement) : null;
+    return card ? (card.querySelector('textarea, input[type="text"], input:not([type])')||null) : null;
+  }
+
+  function scrubIfToken(){
+    const c = C(); if (!c) return;
+    const a = c.getActiveObject && c.getActiveObject();
+    if (!a || !a._raTokenId) return;             // only react to the Token‑ID object
+    const box = findCustomBox(); if (!box) return;
+    const val = (box.value||'').trim();
+    if (val && /^#\S+/.test(val)) {               // if it shows "#1111" etc, clear it
+      box.value = '';
+      try{ box.dispatchEvent(new Event('input',{bubbles:true})); }catch(_){}
+      try{ box.dispatchEvent(new Event('change',{bubbles:true})); }catch(_){}
+    }
+  }
+
+  function boot(){
+    const c = C(); if (!c){ setTimeout(boot,200); return; }
+    c.on('selection:created', ()=> setTimeout(scrubIfToken,0));
+    c.on('selection:updated', ()=> setTimeout(scrubIfToken,0));
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+})();
+
+/* ========== RA_FRONT_GUARD_SAFE_v3 — only on selection change (safe for Curved) ========== */
+(()=>{
+  const C = ()=> window.canvas || null;
+  const isSys = o => !!(o && (o._isBase || o._raBrandFooter || o._raSys));
+  const hasText = o => {
+    if (!o) return false;
+    const t = (o.type||'').toLowerCase();
+    if (t.includes('text')) return true;
+    if (typeof o.getObjects === 'function'){
+      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
+      catch(_){}
+    }
+    return false;
+  };
+
+  function bumpSelected(){
+    const c = C(); if (!c) return;
+    const a = c.getActiveObject && c.getActiveObject();
+    if (!a || isSys(a) || !hasText(a)) return;
+    try { c.bringToFront(a); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function boot(){
+    const c = C(); if (!c){ setTimeout(boot, 200); return; }
+    // Only react when the user changes selection or releases the mouse.
+    c.on('selection:created', ()=> setTimeout(bumpSelected,0));
+    c.on('selection:updated', ()=> setTimeout(bumpSelected,0));
+    c.on('mouse:up',          ()=> setTimeout(bumpSelected,0));
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
+  else boot();
+})();
+
+/* ========== RA_CURVED_FLOW_GUARD_UI_v3 — require “Add Text” before Curved (UI-only, no canvas edits) ========== */
+(()=>{
+  if (window.__RA_CURVED_GUARD_UI_V3) return; window.__RA_CURVED_GUARD_UI_V3 = true;
+
+  const C = ()=> window.canvas || null;
+
+  function hasUserText(){
+    const c = C(); if (!c) return false;
+    const objs = (c.getObjects?.() || []);
+    for (const o of objs){
+      if (!o || o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) continue;
+      const t = (o.type||'').toLowerCase();
+      if (t==='text' || t==='textbox' || t==='i-text') return true;
+      if (t==='group'){
+        try{
+          if (o.getObjects().some(k => ((k.type||'').toLowerCase().includes('text')))) return true;
+        }catch(_){}
+      }
+    }
+    return false;
+  }
+
+  function findCustomTextCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent||''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+
+  function findCurvedControl(card){
+    if (!card) return null;
+    // Label "Curved" with a checkbox or custom switch.
+    const labels = Array.from(card.querySelectorAll('label')).filter(l => /curved/i.test(l.textContent||''));
+    for (const lab of labels){
+      const id = lab.getAttribute('for');
+      if (id){
+        const el = document.getElementById(id);
+        if (el) return el;
+      }
+      const cb = lab.querySelector('input[type="checkbox"]');
+      if (cb) return cb;
+    }
+    // Fall back to common “switch” patterns inside the Custom Text card
+    return card.querySelector('[role="switch"], .switch, .toggle') || null;
+  }
+
+  function showInlineHint(anchor){
+    let hint = document.getElementById('raCurvedHintInline');
+    if (!hint){
+      hint = document.createElement('div');
+      hint.id = 'raCurvedHintInline';
+      hint.textContent = 'Add Text first, then enable Curved.';
+      hint.style.cssText = 'margin-top:6px;font-size:12px;color:#fbbf24;opacity:.95';
+      (anchor?.parentElement || anchor || document.body).appendChild(hint);
+    }
+    clearTimeout(hint._t);
+    hint.style.display = '';
+    hint._t = setTimeout(()=>{ hint.style.display = 'none'; }, 1800);
+  }
+
+  function wire(){
+    const card = findCustomTextCard(); if (!card){ setTimeout(wire, 300); return; }
+    const ctl  = findCurvedControl(card); if (!ctl){ setTimeout(wire, 300); return; }
+
+    const blockIfNoText = (ev)=>{
+      if (hasUserText()) return;              // OK: already have a text object
+      try{ ev.stopImmediatePropagation(); }catch(_){}
+      try{ ev.preventDefault(); }catch(_){}
+      // If it’s a real checkbox, keep the UI in the OFF state
+      if ((ctl.tagName||'').toLowerCase()==='input' && ctl.type==='checkbox'){ ctl.checked = false; }
+      showInlineHint(ctl);
+    };
+
+    // Capture-phase so we run before the app’s own handler
+    ctl.addEventListener('change',      blockIfNoText, true);
+    ctl.addEventListener('click',       blockIfNoText, true);
+    ctl.addEventListener('pointerdown', blockIfNoText, true);
+    ctl.addEventListener('keydown',     (e)=>{ if ((e.key===' '||e.key==='Enter') && !hasUserText()){ blockIfNoText(e); }}, true);
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, { once:true });
+  else wire();
+})();
+
+/* ========== RA_CURVED_PRE_FLUSH_UI_v1 — commit message box before Curved toggles (no canvas edits) ========== */
+(()=>{
+  if (window.__RA_CURVED_PRE_FLUSH_UI_V1) return; window.__RA_CURVED_PRE_FLUSH_UI_V1 = true;
+
+  const C = ()=> window.canvas || null;
+
+  function hasUserText(){
+    const c = C(); if (!c) return false;
+    const objs = (c.getObjects?.() || []);
+    for (const o of objs){
+      if (!o || o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) continue;
+      const t = (o.type||'').toLowerCase();
+      if (t==='text' || t==='textbox' || t==='i-text') return true;
+      if (t==='group'){
+        try{ if (o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text')))) return true; }catch(_){}
+      }
+    }
+    return false;
+  }
+
+  function findCustomTextCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent||''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+  function findMessageBox(card){
+    return card && (card.querySelector('textarea') ||
+                    card.querySelector('input[type="text"]') ||
+                    card.querySelector('input:not([type])')) || null;
+  }
+  function findCurvedControl(card){
+    if (!card) return null;
+    const labels = Array.from(card.querySelectorAll('label')).filter(l => /curved/i.test(l.textContent||''));
+    for (const lab of labels){
+      const id = lab.getAttribute('for');
+      if (id){ const el = document.getElementById(id); if (el) return el; }
+      const cb = lab.querySelector('input[type="checkbox"]'); if (cb) return cb;
+    }
+    return card.querySelector('[role="switch"], .switch, .toggle') || null;
+  }
+
+  function flush(box){
+    if (!box) return;
+    try { box.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
+    try { box.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
+  }
+
+  function wire(){
+    const card = findCustomTextCard(); if (!card){ setTimeout(wire, 300); return; }
+    const curved = findCurvedControl(card); if (!curved){ setTimeout(wire, 300); return; }
+    const box = findMessageBox(card);
+
+    // Capture phase: run before the app’s own handler
+    ['pointerdown','click','change','keydown'].forEach(ev=>{
+      curved.addEventListener(ev, (e)=>{
+        // Only pre‑commit when a text object already exists; if not, your other guard handles it.
+        if (!hasUserText()) return;
+        // Commit the latest message so Curved picks it up immediately
+        flush(box);
+      }, true);
+    });
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, { once:true });
+  else wire();
+})();
+
+/* ========== RA_CURVED_PRIME_v1 — keep text visible when Curved is ticked ========== */
+(() => {
+  const C = () => window.canvas || null;
+
+  // Find the Custom Text card and its controls
+  function findCustomTextCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent || ''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+  function findMsgInput(card){
+    return card ? (card.querySelector('textarea, input[type="text"], input:not([type])') || null) : null;
+  }
+  function findCurvedCheckbox(card){
+    if (!card) return null;
+    const boxes = Array.from(card.querySelectorAll('input[type="checkbox"]'));
+    for (const cb of boxes){
+      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
+      const txt = (lab && lab.textContent ? lab.textContent : '').toLowerCase();
+      if (txt.includes('curved')) return cb;
+    }
+    return null;
+  }
+
+  // Get the currently selected text on canvas (ignores base/footer/token‑id)
+  function activeCanvasText(){
+    const c = C(); if (!c) return null;
+    const a = c.getActiveObject && c.getActiveObject();
+    if (!a) return null;
+    const isSys = o => !!(o && (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId));
+    if (isSys(a)) return null;
+
+    const isText = o => (o && (String(o.type||'').toLowerCase().includes('text')));
+    if (isText(a)) return a;
+
+    if (typeof a.getObjects === 'function'){
+      try { return a.getObjects().find(isText) || null; } catch(_) {}
+    }
+    return null;
+  }
+
+  function nudgeInput(el){
+    try { el.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
+    try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
+  }
+
+  function onCurvedToggle(){
+    const card = findCustomTextCard(); if (!card) return;
+    const msg  = findMsgInput(card);  if (!msg)   return;
+    const cb   = findCurvedCheckbox(card);       if (!cb)   return;
+
+    // Only do work when turning Curved ON
+    if (!cb.checked) return;
+
+    // If the app cleared the message box after "Add Text", repopulate it from the selected text
+    if (!msg.value || !msg.value.trim()){
+      const t = activeCanvasText();
+      if (t && typeof t.text === 'string'){
+        msg.value = t.text;
+      }
+    }
+
+    // Nudge the app so it rebuilds the curved text immediately (so it doesn't "disappear")
+    nudgeInput(msg);
+
+    // After the app rebuilds, select the newest non-system object so it's easy to move
+    const c = C(); if (!c) return;
+    setTimeout(() => {
+      try{
+        const objs = c.getObjects ? c.getObjects() : [];
+        for (let i = objs.length - 1; i >= 0; i--){
+          const o = objs[i];
+          if (!o) continue;
+          if (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId) continue;
+          if (o.visible === false) o.visible = true;
+          c.setActiveObject(o);
+          o.setCoords && o.setCoords();
+          break;
+        }
+        c.requestRenderAll && c.requestRenderAll();
+      }catch(_){}
+    }, 40);
+  }
+
+  function boot(){
+    const card = findCustomTextCard();
+    const cb   = findCurvedCheckbox(card);
+    if (!card || !cb){ setTimeout(boot, 250); return; }
+
+    // Hook once
+    if (cb.__raPrimeHooked) return;
+    cb.__raPrimeHooked = true;
+    cb.addEventListener('change', () => setTimeout(onCurvedToggle, 10), true);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
+
+/* ========== RA_ADD_TEXT_PRIME_v1 — keep text visible after 'Add Text' ========== */
+(() => {
+  const C = () => window.canvas || null;
+
+  // Find the Custom Text card + its pieces
+  function findCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent || ''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+  function findMsg(card){
+    return card ? (card.querySelector('textarea, input[type="text"], input:not([type])') || null) : null;
+  }
+  function findAddBtn(card){
+    if (!card) return null;
+    return Array.from(card.querySelectorAll('button'))
+      .find(b => /(^|\s)add\s*text(\s|$)/i.test(b.textContent || ''));
+  }
+  function findCurved(card){
+    if (!card) return null;
+    const cbs = Array.from(card.querySelectorAll('input[type="checkbox"]'));
+    for (const cb of cbs){
+      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
+      const txt = (lab && lab.textContent ? lab.textContent : '').toLowerCase();
+      if (txt.includes('curved')) return cb;
+    }
+    return null;
+  }
+
+  let LAST_TYPED = '';
+
+  function nudge(el){
+    try { el.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
+    try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
+  }
+  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId)); }
+  function newestUserObject(){
+    const c = C(); if (!c) return null;
+    const objs = c.getObjects ? c.getObjects() : [];
+    for (let i = objs.length - 1; i >= 0; i--){
+      const o = objs[i]; if (!o || isSys(o)) continue;
+      return o;
+    }
+    return null;
+  }
+
+  function boot(){
+    const card   = findCard();
+    const msg    = findMsg(card);
+    const addBtn = findAddBtn(card);
+    const curved = findCurved(card);
+    if (!card || !msg || !addBtn){ setTimeout(boot, 250); return; }
+
+    // Remember last non-empty text the user typed
+    if (!msg.__raRemember){
+      msg.__raRemember = true;
+      msg.addEventListener('input', ()=>{
+        const v = (msg.value || '').trim();
+        if (v) LAST_TYPED = v;
+      }, true);
+    }
+
+    // After "Add Text", the app clears the box; put the text back and nudge
+    if (!addBtn.__raPrime){
+      addBtn.__raPrime = true;
+      addBtn.addEventListener('click', ()=>{
+        // Wait a moment for the app to add the object and clear the field
+        setTimeout(()=>{
+          if (!msg.value || !msg.value.trim()){
+            if (LAST_TYPED){
+              msg.value = LAST_TYPED;
+              nudge(msg); // keep the new object from vanishing
+            } else {
+              // Fallback: read whatever text the app just added
+              const o = newestUserObject();
+              const t = (o && typeof o.text === 'string') ? o.text : '';
+              if (t){ msg.value = t; nudge(msg); }
+            }
+          }
+          // If Curved is already ON, select the newest object so it’s easy to move
+          if (curved && curved.checked){
+            const c = C(); const o = newestUserObject();
+            if (c && o){ try{ c.setActiveObject(o); o.setCoords && o.setCoords(); c.requestRenderAll && c.requestRenderAll(); }catch(_){ } }
+          }
+        }, 30); // if it still blinks, bump to 60–80
+      }, true);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
+
+/* ========== RA_CURVED_PRIME_v2 — keep message + text when toggling Curved ========== */
+(() => {
+  const C = () => window.canvas || null;
+  const DELAY_MS = 60; // if you still see a blink, try 80 or 100
+
+  function findCustomTextCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent || ''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+  function findMsg(card){
+    return card ? (card.querySelector('textarea, input[type="text"], input:not([type])') || null) : null;
+  }
+  function findCurved(card){
+    if (!card) return null;
+    const cbs = Array.from(card.querySelectorAll('input[type="checkbox"]'));
+    for (const cb of cbs){
+      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
+      const txt = (lab && lab.textContent ? lab.textContent : '').toLowerCase();
+      if (txt.includes('curved')) return cb;
+    }
+    return null;
+  }
+  function nudge(el){
+    try { el.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
+    try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
+  }
+  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId)); }
+  function newestUserObject(){
+    const c = C(); if (!c) return null;
+    const objs = c.getObjects ? c.getObjects() : [];
+    for (let i = objs.length - 1; i >= 0; i--){
+      const o = objs[i]; if (!o || isSys(o)) continue;
+      return o;
+    }
+    return null;
+  }
+
+  let LAST_TYPED = '';
+  let WIRING_DONE = false;
+
+  function boot(){
+    const card   = findCustomTextCard();
+    const msg    = findMsg(card);
+    const curved = findCurved(card);
+    if (!card || !msg || !curved){ setTimeout(boot, 250); return; }
+    if (WIRING_DONE) return; WIRING_DONE = true;
+
+    // Remember what you typed (so we can put it back after Curved rebuilds)
+    msg.addEventListener('input', ()=>{
+      const v = (msg.value || '').trim();
+      if (v) LAST_TYPED = v;
+    }, true);
+
+    // When Curved toggles, the app rebuilds the text and often clears the box.
+    curved.addEventListener('change', ()=>{
+      const before = (msg.value || '').trim() || LAST_TYPED || '';
+      setTimeout(() => {
+        // If the app cleared the field, restore the text you typed and nudge the UI
+        if (!msg.value || !msg.value.trim()){
+          if (before){
+            msg.value = before;
+            nudge(msg);
+          }
+        }
+        // Re-select the newest non-system object so it’s easy to move
+        const c = C(); const o = newestUserObject();
+        if (c && o){ try{ c.setActiveObject(o); o.setCoords && o.setCoords(); c.requestRenderAll && c.requestRenderAll(); }catch(_){ } }
+      }, DELAY_MS);
+    }, true);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
 })();
