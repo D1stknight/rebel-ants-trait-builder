@@ -6358,108 +6358,57 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_FRONT_GUARD_MINI_v2 — keep new text/curved text above the base ========== */
+/* ========== RA_FRONT_GUARD_MINI_v3 — front bump only at safe moments + no cache for curved ========== */
 (()=>{
   function C(){ return window.canvas || null; }
-  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raSys)); }
+  const isSys = o => !!(o && (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys));
 
-  // Detect text, including grouped/curved text that’s wrapped in a Group
-  function containsText(o){
+  function hasText(o){
     if (!o) return false;
     if ((o.type||'').toLowerCase().includes('text')) return true;
     if (typeof o.getObjects === 'function'){
-      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
-      catch(_){ /* ignore */ }
+      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); } catch(_){}
     }
     return false;
   }
 
-  function toFront(o){
+  // Treat grouped text (Curved) as "curved"
+  function looksCurved(o){
+    if (!hasText(o)) return false;
+    return !!(o && (o.radius!=null || o.arc!=null || o._curved || (o.type||'').toLowerCase()==='group'));
+  }
+
+  function disableCache(o){
+    if (!o) return;
+    try { o.objectCaching = false; o.noScaleCache = true; o.dirty = true; } catch(_){}
+    if (typeof o.getObjects === 'function'){
+      try { o.getObjects().forEach(ch => { try { ch.objectCaching = false; ch.noScaleCache = true; ch.dirty = true; } catch(_){} }); } catch(_){}
+    }
+  }
+
+  function bump(o){
     const c = C(); if (!c || !o || isSys(o)) return;
-    // If something set it invisible during rebuild, ensure it’s visible
-    if (o.visible === false) { try{ o.visible = true; }catch(_){ } }
+    if (looksCurved(o)) disableCache(o);        // one‑time safety for curved groups
     try { c.bringToFront(o); } catch(_){}
     try { c.requestRenderAll(); } catch(_){}
   }
 
-  function bumpActive(){
-    const c = C(); if (!c) return;
-    const a = c.getActiveObject && c.getActiveObject();
-    if (a && !isSys(a)) toFront(a);
-  }
+  function bumpActive(){ const c=C(); const a=c && c.getActiveObject && c.getActiveObject(); if (a && !isSys(a)) bump(a); }
 
   function boot(){
     const c = C(); if (!c){ setTimeout(boot, 200); return; }
+    if (c.__raFrontGuardMiniV3) return;
+    c.__raFrontGuardMiniV3 = true;
 
-    // When Curved rebuilds, a fresh object gets added (text or a group with text)
-    c.on('object:added',   e => { const o = e && e.target; if (containsText(o) && !isSys(o)) setTimeout(()=>toFront(o),0); });
-    c.on('object:modified',e => { const o = e && e.target; if (containsText(o) && !isSys(o)) setTimeout(()=>toFront(o),0); });
+    // When a new object appears (e.g., ticking "Curved"), bump it once
+    c.on('object:added', e => { const o=e && e.target; if (hasText(o) && !isSys(o)) setTimeout(()=>bump(o),0); });
 
-    // Also bump the selected item after UI interactions
+    // IMPORTANT: do NOT bump on object:modified (that was causing ghost tiles)
+
+    // After you finish a drag/scale/rotate, bump the selected object
+    c.on('mouse:up',          ()=> setTimeout(bumpActive,0));
     c.on('selection:created', ()=> setTimeout(bumpActive,0));
     c.on('selection:updated', ()=> setTimeout(bumpActive,0));
-    c.on('mouse:up',          ()=> setTimeout(bumpActive,0));
-  }
-
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
-  else boot();
-})();
-
-/* ========== RA_CURVED_CACHE_OFF_v1 — stop ghost/duplicate tiles on Curved text ========== */
-(()=>{
-  function C(){ return window.canvas || null; }
-  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys)); }
-
-  // "Curved" in your app is usually a fabric.Group that contains text children.
-  function looksLikeCurved(o){
-    if (!o || isSys(o)) return false;
-    const t = (o.type||'').toLowerCase();
-
-    // If it's a group, check if it contains any text children
-    if (typeof o.getObjects === 'function'){
-      try {
-        const kids = o.getObjects();
-        if (kids && kids.some(ch => ((ch.type||'').toLowerCase().includes('text')))) return true;
-      } catch(_){}
-    }
-
-    // If it's a text-like object and has arc/radius-ish hints, treat as curved too
-    if (t.includes('text') && (o.radius!=null || o.arc!=null || o._curved)) return true;
-
-    return false;
-  }
-
-  function disableCache(o){
-    if (!o || isSys(o)) return;
-    try { o.objectCaching = false; o.noScaleCache = true; o.dirty = true; } catch(_){}
-    if (typeof o.getObjects === 'function'){
-      try {
-        o.getObjects().forEach(ch=>{
-          try { ch.objectCaching = false; ch.noScaleCache = true; ch.dirty = true; } catch(_){}
-        });
-      } catch(_){}
-    }
-  }
-
-  function handle(o){
-    if (!o) return;
-    if (looksLikeCurved(o)){
-      disableCache(o);
-      try { C()?.requestRenderAll(); } catch(_){}
-    }
-  }
-
-  function boot(){
-    const c = C(); if (!c){ setTimeout(boot, 200); return; }
-    if (c.__raCurvedCacheOff) return; // guard against double-wire
-    c.__raCurvedCacheOff = true;
-
-    c.on('object:added',    e => handle(e && e.target));
-    c.on('object:modified', e => handle(e && e.target));
-
-    // Also catch selection changes (some tools rebuild the object then select it)
-    c.on('selection:created', ()=> handle(c.getActiveObject && c.getActiveObject()));
-    c.on('selection:updated', ()=> handle(c.getActiveObject && c.getActiveObject()));
   }
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
