@@ -6316,69 +6316,104 @@ async function loadTokenFromCollection(tokenId, col){
   else boot();
 })();
 
-/* ========== RA_CURVED_REQUIRE_ADD_v1 — require "Add Text" before Curved ========== */
+/* ========== RA_CURVED_REQUIRE_ADD_v2 — enforce “Add Text → then Curved” at canvas level ========== */
 (()=>{
   const C = ()=> window.canvas || null;
 
-  function findCustomTextCard(){
-    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el => /custom text/i.test(el.textContent||''));
-    return h ? (h.closest('.card') || h.parentElement) : null;
-  }
-  function findCurvedCheckbox(card){
-    if (!card) return null;
-    const cbs = Array.from(card.querySelectorAll('input[type="checkbox"]'));
-    for (const cb of cbs){
-      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
-      const txt = (lab && lab.textContent || '').toLowerCase();
-      if (txt.includes('curved')) return cb;
+  function countUserText(c, ignore){
+    const objs = (c.getObjects?.() || []);
+    let n=0;
+    for (const o of objs){
+      if (!o || o===ignore) continue;
+      if (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) continue;
+      const t = (o.type||'').toLowerCase();
+      if (t==='text' || t==='textbox' || t==='i-text'){ n++; continue; }
+      if (t==='group'){
+        try {
+          if (o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text')))) n++;
+        }catch(_){}
+      }
     }
-    return null;
+    return n;
   }
 
-  function hasUserTextOnCanvas(){
-    const c = C(); if (!c) return false;
-    const objs = c.getObjects?.() || [];
-    return objs.some(o=>{
-      if (!o) return false;
-      // Ignore base image, watermark/footer, token‑ID text, or our own system items
-      if (o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) return false;
-      const t = (o.type||'').toLowerCase();
-      if (t==='text' || t==='textbox' || t==='i-text') return true;
-      if (t==='group'){
-        try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
-        catch(_){ /* ignore */ }
+  function looksLikeCurved(o){
+    if (!o) return false;
+    const t = (o.type||'').toLowerCase();
+    if (t==='group'){
+      try{
+        const kids = o.getObjects();
+        const textKids = kids.filter(k => ((k.type||'').toLowerCase().includes('text')));
+        if (textKids.length>=3) return true; // many letter-glyphs → curved
+      }catch(_){}
+    }
+    if (t.includes('text')){
+      if ('radius' in o || 'arc' in o || 'spacing' in o || o.path) return true;
+    }
+    return false;
+  }
+
+  function findCurvedToggle(){
+    const labels = Array.from(document.querySelectorAll('label')).filter(l => /curved/i.test(l.textContent||''));
+    for (const lab of labels){
+      const id = lab.getAttribute('for');
+      if (id){
+        const el = document.getElementById(id);
+        if (el) return el;
       }
-      return false;
-    });
+      const inp = lab.querySelector('input');
+      if (inp) return inp;
+    }
+    const sw = Array.from(document.querySelectorAll('[role="switch"]')).find(el => /curved/i.test(el.textContent||''));
+    if (sw) return sw;
+    const btn = Array.from(document.querySelectorAll('button')).find(b => /curved/i.test(b.textContent||''));
+    return btn || null;
+  }
+
+  function toggleOffUI(){
+    const el = findCurvedToggle();
+    if (!el) return;
+    const tag = (el.tagName||'').toLowerCase();
+    if (tag==='input'){
+      if (el.type==='checkbox' && el.checked){
+        el.checked = false;
+        try{ el.dispatchEvent(new Event('change',{bubbles:true})); }catch(_){}
+      }
+    } else {
+      const aria = el.getAttribute('aria-checked');
+      if (aria==='true'){ try{ el.click(); }catch(_){} }
+    }
+  }
+
+  function showHint(){
+    let hint = document.getElementById('raCurvedAddHint');
+    if (!hint){
+      hint = document.createElement('div');
+      hint.id = 'raCurvedAddHint';
+      hint.textContent = 'Add Text first, then enable Curved.';
+      hint.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);background:#1f2937;color:#fff;padding:6px 10px;border:1px solid rgba(255,255,255,.2);border-radius:8px;font-size:12px;z-index:99999;opacity:.95';
+      document.body.appendChild(hint);
+    }
+    clearTimeout(hint._t);
+    hint.style.display='';
+    hint._t = setTimeout(()=>{ hint.style.display='none'; }, 1600);
   }
 
   function boot(){
-    const card = findCustomTextCard(); if (!card){ setTimeout(boot,300); return; }
-    const curved = findCurvedCheckbox(card); if (!curved){ setTimeout(boot,300); return; }
+    const c = C(); if (!c){ setTimeout(boot,200); return; }
 
-    // A tiny hint below the curved controls
-    const hint = document.createElement('div');
-    hint.style.cssText = 'font-size:12px;color:#9ca3af;opacity:.85;margin-top:6px;display:none';
-    hint.textContent = 'Add Text first, then enable Curved.';
-    (curved.closest('.row')?.parentElement || card).appendChild(hint);
-
-    // If user tries to turn Curved on before any text exists, block it and show the hint
-    let aboutToCheck = false;
-    curved.addEventListener('click', (e)=>{
-      // This fires before the checkbox state flips; remember the intent
-      aboutToCheck = !curved.checked;
-    }, true);
-
-    curved.addEventListener('change', (e)=>{
-      if (aboutToCheck && curved.checked && !hasUserTextOnCanvas()){
-        try{ e.preventDefault(); e.stopImmediatePropagation(); }catch(_){}
-        curved.checked = false;
-        hint.style.display = '';
-        setTimeout(()=> hint.style.display = 'none', 2000);
+    // If Curved tries to add something while there was NO user text on canvas, block it.
+    c.on('object:added', e=>{
+      const o = e && e.target; if (!o) return;
+      const before = Math.max(0, countUserText(c, o)); // count prior user text
+      if (before===0 && looksLikeCurved(o)){
+        try{ c.remove(o); }catch(_){}
+        try{ c.discardActiveObject(); }catch(_){}
+        try{ c.requestRenderAll(); }catch(_){}
+        toggleOffUI();
+        showHint();
       }
-      aboutToCheck = false;
-    }, true);
+    });
   }
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
