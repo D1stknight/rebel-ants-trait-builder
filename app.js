@@ -6842,3 +6842,88 @@ async function loadTokenFromCollection(tokenId, col){
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
+
+/* ========== RA_PNG_NEWTAB_SAFE_v1 — fix Chrome reload when wallet connected ========== */
+(() => {
+  // Heuristics so we only touch the PNG area and the “Open in new tab” action
+  const OPEN_TXT = /open\s+in\s+new\s+tab/i;
+  const AREA_TXT = /download\s*png|export\s*png/i;
+
+  // Try to scope the click to the Download PNG card/section
+  function isInsidePngArea(el) {
+    let n = el;
+    for (let i = 0; i < 6 && n; i++, n = n.parentElement) {
+      const t = (n.textContent || '').toLowerCase();
+      if (AREA_TXT.test(t)) return true;
+      if (n.classList && (n.classList.contains('card') || n.classList.contains('panel'))) {
+        // if we hit a card/panel without seeing “Download PNG”, bail
+        return AREA_TXT.test(t);
+      }
+    }
+    return false;
+  }
+
+  function getCanvas() {
+    return window.canvas || null;
+  }
+
+  // Paint a PNG into a brand‑new tab without navigating the current tab
+  function openDataUrlInNewTab(dataUrl) {
+    const w = window.open('', '_blank', 'noopener');
+    if (!w) { alert('Please allow pop‑ups to open the image in a new tab.'); return; }
+    w.document.title = 'PNG Preview';
+    w.document.body.style.margin = '0';
+    w.document.body.style.background = '#111';
+    const img = w.document.createElement('img');
+    img.src = dataUrl;
+    img.style.display = 'block';
+    img.style.maxWidth = '100%';
+    img.style.height = 'auto';
+    w.document.body.appendChild(img);
+  }
+
+  // If the UI already has a blob: link, we still open a blank tab first and point it there.
+  function openBlobHrefInNewTab(blobHref) {
+    const w = window.open('', '_blank', 'noopener');
+    if (!w) { alert('Please allow pop‑ups to open the image in a new tab.'); return; }
+    // Option A: just navigate the new tab to the blob
+    try { w.location.replace(blobHref); return; } catch (_){}
+    // Fallback: embed it as an <img>
+    const img = new Image();
+    img.onload = () => {
+      w.document.title = 'PNG Preview';
+      w.document.body.style.margin = '0';
+      w.document.body.appendChild(img);
+      img.style.display = 'block';
+      img.style.maxWidth = '100%';
+      img.style.height = 'auto';
+    };
+    img.src = blobHref;
+  }
+
+  // Delegated click handler (capture) so we can stop the existing handler that causes navigation
+  document.addEventListener('click', (ev) => {
+    const target = ev.target && (ev.target.closest('a,button') || ev.target);
+    if (!target) return;
+
+    const label = ((target.textContent || target.value || target.title || '').trim());
+    if (!OPEN_TXT.test(label)) return;          // only the “Open in new tab” control
+    if (!isInsidePngArea(target)) return;       // only inside the Download PNG area
+
+    // We’ll take over this action to avoid navigating the current tab.
+    try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch (_){}
+
+    // If the control already has a blob href, use it; otherwise render the current canvas
+    const href = (target.getAttribute && target.getAttribute('href')) || '';
+    if (href && /^blob:/.test(href)) {
+      openBlobHrefInNewTab(href);
+      return;
+    }
+
+    // Render directly from the Fabric canvas (keeps behavior consistent even if no href present)
+    const c = getCanvas();
+    if (!c || typeof c.toDataURL !== 'function') { alert('Canvas not ready.'); return; }
+    const dataUrl = c.toDataURL({ format: 'png' });  // your app already includes watermark/footer in the canvas
+    openDataUrlInNewTab(dataUrl);
+  }, true);
+})();
