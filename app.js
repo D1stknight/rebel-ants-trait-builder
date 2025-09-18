@@ -6927,3 +6927,70 @@ async function loadTokenFromCollection(tokenId, col){
     openDataUrlInNewTab(dataUrl);
   }, true);
 })();
+
+/* ========== RA_PNG_NEWTAB_SHIELD_v3 — stop page reload on “Open in new tab” ========== */
+(() => {
+  const IMG_URL = url =>
+    typeof url === 'string' &&
+    (url.startsWith('blob:') || url.startsWith('data:image/'));
+
+  // 1) Wrap window.open so ANY image open (blob/data) uses a true new tab and never navigates this tab
+  const _origOpen = window.open;
+  window.open = function(url, target, features) {
+    try {
+      if (IMG_URL(url)) {
+        const w = _origOpen.call(window, '', target || '_blank', (features ? features + ',' : '') + 'noopener');
+        if (!w) return null; // pop‑up blocked
+        try {
+          // Fast path: just navigate the new tab
+          w.location.replace(url);
+        } catch (_) {
+          // Fallback: paint the image into the new tab
+          try {
+            w.document.title = 'PNG Preview';
+            w.document.body.style.margin = '0';
+            w.document.body.style.background = '#111';
+            const img = w.document.createElement('img');
+            img.src = url;
+            img.style.display = 'block';
+            img.style.maxWidth = '100%';
+            img.style.height = 'auto';
+            w.document.body.appendChild(img);
+          } catch (_2) {}
+        }
+        return w;
+      }
+    } catch(_) {}
+    // Non-image URLs: behave normally
+    return _origOpen.apply(window, arguments);
+  };
+
+  // 2) If the UI uses an <a target="_blank" href="blob:...">, intercept so the current tab never navigates.
+  function interceptAnchorClick(ev) {
+    const a = ev.target && (ev.target.closest ? ev.target.closest('a') : null);
+    if (!a) return;
+    const href = a.getAttribute && a.getAttribute('href');
+    if (!href || !IMG_URL(href)) return;
+
+    // We take over to avoid any chance the current tab navigates.
+    try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
+    // Delegate to our safe window.open wrapper
+    window.open(href, a.getAttribute('target') || '_blank');
+  }
+  document.addEventListener('click', interceptAnchorClick, true);
+
+  // 3) Belt & suspenders: if a form submit is used to trigger “Open in new tab”, prevent navigation and open safely.
+  document.addEventListener('submit', (ev) => {
+    // Only act if the submitter looks like “Open in new tab”
+    const btn = ev.submitter || null;
+    const label = (btn && (btn.textContent || btn.value || btn.title) || '').toLowerCase();
+    if (!/open.*new.*tab/.test(label)) return;
+
+    // Try to find a blob/data link inside the form
+    const a = ev.target && ev.target.querySelector && ev.target.querySelector('a[href^="blob:"], a[href^="data:image/"]');
+    if (!a) return;
+
+    try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
+    window.open(a.getAttribute('href'), a.getAttribute('target') || '_blank');
+  }, true);
+})();
