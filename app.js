@@ -6742,3 +6742,50 @@ async function loadTokenFromCollection(tokenId, col){
     boot();
   }
 })();
+
+/* ========== RA_WATERMARK_HARDLOCK_v1 — keep big watermark unmovable, even after "Unlock All" ========== */
+(() => {
+  function C(){ return window.canvas || null; }
+
+  // Identify the big watermark. We lock "system" overlays but leave base, footer and token-ID alone.
+  function isWM(o){
+    if (!o) return false;
+    if (o._raWM || o._raWatermark || o._isWatermark || o._wm) return true; // common flags
+    // Treat other system overlays as locked too, but allow footer / token-ID / base / bg
+    if (o._raSys && !o._raBrandFooter && !o._raTokenId && !o._isBase && !o._isBgRect) return true;
+    const n = (o.name||o.id||'').toString().toLowerCase();
+    if (n.includes('watermark') || n === 'wm') return true;
+    return false;
+  }
+
+  function hardLock(o){
+    if (!o) return;
+    o.set?.({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true });
+    o.selectable = false; o.evented = false; o.hasControls = false;
+    o.lockMovementX = true; o.lockMovementY = true;
+  }
+
+  function relockAll(){
+    const c=C(); if (!c) return;
+    (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) hardLock(o); });
+    try{ c.discardActiveObject(); c.requestRenderAll(); }catch(_){}
+  }
+
+  function hookUnlockAllButton(){
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const unlockBtn = buttons.find(b => /unlock\s*all/i.test((b.textContent||'').trim()));
+    if (!unlockBtn) return;
+    // After Unlock All fires, immediately re-lock the watermark
+    unlockBtn.addEventListener('click', ()=> setTimeout(relockAll,0), true);
+  }
+
+  function boot(){
+    const c=C(); if (!c){ setTimeout(boot,200); return; }
+    relockAll();                         // lock now
+    document.addEventListener('ra-wm-recalc', ()=> setTimeout(relockAll,0)); // lock after WM toggles
+    c.on?.('object:added', e => { const o=e?.target; if (isWM(o)) setTimeout(relockAll,0); }); // lock if reinserted
+    hookUnlockAllButton();
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+})();
