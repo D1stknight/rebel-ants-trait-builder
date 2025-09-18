@@ -5603,52 +5603,56 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_LIVE_MINI_v3 — show footer on Friend + Manual uploads; hide on Rebel ========== */
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v4 — footer always on top; friend+manual only ========== */
 (() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
-  const STYLE = { fontFamily:"Inter, Arial, sans-serif", fontSize:12, fill:"#cfcfcf", opacity:0.88 };
+  const STYLE = { fontFamily:'Inter, Arial, sans-serif', fontSize:12, fill:'#cfcfcf', opacity:0.9 };
   const PAD = 10;
   const toLower = s => (s||'').toLowerCase();
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // Try to find your base image among objects; if not found, we still show the footer (manual upload case).
   function findBase(c){
-    return (c.getObjects?.()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+    const objs = c.getObjects?.() || [];
+    // Prefer objects marked by your app
+    let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+    if (base) return base;
+    // Fallback: last image‑like object that isn’t the footer itself
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o?._raBrandFooter);
+    return imgs.length ? imgs[imgs.length-1] : null;
   }
 
   function rebelContract(){
-    // 1) explicit global
     if (typeof CONTRACT === 'string' && CONTRACT) return toLower(CONTRACT);
-    // 2) from configured collections (first tagged "rebel")
     const list = Array.isArray(window.RA_COLLECTIONS) ? window.RA_COLLECTIONS : [];
     const r = list.find(x => (x.tag==='rebel') && (x.address || x.contract));
     if (r) return toLower(r.address || r.contract);
-    // 3) fallback to your known Rebel Ants address (safe fallback)
-    return toLower('0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221');
+    // Safe default: your Rebel Ants mainnet contract
+    return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
   }
 
   function shouldShow(c){
     const base = findBase(c);
-    if (!base) return false;
-
     const rebel = rebelContract();
-    const cc = toLower(base._tokenContract||'');
-
-    if (cc) {
-      // Token-loaded image → show unless it's the Rebel contract
-      return (rebel && cc !== rebel);
+    if (!base) {
+      // No tagged base → treat as manual upload → show footer
+      return true;
     }
-    // Manual upload (no contract metadata) → show footer
-    return true;
+    const cc = toLower(base._tokenContract || '');
+    if (!cc) {
+      // No contract info on the base → manual upload → show footer
+      return true;
+    }
+    // Token‑loaded image → show unless it's Rebel
+    return (cc !== rebel);
   }
 
-  function place(c, footer){
-    footer.set({ originX:'right', originY:'bottom', left:c.getWidth()-PAD, top:c.getHeight()-PAD });
-    footer.setCoords();
-  }
-
+  // Create / reuse footer; keep it non‑interactive
   function ensure(){
     const c = C(); if (!c) return;
-    let footer = (c.getObjects?.()||[]).find(o => o && o._raBrandFooter);
+
+    let footer = (c.getObjects?.()||[]).find(o => o && o._raBrandFooter) || null;
     const show = shouldShow(c);
 
     if (!show){
@@ -5660,17 +5664,32 @@ const shouldShow =
 
     if (!footer){
       footer = new fabric.Textbox(FOOTER_TEXT, {
-        ...STYLE, selectable:false, evented:false, hasControls:false,
+        ...STYLE,
+        selectable:false, evented:false, hasControls:false,
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
         _raBrandFooter:true, _raSys:true
       });
       c.add(footer);
     } else {
       footer.set(STYLE);
+      // Reassert non‑interactive in case some UI changed it
+      footer.set({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true, hoverCursor:'default' });
     }
-    place(c, footer);
-    try{ c.bringToFront(footer); }catch(_){}
-    try{ window.bringInterfaceToFront && window.bringInterfaceToFront(); }catch(_){}
-    c.requestRenderAll();
+
+    // Position bottom‑right and bring to absolute top
+    footer.set({ originX:'right', originY:'bottom', left:c.getWidth()-PAD, top:c.getHeight()-PAD });
+    footer.setCoords();
+
+    try { c.bringToFront(footer); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  // Keep the footer above EVERYTHING, even if users add overlays / bring to front.
+  let rafPending = false;
+  function bumpSoon(){
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => { rafPending = false; ensure(); });
   }
 
   function boot(){
@@ -5680,22 +5699,22 @@ const shouldShow =
     // Refit on canvas resize
     try {
       const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-      new ResizeObserver(()=> ensure()).observe(el);
+      new ResizeObserver(()=> bumpSoon()).observe(el);
     } catch(_){}
 
-    // React when the base/brand changes or watermark recalculates
-    ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
-      document.addEventListener(ev, ()=> ensure());
-    });
+    // Whenever anything is added or modified, re‑assert "footer on top"
+    c.on?.('object:added',    e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
+    c.on?.('object:modified', e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
+    c.on?.('mouse:up', bumpSoon);
 
-    // Manual uploads: when a new base image is added, ensure footer
-    c.on?.('object:added', e=>{
-      const o = e && e.target;
-      if (o && o._isBase && !o._isBgRect) setTimeout(ensure, 0);
+    // React to your app events too
+    ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
+      document.addEventListener(ev, bumpSoon);
     });
   }
 
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
+  else { boot(); }
 })();
 
 /* ========== RA_COLLECTIONS_RESET_v1 — single dropdown + clean CSS + multi-collection loader ========== */
