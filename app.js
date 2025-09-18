@@ -5603,109 +5603,122 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v4b — footer always on top; friend+manual only; black fill + white outline ========== */
-(()=>{
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v4 — footer always on top; friend+manual only ========== */
+(() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
-  const SHOW_ON_MANUAL = true; // show footer on manual uploads too
-
-  // Black inside, white outline (your requested combo)
-  const TEXT_STYLE = {
-    fontFamily: 'Inter, Arial, sans-serif',
-    fontSize: 12,
-    fill: '#000000',     // black inside
-    stroke: '#ffffff',   // white outline
-    strokeWidth: 2,
-    strokeUniform: true
-  };
-  const PAD = 10; // bottom-right padding
-
-  const C = ()=> window.canvas || null;
+  const STYLE = {
+  fontFamily: 'Inter, Arial, sans-serif',
+  fontSize: 12,
+  fill: '#000000',          // black inside the letters
+  stroke: '#ffffff',        // white outline
+  strokeWidth: 2,
+  strokeUniform: true,      // outline stays 2px even if canvas is scaled
+  opacity: 0.95
+};
+  const PAD = 10;
   const toLower = s => (s||'').toLowerCase();
 
-  // Find the base image (the same simple logic v4 used)
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // Try to find your base image among objects; if not found, we still show the footer (manual upload case).
   function findBase(c){
-    if (!c) return null;
-    return (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect) || null;
+    const objs = c.getObjects?.() || [];
+    // Prefer objects marked by your app
+    let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+    if (base) return base;
+    // Fallback: last image‑like object that isn’t the footer itself
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o?._raBrandFooter);
+    return imgs.length ? imgs[imgs.length-1] : null;
   }
 
-  // Figure out if this is a Rebel token (hide footer) or Friend/manual (show footer)
-  let rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
-  if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
-    const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
-    if (r) rebelContract = toLower(r.address || r.contract);
+  function rebelContract(){
+    if (typeof CONTRACT === 'string' && CONTRACT) return toLower(CONTRACT);
+    const list = Array.isArray(window.RA_COLLECTIONS) ? window.RA_COLLECTIONS : [];
+    const r = list.find(x => (x.tag==='rebel') && (x.address || x.contract));
+    if (r) return toLower(r.address || r.contract);
+    // Safe default: your Rebel Ants mainnet contract
+    return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
   }
 
   function shouldShow(c){
     const base = findBase(c);
-    if (!base) return false;                 // nothing loaded yet
+    const rebel = rebelContract();
+    if (!base) {
+      // No tagged base → treat as manual upload → show footer
+      return true;
+    }
     const cc = toLower(base._tokenContract || '');
-    if (!cc) return !!SHOW_ON_MANUAL;        // manual upload → show
-    return (rebelContract && cc !== rebelContract); // friend token → show
+    if (!cc) {
+      // No contract info on the base → manual upload → show footer
+      return true;
+    }
+    // Token‑loaded image → show unless it's Rebel
+    return (cc !== rebel);
   }
 
-  function place(c, footer){
-    footer.set({
-      originX:'right', originY:'bottom',
-      left: c.getWidth() - PAD,
-      top:  c.getHeight() - PAD
-    });
-    footer.setCoords();
-  }
-
+  // Create / reuse footer; keep it non‑interactive
   function ensure(){
     const c = C(); if (!c) return;
-    let footer = (c.getObjects()||[]).find(o => o && o._raBrandFooter);
+
+    let footer = (c.getObjects?.()||[]).find(o => o && o._raBrandFooter) || null;
     const show = shouldShow(c);
 
     if (!show){
-      if (footer){ try{ c.remove(footer); }catch(_){ } c.requestRenderAll(); }
+      if (footer){ try{ c.remove(footer); }catch(_){}
+        try{ c.requestRenderAll(); }catch(_){}
+      }
       return;
     }
 
     if (!footer){
-      if (typeof fabric === 'undefined') return;
       footer = new fabric.Textbox(FOOTER_TEXT, {
-        ...TEXT_STYLE,
+        ...STYLE,
         selectable:false, evented:false, hasControls:false,
-        lockMovementX:true, lockMovementY:true, lockRotation:true, lockScalingX:true, lockScalingY:true,
-        hoverCursor:'default',
-        _raBrandFooter:true, _raSys:true,
-        originX:'right', originY:'bottom'
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+        _raBrandFooter:true, _raSys:true
       });
       c.add(footer);
     } else {
-      footer.set(TEXT_STYLE);
-      footer.set({
-        selectable:false, evented:false, hasControls:false,
-        lockMovementX:true, lockMovementY:true, lockRotation:true, lockScalingX:true, lockScalingY:true
-      });
+      footer.set(STYLE);
+      // Reassert non‑interactive in case some UI changed it
+      footer.set({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true, hoverCursor:'default' });
     }
 
-    place(c, footer);
+    // Position bottom‑right and bring to absolute top
+    footer.set({ originX:'right', originY:'bottom', left:c.getWidth()-PAD, top:c.getHeight()-PAD });
+    footer.setCoords();
+
     try { c.bringToFront(footer); } catch(_){}
-    try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
-    c.requestRenderAll();
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  // Keep the footer above EVERYTHING, even if users add overlays / bring to front.
+  let rafPending = false;
+  function bumpSoon(){
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => { rafPending = false; ensure(); });
   }
 
   function boot(){
     const c = C(); if (!c) return setTimeout(boot, 120);
     ensure();
 
-    if (!c.__raBrandFooterWired_v4b){
-      c.__raBrandFooterWired_v4b = true;
+    // Refit on canvas resize
+    try {
+      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+      new ResizeObserver(()=> bumpSoon()).observe(el);
+    } catch(_){}
 
-      // Keep it positioned on resize
-      try {
-        const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-        new ResizeObserver(()=> requestAnimationFrame(ensure)).observe(el);
-      } catch(_){}
+    // Whenever anything is added or modified, re‑assert "footer on top"
+    c.on?.('object:added',    e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
+    c.on?.('object:modified', e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
+    c.on?.('mouse:up', bumpSoon);
 
-      // Recompute on app-level events we already fire in your app
-      document.addEventListener('ra-collection-change', ()=> requestAnimationFrame(ensure));
-      document.addEventListener('ra-wm-recalc',         ()=> requestAnimationFrame(ensure));
-      document.addEventListener('ra-holder-update',     ()=> requestAnimationFrame(ensure));
-      document.addEventListener('ra-brand-footer',      ()=> requestAnimationFrame(ensure));
-    }
+    // React to your app events too
+    ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
+      document.addEventListener(ev, bumpSoon);
+    });
   }
 
   if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
