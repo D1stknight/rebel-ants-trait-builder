@@ -5712,8 +5712,9 @@ const shouldShow =
 
     // Whenever anything is added or modified, re‑assert "footer on top"
     c.on?.('object:added',    e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
-    c.on?.('object:modified', e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
-    c.on?.('mouse:up', bumpSoon);
+c.on?.('object:modified', e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
+// removed mouse:up nudge — it was stepping on Undo
+c.on?.('object:removed',  e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
 
     // React to your app events too
     ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
