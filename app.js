@@ -5603,12 +5603,12 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v5b — topmost, locked, friend+manual; robust base detect + readable chip ========== */
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — robust base detect (incl. groups) + friend+manual + readable chip ========== */
 (()=>{
   const FOOTER_TEXT = 'Powered by Rebel Studios';
-  const SHOW_ON_MANUAL = true;  // manual uploads should show the footer
+  const SHOW_ON_MANUAL = true; // manual uploads should show the footer
 
-  // Text + outline + soft shadow for readability
+  // Readable text (white + black outline + soft shadow)
   const TEXT_STYLE = {
     fontFamily: 'Inter, Arial, sans-serif',
     fontSize: 12,
@@ -5619,33 +5619,56 @@ const shouldShow =
     shadow: 'rgba(0,0,0,0.35) 0 1 2'
   };
 
-  // Small translucent “chip” behind text so it never disappears on bright/dark art
-  const CHIP = {
-    padX: 8,
-    padY: 4,
-    fill: 'rgba(0,0,0,0.45)',
-    stroke: 'rgba(255,255,255,0.25)',
-    strokeWidth: 1,
-    radius: 6
-  };
-
+  // Small dark “chip” under the text so it’s visible on bright/dark/busy art
+  const CHIP = { padX: 8, padY: 4, fill: 'rgba(0,0,0,0.45)', stroke: 'rgba(255,255,255,0.25)', strokeWidth: 1, radius: 6 };
   const PAD = 10; // distance from bottom-right
 
-  const C = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const C = ()=> window.canvas || null;
   const toLower = s => (s||'').toLowerCase();
 
-  // 1) Base detection — be tolerant: prefer _isBase, otherwise fall back to the last image on canvas
-  function findBaseLoose(c){
+  // ---- Deep helpers (handle Images wrapped inside Groups) ----
+  function containsImageDeep(o){
+    if (!o) return false;
+    if ((o.type||'').toLowerCase() === 'image') return true;
+    if (typeof o.getObjects === 'function'){
+      try { return o.getObjects().some(ch => (ch.type||'').toLowerCase() === 'image'); } catch(_){}
+    }
+    return false;
+  }
+  function findImageDeep(o){
+    if (!o) return null;
+    if ((o.type||'').toLowerCase() === 'image') return o;
+    if (typeof o.getObjects === 'function'){
+      try {
+        for (const ch of o.getObjects()){
+          const hit = findImageDeep(ch);
+          if (hit) return hit;
+        }
+      }catch(_){}
+    }
+    return null;
+  }
+  function findBaseDeep(c){
     if (!c) return null;
     const objs = c.getObjects?.() || [];
+    // Prefer explicit _isBase
     let base = objs.find(o => o && o._isBase && !o._isBgRect);
     if (base) return base;
-    // Fallback: last plain image (and not the footer itself)
-    const imgs = objs.filter(o => (o && o.type === 'image' && !o._raBrandFooter));
-    return imgs.length ? imgs[imgs.length - 1] : null;
+    // Otherwise: last thing that contains an image (image or group-with-image)
+    for (let i = objs.length - 1; i >= 0; i--){
+      const o = objs[i];
+      if (o && containsImageDeep(o)) return o;
+    }
+    return null;
+  }
+  function getTokenContractDeep(o){
+    if (!o) return '';
+    if (o._tokenContract) return String(o._tokenContract||'');
+    const img = findImageDeep(o);
+    return img && img._tokenContract ? String(img._tokenContract) : '';
   }
 
-  // 2) Rebel contract so we hide footer for Rebel tokens
+  // Rebel contract (so we hide footer for Rebel tokens)
   let rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
   if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
     const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
@@ -5653,11 +5676,11 @@ const shouldShow =
   }
 
   function shouldShow(c){
-    const base = findBaseLoose(c);
-    if (!base) return false;               // no art on canvas → don’t show
-    const cc = toLower(base._tokenContract || '');
-    if (!cc) return !!SHOW_ON_MANUAL;      // manual uploads → show
-    return (rebelContract && cc !== rebelContract); // friend tokens → show
+    const base = findBaseDeep(c);
+    if (!base) return false;                  // nothing loaded yet
+    const cc = toLower(getTokenContractDeep(base));
+    if (!cc) return !!SHOW_ON_MANUAL;         // manual upload → show
+    return (rebelContract && cc !== rebelContract); // friend token → show
   }
 
   function place(c, grp){
@@ -5675,22 +5698,22 @@ const shouldShow =
       return;
     }
 
-    // Create group (chip + text) if missing
+    // Create/refresh the topmost locked group (chip + text)
     if (!footer || footer.type !== 'group'){
       try{ if (footer) c.remove(footer); }catch(_){}
+      if (typeof fabric === 'undefined') return;
+
       const txt = new fabric.Textbox(FOOTER_TEXT, {
-        ...TEXT_STYLE,
-        originX:'left', originY:'top',
-        selectable:false, evented:false, hasControls:false,
-        _raSys:true
+        ...TEXT_STYLE, originX:'left', originY:'top',
+        selectable:false, evented:false, hasControls:false, _raSys:true
       });
       const bg  = new fabric.Rect({
         originX:'left', originY:'top',
         rx: CHIP.radius, ry: CHIP.radius,
         fill: CHIP.fill, stroke: CHIP.stroke, strokeWidth: CHIP.strokeWidth,
-        selectable:false, evented:false, hasControls:false,
-        _raSys:true
+        selectable:false, evented:false, hasControls:false, _raSys:true
       });
+
       footer = new fabric.Group([bg, txt], {
         originX:'right', originY:'bottom',
         selectable:false, evented:false, hasControls:false,
@@ -5701,7 +5724,7 @@ const shouldShow =
       c.add(footer);
     }
 
-    // Refresh styles/size the chip tight to the text
+    // Update styles + size the chip to hug the text
     const bg  = footer.item(0);
     const txt = footer.item(1);
     txt.set(TEXT_STYLE);
@@ -5712,7 +5735,7 @@ const shouldShow =
     const th = (typeof txt.getScaledHeight === 'function') ? txt.getScaledHeight() : (txt.height || 16);
     bg.set({ left: -CHIP.padX, top: -CHIP.padY, width: tw + CHIP.padX*2, height: th + CHIP.padY*2 });
 
-    // Position + force front + keep it locked (even after “Unlock all”)
+    // Position + force to the very top + lock again (in case “Unlock all” ran)
     place(c, footer);
     footer.set({
       selectable:false, evented:false, hasControls:false,
@@ -5727,22 +5750,27 @@ const shouldShow =
     const c = C(); if (!c) return setTimeout(boot, 120);
     ensure();
 
-    // Only high-level events (clean; avoids Curved‑text noise)
-    if (!c.__raBrandFooterWired_v5b){
-      c.__raBrandFooterWired_v5b = true;
+    if (!c.__raBrandFooterWired_v6){
+      c.__raBrandFooterWired_v6 = true;
+
+      // Resize → reposition footer
       try {
         const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
         new ResizeObserver(()=> requestAnimationFrame(ensure)).observe(el);
       } catch(_){}
+
+      // React to high-level app events
       ['ra-collection-change','ra-wm-recalc','ra-holder-update','ra-brand-footer']
         .forEach(ev => document.addEventListener(ev, ()=> requestAnimationFrame(ensure)));
-      // If it ever gets selected, immediately drop selection & re‑enforce locks
+
+      // Only re‑ensure when objects that might be the base change (images or groups)
+      c.on('object:added',   e => { const o = e?.target; if (containsImageDeep(o)) setTimeout(ensure,0); });
+      c.on('object:removed', e => { const o = e?.target; if (containsImageDeep(o)) setTimeout(ensure,0); });
+
+      // If someone manages to select it, drop selection and re‑lock
       c.on('selection:created', (e)=>{
         const a = e?.selected?.[0];
-        if (a && a._raBrandFooter){
-          try{ c.discardActiveObject(); }catch(_){}
-          ensure();
-        }
+        if (a && a._raBrandFooter){ try{ c.discardActiveObject(); }catch(_){ } ensure(); }
       });
     }
   }
