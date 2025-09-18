@@ -5603,13 +5603,12 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v5 — always-on-top chip + friend+manual only ========== */
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v5b — topmost, locked, friend+manual; robust base detect + readable chip ========== */
 (()=>{
-  // ——— tweakables (top of file, easy to change) ———
   const FOOTER_TEXT = 'Powered by Rebel Studios';
-  const SHOW_ON_MANUAL = true;  // true = footer also on manual uploads (no token contract)
+  const SHOW_ON_MANUAL = true;  // manual uploads should show the footer
 
-  // Text styling (white, thin black outline, soft shadow)
+  // Text + outline + soft shadow for readability
   const TEXT_STYLE = {
     fontFamily: 'Inter, Arial, sans-serif',
     fontSize: 12,
@@ -5620,27 +5619,33 @@ const shouldShow =
     shadow: 'rgba(0,0,0,0.35) 0 1 2'
   };
 
-  // Backplate (“chip”) behind the text for readability
+  // Small translucent “chip” behind text so it never disappears on bright/dark art
   const CHIP = {
     padX: 8,
     padY: 4,
-    fill: 'rgba(0,0,0,0.45)',           // translucent dark
-    stroke: 'rgba(255,255,255,0.25)',   // subtle edge
+    fill: 'rgba(0,0,0,0.45)',
+    stroke: 'rgba(255,255,255,0.25)',
     strokeWidth: 1,
     radius: 6
   };
 
-  const PAD = 10; // distance from bottom-right corner
+  const PAD = 10; // distance from bottom-right
 
-  // ——— helpers ———
   const C = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const toLower = s => (s||'').toLowerCase();
 
-  function findBase(c){
-    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+  // 1) Base detection — be tolerant: prefer _isBase, otherwise fall back to the last image on canvas
+  function findBaseLoose(c){
+    if (!c) return null;
+    const objs = c.getObjects?.() || [];
+    let base = objs.find(o => o && o._isBase && !o._isBgRect);
+    if (base) return base;
+    // Fallback: last plain image (and not the footer itself)
+    const imgs = objs.filter(o => (o && o.type === 'image' && !o._raBrandFooter));
+    return imgs.length ? imgs[imgs.length - 1] : null;
   }
 
-  // Find your Rebel contract so we can hide footer on Rebel tokens
+  // 2) Rebel contract so we hide footer for Rebel tokens
   let rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
   if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
     const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
@@ -5648,11 +5653,11 @@ const shouldShow =
   }
 
   function shouldShow(c){
-    const base = findBase(c);
-    if (!base) return false;
-    const cc = toLower(base._tokenContract||'');
-    if (!cc) return !!SHOW_ON_MANUAL;         // manual uploads
-    return (rebelContract && cc !== rebelContract); // friends show; rebel hide
+    const base = findBaseLoose(c);
+    if (!base) return false;               // no art on canvas → don’t show
+    const cc = toLower(base._tokenContract || '');
+    if (!cc) return !!SHOW_ON_MANUAL;      // manual uploads → show
+    return (rebelContract && cc !== rebelContract); // friend tokens → show
   }
 
   function place(c, grp){
@@ -5662,7 +5667,6 @@ const shouldShow =
 
   function ensure(){
     const c = C(); if (!c) return;
-
     let footer = (c.getObjects()||[]).find(o => o && o._raBrandFooter);
 
     const show = shouldShow(c);
@@ -5671,7 +5675,7 @@ const shouldShow =
       return;
     }
 
-    // Create the group if missing (bg rect + text)
+    // Create group (chip + text) if missing
     if (!footer || footer.type !== 'group'){
       try{ if (footer) c.remove(footer); }catch(_){}
       const txt = new fabric.Textbox(FOOTER_TEXT, {
@@ -5697,25 +5701,23 @@ const shouldShow =
       c.add(footer);
     }
 
-    // Refresh styles/sizing each time
+    // Refresh styles/size the chip tight to the text
     const bg  = footer.item(0);
     const txt = footer.item(1);
     txt.set(TEXT_STYLE);
     bg.set({ fill: CHIP.fill, stroke: CHIP.stroke, strokeWidth: CHIP.strokeWidth, rx: CHIP.radius, ry: CHIP.radius });
 
-    // Measure text, size the chip tightly around it
     txt.setCoords();
     const tw = (typeof txt.getScaledWidth  === 'function') ? txt.getScaledWidth()  : (txt.width  || 100);
     const th = (typeof txt.getScaledHeight === 'function') ? txt.getScaledHeight() : (txt.height || 16);
     bg.set({ left: -CHIP.padX, top: -CHIP.padY, width: tw + CHIP.padX*2, height: th + CHIP.padY*2 });
 
-    // Place + force topmost, keep unselectable even after “Unlock all”
+    // Position + force front + keep it locked (even after “Unlock all”)
     place(c, footer);
     footer.set({
       selectable:false, evented:false, hasControls:false,
       lockMovementX:true, lockMovementY:true, lockRotation:true, lockScalingX:true, lockScalingY:true
     });
-
     try { c.bringToFront(footer); } catch(_){}
     try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
     c.requestRenderAll();
@@ -5725,27 +5727,24 @@ const shouldShow =
     const c = C(); if (!c) return setTimeout(boot, 120);
     ensure();
 
-    // Keep it correct on resizes and app-level changes (no noisy per-object hooks)
-    if (!c.__raBrandFooterWired_v5){
-      c.__raBrandFooterWired_v5 = true;
+    // Only high-level events (clean; avoids Curved‑text noise)
+    if (!c.__raBrandFooterWired_v5b){
+      c.__raBrandFooterWired_v5b = true;
       try {
         const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
         new ResizeObserver(()=> requestAnimationFrame(ensure)).observe(el);
       } catch(_){}
+      ['ra-collection-change','ra-wm-recalc','ra-holder-update','ra-brand-footer']
+        .forEach(ev => document.addEventListener(ev, ()=> requestAnimationFrame(ensure)));
+      // If it ever gets selected, immediately drop selection & re‑enforce locks
+      c.on('selection:created', (e)=>{
+        const a = e?.selected?.[0];
+        if (a && a._raBrandFooter){
+          try{ c.discardActiveObject(); }catch(_){}
+          ensure();
+        }
+      });
     }
-
-    ['ra-collection-change','ra-wm-recalc','ra-holder-update','ra-brand-footer']
-      .forEach(ev => document.addEventListener(ev, ()=> requestAnimationFrame(ensure)));
-
-    // If something ever manages to select it (e.g., external script), immediately drop selection
-    const cobj = C();
-    cobj?.on?.('selection:created', (e)=>{
-      const a = e?.selected?.[0];
-      if (a && a._raBrandFooter){
-        try{ cobj.discardActiveObject(); }catch(_){}
-        ensure();
-      }
-    });
   }
 
   if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
