@@ -6843,154 +6843,108 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_SAFE_v1 — fix Chrome reload when wallet connected ========== */
+/* ========== RA_PNG_NEWTAB_FORCE_v2 — replace the “Open in new tab” button with a safe handler ========== */
 (() => {
-  // Heuristics so we only touch the PNG area and the “Open in new tab” action
-  const OPEN_TXT = /open\s+in\s+new\s+tab/i;
-  const AREA_TXT = /download\s*png|export\s*png/i;
-
-  // Try to scope the click to the Download PNG card/section
-  function isInsidePngArea(el) {
-    let n = el;
-    for (let i = 0; i < 6 && n; i++, n = n.parentElement) {
-      const t = (n.textContent || '').toLowerCase();
-      if (AREA_TXT.test(t)) return true;
-      if (n.classList && (n.classList.contains('card') || n.classList.contains('panel'))) {
-        // if we hit a card/panel without seeing “Download PNG”, bail
-        return AREA_TXT.test(t);
-      }
-    }
-    return false;
+  function onReady(fn){
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
+    else fn();
   }
 
-  function getCanvas() {
-    return window.canvas || null;
+  // Find the download card/panel by looking for its button
+  function findDownloadPanel(){
+    const btn = Array.from(document.querySelectorAll('button, a'))
+      .find(el => /open\s+in\s+new\s+tab|open\s+a\s+new\s+tab/i.test((el.textContent||'').trim()));
+    return btn ? (btn.closest('.card') || btn.parentElement) : null;
   }
 
-  // Paint a PNG into a brand‑new tab without navigating the current tab
-  function openDataUrlInNewTab(dataUrl) {
+  // Try to locate an existing blob/data URL near the controls
+  function findImageUrl(panel){
+    if (!panel) return null;
+    // Common: an <a href="blob:..."> or <a href="data:image/...">
+    const a = panel.querySelector('a[href^="blob:"], a[href^="data:image/"]');
+    if (a && a.href) return a.href;
+    return null;
+  }
+
+  // Last-resort: render the visible canvas to PNG (may fail if canvas is tainted)
+  function canvasToPng(){
+    try {
+      const c = (window.canvas && (canvas.getElement ? canvas.getElement() : canvas.lowerCanvasEl)) ||
+                document.querySelector('canvas');
+      if (!c) return null;
+      return c.toDataURL('image/png');
+    } catch(_) { return null; }
+  }
+
+  function openInNewTab(url){
+    if (!url) return false;
     const w = window.open('', '_blank', 'noopener');
-    if (!w) { alert('Please allow pop‑ups to open the image in a new tab.'); return; }
-    w.document.title = 'PNG Preview';
-    w.document.body.style.margin = '0';
-    w.document.body.style.background = '#111';
-    const img = w.document.createElement('img');
-    img.src = dataUrl;
-    img.style.display = 'block';
-    img.style.maxWidth = '100%';
-    img.style.height = 'auto';
-    w.document.body.appendChild(img);
-  }
-
-  // If the UI already has a blob: link, we still open a blank tab first and point it there.
-  function openBlobHrefInNewTab(blobHref) {
-    const w = window.open('', '_blank', 'noopener');
-    if (!w) { alert('Please allow pop‑ups to open the image in a new tab.'); return; }
-    // Option A: just navigate the new tab to the blob
-    try { w.location.replace(blobHref); return; } catch (_){}
-    // Fallback: embed it as an <img>
-    const img = new Image();
-    img.onload = () => {
+    if (!w) return false; // popup blocked
+    try {
       w.document.title = 'PNG Preview';
       w.document.body.style.margin = '0';
-      w.document.body.appendChild(img);
+      w.document.body.style.background = '#111';
+      const img = w.document.createElement('img');
+      img.src = url;
       img.style.display = 'block';
       img.style.maxWidth = '100%';
       img.style.height = 'auto';
-    };
-    img.src = blobHref;
+      w.document.body.appendChild(img);
+      return true;
+    } catch(_) { return false; }
   }
 
-  // Delegated click handler (capture) so we can stop the existing handler that causes navigation
-  document.addEventListener('click', (ev) => {
-    const target = ev.target && (ev.target.closest('a,button') || ev.target);
-    if (!target) return;
+  function replaceButton(panel){
+    if (!panel) return false;
 
-    const label = ((target.textContent || target.value || target.title || '').trim());
-    if (!OPEN_TXT.test(label)) return;          // only the “Open in new tab” control
-    if (!isInsidePngArea(target)) return;       // only inside the Download PNG area
+    // Find the “Open in new tab” control (button or link)
+    const el = Array.from(panel.querySelectorAll('button, a'))
+      .find(e => /open\s+in\s+new\s+tab|open\s+a\s+new\s+tab/i.test((e.textContent||'').trim()));
+    if (!el) return false;
 
-    // We’ll take over this action to avoid navigating the current tab.
-    try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch (_){}
+    // Clone to drop all existing listeners/behaviors
+    const clone = el.cloneNode(true);
 
-    // If the control already has a blob href, use it; otherwise render the current canvas
-    const href = (target.getAttribute && target.getAttribute('href')) || '';
-    if (href && /^blob:/.test(href)) {
-      openBlobHrefInNewTab(href);
-      return;
-    }
+    clone.addEventListener('click', (ev)=>{
+      try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
 
-    // Render directly from the Fabric canvas (keeps behavior consistent even if no href present)
-    const c = getCanvas();
-    if (!c || typeof c.toDataURL !== 'function') { alert('Canvas not ready.'); return; }
-    const dataUrl = c.toDataURL({ format: 'png' });  // your app already includes watermark/footer in the canvas
-    openDataUrlInNewTab(dataUrl);
-  }, true);
-})();
+      // 1) Prefer the app’s generated blob/data URL if present
+      let url = findImageUrl(panel);
 
-/* ========== RA_PNG_NEWTAB_SHIELD_v3 — stop page reload on “Open in new tab” ========== */
-(() => {
-  const IMG_URL = url =>
-    typeof url === 'string' &&
-    (url.startsWith('blob:') || url.startsWith('data:image/'));
+      // 2) Fallback: snapshot the visible canvas
+      if (!url) url = canvasToPng();
 
-  // 1) Wrap window.open so ANY image open (blob/data) uses a true new tab and never navigates this tab
-  const _origOpen = window.open;
-  window.open = function(url, target, features) {
-    try {
-      if (IMG_URL(url)) {
-        const w = _origOpen.call(window, '', target || '_blank', (features ? features + ',' : '') + 'noopener');
-        if (!w) return null; // pop‑up blocked
-        try {
-          // Fast path: just navigate the new tab
-          w.location.replace(url);
-        } catch (_) {
-          // Fallback: paint the image into the new tab
-          try {
-            w.document.title = 'PNG Preview';
-            w.document.body.style.margin = '0';
-            w.document.body.style.background = '#111';
-            const img = w.document.createElement('img');
-            img.src = url;
-            img.style.display = 'block';
-            img.style.maxWidth = '100%';
-            img.style.height = 'auto';
-            w.document.body.appendChild(img);
-          } catch (_2) {}
-        }
-        return w;
+      if (!url){
+        alert('Could not find the PNG. Try clicking “Download PNG” first, then “Open in new tab.”');
+        return;
       }
-    } catch(_) {}
-    // Non-image URLs: behave normally
-    return _origOpen.apply(window, arguments);
-  };
 
-  // 2) If the UI uses an <a target="_blank" href="blob:...">, intercept so the current tab never navigates.
-  function interceptAnchorClick(ev) {
-    const a = ev.target && (ev.target.closest ? ev.target.closest('a') : null);
-    if (!a) return;
-    const href = a.getAttribute && a.getAttribute('href');
-    if (!href || !IMG_URL(href)) return;
+      if (!openInNewTab(url)){
+        alert('Please allow pop‑ups for this site to open the PNG in a new tab.');
+      }
+    }, true);
 
-    // We take over to avoid any chance the current tab navigates.
-    try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
-    // Delegate to our safe window.open wrapper
-    window.open(href, a.getAttribute('target') || '_blank');
+    // Swap it in place
+    el.replaceWith(clone);
+
+    // Also block any other anchors inside the panel that point to blob/data so they never navigate this tab
+    panel.addEventListener('click', (ev)=>{
+      const a = ev.target && ev.target.closest && ev.target.closest('a[href^="blob:"], a[href^="data:image/"]');
+      if (!a) return;
+      try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
+      // Delegate to our own handler
+      const fake = panel.querySelector('button, a');
+      clone.click();
+    }, true);
+
+    return true;
   }
-  document.addEventListener('click', interceptAnchorClick, true);
 
-  // 3) Belt & suspenders: if a form submit is used to trigger “Open in new tab”, prevent navigation and open safely.
-  document.addEventListener('submit', (ev) => {
-    // Only act if the submitter looks like “Open in new tab”
-    const btn = ev.submitter || null;
-    const label = (btn && (btn.textContent || btn.value || btn.title) || '').toLowerCase();
-    if (!/open.*new.*tab/.test(label)) return;
+  function boot(){
+    const panel = findDownloadPanel();
+    if (!panel){ setTimeout(boot, 300); return; }
+    replaceButton(panel);
+  }
 
-    // Try to find a blob/data link inside the form
-    const a = ev.target && ev.target.querySelector && ev.target.querySelector('a[href^="blob:"], a[href^="data:image/"]');
-    if (!a) return;
-
-    try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
-    window.open(a.getAttribute('href'), a.getAttribute('target') || '_blank');
-  }, true);
+  onReady(boot);
 })();
