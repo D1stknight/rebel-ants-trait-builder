@@ -5603,111 +5603,105 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v4 — footer always on top; friend+manual only ========== */
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — history‑neutral; friend+manual only; black fill + white outline ========== */
 (() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
   const STYLE = {
-  fontFamily: 'Inter, Arial, sans-serif',
-  fontSize: 12,
-  fill: '#000000',          // black inside the letters
-  stroke: '#ffffff',        // white outline
-  strokeWidth: 2,
-  strokeUniform: true,      // outline stays 2px even if canvas is scaled
-  opacity: 0.95
-};
+    fontFamily: 'Inter, Arial, sans-serif',
+    fontSize: 12,
+    fill: '#000000',            // black inside
+    stroke: '#ffffff',          // white outline
+    strokeWidth: 1.6,
+    strokeUniform: true,
+    opacity: 0.95
+  };
   const PAD = 10;
-  const toLower = s => (s||'').toLowerCase();
+  const toLower = s => (s || '').toLowerCase();
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
-  // Try to find your base image among objects; if not found, we still show the footer (manual upload case).
+  // Prefer a tagged base; otherwise use the last image on canvas (manual upload case)
   function findBase(c){
     const objs = c.getObjects?.() || [];
-    // Prefer objects marked by your app
     let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
     if (base) return base;
-    // Fallback: last image‑like object that isn’t the footer itself
     const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o?._raBrandFooter);
-    return imgs.length ? imgs[imgs.length-1] : null;
+    return imgs.length ? imgs[imgs.length - 1] : null;
   }
 
   function rebelContract(){
     if (typeof CONTRACT === 'string' && CONTRACT) return toLower(CONTRACT);
     const list = Array.isArray(window.RA_COLLECTIONS) ? window.RA_COLLECTIONS : [];
-    const r = list.find(x => (x.tag==='rebel') && (x.address || x.contract));
+    const r = list.find(x => (x.tag === 'rebel') && (x.address || x.contract));
     if (r) return toLower(r.address || r.contract);
-    // Safe default: your Rebel Ants mainnet contract
+    // Safe default: Rebel Ants mainnet
     return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
   }
 
   function shouldShow(c){
     const base = findBase(c);
-    const rebel = rebelContract();
-    if (!base) {
-      // No tagged base → treat as manual upload → show footer
-      return true;
-    }
+    if (!base) return true;                    // manual upload → show
     const cc = toLower(base._tokenContract || '');
-    if (!cc) {
-      // No contract info on the base → manual upload → show footer
-      return true;
-    }
-    // Token‑loaded image → show unless it's Rebel
-    return (cc !== rebel);
+    if (!cc) return true;                      // no contract info → treat as manual
+    return (cc !== rebelContract());           // show on friends; hide on Rebel Ants
   }
 
-  // Create / reuse footer; keep it non‑interactive
+  // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
-    const c = C(); if (!c) return;
+    const c = C(); if (!c) return false;
+    let changed = false;
 
-    let footer = (c.getObjects?.()||[]).find(o => o && o._raBrandFooter) || null;
+    let footer = (c.getObjects?.() || []).find(o => o && o._raBrandFooter) || null;
     const show = shouldShow(c);
 
     if (!show){
-      if (footer){ try{ c.remove(footer); }catch(_){}
-        try{ c.requestRenderAll(); }catch(_){}
+      if (footer){
+        try { c.remove(footer); changed = true; } catch(_){}
       }
-      return;
+      if (changed) try { c.requestRenderAll(); } catch(_){}
+      return changed;
     }
 
     if (!footer){
-    footer = new fabric.Textbox(FOOTER_TEXT, {
-  ...STYLE,
-  selectable:false, evented:false, hasControls:false,
-  lockMovementX:true, lockMovementY:true, hoverCursor:'default',
-  _raBrandFooter:true, _raSys:true,
-  excludeFromExport:true   // <-- keep footer out of JSON/history
-});
+      footer = new fabric.Textbox(FOOTER_TEXT, {
+        ...STYLE,
+        selectable:false, evented:false, hasControls:false,
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+        _raBrandFooter:true, _raSys:true,
+        excludeFromExport:true          // keep out of JSON/history
+      });
       c.add(footer);
-   } else {
-  footer.set(STYLE);
-  // Reassert non‑interactive and keep out of JSON/history
-  footer.set({
-    selectable:false, evented:false, hasControls:false,
-    lockMovementX:true, lockMovementY:true, hoverCursor:'default',
-    excludeFromExport:true
-  });
-}
+      changed = true;
+    } else {
+      // Reassert non‑interactive + exclude from export
+      footer.set({
+        selectable:false, evented:false, hasControls:false,
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+        excludeFromExport:true
+      });
+      // Style reapply is cheap; if identical it won’t dirty
+      footer.set(STYLE);
+    }
 
-    // Position bottom‑right and bring to absolute top
-    footer.set({ originX:'right', originY:'bottom', left:c.getWidth()-PAD, top:c.getHeight()-PAD });
-    footer.setCoords();
+    // Position bottom‑right only if it actually moved
+    const wantLeft = c.getWidth() - PAD;
+    const wantTop  = c.getHeight() - PAD;
+    if (footer.originX !== 'right' || footer.originY !== 'bottom' ||
+        Math.round(footer.left) !== Math.round(wantLeft) ||
+        Math.round(footer.top)  !== Math.round(wantTop)) {
+      footer.set({ originX:'right', originY:'bottom', left:wantLeft, top:wantTop });
+      footer.setCoords();
+      changed = true;
+    }
 
-    try {
-  const objs = c.getObjects?.() || [];
-  if (objs[objs.length - 1] !== footer) {
-    c.bringToFront(footer);
-  }
-} catch(_){}
-try { c.requestRenderAll(); } catch(_){}
-  }
+    // Keep truly topmost, but only if not already there
+    const objs = c.getObjects?.() || [];
+    if (objs[objs.length - 1] !== footer){
+      try { c.bringToFront(footer); changed = true; } catch(_){}
+    }
 
-  // Keep the footer above EVERYTHING, even if users add overlays / bring to front.
-  let rafPending = false;
-  function bumpSoon(){
-    if (rafPending) return;
-    rafPending = true;
-    requestAnimationFrame(() => { rafPending = false; ensure(); });
+    if (changed) try { c.requestRenderAll(); } catch(_){}
+    return changed;
   }
 
   function boot(){
@@ -5717,23 +5711,32 @@ try { c.requestRenderAll(); } catch(_){}
     // Refit on canvas resize
     try {
       const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-      new ResizeObserver(()=> bumpSoon()).observe(el);
+      new ResizeObserver(() => { ensure(); }).observe(el);
     } catch(_){}
 
-    // Whenever anything is added or modified, re‑assert "footer on top"
-    c.on?.('object:added',    e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
-c.on?.('object:modified', e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
-// removed mouse:up nudge — it was stepping on Undo
-c.on?.('object:removed',  e => { if (!e?.target?._raBrandFooter) bumpSoon(); });
+    // Minimal, history‑friendly triggers:
+    c.on?.('object:added',   e => { if (!e?.target?._raBrandFooter) ensure(); });
+    c.on?.('object:removed', e => { if (!e?.target?._raBrandFooter) ensure(); });
 
-    // React to your app events too
+    // If something is brought to front, we’ll catch it next frame without spamming history
+    let rafScheduled = false;
+    c.on?.('after:render', () => {
+      if (rafScheduled) return;
+      rafScheduled = true;
+      requestAnimationFrame(() => { rafScheduled = false; ensure(); });
+    });
+
+    // App‑level events that can change what should show
     ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
-      document.addEventListener(ev, bumpSoon);
+      document.addEventListener(ev, () => { ensure(); });
     });
   }
 
-  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
-  else { boot(); }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
 })();
 
 /* ========== RA_COLLECTIONS_RESET_v1 — single dropdown + clean CSS + multi-collection loader ========== */
