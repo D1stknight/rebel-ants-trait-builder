@@ -5603,55 +5603,64 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_LIVE_MINI_v2 — auto footer for non‑Rebel tokens (live + export) ========== */
-(()=>{
+/* ========== RA_BRAND_FOOTER_LIVE_MINI_v3 — show footer on Friend + Manual uploads; hide on Rebel ========== */
+(() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
-  const STYLE = { fontFamily: "Inter, Arial, sans-serif", fontSize: 12, fill: "#cfcfcf", opacity: 0.88 };
+  const STYLE = { fontFamily:"Inter, Arial, sans-serif", fontSize:12, fill:"#cfcfcf", opacity:0.88 };
   const PAD = 10;
-
   const toLower = s => (s||'').toLowerCase();
-  let rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
-if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
-  const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
-  if (r) rebelContract = toLower(r.address || r.contract);
-}
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-  function findBase(c){ return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null; }
+  function findBase(c){
+    return (c.getObjects?.()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+  }
+
+  function rebelContract(){
+    // 1) explicit global
+    if (typeof CONTRACT === 'string' && CONTRACT) return toLower(CONTRACT);
+    // 2) from configured collections (first tagged "rebel")
+    const list = Array.isArray(window.RA_COLLECTIONS) ? window.RA_COLLECTIONS : [];
+    const r = list.find(x => (x.tag==='rebel') && (x.address || x.contract));
+    if (r) return toLower(r.address || r.contract);
+    // 3) fallback to your known Rebel Ants address (safe fallback)
+    return toLower('0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221');
+  }
 
   function shouldShow(c){
     const base = findBase(c);
     if (!base) return false;
-    // Only friend tokens: needs the loader to set _tokenContract
+
+    const rebel = rebelContract();
     const cc = toLower(base._tokenContract||'');
-    if (!cc) return false;                      // unknown → assume Rebel / no footer
-    return (rebelContract && cc !== rebelContract);
+
+    if (cc) {
+      // Token-loaded image → show unless it's the Rebel contract
+      return (rebel && cc !== rebel);
+    }
+    // Manual upload (no contract metadata) → show footer
+    return true;
   }
 
   function place(c, footer){
-    footer.set({
-      originX:'right', originY:'bottom',
-      left: c.getWidth() - PAD,
-      top:  c.getHeight() - PAD
-    });
+    footer.set({ originX:'right', originY:'bottom', left:c.getWidth()-PAD, top:c.getHeight()-PAD });
     footer.setCoords();
   }
 
   function ensure(){
     const c = C(); if (!c) return;
-
-    let footer = (c.getObjects()||[]).find(o => o && o._raBrandFooter);
+    let footer = (c.getObjects?.()||[]).find(o => o && o._raBrandFooter);
     const show = shouldShow(c);
 
     if (!show){
-      if (footer){ c.remove(footer); c.requestRenderAll(); }
+      if (footer){ try{ c.remove(footer); }catch(_){}
+        try{ c.requestRenderAll(); }catch(_){}
+      }
       return;
     }
 
     if (!footer){
       footer = new fabric.Textbox(FOOTER_TEXT, {
-        ...STYLE,
-        selectable:false, evented:false, hasControls:false,
+        ...STYLE, selectable:false, evented:false, hasControls:false,
         _raBrandFooter:true, _raSys:true
       });
       c.add(footer);
@@ -5659,8 +5668,8 @@ if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
       footer.set(STYLE);
     }
     place(c, footer);
-    try { c.bringToFront(footer); } catch(_){}
-    try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
+    try{ c.bringToFront(footer); }catch(_){}
+    try{ window.bringInterfaceToFront && window.bringInterfaceToFront(); }catch(_){}
     c.requestRenderAll();
   }
 
@@ -5668,22 +5677,25 @@ if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
     const c = C(); if (!c) return setTimeout(boot, 120);
     ensure();
 
-   if (!c.__raBrandFooterWired){
-  c.__raBrandFooterWired = true;
-  // Do NOT hook per-object Fabric events — they spam during curved text edits.
-  try {
-    const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-    new ResizeObserver(()=> requestAnimationFrame(ensure)).observe(el);
-  } catch(_){}
-}
+    // Refit on canvas resize
+    try {
+      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+      new ResizeObserver(()=> ensure()).observe(el);
+    } catch(_){}
 
-// Only respond to high-level app events (throttled)
-['ra-collection-change','ra-wm-recalc','ra-holder-update','ra-brand-footer']
-  .forEach(ev => document.addEventListener(ev, ()=> requestAnimationFrame(ensure)));
+    // React when the base/brand changes or watermark recalculates
+    ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
+      document.addEventListener(ev, ()=> ensure());
+    });
+
+    // Manual uploads: when a new base image is added, ensure footer
+    c.on?.('object:added', e=>{
+      const o = e && e.target;
+      if (o && o._isBase && !o._isBgRect) setTimeout(ensure, 0);
+    });
   }
 
-  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
-  else { boot(); }
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
 /* ========== RA_COLLECTIONS_RESET_v1 — single dropdown + clean CSS + multi-collection loader ========== */
