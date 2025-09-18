@@ -5671,25 +5671,35 @@ const shouldShow =
     }
 
     if (!footer){
-      footer = new fabric.Textbox(FOOTER_TEXT, {
-        ...STYLE,
-        selectable:false, evented:false, hasControls:false,
-        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
-        _raBrandFooter:true, _raSys:true
-      });
+    footer = new fabric.Textbox(FOOTER_TEXT, {
+  ...STYLE,
+  selectable:false, evented:false, hasControls:false,
+  lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+  _raBrandFooter:true, _raSys:true,
+  excludeFromExport:true   // <-- keep footer out of JSON/history
+});
       c.add(footer);
-    } else {
-      footer.set(STYLE);
-      // Reassert non‑interactive in case some UI changed it
-      footer.set({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true, hoverCursor:'default' });
-    }
+   } else {
+  footer.set(STYLE);
+  // Reassert non‑interactive and keep out of JSON/history
+  footer.set({
+    selectable:false, evented:false, hasControls:false,
+    lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+    excludeFromExport:true
+  });
+}
 
     // Position bottom‑right and bring to absolute top
     footer.set({ originX:'right', originY:'bottom', left:c.getWidth()-PAD, top:c.getHeight()-PAD });
     footer.setCoords();
 
-    try { c.bringToFront(footer); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
+    try {
+  const objs = c.getObjects?.() || [];
+  if (objs[objs.length - 1] !== footer) {
+    c.bringToFront(footer);
+  }
+} catch(_){}
+try { c.requestRenderAll(); } catch(_){}
   }
 
   // Keep the footer above EVERYTHING, even if users add overlays / bring to front.
