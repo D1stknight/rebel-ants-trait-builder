@@ -5606,7 +5606,16 @@ const shouldShow =
 /* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v4 — footer always on top; friend+manual only ========== */
 (() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
-  const STYLE = { fontFamily:'Inter, Arial, sans-serif', fontSize:12, fill:'#cfcfcf', opacity:0.9 };
+  const STYLE = {
+  fontFamily: "Inter, Arial, sans-serif",
+  fontSize: 12,
+  fill: "#ffffff",            // brighter fill
+  opacity: 0.98,
+  stroke: "#000000",          // black outline
+  strokeWidth: 2,
+  strokeUniform: true,
+  shadow: "rgba(0,0,0,0.35) 0 1 2"  // soft drop shadow for extra separation
+};
   const PAD = 10;
   const toLower = s => (s||'').toLowerCase();
 
