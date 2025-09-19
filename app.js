@@ -6843,34 +6843,32 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_REPLACE_UI_v1 — hide original button; safe new-tab from Fabric dataURL ========== */
+/* ========== RA_PNG_NEWTAB_REPLACE_UI_v2 — form‑safe, Chrome wallet‑safe new‑tab preview ========== */
 (() => {
   function onReady(fn){
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
     else fn();
   }
 
-  // Find the existing "Open in new tab" control anywhere in the UI
+  // Find the existing "Open in new tab" control anywhere by its text
   function findNewTabControl(root=document){
     const controls = Array.from(root.querySelectorAll('button, a'));
     return controls.find(el => /open\s+(?:in|a)\s+new\s+tab/i.test((el.textContent||'').trim()));
   }
 
-  // Find a nearby Download/PNG panel to place our safe button
+  // Try to place our safe button near the original Download/PNG area
   function findDownloadPanel(){
     const anchor = findNewTabControl();
     if (anchor) return anchor.closest('.card') || anchor.parentElement || document.body;
-    // fallback: a card that mentions download
     const cards = Array.from(document.querySelectorAll('.card,section,div'));
     return cards.find(el => /download\s*png/i.test((el.textContent||'').toLowerCase())) || document.body;
   }
 
-  // Produce a dataURL from Fabric (self-contained; won’t be revoked if page reloads)
+  // Get a PNG as a data URL (self‑contained, won’t go blank if the opener reloads)
   function snapshotPNG(){
     try{
       if (window.canvas && typeof window.canvas.toDataURL === 'function'){
-        // Use Fabric API for best fidelity
-        return window.canvas.toDataURL({ format:'png' }); // uses current pixel ratio
+        return window.canvas.toDataURL({ format:'png' });
       }
       const c = (window.canvas && (canvas.getElement ? canvas.getElement() : canvas.lowerCanvasEl))
              || document.querySelector('canvas');
@@ -6878,83 +6876,101 @@ async function loadTokenFromCollection(tokenId, col){
     }catch(_){ return null; }
   }
 
-  // Open a tab and paint the image. Using dataURL ensures it stays even if the opener reloads.
+  // Open a new tab and paint the PNG into it
   function openPreview(dataUrl){
-    const w = window.open('', '_blank', 'noopener');
-    if (!w) { alert('Please allow pop-ups to open the image in a new tab.'); return; }
-    try{
-      w.document.title = 'PNG Preview';
-      w.document.body.style.margin = '0';
-      w.document.body.style.background = '#111';
-      const img = w.document.createElement('img');
-      img.src = dataUrl;
-      img.style.display = 'block';
-      img.style.maxWidth = '100%';
-      img.style.height = 'auto';
-      w.document.body.appendChild(img);
-    }catch(_){}
+    const w = window.open('about:blank', '_blank', 'noopener,noreferrer');
+    if (!w) { alert('Allow pop‑ups to open the image in a new tab.'); return; }
+    const html = `
+      <!doctype html>
+      <title>PNG Preview</title>
+      <meta name="color-scheme" content="dark light">
+      <body style="margin:0;background:#111">
+        <img src="${dataUrl}" style="display:block;max-width:100%;height:auto">
+      </body>`;
+    try { w.document.open(); w.document.write(html); w.document.close(); } catch(_){}
   }
 
-  function installShield(){
-    // Cancel any clicks on the original control anywhere in the capture phase
-    document.addEventListener('click', (ev)=>{
-      const t = ev.target && (ev.target.closest ? ev.target.closest('button, a') : null);
+  // Stop the app’s handlers from hijacking our click, and block form submit from our button
+  function installGuards(safeBtn){
+    const stop = e => { try{ e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }catch(_){} };
+
+    // Keep any delegated/capturing click handlers from running for our button
+    ['click','mousedown','mouseup','pointerdown','pointerup','touchstart','touchend'].forEach(ev=>{
+      safeBtn.addEventListener(ev, stop, true);
+    });
+
+    // If our safe button lives inside a <form>, prevent that form from submitting on our click
+    const form = safeBtn.closest && safeBtn.closest('form');
+    if (form){
+      form.addEventListener('submit', (e)=>{
+        const sub = e.submitter || document.activeElement;
+        if (sub === safeBtn){
+          stop(e);
+        }
+      }, true);
+    }
+
+    // If the original "Open in new tab" gets reinserted later, cancel its clicks
+    window.addEventListener('click', (e)=>{
+      const t = e.target && (e.target.closest ? e.target.closest('button,a') : null);
       if (!t) return;
       const txt = ((t.textContent||'').trim()).toLowerCase();
-      if (/open\s+(?:in|a)\s+new\s+tab/.test(txt)){
-        try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }catch(_){}
+      if (/open\s+(?:in|a)\s+new\s+tab/.test(txt) && t.id !== 'raOpenNewTabSafe'){
+        stop(e);
       }
     }, true);
   }
 
   function ensureSafeButton(){
-    const panel = findDownloadPanel();
-    if (!panel) return false;
+    const panel = findDownloadPanel(); if (!panel) return false;
 
-    // Hide the original control if it exists
+    // Hide the original control if present
     const orig = findNewTabControl(panel);
-    if (orig && orig.style) orig.style.display = 'none';
+    if (orig){ orig.style.display = 'none'; orig.setAttribute('aria-hidden','true'); }
 
-    // If our button already exists, stop here
-    if (panel.querySelector('#raOpenNewTabSafe')) return true;
-
-    // Create a safe twin button
-    const safe = document.createElement((orig && orig.tagName === 'A') ? 'a' : 'button');
-    safe.id = 'raOpenNewTabSafe';
-    safe.textContent = (orig && (orig.textContent||'').trim()) || 'Open in new tab';
-    safe.className = orig ? orig.className : 'btn';
-    if (safe.tagName === 'A') safe.href = 'javascript:void(0)';
-
-    // Place it right after the original if we have one; else append to panel
-    if (orig && orig.parentElement){
-      orig.parentElement.insertBefore(safe, orig.nextSibling);
-    } else {
-      const row = panel.querySelector('.row') || panel;
-      row.appendChild(safe);
+    // Create our safe twin if missing
+    let safe = panel.querySelector('#raOpenNewTabSafe');
+    if (!safe){
+      safe = document.createElement('button');
+      safe.id = 'raOpenNewTabSafe';
+      safe.type = 'button';                               // <-- IMPORTANT: do not submit forms
+      safe.className = orig ? orig.className : 'btn';
+      safe.textContent = (orig && (orig.textContent||'').trim()) || 'Open in new tab';
+      if (orig && orig.parentElement) orig.parentElement.insertBefore(safe, orig.nextSibling);
+      else (panel.querySelector('.row') || panel).appendChild(safe);
     }
 
-    // Our safe click handler
-    safe.addEventListener('click', (ev)=>{
-      try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }catch(_){}
-      const dataUrl = snapshotPNG();
-      if (!dataUrl){
-        alert('Could not capture the canvas to PNG. Try using “Download PNG” instead.');
-        return;
-      }
-      openPreview(dataUrl);
-    }, true);
+    // Bind once
+    if (!safe.__raBound){
+      safe.__raBound = true;
+      safe.addEventListener('click', (ev)=>{
+        try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }catch(_){}
+        const dataUrl = snapshotPNG();
+        if (!dataUrl){ alert('Could not capture the canvas to PNG. Try “Download PNG”.'); return; }
+        openPreview(dataUrl);
+      }, true);
+      installGuards(safe);
+    }
 
     return true;
   }
 
+  // If the app re-renders the panel and re-adds the original button, hide it again
+  function watchForOriginal(){
+    const obs = new MutationObserver(()=>{ 
+      const orig = findNewTabControl();
+      if (orig && orig.id !== 'raOpenNewTabSafe'){
+        orig.style.display = 'none';
+        orig.setAttribute('aria-hidden','true');
+      }
+      ensureSafeButton();
+    });
+    obs.observe(document.documentElement, { childList:true, subtree:true });
+  }
+
   function boot(){
-    installShield();
-    let tries = 0;
-    const iv = setInterval(()=>{
-      tries++;
-      const ok = ensureSafeButton();
-      if (ok || tries > 60) clearInterval(iv); // ~9s total
-    }, 150);
+    ensureSafeButton();
+    watchForOriginal();
   }
 
   onReady(boot);
