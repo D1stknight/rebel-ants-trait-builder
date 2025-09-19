@@ -6843,135 +6843,109 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_REPLACE_UI_v2 — form‑safe, Chrome wallet‑safe new‑tab preview ========== */
+/* ========== RA_PNG_NEWTAB_OVERRIDE_v6 — Chrome wallet-safe new tab (sync export, full stop of defaults) ========== */
 (() => {
-  function onReady(fn){
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
-    else fn();
-  }
+  if (window.__RA_NEWTAB_V6) return;
+  window.__RA_NEWTAB_V6 = true;
 
-  // Find the existing "Open in new tab" control anywhere by its text
-  function findNewTabControl(root=document){
-    const controls = Array.from(root.querySelectorAll('button, a'));
-    return controls.find(el => /open\s+(?:in|a)\s+new\s+tab/i.test((el.textContent||'').trim()));
-  }
+  function C(){ return window.canvas || null; }
 
-  // Try to place our safe button near the original Download/PNG area
-  function findDownloadPanel(){
-    const anchor = findNewTabControl();
-    if (anchor) return anchor.closest('.card') || anchor.parentElement || document.body;
-    const cards = Array.from(document.querySelectorAll('.card,section,div'));
-    return cards.find(el => /download\s*png/i.test((el.textContent||'').toLowerCase())) || document.body;
-  }
-
-  // Get a PNG as a data URL (self‑contained, won’t go blank if the opener reloads)
-  function snapshotPNG(){
+  // Try to read the "Export quality" multiplier from the UI text (e.g., "HQ ×2")
+  function readMultiplier(){
     try{
-      if (window.canvas && typeof window.canvas.toDataURL === 'function'){
-        return window.canvas.toDataURL({ format:'png' });
-      }
-      const c = (window.canvas && (canvas.getElement ? canvas.getElement() : canvas.lowerCanvasEl))
-             || document.querySelector('canvas');
-      return c ? c.toDataURL('image/png') : null;
-    }catch(_){ return null; }
+      const card = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+        .find(el => /export quality/i.test(el.textContent||''));
+      const box = card ? (card.closest('.card') || card.parentElement) : null;
+      const txt = (box && box.textContent || '').replace(/\s+/g,' ');
+      const m = /[x×]\s*([0-9]+)/i.exec(txt);
+      const n = m ? parseInt(m[1],10) : NaN;
+      return (Number.isFinite(n) && n >= 1 && n <= 6) ? n : 2; // default ×2
+    }catch(_){ return 2; }
   }
 
-  // Open a new tab and paint the PNG into it
-  function openPreview(dataUrl){
-    const w = window.open('about:blank', '_blank', 'noopener,noreferrer');
-    if (!w) { alert('Allow pop‑ups to open the image in a new tab.'); return; }
+  function makeDataURL(){
+    const c = C();
+    if (!c || !c.toDataURL) return null;
+    // Use a safe default multiplier if we can't read it
+    const mult = readMultiplier();
+    try{
+      // Fabric handles { format:'png', multiplier:n }
+      return c.toDataURL({ format:'png', multiplier: mult });
+    }catch(_){
+      // Fallback plain toDataURL
+      try{ return c.toDataURL('image/png'); }catch(__){ return null; }
+    }
+  }
+
+  function openNewTabWith(dataUrl){
+    if (!dataUrl) { alert('Could not render PNG.'); return; }
+    // Open a truly new tab, detached from the opener (wallet scripts can’t poke it)
+    const win = window.open('about:blank', '_blank', 'noopener,noreferrer');
+    if (!win) { alert('Popup blocked. Please allow popups for this site.'); return; }
+
+    // Simple HTML to show the image and offer a download link
     const html = `
       <!doctype html>
-      <title>PNG Preview</title>
-      <meta name="color-scheme" content="dark light">
-      <body style="margin:0;background:#111">
-        <img src="${dataUrl}" style="display:block;max-width:100%;height:auto">
-      </body>`;
-    try { w.document.open(); w.document.write(html); w.document.close(); } catch(_){}
-  }
-
-  // Stop the app’s handlers from hijacking our click, and block form submit from our button
-  function installGuards(safeBtn){
-    const stop = e => { try{ e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }catch(_){} };
-
-    // Keep any delegated/capturing click handlers from running for our button
-    ['click','mousedown','mouseup','pointerdown','pointerup','touchstart','touchend'].forEach(ev=>{
-      safeBtn.addEventListener(ev, stop, true);
-    });
-
-    // If our safe button lives inside a <form>, prevent that form from submitting on our click
-    const form = safeBtn.closest && safeBtn.closest('form');
-    if (form){
-      form.addEventListener('submit', (e)=>{
-        const sub = e.submitter || document.activeElement;
-        if (sub === safeBtn){
-          stop(e);
-        }
-      }, true);
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Rebel Ants Export</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>
+          html,body{height:100%;margin:0;background:#0b0c10;color:#eee}
+          .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box}
+          img{max-width:100%;height:auto;display:block}
+          .bar{position:fixed;right:12px;bottom:12px;background:rgba(0,0,0,.6);padding:6px 10px;border-radius:8px;font:12px system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
+          .bar a{color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.3);padding:4px 8px;border-radius:6px}
+        </style>
+      </head>
+      <body>
+        <div class="wrap"><img src="${dataUrl}" alt="Export"></div>
+        <div class="bar"><a href="${dataUrl}" download="rebel-ants.png">Download PNG</a></div>
+      </body>
+      </html>`;
+    try {
+      win.document.open();
+      win.document.write(html);
+      win.document.close();
+    } catch(_){
+      // As a last resort, navigate the new tab to the image URL
+      try { win.location.href = dataUrl; } catch(__){}
     }
-
-    // If the original "Open in new tab" gets reinserted later, cancel its clicks
-    window.addEventListener('click', (e)=>{
-      const t = e.target && (e.target.closest ? e.target.closest('button,a') : null);
-      if (!t) return;
-      const txt = ((t.textContent||'').trim()).toLowerCase();
-      if (/open\s+(?:in|a)\s+new\s+tab/.test(txt) && t.id !== 'raOpenNewTabSafe'){
-        stop(e);
-      }
-    }, true);
   }
 
-  function ensureSafeButton(){
-    const panel = findDownloadPanel(); if (!panel) return false;
-
-    // Hide the original control if present
-    const orig = findNewTabControl(panel);
-    if (orig){ orig.style.display = 'none'; orig.setAttribute('aria-hidden','true'); }
-
-    // Create our safe twin if missing
-    let safe = panel.querySelector('#raOpenNewTabSafe');
-    if (!safe){
-      safe = document.createElement('button');
-      safe.id = 'raOpenNewTabSafe';
-      safe.type = 'button';                               // <-- IMPORTANT: do not submit forms
-      safe.className = orig ? orig.className : 'btn';
-      safe.textContent = (orig && (orig.textContent||'').trim()) || 'Open in new tab';
-      if (orig && orig.parentElement) orig.parentElement.insertBefore(safe, orig.nextSibling);
-      else (panel.querySelector('.row') || panel).appendChild(safe);
-    }
-
-    // Bind once
-    if (!safe.__raBound){
-      safe.__raBound = true;
-      safe.addEventListener('click', (ev)=>{
-        try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }catch(_){}
-        const dataUrl = snapshotPNG();
-        if (!dataUrl){ alert('Could not capture the canvas to PNG. Try “Download PNG”.'); return; }
-        openPreview(dataUrl);
-      }, true);
-      installGuards(safe);
-    }
-
-    return true;
+  function isOpenNewTabButton(el){
+    const t = (el.textContent||'').trim().toLowerCase();
+    return /open\s+in\s+new\s+tab/.test(t);
   }
 
-  // If the app re-renders the panel and re-adds the original button, hide it again
-  function watchForOriginal(){
-    const obs = new MutationObserver(()=>{ 
-      const orig = findNewTabControl();
-      if (orig && orig.id !== 'raOpenNewTabSafe'){
-        orig.style.display = 'none';
-        orig.setAttribute('aria-hidden','true');
-      }
-      ensureSafeButton();
-    });
-    obs.observe(document.documentElement, { childList:true, subtree:true });
+  function install(){
+    // Capture phase handler: stop absolutely everything else from running
+    const handler = (e) => {
+      const tgt = e.target;
+      if (!tgt) return;
+      // Button or link that says "Open in New Tab"
+      const btn = tgt.closest && tgt.closest('button, a');
+      if (!btn || !isOpenNewTabButton(btn)) return;
+
+      // Stop default navigation and any other listeners (very important)
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      // Create PNG synchronously and open the preview tab
+      const dataUrl = makeDataURL();
+      openNewTabWith(dataUrl);
+    };
+
+    // Attach globally so we catch the click regardless of where the button lives
+    window.addEventListener('click', handler, true);  // capture phase
   }
 
-  function boot(){
-    ensureSafeButton();
-    watchForOriginal();
+  // Wait for the DOM; if already ready, go now
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', install, { once:true });
+  } else {
+    install();
   }
-
-  onReady(boot);
 })();
