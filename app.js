@@ -6843,133 +6843,127 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_SAFE_BUTTON_v10 — Chrome-only replacement button; Safari untouched ========== */
+/* ========== RA_PNG_NEWTAB_SAFE_BUTTON_v12 — Chrome-only safe button; tiny observer; async open ========== */
 (() => {
-  if (window.__RA_NEWTAB_V10) return;
-  window.__RA_NEWTAB_V10 = true;
+  if (window.__RA_NEWTAB_V12) return;
+  window.__RA_NEWTAB_V12 = true;
 
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
   function C(){ return window.canvas || null; }
 
-  // Find the Export card's "Open in New Tab" and its sibling "Download PNG"
-  function findButtons(){
-    const all = Array.from(document.querySelectorAll('button,a'));
-    const openBtn = all.find(el => /open\s*in\s*new\s*tab/i.test((el.textContent||'').trim()));
-    const dlBtn   = all.find(el => /download\s*png/i.test((el.textContent||'').trim()));
+  // Find Export card + its buttons
+  function findExportCard(){
+    const tag = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /(^|\b)export(\b|$)/i.test((el.textContent||'').trim()));
+    return tag ? (tag.closest('.card') || tag.parentElement) : null;
+  }
+  function findButtons(card){
+    if (!card) return { openBtn:null, dlBtn:null };
+    const all = Array.from(card.querySelectorAll('button,a'));
+    const openBtn = all.find(el => /open\s*in\s*new\s*tab/i.test((el.textContent||'').trim())) || null;
+    const dlBtn   = all.find(el => /download\s*png/i.test((el.textContent||'').trim())) || null;
     return { openBtn, dlBtn };
   }
 
-  // Read “HQ ×2/×3…” text from the Export card; fallback ×2
-  function readMultiplier(){
+  function readMultiplier(card){
     try{
-      const hdr = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-        .find(el => /export quality/i.test(el.textContent||''));
-      const card = hdr ? (hdr.closest('.card') || hdr.parentElement) : null;
       const txt = (card && card.textContent || '').replace(/\s+/g,' ');
       const m = /[x×]\s*([0-9]+)/i.exec(txt);
       const n = m ? parseInt(m[1],10) : NaN;
-      return (Number.isFinite(n) && n>=1 && n<=6) ? n : 2;
-    } catch(_) { return 2; }
+      // Cap for new-tab to keep it snappy; Download PNG still uses your full quality.
+      return (Number.isFinite(n) && n>=1) ? Math.min(n, 3) : 2;
+    }catch(_){ return 2; }
   }
 
-  function dataURLtoBlob(dataUrl){
-    try{
-      const parts = dataUrl.split(',');
-      const mime = (parts[0].match(/:(.*?);/)||[])[1] || 'image/png';
-      const bin  = atob(parts[1]||'');
-      const len  = bin.length;
-      const u8   = new Uint8Array(len);
-      for (let i=0;i<len;i++) u8[i] = bin.charCodeAt(i);
-      return new Blob([u8], { type: mime });
-    }catch(_){ return null; }
+  // Build PNG as dataURL using Fabric (fastest path that includes all layers),
+  // then show it in a fresh tab by writing a tiny HTML page (no reload of the builder).
+  function openPNGInNewTab(mult){
+    const c = C(); if (!c) { alert('Canvas not ready'); return; }
+    try { c.requestRenderAll?.(); } catch(_){}
+
+    // Generate PNG (scaled) – this call is synchronous; keep multiplier modest (see readMultiplier).
+    let dataUrl;
+    try { dataUrl = c.toDataURL({ format:'png', multiplier: mult }); }
+    catch(_){ try { dataUrl = c.toDataURL('image/png'); } catch(__) { dataUrl = null; } }
+
+    if (!dataUrl){ alert('Could not create PNG'); return; }
+
+    // Open a fresh, empty tab that we control and write an <img> into it.
+    const w = window.open('about:blank', '_blank', 'noopener,noreferrer');
+    if (!w){ alert('Popup blocked. Allow popups and try again.'); return; }
+
+    try {
+      const doc = w.document;
+      doc.open();
+      doc.write(`
+        <!doctype html>
+        <meta charset="utf-8">
+        <title>Export PNG</title>
+        <style>
+          html,body{height:100%;margin:0;background:#111;display:grid;place-items:center}
+          img{max-width:100%;max-height:100%;display:block}
+        </style>
+        <img id="img">
+      `);
+      doc.close();
+      const img = doc.getElementById('img');
+      img.src = dataUrl;
+    } catch (e){
+      // Absolute fallback: navigate the new tab directly to the dataURL
+      try { w.location.replace(dataUrl); } catch(_){ w.location.href = dataUrl; }
+    }
   }
 
-  function renderPNGBlob(){
-    const c = C(); if (!c) return null;
-    try{ c.requestRenderAll?.(); }catch(_){}
-    const mult = readMultiplier();
-    let url;
-    try { url = c.toDataURL({ format: 'png', multiplier: mult }); }
-    catch(_){ try { url = c.toDataURL('image/png'); } catch(__){ url = null; } }
-    return url ? dataURLtoBlob(url) : null;
-  }
-
-  // Open the blob in a brand-new tab without touching the builder
-  function openBlobInTab(blob){
-    if (!blob){ alert('Could not create PNG.'); return; }
-    const w = window.open('', '_blank', 'noopener,noreferrer'); // brand-new tab
-    if (!w){ alert('Popup blocked. Please allow popups for this site.'); return; }
-    const objUrl = URL.createObjectURL(blob);
-    try { w.location.replace(objUrl); }
-    catch(_){ try { w.location.href = objUrl; } catch(__){} }
-    // Keep the URL alive long enough for the tab to load
-    setTimeout(()=>URL.revokeObjectURL(objUrl), 60000);
-  }
-
-  // Build our own safe button (Chrome only)
+  // Replace original button with our safe one (Chrome/Chromium only)
   function ensureSafeButton(){
-    if (isSafari) return; // Safari works fine; leave original alone
-    const { openBtn, dlBtn } = findButtons();
-    if (!openBtn) return;
+    if (isSafari) return; // Safari works fine; leave it alone
+    const card = findExportCard(); if (!card) return;
+    const { openBtn, dlBtn } = findButtons(card);
+    if (!openBtn || openBtn.__raReplaced) return;
 
-    // If we already replaced this instance, stop
-    if (openBtn.__raReplaced) return;
-
-    // Hide & neutralize original (prevent any handler from firing)
+    // Hide and neutralize the original
     openBtn.__raReplaced = true;
     openBtn.style.display = 'none';
-    try { openBtn.removeAttribute('href'); } catch(_){}
-    try { openBtn.onclick = null; } catch(_){}
+    try { openBtn.removeAttribute('href'); openBtn.onclick = null; } catch(_){}
 
-    // Insert our clone-looking safe button right after Download PNG (or where the old one was)
-    const parent = openBtn.parentElement || openBtn.closest('div') || openBtn;
-    const ref    = dlBtn && dlBtn.parentElement === parent ? dlBtn.nextSibling : openBtn.nextSibling;
-
+    // Insert our safe button where users expect it
     const safe = document.createElement('button');
     safe.type = 'button';
-    safe.id   = 'raOpenNewTabSafe';
+    safe.id = 'raOpenNewTabSafe';
     safe.textContent = 'Open in New Tab';
-    safe.__raSafeBtn = true;
-
-    // Copy class names so it looks identical
     safe.className = openBtn.className || 'btn';
 
-    // Our click handler (fully self-contained)
-    const onClick = (e)=>{
-      try{
-        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-      }catch(_){}
-      const blob = renderPNGBlob();
-      openBlobInTab(blob);
-    };
+    safe.addEventListener('click', (e)=>{
+      try { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); } catch(_){}
+      const mult = readMultiplier(card);
+      // Disable briefly to prevent double-runs
+      safe.disabled = true;
+      setTimeout(()=> safe.disabled = false, 2000);
+      openPNGInNewTab(mult);
+    }, { capture:true });
 
-    safe.addEventListener('click', onClick, { capture:true });
+    // Place right after Download PNG (if found), else where the old one was
+    const parent = openBtn.parentElement || card;
+    const ref    = (dlBtn && dlBtn.parentElement === parent) ? dlBtn.nextSibling : openBtn.nextSibling;
+    try { parent.insertBefore(safe, ref || null); } catch(_){ parent.appendChild(safe); }
 
-    // Extra hardening: intercept delegated clicks that try to reach *any* element with our label
-    // (some frameworks attach capture handlers on containers)
-    const guard = (e)=>{
+    // Lightweight guard: capture clicks inside the Export card only (not the whole page)
+    card.addEventListener('click', (e)=>{
       const t = e.target && (e.target.closest && e.target.closest('button,a'));
       if (!t) return;
-      if (/open\s*in\s*new\s*tab/i.test((t.textContent||'').trim())){
+      if (/open\s*in\s*new\s*tab/i.test((t.textContent||'').trim()) && t !== safe){
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-        onClick(e);
+        safe.click();
       }
-    };
-    document.addEventListener('click', guard, true);
-
-    // Place the safe button
-    try { parent.insertBefore(safe, ref || null); }
-    catch(_){ try { parent.appendChild(safe); } catch(__){} }
+    }, true);
   }
 
-  // Try now, then watch for UI re-renders and re-apply
+  // Try now, then a few gentle retries (no page-wide observer)
   function boot(){
-    ensureSafeButton();
-    if (!isSafari){
-      const mo = new MutationObserver(()=> ensureSafeButton());
-      mo.observe(document.documentElement, { childList:true, subtree:true });
-    }
+    let tries = 0;
+    const tick = () => { tries++; ensureSafeButton(); if (tries < 10) setTimeout(tick, 300); };
+    tick();
   }
 
   if (document.readyState === 'loading') {
