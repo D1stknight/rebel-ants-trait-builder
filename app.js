@@ -6843,13 +6843,12 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_SAFE_BUTTON_v2 — add a separate safe button; Chrome only; no globals ========== */
+/* ========== RA_PREVIEW_TAB_SAFE_v3 — one extra button, no globals, no text matching ========== */
 (() => {
   function onReady(fn){
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
     else fn();
   }
-  const isChrome = !!navigator.userAgent.match(/Chrome\/\d+/) && !/Edg|OPR|Brave/i.test(navigator.userAgent);
   const C = () => window.canvas || null;
 
   function findExportCard(){
@@ -6857,90 +6856,81 @@ async function loadTokenFromCollection(tokenId, col){
     const head = labels.find(el => /export\b/i.test(el.textContent||''));
     return head ? (head.closest('.card') || head.parentElement) : null;
   }
-  function findButtonByText(root, re){
+  function findByText(root, re){
     return Array.from((root||document).querySelectorAll('button,a,[role="button"]'))
-      .find(b => re.test(((b.textContent||'') + ' ' + (b.getAttribute('aria-label')||'')).toLowerCase()));
+      .find(b => re.test(((b.textContent||'') + ' ' + (b.getAttribute('aria-label')||'')).toLowerCase())));
   }
 
-  function makeSafeBtn(){
-    const btn = document.createElement('button');
-    btn.id = 'raOpenTabSafe';
-    btn.className = 'btn';                    // matches your styling
-    btn.style.marginLeft = '8px';
-    btn.textContent = 'Open in New Tab (Safe)';
-    return btn;
-  }
-
-  function openInNewTabSafe(){
-    const c = C();
-    if (!c || !c.toDataURL){
-      alert('Canvas not ready yet. Try again.');
-      return;
+  function getMultiplier(){
+    // Try to read HQ ×N if your UI exposes it; fallback 2
+    const el = document.getElementById('exportQuality')
+            || document.querySelector('#export select, [data-role="exportQuality"]');
+    if (el){
+      const t = (el.value || el.textContent || '').toString();
+      const m = parseInt(t.replace(/\D+/g,''), 10);
+      if (m && m >= 1 && m <= 8) return m;
     }
+    return 2;
+  }
 
-    // Open a blank tab immediately to keep the user gesture
+  function openPreviewTab(){
+    const c = C();
+    if (!c || !c.toDataURL){ alert('Canvas not ready yet.'); return; }
+
+    // Open the tab immediately to keep the user gesture (prevents popup blocking)
     let w = null;
-    try { w = window.open('', '_blank', 'noopener'); } catch(_) { w = null; }
+    try { w = window.open('', '_blank', 'noopener'); } catch(_) {}
 
-    // Render PNG
+    // Build PNG
     let url = null;
-    try { url = c.toDataURL('image/png'); } catch(_) { url = null; }
+    try { url = c.toDataURL({ format:'png', multiplier:getMultiplier(), enableRetinaScaling:true }); }
+    catch(_){ try { url = c.toDataURL('image/png'); } catch(_){ url = null; } }
 
     if (!url){
-      if (w) { try { w.close(); } catch(_){} }
-      // Fallback to download if we couldn’t get a data URL
+      if (w) try { w.close(); } catch(_){}
+      alert('Could not create PNG. Try Download PNG instead.');
+      return;
+    }
+
+    if (!w || !w.document){
+      // Popup blocked → just download as a fallback
       const a = document.createElement('a');
-      a.href = url || '#';
-      a.download = 'rebel-ants.png';
+      a.href = url; a.download = 'rebel-ants.png';
       document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(),0);
       return;
     }
 
-    if (w && w.document){
-      // Fill the new tab with the image (no navigation on the opener)
-      try {
-        const doc = w.document;
-        doc.open();
-        doc.write(
-          '<!doctype html><meta charset="utf-8"><title>Export</title>' +
-          '<style>html,body{height:100%;margin:0;background:#111;display:grid;place-items:center}img{max-width:100%;max-height:100%;display:block}</style>' +
-          `<img src="${url}" alt="PNG">`
-        );
-        doc.close();
-      } catch(_){
-        // If writing fails, last‑ditch navigation
-        try { w.location.replace(url); } catch(_){}
-      }
-    } else {
-      // Popup blocked → just download
-      const a = document.createElement('a');
-      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = 'rebel-ants.png';
-      document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(),0);
-    }
+    // Fill the new tab without navigating the opener
+    const doc = w.document;
+    doc.open();
+    doc.write(
+      '<!doctype html><meta charset="utf-8"><title>Preview</title>' +
+      '<style>html,body{height:100%;margin:0;background:#0b0c10;display:grid;place-items:center}' +
+      'img{max-width:100%;max-height:100%;display:block;box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px}</style>' +
+      `<img src="${url}" alt="Export PNG">`
+    );
+    doc.close();
   }
 
   function wire(){
     const card = findExportCard(); if (!card) return;
+    const dlBtn = findByText(card, /\bdownload\s*png\b/i);
 
-    // Find the existing two export buttons so we can place ours next to them
-    const dlBtn   = findButtonByText(card, /\bdownload\s*png\b/i);
-    const oldOpen = findButtonByText(card, /\bopen\s*in\s*new\s*tab\b/i);
+    // Our button uses a unique label so no old code will target it.
+    const btn = document.createElement('button');
+    btn.id = 'raPreviewTabSafe';
+    btn.className = 'btn';
+    btn.style.marginLeft = '8px';
+    btn.textContent = 'Preview Tab (Safe)';
 
-    // Only show our safe button on Chrome. Leave Safari/others untouched.
-    const btn = makeSafeBtn();
-    btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); openInNewTabSafe(); }, false);
+    const host = dlBtn && dlBtn.parentElement ? dlBtn.parentElement : card;
+    host.insertBefore(btn, dlBtn ? dlBtn.nextSibling : host.firstChild);
 
-    if (dlBtn && dlBtn.parentElement){
-      dlBtn.parentElement.insertBefore(btn, dlBtn.nextSibling);
-    } else {
-      // fallback: put at the end of the export card
-      card.appendChild(btn);
-    }
-
-    // On Chrome, hide the original “Open in New Tab” to avoid user confusion + double handlers
-    if (isChrome && oldOpen){
-      oldOpen.style.display = 'none';
-    }
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      openPreviewTab();
+    }, false);
   }
 
   onReady(wire);
