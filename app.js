@@ -6843,59 +6843,76 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_DIRECT_v7 — wallet‑safe “Open in New Tab” (Chrome & Safari) ========== */
-(()=>{
+/* ========== RA_PNG_NEWTAB_SAFE_BUTTON_v2 — add a separate safe button; Chrome only; no globals ========== */
+(() => {
   function onReady(fn){
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', fn, { once:true });
-    } else { fn(); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
+    else fn();
   }
-  const C = ()=> window.canvas || null;
+  const isChrome = !!navigator.userAgent.match(/Chrome\/\d+/) && !/Edg|OPR|Brave/i.test(navigator.userAgent);
+  const C = () => window.canvas || null;
 
-  // Find the "Open in New Tab" control by visible text
-  function isOpenNewTabButton(el){
-    if (!el) return false;
-    const txt = (el.textContent || '').trim().toLowerCase();
-    return /open\s*in\s*new\s*tab/.test(txt);
+  function findExportCard(){
+    const labels = Array.from(document.querySelectorAll('h1,h2,h3,strong,label'));
+    const head = labels.find(el => /export\b/i.test(el.textContent||''));
+    return head ? (head.closest('.card') || head.parentElement) : null;
   }
-
-  let pendingWin = null;
-
-  // Open a blank tab immediately (keeps the user gesture)
-  function openBlankNow(){
-    try{
-      pendingWin = window.open('', '_blank', 'noopener,noreferrer');
-      if (pendingWin && pendingWin.document) {
-        pendingWin.document.title = 'Preparing image…';
-        pendingWin.document.body.style.cssText =
-          'margin:0;background:#111;color:#bbb;display:flex;align-items:center;justify-content:center;font:14px system-ui;';
-        pendingWin.document.body.textContent = 'Preparing image…';
-      }
-    } catch(_){ pendingWin = null; }
+  function findButtonByText(root, re){
+    return Array.from((root||document).querySelectorAll('button,a,[role="button"]'))
+      .find(b => re.test(((b.textContent||'') + ' ' + (b.getAttribute('aria-label')||'')).toLowerCase()));
   }
 
-  // Fill that tab with the PNG; if blocked, fall back to download
-  function putImageIntoTab(){
+  function makeSafeBtn(){
+    const btn = document.createElement('button');
+    btn.id = 'raOpenTabSafe';
+    btn.className = 'btn';                    // matches your styling
+    btn.style.marginLeft = '8px';
+    btn.textContent = 'Open in New Tab (Safe)';
+    return btn;
+  }
+
+  function openInNewTabSafe(){
     const c = C();
-    if (!c || !c.toDataURL) { if (pendingWin) try{ pendingWin.close(); }catch(_){ } pendingWin = null; return; }
-
-    let url = null;
-    try { url = c.toDataURL('image/png'); } catch(_){ url = null; }
-
-    if (!url){
-      if (pendingWin) {
-        pendingWin.document.body.textContent = 'Could not create PNG. Try “Download PNG”.';
-        pendingWin = null;
-      }
+    if (!c || !c.toDataURL){
+      alert('Canvas not ready yet. Try again.');
       return;
     }
 
-    if (pendingWin){
-      // Replace the temporary blank with the PNG URL
-      try { pendingWin.location.replace(url); } catch(_){}
-      pendingWin = null;
+    // Open a blank tab immediately to keep the user gesture
+    let w = null;
+    try { w = window.open('', '_blank', 'noopener'); } catch(_) { w = null; }
+
+    // Render PNG
+    let url = null;
+    try { url = c.toDataURL('image/png'); } catch(_) { url = null; }
+
+    if (!url){
+      if (w) { try { w.close(); } catch(_){} }
+      // Fallback to download if we couldn’t get a data URL
+      const a = document.createElement('a');
+      a.href = url || '#';
+      a.download = 'rebel-ants.png';
+      document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(),0);
+      return;
+    }
+
+    if (w && w.document){
+      // Fill the new tab with the image (no navigation on the opener)
+      try {
+        const doc = w.document;
+        doc.open();
+        doc.write(
+          '<!doctype html><meta charset="utf-8"><title>Export</title>' +
+          '<style>html,body{height:100%;margin:0;background:#111;display:grid;place-items:center}img{max-width:100%;max-height:100%;display:block}</style>' +
+          `<img src="${url}" alt="PNG">`
+        );
+        doc.close();
+      } catch(_){
+        // If writing fails, last‑ditch navigation
+        try { w.location.replace(url); } catch(_){}
+      }
     } else {
-      // Popup blocked → force a download in the same click
+      // Popup blocked → just download
       const a = document.createElement('a');
       a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = 'rebel-ants.png';
       document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(),0);
@@ -6903,26 +6920,27 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   function wire(){
-    // Use pointerdown (earliest user gesture) to beat wallet/app handlers
-    document.addEventListener('pointerdown', (e)=>{
-      const btn = e.target && e.target.closest('button, a, [role="button"]');
-      if (!btn || !isOpenNewTabButton(btn)) return;
+    const card = findExportCard(); if (!card) return;
 
-      // Stop the builder’s original handler (prevents reload)
-      try { e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); } catch(_){}
-      try { btn.blur(); } catch(_){}
+    // Find the existing two export buttons so we can place ours next to them
+    const dlBtn   = findButtonByText(card, /\bdownload\s*png\b/i);
+    const oldOpen = findButtonByText(card, /\bopen\s*in\s*new\s*tab\b/i);
 
-      openBlankNow();
-      // Generate URL and fill the tab right after
-      setTimeout(putImageIntoTab, 0);
-    }, true);
+    // Only show our safe button on Chrome. Leave Safari/others untouched.
+    const btn = makeSafeBtn();
+    btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); openInNewTabSafe(); }, false);
 
-    // Safety net: also kill the default click to avoid double‑handling/shaking
-    document.addEventListener('click', (e)=>{
-      const btn = e.target && e.target.closest('button, a, [role="button"]');
-      if (!btn || !isOpenNewTabButton(btn)) return;
-      try { e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); } catch(_){}
-    }, true);
+    if (dlBtn && dlBtn.parentElement){
+      dlBtn.parentElement.insertBefore(btn, dlBtn.nextSibling);
+    } else {
+      // fallback: put at the end of the export card
+      card.appendChild(btn);
+    }
+
+    // On Chrome, hide the original “Open in New Tab” to avoid user confusion + double handlers
+    if (isChrome && oldOpen){
+      oldOpen.style.display = 'none';
+    }
   }
 
   onReady(wire);
