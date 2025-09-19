@@ -6843,107 +6843,118 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_FORCE_v2 — replace the “Open in new tab” button with a safe handler ========== */
+/* ========== RA_PNG_NEWTAB_REPLACE_UI_v1 — hide original button; safe new-tab from Fabric dataURL ========== */
 (() => {
   function onReady(fn){
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
     else fn();
   }
 
-  // Find the download card/panel by looking for its button
+  // Find the existing "Open in new tab" control anywhere in the UI
+  function findNewTabControl(root=document){
+    const controls = Array.from(root.querySelectorAll('button, a'));
+    return controls.find(el => /open\s+(?:in|a)\s+new\s+tab/i.test((el.textContent||'').trim()));
+  }
+
+  // Find a nearby Download/PNG panel to place our safe button
   function findDownloadPanel(){
-    const btn = Array.from(document.querySelectorAll('button, a'))
-      .find(el => /open\s+in\s+new\s+tab|open\s+a\s+new\s+tab/i.test((el.textContent||'').trim()));
-    return btn ? (btn.closest('.card') || btn.parentElement) : null;
+    const anchor = findNewTabControl();
+    if (anchor) return anchor.closest('.card') || anchor.parentElement || document.body;
+    // fallback: a card that mentions download
+    const cards = Array.from(document.querySelectorAll('.card,section,div'));
+    return cards.find(el => /download\s*png/i.test((el.textContent||'').toLowerCase())) || document.body;
   }
 
-  // Try to locate an existing blob/data URL near the controls
-  function findImageUrl(panel){
-    if (!panel) return null;
-    // Common: an <a href="blob:..."> or <a href="data:image/...">
-    const a = panel.querySelector('a[href^="blob:"], a[href^="data:image/"]');
-    if (a && a.href) return a.href;
-    return null;
+  // Produce a dataURL from Fabric (self-contained; won’t be revoked if page reloads)
+  function snapshotPNG(){
+    try{
+      if (window.canvas && typeof window.canvas.toDataURL === 'function'){
+        // Use Fabric API for best fidelity
+        return window.canvas.toDataURL({ format:'png' }); // uses current pixel ratio
+      }
+      const c = (window.canvas && (canvas.getElement ? canvas.getElement() : canvas.lowerCanvasEl))
+             || document.querySelector('canvas');
+      return c ? c.toDataURL('image/png') : null;
+    }catch(_){ return null; }
   }
 
-  // Last-resort: render the visible canvas to PNG (may fail if canvas is tainted)
-  function canvasToPng(){
-    try {
-      const c = (window.canvas && (canvas.getElement ? canvas.getElement() : canvas.lowerCanvasEl)) ||
-                document.querySelector('canvas');
-      if (!c) return null;
-      return c.toDataURL('image/png');
-    } catch(_) { return null; }
-  }
-
-  function openInNewTab(url){
-    if (!url) return false;
+  // Open a tab and paint the image. Using dataURL ensures it stays even if the opener reloads.
+  function openPreview(dataUrl){
     const w = window.open('', '_blank', 'noopener');
-    if (!w) return false; // popup blocked
-    try {
+    if (!w) { alert('Please allow pop-ups to open the image in a new tab.'); return; }
+    try{
       w.document.title = 'PNG Preview';
       w.document.body.style.margin = '0';
       w.document.body.style.background = '#111';
       const img = w.document.createElement('img');
-      img.src = url;
+      img.src = dataUrl;
       img.style.display = 'block';
       img.style.maxWidth = '100%';
       img.style.height = 'auto';
       w.document.body.appendChild(img);
-      return true;
-    } catch(_) { return false; }
+    }catch(_){}
   }
 
-  function replaceButton(panel){
-    if (!panel) return false;
-
-    // Find the “Open in new tab” control (button or link)
-    const el = Array.from(panel.querySelectorAll('button, a'))
-      .find(e => /open\s+in\s+new\s+tab|open\s+a\s+new\s+tab/i.test((e.textContent||'').trim()));
-    if (!el) return false;
-
-    // Clone to drop all existing listeners/behaviors
-    const clone = el.cloneNode(true);
-
-    clone.addEventListener('click', (ev)=>{
-      try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
-
-      // 1) Prefer the app’s generated blob/data URL if present
-      let url = findImageUrl(panel);
-
-      // 2) Fallback: snapshot the visible canvas
-      if (!url) url = canvasToPng();
-
-      if (!url){
-        alert('Could not find the PNG. Try clicking “Download PNG” first, then “Open in new tab.”');
-        return;
-      }
-
-      if (!openInNewTab(url)){
-        alert('Please allow pop‑ups for this site to open the PNG in a new tab.');
+  function installShield(){
+    // Cancel any clicks on the original control anywhere in the capture phase
+    document.addEventListener('click', (ev)=>{
+      const t = ev.target && (ev.target.closest ? ev.target.closest('button, a') : null);
+      if (!t) return;
+      const txt = ((t.textContent||'').trim()).toLowerCase();
+      if (/open\s+(?:in|a)\s+new\s+tab/.test(txt)){
+        try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }catch(_){}
       }
     }, true);
+  }
 
-    // Swap it in place
-    el.replaceWith(clone);
+  function ensureSafeButton(){
+    const panel = findDownloadPanel();
+    if (!panel) return false;
 
-    // Also block any other anchors inside the panel that point to blob/data so they never navigate this tab
-    panel.addEventListener('click', (ev)=>{
-      const a = ev.target && ev.target.closest && ev.target.closest('a[href^="blob:"], a[href^="data:image/"]');
-      if (!a) return;
-      try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch(_){}
-      // Delegate to our own handler
-      const fake = panel.querySelector('button, a');
-      clone.click();
+    // Hide the original control if it exists
+    const orig = findNewTabControl(panel);
+    if (orig && orig.style) orig.style.display = 'none';
+
+    // If our button already exists, stop here
+    if (panel.querySelector('#raOpenNewTabSafe')) return true;
+
+    // Create a safe twin button
+    const safe = document.createElement((orig && orig.tagName === 'A') ? 'a' : 'button');
+    safe.id = 'raOpenNewTabSafe';
+    safe.textContent = (orig && (orig.textContent||'').trim()) || 'Open in new tab';
+    safe.className = orig ? orig.className : 'btn';
+    if (safe.tagName === 'A') safe.href = 'javascript:void(0)';
+
+    // Place it right after the original if we have one; else append to panel
+    if (orig && orig.parentElement){
+      orig.parentElement.insertBefore(safe, orig.nextSibling);
+    } else {
+      const row = panel.querySelector('.row') || panel;
+      row.appendChild(safe);
+    }
+
+    // Our safe click handler
+    safe.addEventListener('click', (ev)=>{
+      try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }catch(_){}
+      const dataUrl = snapshotPNG();
+      if (!dataUrl){
+        alert('Could not capture the canvas to PNG. Try using “Download PNG” instead.');
+        return;
+      }
+      openPreview(dataUrl);
     }, true);
 
     return true;
   }
 
   function boot(){
-    const panel = findDownloadPanel();
-    if (!panel){ setTimeout(boot, 300); return; }
-    replaceButton(panel);
+    installShield();
+    let tries = 0;
+    const iv = setInterval(()=>{
+      tries++;
+      const ok = ensureSafeButton();
+      if (ok || tries > 60) clearInterval(iv); // ~9s total
+    }, 150);
   }
 
   onReady(boot);
