@@ -6843,109 +6843,117 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_OVERRIDE_v6 — Chrome wallet-safe new tab (sync export, full stop of defaults) ========== */
+/* ========== RA_PNG_NEWTAB_REPLACE_v7 — Chrome wallet-safe, Safari untouched ========== */
 (() => {
-  if (window.__RA_NEWTAB_V6) return;
-  window.__RA_NEWTAB_V6 = true;
+  if (window.__RA_NEWTAB_V7) return;
+  window.__RA_NEWTAB_V7 = true;
+
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
   function C(){ return window.canvas || null; }
 
-  // Try to read the "Export quality" multiplier from the UI text (e.g., "HQ ×2")
+  // Read “HQ ×2/×4…” from the Export card; default ×2
   function readMultiplier(){
     try{
-      const card = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      const hdr = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
         .find(el => /export quality/i.test(el.textContent||''));
-      const box = card ? (card.closest('.card') || card.parentElement) : null;
-      const txt = (box && box.textContent || '').replace(/\s+/g,' ');
+      const card = hdr ? (hdr.closest('.card') || hdr.parentElement) : null;
+      const txt = (card && card.textContent || '').replace(/\s+/g,' ');
       const m = /[x×]\s*([0-9]+)/i.exec(txt);
       const n = m ? parseInt(m[1],10) : NaN;
-      return (Number.isFinite(n) && n >= 1 && n <= 6) ? n : 2; // default ×2
+      return (Number.isFinite(n) && n>=1 && n<=6) ? n : 2;
     }catch(_){ return 2; }
   }
 
   function makeDataURL(){
-    const c = C();
-    if (!c || !c.toDataURL) return null;
-    // Use a safe default multiplier if we can't read it
+    const c = C(); if (!c || !c.toDataURL) return null;
+    try{ c.requestRenderAll?.(); }catch(_){}
     const mult = readMultiplier();
     try{
-      // Fabric handles { format:'png', multiplier:n }
       return c.toDataURL({ format:'png', multiplier: mult });
     }catch(_){
-      // Fallback plain toDataURL
       try{ return c.toDataURL('image/png'); }catch(__){ return null; }
     }
   }
 
-  function openNewTabWith(dataUrl){
+  function openInFreshTab(dataUrl){
     if (!dataUrl) { alert('Could not render PNG.'); return; }
-    // Open a truly new tab, detached from the opener (wallet scripts can’t poke it)
-    const win = window.open('about:blank', '_blank', 'noopener,noreferrer');
-    if (!win) { alert('Popup blocked. Please allow popups for this site.'); return; }
+    const w = window.open('about:blank', '_blank', 'noopener,noreferrer');
+    if (!w) { alert('Popup blocked. Please allow popups.'); return; }
 
-    // Simple HTML to show the image and offer a download link
     const html = `
-      <!doctype html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Rebel Ants Export</title>
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>
-          html,body{height:100%;margin:0;background:#0b0c10;color:#eee}
-          .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box}
-          img{max-width:100%;height:auto;display:block}
-          .bar{position:fixed;right:12px;bottom:12px;background:rgba(0,0,0,.6);padding:6px 10px;border-radius:8px;font:12px system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
-          .bar a{color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.3);padding:4px 8px;border-radius:6px}
-        </style>
-      </head>
-      <body>
-        <div class="wrap"><img src="${dataUrl}" alt="Export"></div>
-        <div class="bar"><a href="${dataUrl}" download="rebel-ants.png">Download PNG</a></div>
-      </body>
-      </html>`;
-    try {
-      win.document.open();
-      win.document.write(html);
-      win.document.close();
-    } catch(_){
-      // As a last resort, navigate the new tab to the image URL
-      try { win.location.href = dataUrl; } catch(__){}
+      <!doctype html><html><head><meta charset="utf-8">
+      <title>Rebel Ants Export</title>
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;color:#eee}
+        .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box}
+        img{max-width:100%;height:auto;display:block}
+        .bar{position:fixed;right:12px;bottom:12px;background:rgba(0,0,0,.6);padding:6px 10px;border-radius:8px;font:12px system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
+        .bar a{color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.3);padding:4px 8px;border-radius:6px}
+      </style></head><body>
+      <div class="wrap"><img src="${dataUrl}" alt="Export"></div>
+      <div class="bar"><a href="${dataUrl}" download="rebel-ants.png">Download PNG</a></div>
+      </body></html>`;
+    try{
+      w.document.open(); w.document.write(html); w.document.close();
+    }catch(_){
+      // Last‑ditch fallback
+      try{ w.location.href = dataUrl; }catch(__){}
     }
   }
 
-  function isOpenNewTabButton(el){
-    const t = (el.textContent||'').trim().toLowerCase();
-    return /open\s+in\s+new\s+tab/.test(t);
+  // Find the real “Open in New Tab” control
+  function findOpenBtn(){
+    const nodes = Array.from(document.querySelectorAll('button,a'));
+    return nodes.find(el => /open\s*in\s*new\s*tab/i.test((el.textContent||'').trim()));
   }
 
-  function install(){
-    // Capture phase handler: stop absolutely everything else from running
-    const handler = (e) => {
-      const tgt = e.target;
-      if (!tgt) return;
-      // Button or link that says "Open in New Tab"
-      const btn = tgt.closest && tgt.closest('button, a');
-      if (!btn || !isOpenNewTabButton(btn)) return;
+  // Replace the original node to *remove* its built-in handler entirely
+  function replaceButton(orig){
+    if (!orig || orig.__raNewTabPatched) return false;
 
-      // Stop default navigation and any other listeners (very important)
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
+    const clone = orig.cloneNode(true);
+    clone.id = 'raOpenNewTabSafe';
+    clone.__raNewTabPatched = true;
+    clone.setAttribute('type','button');              // never submit
+    clone.className = orig.className || 'btn';        // keep styling
 
-      // Create PNG synchronously and open the preview tab
+    // Our click handler (Chrome fix). Safari is left alone (no replacement).
+    clone.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
       const dataUrl = makeDataURL();
-      openNewTabWith(dataUrl);
-    };
+      openInFreshTab(dataUrl);
+    }, { capture:true });
 
-    // Attach globally so we catch the click regardless of where the button lives
-    window.addEventListener('click', handler, true);  // capture phase
+    try { orig.parentNode.replaceChild(clone, orig); } catch(_){ return false; }
+    return true;
   }
 
-  // Wait for the DOM; if already ready, go now
+  function boot(){
+    // Do nothing on Safari (keeps Safari’s original good behavior)
+    if (isSafari) return;
+
+    let tries = 0;
+    const tryInstall = () => {
+      const btn = findOpenBtn();
+      if (btn && replaceButton(btn)) return;
+      if (++tries > 80) return;
+      setTimeout(tryInstall, 150);
+    };
+    tryInstall();
+
+    // If the UI re-renders later and puts the original back, patch again
+    const mo = new MutationObserver(() => {
+      const btn = findOpenBtn();
+      if (btn && !btn.__raNewTabPatched) replaceButton(btn);
+    });
+    mo.observe(document.documentElement, { childList:true, subtree:true });
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', install, { once:true });
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
   } else {
-    install();
+    boot();
   }
 })();
