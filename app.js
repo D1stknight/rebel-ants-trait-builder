@@ -6843,16 +6843,24 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_REPLACE_v7 — Chrome wallet-safe, Safari untouched ========== */
+/* ========== RA_PNG_NEWTAB_SAFE_BUTTON_v10 — Chrome-only replacement button; Safari untouched ========== */
 (() => {
-  if (window.__RA_NEWTAB_V7) return;
-  window.__RA_NEWTAB_V7 = true;
+  if (window.__RA_NEWTAB_V10) return;
+  window.__RA_NEWTAB_V10 = true;
 
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
   function C(){ return window.canvas || null; }
 
-  // Read “HQ ×2/×4…” from the Export card; default ×2
+  // Find the Export card's "Open in New Tab" and its sibling "Download PNG"
+  function findButtons(){
+    const all = Array.from(document.querySelectorAll('button,a'));
+    const openBtn = all.find(el => /open\s*in\s*new\s*tab/i.test((el.textContent||'').trim()));
+    const dlBtn   = all.find(el => /download\s*png/i.test((el.textContent||'').trim()));
+    return { openBtn, dlBtn };
+  }
+
+  // Read “HQ ×2/×3…” text from the Export card; fallback ×2
   function readMultiplier(){
     try{
       const hdr = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
@@ -6862,93 +6870,106 @@ async function loadTokenFromCollection(tokenId, col){
       const m = /[x×]\s*([0-9]+)/i.exec(txt);
       const n = m ? parseInt(m[1],10) : NaN;
       return (Number.isFinite(n) && n>=1 && n<=6) ? n : 2;
-    }catch(_){ return 2; }
+    } catch(_) { return 2; }
   }
 
-  function makeDataURL(){
-    const c = C(); if (!c || !c.toDataURL) return null;
+  function dataURLtoBlob(dataUrl){
+    try{
+      const parts = dataUrl.split(',');
+      const mime = (parts[0].match(/:(.*?);/)||[])[1] || 'image/png';
+      const bin  = atob(parts[1]||'');
+      const len  = bin.length;
+      const u8   = new Uint8Array(len);
+      for (let i=0;i<len;i++) u8[i] = bin.charCodeAt(i);
+      return new Blob([u8], { type: mime });
+    }catch(_){ return null; }
+  }
+
+  function renderPNGBlob(){
+    const c = C(); if (!c) return null;
     try{ c.requestRenderAll?.(); }catch(_){}
     const mult = readMultiplier();
-    try{
-      return c.toDataURL({ format:'png', multiplier: mult });
-    }catch(_){
-      try{ return c.toDataURL('image/png'); }catch(__){ return null; }
-    }
+    let url;
+    try { url = c.toDataURL({ format: 'png', multiplier: mult }); }
+    catch(_){ try { url = c.toDataURL('image/png'); } catch(__){ url = null; } }
+    return url ? dataURLtoBlob(url) : null;
   }
 
-  function openInFreshTab(dataUrl){
-    if (!dataUrl) { alert('Could not render PNG.'); return; }
-    const w = window.open('about:blank', '_blank', 'noopener,noreferrer');
-    if (!w) { alert('Popup blocked. Please allow popups.'); return; }
-
-    const html = `
-      <!doctype html><html><head><meta charset="utf-8">
-      <title>Rebel Ants Export</title>
-      <meta name="viewport" content="width=device-width,initial-scale=1">
-      <style>
-        html,body{height:100%;margin:0;background:#0b0c10;color:#eee}
-        .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box}
-        img{max-width:100%;height:auto;display:block}
-        .bar{position:fixed;right:12px;bottom:12px;background:rgba(0,0,0,.6);padding:6px 10px;border-radius:8px;font:12px system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
-        .bar a{color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.3);padding:4px 8px;border-radius:6px}
-      </style></head><body>
-      <div class="wrap"><img src="${dataUrl}" alt="Export"></div>
-      <div class="bar"><a href="${dataUrl}" download="rebel-ants.png">Download PNG</a></div>
-      </body></html>`;
-    try{
-      w.document.open(); w.document.write(html); w.document.close();
-    }catch(_){
-      // Last‑ditch fallback
-      try{ w.location.href = dataUrl; }catch(__){}
-    }
+  // Open the blob in a brand-new tab without touching the builder
+  function openBlobInTab(blob){
+    if (!blob){ alert('Could not create PNG.'); return; }
+    const w = window.open('', '_blank', 'noopener,noreferrer'); // brand-new tab
+    if (!w){ alert('Popup blocked. Please allow popups for this site.'); return; }
+    const objUrl = URL.createObjectURL(blob);
+    try { w.location.replace(objUrl); }
+    catch(_){ try { w.location.href = objUrl; } catch(__){} }
+    // Keep the URL alive long enough for the tab to load
+    setTimeout(()=>URL.revokeObjectURL(objUrl), 60000);
   }
 
-  // Find the real “Open in New Tab” control
-  function findOpenBtn(){
-    const nodes = Array.from(document.querySelectorAll('button,a'));
-    return nodes.find(el => /open\s*in\s*new\s*tab/i.test((el.textContent||'').trim()));
-  }
+  // Build our own safe button (Chrome only)
+  function ensureSafeButton(){
+    if (isSafari) return; // Safari works fine; leave original alone
+    const { openBtn, dlBtn } = findButtons();
+    if (!openBtn) return;
 
-  // Replace the original node to *remove* its built-in handler entirely
-  function replaceButton(orig){
-    if (!orig || orig.__raNewTabPatched) return false;
+    // If we already replaced this instance, stop
+    if (openBtn.__raReplaced) return;
 
-    const clone = orig.cloneNode(true);
-    clone.id = 'raOpenNewTabSafe';
-    clone.__raNewTabPatched = true;
-    clone.setAttribute('type','button');              // never submit
-    clone.className = orig.className || 'btn';        // keep styling
+    // Hide & neutralize original (prevent any handler from firing)
+    openBtn.__raReplaced = true;
+    openBtn.style.display = 'none';
+    try { openBtn.removeAttribute('href'); } catch(_){}
+    try { openBtn.onclick = null; } catch(_){}
 
-    // Our click handler (Chrome fix). Safari is left alone (no replacement).
-    clone.addEventListener('click', (e)=>{
-      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-      const dataUrl = makeDataURL();
-      openInFreshTab(dataUrl);
-    }, { capture:true });
+    // Insert our clone-looking safe button right after Download PNG (or where the old one was)
+    const parent = openBtn.parentElement || openBtn.closest('div') || openBtn;
+    const ref    = dlBtn && dlBtn.parentElement === parent ? dlBtn.nextSibling : openBtn.nextSibling;
 
-    try { orig.parentNode.replaceChild(clone, orig); } catch(_){ return false; }
-    return true;
-  }
+    const safe = document.createElement('button');
+    safe.type = 'button';
+    safe.id   = 'raOpenNewTabSafe';
+    safe.textContent = 'Open in New Tab';
+    safe.__raSafeBtn = true;
 
-  function boot(){
-    // Do nothing on Safari (keeps Safari’s original good behavior)
-    if (isSafari) return;
+    // Copy class names so it looks identical
+    safe.className = openBtn.className || 'btn';
 
-    let tries = 0;
-    const tryInstall = () => {
-      const btn = findOpenBtn();
-      if (btn && replaceButton(btn)) return;
-      if (++tries > 80) return;
-      setTimeout(tryInstall, 150);
+    // Our click handler (fully self-contained)
+    const onClick = (e)=>{
+      try{
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      }catch(_){}
+      const blob = renderPNGBlob();
+      openBlobInTab(blob);
     };
-    tryInstall();
 
-    // If the UI re-renders later and puts the original back, patch again
-    const mo = new MutationObserver(() => {
-      const btn = findOpenBtn();
-      if (btn && !btn.__raNewTabPatched) replaceButton(btn);
-    });
-    mo.observe(document.documentElement, { childList:true, subtree:true });
+    safe.addEventListener('click', onClick, { capture:true });
+
+    // Extra hardening: intercept delegated clicks that try to reach *any* element with our label
+    // (some frameworks attach capture handlers on containers)
+    const guard = (e)=>{
+      const t = e.target && (e.target.closest && e.target.closest('button,a'));
+      if (!t) return;
+      if (/open\s*in\s*new\s*tab/i.test((t.textContent||'').trim())){
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        onClick(e);
+      }
+    };
+    document.addEventListener('click', guard, true);
+
+    // Place the safe button
+    try { parent.insertBefore(safe, ref || null); }
+    catch(_){ try { parent.appendChild(safe); } catch(__){} }
+  }
+
+  // Try now, then watch for UI re-renders and re-apply
+  function boot(){
+    ensureSafeButton();
+    if (!isSafari){
+      const mo = new MutationObserver(()=> ensureSafeButton());
+      mo.observe(document.documentElement, { childList:true, subtree:true });
+    }
   }
 
   if (document.readyState === 'loading') {
