@@ -6843,139 +6843,87 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_BLOBHTML_v13 — Chrome-only, replace button, open HTML Blob tab ========== */
-(() => {
-  if (window.__RA_NEWTAB_V13) return;
-  window.__RA_NEWTAB_V13 = true;
-
-  const ua = navigator.userAgent;
-  const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
-  const isChromeFamily = !!window.chrome && !/Edg|OPR|Brave/i.test(ua);
-  if (!isChromeFamily) return; // only patch Chrome/Chromium; Safari/others work fine
-
-  const C = () => window.canvas || null;
-
-  function findExportCard(){
-    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el => /(^|\b)export(\b|$)/i.test((el.textContent||'').trim()));
-    return h ? (h.closest('.card') || h.parentElement) : null;
+/* ========== RA_PNG_NEWTAB_DIRECT_v7 — wallet‑safe “Open in New Tab” (Chrome & Safari) ========== */
+(()=>{
+  function onReady(fn){
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once:true });
+    } else { fn(); }
   }
-  function readMultiplier(card){
+  const C = ()=> window.canvas || null;
+
+  // Find the "Open in New Tab" control by visible text
+  function isOpenNewTabButton(el){
+    if (!el) return false;
+    const txt = (el.textContent || '').trim().toLowerCase();
+    return /open\s*in\s*new\s*tab/.test(txt);
+  }
+
+  let pendingWin = null;
+
+  // Open a blank tab immediately (keeps the user gesture)
+  function openBlankNow(){
     try{
-      const txt = (card && card.textContent || '').replace(/\s+/g,' ');
-      const m = /[x×]\s*([0-9]+)/i.exec(txt);
-      const n = m ? parseInt(m[1],10) : NaN;
-      // Keep it modest in the new-tab preview (download still uses your full setting)
-      return (Number.isFinite(n) && n >= 1) ? Math.min(n, 3) : 2;
-    }catch{ return 2; }
-  }
-
-  async function makePngBlob(mult){
-    const c = C(); if (!c) return null;
-    try { c.requestRenderAll?.(); } catch(_){}
-    let dataUrl;
-    try {
-      dataUrl = c.toDataURL({ format:'png', multiplier: mult });
-    } catch(_){
-      try { dataUrl = c.toDataURL('image/png'); } catch(__){ dataUrl = null; }
-    }
-    if (!dataUrl) return null;
-    // Convert dataURL → Blob (avoids using document.write and big data:html URLs)
-    const res = await fetch(dataUrl);
-    return await res.blob();
-  }
-
-  async function openInNewTabHTMLBlob(mult){
-    const imgBlob = await makePngBlob(mult);
-    if (!imgBlob) { alert('Could not create PNG'); return; }
-
-    const imgUrl = URL.createObjectURL(imgBlob);
-    const html = [
-      '<!doctype html><meta charset="utf-8"><title>Export PNG</title>',
-      '<style>html,body{height:100%;margin:0;background:#111;display:grid;place-items:center}',
-      'img{max-width:100%;max-height:100%;display:block}</style>',
-      `<img src="${imgUrl}" alt="Export PNG">`
-    ].join('');
-
-    const pageBlob = new Blob([html], { type:'text/html' });
-    const pageUrl  = URL.createObjectURL(pageBlob);
-
-    // Open the HTML blob in a brand new tab; detached from opener
-    const w = window.open(pageUrl, '_blank', 'noopener,noreferrer');
-    if (!w) { alert('Popup blocked. Allow popups for this site and try again.'); }
-
-    // Revoke later (keep generous timeout so the image doesn’t vanish)
-    setTimeout(() => { try{ URL.revokeObjectURL(pageUrl); }catch(_){ } }, 120000);
-    setTimeout(() => { try{ URL.revokeObjectURL(imgUrl); }catch(_){ } }, 180000);
-  }
-
-  function ensureSafeButton(){
-    const card = findExportCard(); if (!card) return;
-
-    // Remove any native "Open in New Tab" controls inside the card (anchors or buttons)
-    Array.from(card.querySelectorAll('a,button')).forEach(el=>{
-      const t = (el.textContent||'').trim().toLowerCase();
-      if (/open\s*in\s*new\s*tab/.test(t)) el.remove();
-    });
-
-    // Do we already have our safe button?
-    if (card.querySelector('#raOpenNewTabSafe')) return;
-
-    // Try to place right after "Download PNG" if possible
-    const btns = Array.from(card.querySelectorAll('button,a'));
-    const dl = btns.find(el => /download\s*png/i.test((el.textContent||'').trim()));
-
-    const safe = document.createElement('button');
-    safe.type = 'button';
-    safe.id = 'raOpenNewTabSafe';
-    safe.textContent = 'Open in New Tab';
-    safe.className = (dl && dl.className) || 'btn';
-    safe.addEventListener('click', async (e)=>{
-      try{ e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }catch(_){}
-      safe.disabled = true;
-      try { await openInNewTabHTMLBlob(readMultiplier(card)); }
-      finally { setTimeout(()=> safe.disabled = false, 1200); }
-    }, true);
-
-    if (dl && dl.parentElement){
-      dl.parentElement.insertBefore(safe, dl.nextSibling);
-    } else {
-      // Fallback: stick it near the top of the card
-      card.insertBefore(safe, card.firstElementChild ? card.firstElementChild.nextSibling : null);
-    }
-
-    // Guard: capture any clicks in this card that target a leftover “Open in New Tab” element re-inserted by the app
-    card.addEventListener('click', (e)=>{
-      const node = e.target && (e.target.closest ? e.target.closest('a,button') : null);
-      if (!node) return;
-      const t = (node.textContent||'').trim();
-      if (/open\s*in\s*new\s*tab/i.test(t) && node !== safe){
-        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-        safe.click();
+      pendingWin = window.open('', '_blank', 'noopener,noreferrer');
+      if (pendingWin && pendingWin.document) {
+        pendingWin.document.title = 'Preparing image…';
+        pendingWin.document.body.style.cssText =
+          'margin:0;background:#111;color:#bbb;display:flex;align-items:center;justify-content:center;font:14px system-ui;';
+        pendingWin.document.body.textContent = 'Preparing image…';
       }
+    } catch(_){ pendingWin = null; }
+  }
+
+  // Fill that tab with the PNG; if blocked, fall back to download
+  function putImageIntoTab(){
+    const c = C();
+    if (!c || !c.toDataURL) { if (pendingWin) try{ pendingWin.close(); }catch(_){ } pendingWin = null; return; }
+
+    let url = null;
+    try { url = c.toDataURL('image/png'); } catch(_){ url = null; }
+
+    if (!url){
+      if (pendingWin) {
+        pendingWin.document.body.textContent = 'Could not create PNG. Try “Download PNG”.';
+        pendingWin = null;
+      }
+      return;
+    }
+
+    if (pendingWin){
+      // Replace the temporary blank with the PNG URL
+      try { pendingWin.location.replace(url); } catch(_){}
+      pendingWin = null;
+    } else {
+      // Popup blocked → force a download in the same click
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = 'rebel-ants.png';
+      document.body.appendChild(a); a.click(); setTimeout(()=>a.remove(),0);
+    }
+  }
+
+  function wire(){
+    // Use pointerdown (earliest user gesture) to beat wallet/app handlers
+    document.addEventListener('pointerdown', (e)=>{
+      const btn = e.target && e.target.closest('button, a, [role="button"]');
+      if (!btn || !isOpenNewTabButton(btn)) return;
+
+      // Stop the builder’s original handler (prevents reload)
+      try { e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); } catch(_){}
+      try { btn.blur(); } catch(_){}
+
+      openBlankNow();
+      // Generate URL and fill the tab right after
+      setTimeout(putImageIntoTab, 0);
+    }, true);
+
+    // Safety net: also kill the default click to avoid double‑handling/shaking
+    document.addEventListener('click', (e)=>{
+      const btn = e.target && e.target.closest('button, a, [role="button"]');
+      if (!btn || !isOpenNewTabButton(btn)) return;
+      try { e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); } catch(_){}
     }, true);
   }
 
-  // Run now and keep the Export card tidy with a tiny, throttled observer (card only)
-  function boot(){
-    let tries = 0;
-    const tick = () => { tries++; ensureSafeButton(); if (tries < 12) setTimeout(tick, 250); };
-    tick();
-
-    const card = findExportCard();
-    if (!card) return;
-    let pending = false;
-    const mo = new MutationObserver(()=> {
-      if (pending) return;
-      pending = true;
-      setTimeout(()=> { pending = false; ensureSafeButton(); }, 120);
-    });
-    mo.observe(card, { childList:true, subtree:true });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
+  onReady(wire);
 })();
