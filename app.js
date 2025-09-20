@@ -799,7 +799,7 @@ canvas.requestRenderAll();
     const dataURL = exportDataURL(); if (!dataURL) return;
 
     // Open synchronously from the click gesture (popup‑safe)
-    const w = window.open('', '_blank', 'noopener,noreferrer');
+    const w = window.open('about:blank', '_blank', 'noopener,noreferrer');
     if (!w){ alert('Popup blocked. Allow popups for this site.'); return; }
 
     const html = `<!doctype html>
@@ -851,7 +851,13 @@ canvas.requestRenderAll();
         prevBtn.removeAttribute('target');
         prevBtn.setAttribute('rel','noopener');
       }
-      prevBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); previewInNewTab(); }, true);
+      prevBtn.addEventListener('click', (e)=>{
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();   // <— add this line
+  previewInNewTab();
+  return false;                    // <— and this (extra safety)
+}, true);
     }
   });
 })();
