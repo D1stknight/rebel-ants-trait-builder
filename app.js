@@ -389,26 +389,6 @@ canvas.requestRenderAll();
       await loadBaseImage(data, false);
     });
 
-    // -------- Base image: load by token ID (Reservoir)
-    safeAddListener("loadToken","click", async ()=>{
-      const id = ($("tokenIdInput") && $("tokenIdInput").value || "").trim();
-      const status = $("tokenStatus");
-      if (!id){ if(status) status.textContent="Enter a token ID."; return; }
-
-      if(status) status.textContent="Fetching token…";
-      try{
-        const imgUrl = await fetchImageByTokenId(CONTRACT, id);
-        if (!imgUrl){ if(status) status.textContent="No image URL found."; return; }
-        if(status) status.textContent="Downloading image…";
-        const data = await fetchAsDataURL(imgUrl);
-        await loadBaseImage(data, true);   // token ⇒ NO watermark
-        addOrUpdateTokenLabel(id);
-        if(status) status.textContent="Loaded 👍";
-      }catch(_){
-        if(status) status.textContent="Failed to load token image.";
-      }
-    });
-
     // -------- Canvas controls
     safeAddListener("zoomIn","click",  ()=> setZoom(zoom*1.1));
     safeAddListener("zoomOut","click", ()=> setZoom(zoom/1.1));
@@ -632,7 +612,7 @@ canvas.requestRenderAll();
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
           <strong>Admin Overlays</strong>
           <div style="display:flex;gap:6px;align-items:center;">
-            <button id="ra2Export"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
+            <button id="ra2"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
             <button id="ra2Hide"    style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
           </div>
         </div>
