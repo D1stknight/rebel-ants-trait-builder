@@ -6845,143 +6845,130 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_DUALSAFE_v1 — Safari no‑block + Chrome no‑reload (wallet) ========== */
+/* ========== RA_PNG_NEWTAB_DIRECTHTML_v1 — Chrome (wallet) blank‑tab fix; Safari OK ========== */
 (() => {
-  // --- helpers (simple + robust) ---
-  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-
-  function canvasRef(){
+  // Find the Fabric canvas safely
+  function C(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas, canvas.lower-canvas, canvas');
     if (!el) return null;
-    // Try common fabric references
-    for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
-      const v = el[k]; if (v && typeof v.toDataURL === 'function') return (window.canvas = v);
-    }
-    // Fallback: some builds expose the Fabric canvas as a property on window
-    for (const key in window) {
-      try {
-        const v = window[key];
-        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) return (window.canvas = v);
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  function getMultiplier(){
-    // Look for “HQ ×2”, “×3”, etc.
-    const el = document.getElementById('exportMultiplier')
-            || document.getElementById('exportQuality')
-            || Array.from(document.querySelectorAll('select,button,span,strong'))
-                 .find(n => /hq\s*×\s*\d/i.test((n.value||n.textContent||'')));
-    if (!el) return 2;
-    const m = parseInt((el.value || el.textContent || '').replace(/\D+/g,''),10);
-    return (m && m >= 1 && m <= 8) ? m : 2;
-  }
-
-  function findExportBox(){
-    // Any container near the "Download PNG" button
-    const dl = Array.from(document.querySelectorAll('button,a'))
-      .find(b => /download\s*png/i.test((b.textContent||'').trim()));
-    return dl ? (dl.closest('.card,.panel,section,div') || document.body) : null;
-  }
-
-  // Create/ensure our **real link** (looks like a button)
-  function ensureSafeLink(){
-    const box = findExportBox(); if (!box) return null;
-
-    // Hide old “Open in New Tab” to avoid accidental clicks
-    Array.from(box.querySelectorAll('a,button')).forEach(el=>{
-      const t = (el.textContent||'').replace(/\s+/g,' ').toLowerCase();
-      if (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) {
-        el.style.display = 'none';
-      }
-    });
-
-    // Add our new link once
-    let link = box.querySelector('#raOpenTabSafeLink');
-    if (!link){
-      link = document.createElement('a');
-      link.id = 'raOpenTabSafeLink';
-      link.textContent = 'Open in New Tab (Safe)';
-      link.target = '_blank';
-      link.rel = 'noopener';
-      // Style like your buttons
-      link.className = 'btn primary';
-      link.style.marginLeft = '8px';
-
-      // Place it next to Download PNG (or at the end of the Export actions row)
-      const dl = Array.from(box.querySelectorAll('button,a'))
-        .find(b => /download\s*png/i.test((b.textContent||'').trim()));
-      (dl && dl.parentElement) ? dl.parentElement.insertBefore(link, dl.nextSibling)
-                               : box.appendChild(link);
-    }
-    return link;
-  }
-
-  // Build a PNG data URL synchronously (fast, counts as the same user action)
-  function makeDataUrl(){
-    const c = canvasRef(); if (!c) return null;
-    const mult = getMultiplier();
     try {
-      return c.toDataURL({ format: 'png', multiplier: mult, enableRetinaScaling: true });
-    } catch(_) {
-      // Older Fabric syntax
-      try { return c.toDataURL('image/png'); } catch(_) { return null; }
+      // common fabric handles
+      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
+        const v = el[k];
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    } catch(_){}
+    // last resort: any object that looks like a fabric canvas
+    try {
+      for (const k in window) {
+        const v = window[k];
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    } catch(_){}
+    return window.canvas || null;
+  }
+
+  // Read the export multiplier (HQ ×2, etc.) if present; fallback = 2
+  function getMultiplier(){
+    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
+    if (!el) return 2;
+    const txt = (el.value || el.textContent || '').toString();
+    const n = parseInt(txt.replace(/\D+/g, ''), 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
+    return 2;
+  }
+
+  // Identify the “Open in new tab” style buttons/links by text
+  function matchOpenNewTabControl(node){
+    const el = node && node.closest && node.closest('button,a');
+    if (!el) return null;
+    const t = (el.textContent || '').replace(/\s+/g,' ').trim().toLowerCase();
+    // Be generous with matching; include both wordings you’ve used
+    return (/open.*new.*tab/.test(t) || /preview.*tab/.test(t)) ? el : null;
+  }
+
+  // Build a tiny HTML page that shows the PNG; no writing into the new tab
+  function makeHtmlBlobUrl(dataUrl){
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Preview</title>
+<style>
+  html,body{height:100%;margin:0;background:#0b0c10;}
+  .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+  img#raImg{
+    display:block; max-width:calc(100vw - 32px); max-height:calc(100vh - 32px);
+    width:auto; height:auto; box-shadow:0 8px 24px rgba(0,0,0,.5); border-radius:8px; image-rendering:auto;
+  }
+  .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+       color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
+</style></head>
+<body>
+  <div class="viewer"><img id="raImg" alt="export" src="${dataUrl}"/></div>
+  <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+  <script>
+    (function(){
+      var img = document.getElementById('raImg');
+      var fit = true;
+      function apply(){
+        if (fit){
+          img.style.maxWidth  = 'calc(100vw - 32px)';
+          img.style.maxHeight = 'calc(100vh - 32px)';
+          img.style.width = 'auto'; img.style.height = 'auto';
+        } else {
+          img.style.maxWidth  = 'none';
+          img.style.maxHeight = 'none';
+          img.style.width = 'auto'; img.style.height = 'auto';
+        }
+      }
+      img.addEventListener('click', function(){ fit = !fit; apply(); });
+      apply();
+    })();
+  </script>
+</body></html>`;
+    const blob = new Blob([html], { type:'text/html' });
+    const url  = URL.createObjectURL(blob);
+    // Auto-revoke after a minute (enough time to view/save)
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return url;
+  }
+
+  // Open the HTML blob in a new tab; no document writing, no opener access needed
+  function openPreviewTab(){
+    const c = C();
+    if (!c){ alert('Canvas not ready yet. Try again in a second.'); return; }
+
+    // Render PNG (sync) so the popup remains user-gesture safe
+    let dataUrl;
+    try{
+      const mult = getMultiplier();
+      dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+    }catch(err){
+      console.error(err);
+      alert('Preview failed. If the image came from a host without CORS, use “Download PNG” instead.');
+      return;
+    }
+
+    const htmlUrl = makeHtmlBlobUrl(dataUrl);
+    const w = window.open(htmlUrl, '_blank', 'noopener,noreferrer');
+    if (!w){
+      alert('Popup blocked. Please allow popups for this site and try again.');
     }
   }
 
-  function boot(){
-    const link = ensureSafeLink(); if (!link) { setTimeout(boot, 150); return; }
-
-    let openedWin = null;   // used on Chrome/wallet path
-
-    // 1) POINTERDOWN: prepare everything while it still counts as a user gesture.
-    link.addEventListener('pointerdown', (e) => {
-      const dataUrl = makeDataUrl();
-      if (!dataUrl) return; // nothing to do
-
-      if (isSafari){
-        // SAFARI: set real href for the *actual* link click; Safari won’t block this.
-        link.href = dataUrl;
-        // Do NOT preventDefault — let the browser navigate the link by itself.
-        openedWin = null;
-      }else{
-        // CHROME (esp. with wallet): open the tab now, before any other click handlers run.
-        openedWin = window.open('about:blank', '_blank', 'noopener');
-        if (!openedWin){
-          // Popup blocked? Fall back to real link navigation like Safari.
-          link.href = dataUrl;
-          openedWin = null;
-          return;
-        }
-        // Minimal viewer
-        openedWin.document.write(
-          '<!doctype html><title>Export</title>' +
-          '<style>html,body{height:100%;margin:0;background:#0b0c10;display:flex;align-items:center;justify-content:center}' +
-          'img{max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.5)}</style>' +
-          '<img id="raImg" alt="export">'
-        );
-        openedWin.document.close();
-        try { openedWin.document.getElementById('raImg').src = dataUrl; } catch(_){}
-      }
-    }, true); // capture = true (earlier than most handlers)
-
-    // 2) CLICK: if we already opened a window on pointerdown, stop the click so nothing else sees it.
-    link.addEventListener('click', (e) => {
-      if (openedWin){
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        e.stopPropagation();
-        openedWin = null; // clean for next time
-      }
-      // Safari path: we did not set openedWin, so the real <a> click just works.
-    }, true);
+  // Capture clicks on the existing control and replace with our behavior
+  function onClickCapture(e){
+    const el = matchOpenNewTabControl(e.target);
+    if (!el) return;
+    // Stop the default anchor behavior (which some wallet extensions hijack)
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    e.stopPropagation();
+    openPreviewTab();
+    return false;
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
+  // Wire once
+  document.addEventListener('click', onClickCapture, true);
 })();
