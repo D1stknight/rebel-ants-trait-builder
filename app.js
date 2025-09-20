@@ -746,34 +746,134 @@ canvas.requestRenderAll();
     }
   });
 
-  // ===============================
-  //  EXPORT (optional UI IDs: exportPng / openNewTab)
-  // ===============================
-  document.addEventListener("DOMContentLoaded", ()=>{
-    safeAddListener("exportPng",   "click", ()=> doExport(false));
-    safeAddListener("openNewTab",  "click", ()=> doExport(true));
-  });
-  function doExport(openTab){
-    if (!window.canvas) return;
-    const mult=parseInt(($("exportMultiplier")||{}).value||"2",10);
-    let dataURL;
-    try{
-      dataURL=canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
-    }catch(_){ alert("Export blocked (CORS). Use images with CORS headers or same-origin."); return; }
-    const prev = $("exportPreview"); if (prev) prev.src = dataURL;
-    const a=document.createElement("a"); a.href=dataURL; a.download="rebel-ant-overlay.png";
-    const manual=$("manualLink"); if (manual){ manual.href=dataURL; manual.textContent="Open last export (manual save)"; }
+ // ===============================
+//  EXPORT (stable: download + preview)
+//  - No builder reload (ever)
+//  - Works with wallet connected (Chrome) and Safari
+//  - Leaves a manual link to the last export
+// ===============================
+(() => {
+  function $(id){ return document.getElementById(id); }
 
-    if(openTab){
-      fetch(dataURL).then(r=>r.blob()).then(blob=>{
-        const url=URL.createObjectURL(blob);
-        const w=window.open(url,"_blank","noopener");
-        if(!w){ window.location.href=url; }
-      });
-    }else{
-      document.body.appendChild(a); a.click(); a.remove();
+  function getCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas, canvas.lower-canvas, canvas');
+    if (!el) return null;
+    // Try common fabric handles
+    for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
+      try {
+        const v = el[k];
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
+      } catch(_){}
+    }
+    // Last resort: scan window
+    try {
+      for (const k in window) {
+        const v = window[k];
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
+      }
+    } catch(_){}
+    return window.canvas || null;
+  }
+
+  function getMultiplier(){
+    const el = $('exportMultiplier') || $('exportQuality');
+    if (!el) return 2;
+    const n = parseInt(String(el.value || el.textContent || '').replace(/\D+/g,''),10);
+    return (Number.isFinite(n) && n >= 1 && n <= 8) ? n : 2;
+  }
+
+  function exportDataURL(){
+    const c = getCanvas();
+    if (!c){ alert('Canvas not ready.'); return null; }
+    try {
+      return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier:getMultiplier() });
+    } catch(_){
+      alert('Export blocked (CORS). Use same‑origin or CORS‑enabled images.');
+      return null;
     }
   }
+
+  function setManualLink(dataURL){
+    const manual = $('manualLink');
+    if (manual){
+      manual.href = dataURL;
+      manual.textContent = 'Open last export (manual save)';
+    }
+  }
+
+  function downloadPNG(){
+    const dataURL = exportDataURL(); if (!dataURL) return;
+    const a = document.createElement('a');
+    a.href = dataURL;
+    a.download = 'rebel-ant-overlay.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setManualLink(dataURL);
+  }
+
+  // Always open a blank tab synchronously, then WRITE the HTML with the PNG.
+  // (We never navigate the current tab; no blob URL fallback that could reload.)
+  function previewInNewTab(){
+    const dataURL = exportDataURL(); if (!dataURL) return;
+
+    // Open synchronously from the click gesture (popup‑safe)
+    const w = window.open('', '_blank', 'noopener,noreferrer');
+    if (!w){ alert('Popup blocked. Allow popups for this site.'); return; }
+
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Preview</title>
+<style>
+  html,body{height:100%;margin:0;background:#0b0c10;overflow:auto}
+  .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);
+      box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px}
+  .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+       color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
+</style></head>
+<body>
+  <div class="viewer"><img id="img" alt="export"/></div>
+  <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+  <script>
+    (function(){
+      var img = document.getElementById('img'), fit = true;
+      function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
+                        else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
+      img.addEventListener('click', function(){ fit = !fit; apply(); });
+      img.src = '${dataURL}';
+      apply();
+    })();
+  </script>
+</body></html>`;
+
+    try { w.document.open(); w.document.write(html); w.document.close(); }
+    catch(_){ /* very rare */ }
+
+    setManualLink(dataURL);
+  }
+
+  // Wire buttons (ids optional; we also fall back to matching by text)
+  function findByText(regex){
+    return Array.from(document.querySelectorAll('button,a')).find(el => regex.test((el.textContent||'').trim().toLowerCase()));
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    const dlBtn   = $('exportPng')  || findByText(/download\s*png/);
+    const prevBtn = $('openNewTab') || findByText(/open.*new.*tab|preview.*tab/);
+
+    if (dlBtn)   dlBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); downloadPNG(); }, true);
+
+    if (prevBtn){
+      // Neutralize native link behavior so nothing else navigates the page
+      if (prevBtn.tagName === 'A'){
+        prevBtn.removeAttribute('href');
+        prevBtn.removeAttribute('target');
+        prevBtn.setAttribute('rel','noopener');
+      }
+      prevBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); previewInNewTab(); }, true);
+    }
+  });
 })();
 
 /* =========================
@@ -961,149 +1061,6 @@ canvas.requestRenderAll();
   } else {
     install();
   }
-})();
-
-/* ==========================================================
-   RA_OPEN_NEW_TAB_VIEWER_V1
-   - Opens export in a NEW TAB
-   - Fits image to the browser window (no more giant render)
-   - Click image to toggle: Fit ↔ Actual size (100%)
-   Paste at the very bottom of app.js (replace any prior open-new-tab patch).
-   ========================================================== */
-(function RA_OPEN_NEW_TAB_VIEWER_V1(){
-  // Find Fabric canvas safely
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[k]; if (v && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    }catch(_){}
-    return null;
-  }
-
-  // Read export multiplier (HQ ×2 etc.)
-  function getMultiplier(){
-    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
-    if (el){
-      const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
-      if (v && v >= 1 && v <= 8) return v;
-    }
-    // fallback default
-    return 2;
-  }
-
-  // Pick the "Open in New Tab" control by label
-  function isOpenNewTabEl(node){
-    const el = node && node.closest && node.closest('button,a');
-    if (!el) return null;
-    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
-    return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
-  }
-
-  // Prevent native link from navigating current tab
-  function neutralizeLinkHref(){
-    const el = Array.from(document.querySelectorAll('a,button'))
-      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
-    if (el && el.tagName === 'A'){
-      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
-      el.setAttribute('href','javascript:void(0)');
-      el.removeAttribute('target');
-      el.setAttribute('rel','noopener');
-    }
-  }
-
-  // New‑tab viewer that fits the image to the viewport
-  function openNewTabViewer(){
-    const c = findCanvas();
-    if (!c){ alert('Canvas not ready'); return; }
-
-    // Open the tab synchronously (popup‑safe)
-    const win = window.open('', '_blank');
-    if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
-    win.document.title = 'Export';
-    win.document.head.innerHTML = `
-      <meta charset="utf-8">
-      <title>Export</title>
-      <style>
-        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
-        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
-        img#raImg{
-          display:block;
-          max-width:calc(100vw - 32px);
-          max-height:calc(100vh - 32px);
-          width:auto;height:auto;
-          box-shadow:0 8px 24px rgba(0,0,0,.5);
-          border-radius:8px;
-          image-rendering:auto;
-        }
-        .hud{
-          position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
-          color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none
-        }
-      </style>
-    `;
-    win.document.body.innerHTML = `
-      <div class="viewer"><img id="raImg" alt="export"/></div>
-      <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
-    `;
-
-    try{
-      const mult = getMultiplier();
-      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
-      const img = win.document.getElementById('raImg');
-      img.src = dataUrl;
-
-      // Fit ↔ Actual size toggle
-      let fit = true;
-      function applyFit(){
-        if (fit){
-          img.style.maxWidth  = 'calc(100vw - 32px)';
-          img.style.maxHeight = 'calc(100vh - 32px)';
-          img.style.width = 'auto';
-          img.style.height = 'auto';
-        } else {
-          img.style.maxWidth  = 'none';
-          img.style.maxHeight = 'none';
-          img.style.width = 'auto';  // natural size
-          img.style.height = 'auto';
-        }
-      }
-      img.addEventListener('click', ()=>{ fit = !fit; applyFit(); });
-      applyFit();
-    }catch(e){
-      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Try a different image or use a CORS‑enabled host.</div>';
-    }
-  }
-
-  // Capture click → always open in new tab viewer
-  let lastAt = 0;
-  function onClickCapture(e){
-    const el = isOpenNewTabEl(e.target);
-    if (!el) return;
-    const now = Date.now();
-    if (now - lastAt < 400){ e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false; }
-    lastAt = now;
-
-    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
-    openNewTabViewer();
-    return false;
-  }
-
-  function wire(){ neutralizeLinkHref(); }
-
-  wire();
-  document.addEventListener('click', onClickCapture, true);
-  new MutationObserver(wire).observe(document.body, { childList:true, subtree:true });
-  document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
 /* =========================================
