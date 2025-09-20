@@ -5638,14 +5638,16 @@ const shouldShow =
     return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
   }
 
-  function shouldShow(c){
-    const base = findBase(c);
-    if (!base) return true;                    // manual upload → show
-    const cc = toLower(base.const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : ''); || '');
-    if (!cc) return true;                      // no contract info → treat as manual
-    return (cc !== rebelContract());           // show on friends; hide on Rebel Ants
-  }
+ function shouldShow(c){
+  const base = findBase(c);
+  if (!base) return true; // manual upload → show the footer
 
+  // SAFE: read the contract tag we put on the base image, lower‑cased
+  const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : '');
+
+  if (!cc) return true;  // no contract info → treat as manual, show the footer
+  return (cc !== rebelContract()); // show on friends; hide on Rebel Ants
+}
   // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
     const c = C(); if (!c) return false;
