@@ -5641,7 +5641,7 @@ const shouldShow =
   function shouldShow(c){
     const base = findBase(c);
     if (!base) return true;                    // manual upload → show
-    const cc = toLower(base._tokenContract || '');
+    const cc = toLower(base.const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : ''); || '');
     if (!cc) return true;                      // no contract info → treat as manual
     return (cc !== rebelContract());           // show on friends; hide on Rebel Ants
   }
@@ -6843,131 +6843,143 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_OPEN_NEW_TAB_ANCHOR_BLOBONLY_v3 — force blob URL; hide old "Open in new tab" ========== */
+/* ========== RA_PNG_NEWTAB_DUALSAFE_v1 — Safari no‑block + Chrome no‑reload (wallet) ========== */
 (() => {
-  if (window.__RA_BLOBONLY_V3) return;
-  window.__RA_BLOBONLY_V3 = true;
+  // --- helpers (simple + robust) ---
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
-  const $  = (s, r=document) => r.querySelector(s);
-  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
-
-  // Find your Fabric canvas instance
-  function findCanvas(){
+  function canvasRef(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = $('canvas.upper-canvas, canvas.lower-canvas, canvas');
+    const el = document.querySelector('canvas.upper-canvas, canvas.lower-canvas, canvas');
     if (!el) return null;
-    // last-resort: look for a Fabric-like object on window
-    try {
-      for (const k of ['canvas','fabricCanvas','__canvas','fabric','__fabric']) {
-        const v = window[k];
-        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) return v;
-      }
-    } catch(_) {}
+    // Try common fabric references
+    for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
+      const v = el[k]; if (v && typeof v.toDataURL === 'function') return (window.canvas = v);
+    }
+    // Fallback: some builds expose the Fabric canvas as a property on window
+    for (const key in window) {
+      try {
+        const v = window[key];
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) return (window.canvas = v);
+      } catch (_) {}
+    }
     return null;
   }
 
-  // Read HQ ×N if present
   function getMultiplier(){
-    const el = $('#exportMultiplier') || $('#exportQuality');
+    // Look for “HQ ×2”, “×3”, etc.
+    const el = document.getElementById('exportMultiplier')
+            || document.getElementById('exportQuality')
+            || Array.from(document.querySelectorAll('select,button,span,strong'))
+                 .find(n => /hq\s*×\s*\d/i.test((n.value||n.textContent||'')));
     if (!el) return 2;
-    const raw = (el.value || el.textContent || '').replace(/\D+/g,'');
-    const n = parseInt(raw,10);
-    return (n && n>=1 && n<=8) ? n : 2;
+    const m = parseInt((el.value || el.textContent || '').replace(/\D+/g,''),10);
+    return (m && m >= 1 && m <= 8) ? m : 2;
   }
 
-  function findDownloadButton(){
-    // Used only to place our new button next to it
-    return $('#downloadPngBtn')
-        || $('#downloadPNG')
-        || $$('button,a').find(b => /download\s*png/i.test((b.textContent||'').trim()));
+  function findExportBox(){
+    // Any container near the "Download PNG" button
+    const dl = Array.from(document.querySelectorAll('button,a'))
+      .find(b => /download\s*png/i.test((b.textContent||'').trim()));
+    return dl ? (dl.closest('.card,.panel,section,div') || document.body) : null;
   }
 
-  // Hide any existing "Open in new tab" UI so it can't be clicked
-  function hideOldOpenButtons(){
-    $$('button,a').forEach(el=>{
-      const t = (el.textContent||'').toLowerCase();
-      if (/open\s*in\s*new\s*tab/.test(t)) {
-        if (!el.dataset.raSavedDisplay) el.dataset.raSavedDisplay = el.style.display || '';
+  // Create/ensure our **real link** (looks like a button)
+  function ensureSafeLink(){
+    const box = findExportBox(); if (!box) return null;
+
+    // Hide old “Open in New Tab” to avoid accidental clicks
+    Array.from(box.querySelectorAll('a,button')).forEach(el=>{
+      const t = (el.textContent||'').replace(/\s+/g,' ').toLowerCase();
+      if (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) {
         el.style.display = 'none';
-        if (el.tagName === 'A') {
-          if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
-          el.removeAttribute('href'); el.removeAttribute('target'); el.setAttribute('rel','noopener');
-        }
       }
     });
+
+    // Add our new link once
+    let link = box.querySelector('#raOpenTabSafeLink');
+    if (!link){
+      link = document.createElement('a');
+      link.id = 'raOpenTabSafeLink';
+      link.textContent = 'Open in New Tab (Safe)';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      // Style like your buttons
+      link.className = 'btn primary';
+      link.style.marginLeft = '8px';
+
+      // Place it next to Download PNG (or at the end of the Export actions row)
+      const dl = Array.from(box.querySelectorAll('button,a'))
+        .find(b => /download\s*png/i.test((b.textContent||'').trim()));
+      (dl && dl.parentElement) ? dl.parentElement.insertBefore(link, dl.nextSibling)
+                               : box.appendChild(link);
+    }
+    return link;
   }
 
-  // Export to a blob — this avoids data: URLs entirely
-  function exportToBlob(cb){
-    const c = findCanvas();
-    if (!c){ alert('Canvas not ready.'); return; }
+  // Build a PNG data URL synchronously (fast, counts as the same user action)
+  function makeDataUrl(){
+    const c = canvasRef(); if (!c) return null;
     const mult = getMultiplier();
-
-    // Prefer direct toBlob on the underlying canvas when available
     try {
-      const el = c.lowerCanvasEl || (c.getElement && c.getElement());
-      if (el && el.toBlob) {
-        el.toBlob((blob)=> cb(blob), 'image/png');
-        return;
-      }
-    } catch(_){}
-
-    // Fallback: toDataURL → convert to Blob
-    try {
-      const dataUrl = c.toDataURL({ format:'png', multiplier: mult });
-      const parts = dataUrl.split(','), mime = parts[0].match(/:(.*?);/)[1];
-      const bstr = atob(parts[1]); let n = bstr.length; const u8 = new Uint8Array(n);
-      while (n--) u8[n] = bstr.charCodeAt(n);
-      cb(new Blob([u8], { type: mime }));
-    } catch (e) {
-      console.error(e);
-      alert('Export failed.');
+      return c.toDataURL({ format: 'png', multiplier: mult, enableRetinaScaling: true });
+    } catch(_) {
+      // Older Fabric syntax
+      try { return c.toDataURL('image/png'); } catch(_) { return null; }
     }
   }
 
-  // Open via a temporary anchor (not window.open)
-  function openBlobInNewTab(blob){
-    if (!blob){ alert('No image to open.'); return; }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.target = '_blank'; a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    // Keep URL alive long enough; then clean up
-    setTimeout(()=>{ try{ a.remove(); }catch(_){}; try{ URL.revokeObjectURL(url); }catch(_){}; }, 120000);
-  }
+  function boot(){
+    const link = ensureSafeLink(); if (!link) { setTimeout(boot, 150); return; }
 
-  function insertSafeButton(){
-    const dl = findDownloadButton();
-    if (!dl) { setTimeout(insertSafeButton, 250); return; }
+    let openedWin = null;   // used on Chrome/wallet path
 
-    hideOldOpenButtons();
+    // 1) POINTERDOWN: prepare everything while it still counts as a user gesture.
+    link.addEventListener('pointerdown', (e) => {
+      const dataUrl = makeDataUrl();
+      if (!dataUrl) return; // nothing to do
 
-    if ($('#raPreviewSafe')) return;
-    const btn = document.createElement(dl.tagName || 'button');
-    btn.id = 'raPreviewSafe';
-    btn.textContent = 'Preview Tab (Safe)';
-    btn.className = dl.className || 'btn';
-    btn.style.whiteSpace = 'nowrap';
-    btn.style.marginLeft = '8px';
+      if (isSafari){
+        // SAFARI: set real href for the *actual* link click; Safari won’t block this.
+        link.href = dataUrl;
+        // Do NOT preventDefault — let the browser navigate the link by itself.
+        openedWin = null;
+      }else{
+        // CHROME (esp. with wallet): open the tab now, before any other click handlers run.
+        openedWin = window.open('about:blank', '_blank', 'noopener');
+        if (!openedWin){
+          // Popup blocked? Fall back to real link navigation like Safari.
+          link.href = dataUrl;
+          openedWin = null;
+          return;
+        }
+        // Minimal viewer
+        openedWin.document.write(
+          '<!doctype html><title>Export</title>' +
+          '<style>html,body{height:100%;margin:0;background:#0b0c10;display:flex;align-items:center;justify-content:center}' +
+          'img{max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.5)}</style>' +
+          '<img id="raImg" alt="export">'
+        );
+        openedWin.document.close();
+        try { openedWin.document.getElementById('raImg').src = dataUrl; } catch(_){}
+      }
+    }, true); // capture = true (earlier than most handlers)
 
-    if (dl.parentNode) dl.parentNode.insertBefore(btn, dl.nextSibling);
-    else document.body.appendChild(btn);
-
-    btn.addEventListener('click', (e)=>{
-      try{ e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }catch(_){}
-      exportToBlob(openBlobInNewTab);
-      return false;
+    // 2) CLICK: if we already opened a window on pointerdown, stop the click so nothing else sees it.
+    link.addEventListener('click', (e) => {
+      if (openedWin){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        e.stopPropagation();
+        openedWin = null; // clean for next time
+      }
+      // Safari path: we did not set openedWin, so the real <a> click just works.
     }, true);
   }
 
-  function boot(){
-    insertSafeButton();
-    // If the export panel re-renders, keep old button hidden and our button present
-    new MutationObserver(()=>{ hideOldOpenButtons(); if (!$('#raPreviewSafe')) insertSafeButton(); })
-      .observe(document.body, { childList:true, subtree:true });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
   }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
-  else boot();
 })();
