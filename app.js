@@ -6845,9 +6845,9 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_PREVIEW_SANDBOX_IFRAME_v1 — open-preview click isolated from page/wallet ========== */
+/* ========== RA_PNG_PREVIEW_SANDBOX_IFRAME_v2 — Chrome no‑reload + Safari allowed pop‑out ========== */
 (() => {
-  // ---- helpers (parent) ----
+  // ---- Find Fabric canvas and export scale ----
   function C(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas, canvas.lower-canvas, canvas');
@@ -6872,8 +6872,10 @@ async function loadTokenFromCollection(tokenId, col){
     const n = parseInt(String(el.value || el.textContent || '').replace(/\D+/g,''),10);
     return (Number.isFinite(n) && n >= 1 && n <= 8) ? n : 2;
   }
-  function makeHtmlBlobUrl(dataUrl){
-    const html = `<!doctype html>
+
+  // ---- Build the viewer HTML and URLs ----
+  function buildViewerHtml(dataUrl){
+    return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Preview</title>
 <style>
   html,body{height:100%;margin:0;background:#0b0c10;overflow:auto}
@@ -6897,63 +6899,74 @@ async function loadTokenFromCollection(tokenId, col){
     })();
   </script>
 </body></html>`;
+  }
+  function makeHtmlBlobUrl(html){
     const blob = new Blob([html], { type:'text/html' });
     const url  = URL.createObjectURL(blob);
     setTimeout(()=> URL.revokeObjectURL(url), 60_000);
     return url;
   }
 
-  // Answer the iframe’s request with the PNG viewer URL
+  // ---- Parent: reply to iframe with both blobUrl and raw dataUrl (fallback) ----
   function onMessage(ev){
     const d = ev && ev.data || {};
     if (!d || d.__raReq !== 'previewData') return;
     let dataUrl = '';
     try {
       const c = C(); if (!c) throw new Error('canvas not ready');
+      // Primary export
       dataUrl = c.toDataURL({ format:'png', multiplier:getMultiplier(), enableRetinaScaling:true });
     } catch(e){
-      console.error(e);
-      try { ev.source?.postMessage({ __raResp:'previewData', url:'' }, '*'); } catch(_){}
-      return;
+      // Fallback (no options)
+      try { dataUrl = C()?.toDataURL('image/png') || ''; } catch(_){}
     }
-    const url = makeHtmlBlobUrl(dataUrl);
-    try { ev.source?.postMessage({ __raResp:'previewData', url }, '*'); } catch(_){}
+    const html   = dataUrl ? buildViewerHtml(dataUrl) : buildViewerHtml('data:image/png;base64,');
+    const blobUrl= makeHtmlBlobUrl(html);
+    try { ev.source?.postMessage({ __raResp:'previewData', blobUrl, dataUrl }, '*'); } catch(_){}
   }
 
-  // Find the original "Open in New Tab" control by text
+  // ---- Find and neutralize the original “Open in New Tab” control ----
   function findOldOpen(){
     return Array.from(document.querySelectorAll('button,a')).find(el=>{
       const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
       return t === 'open in new tab' || /open.*new.*tab/.test(t) || t === 'preview tab' || /preview.*tab/.test(t);
     }) || null;
   }
+  function neutralizeOld(el){
+    if (!el) return;
+    // Remove href/target and stop it from receiving clicks
+    if (el.tagName === 'A'){
+      el.removeAttribute('href'); el.removeAttribute('target'); el.setAttribute('rel','noopener');
+    }
+    el.style.pointerEvents = 'none';
+    el.style.opacity = '0.55';
+    el.title = 'Use Pop‑out Preview';
+  }
 
+  // ---- Insert our sandboxed button right next to the old one ----
   function insertSandboxButton(nextTo){
     if (!nextTo || document.getElementById('raPreviewSandboxWrap')) return;
 
-    // Remove the original control completely so its handlers can’t fire
-    const parent = nextTo.parentNode;
-    try { nextTo.remove(); } catch(_) { nextTo.style.display = 'none'; }
-
-    // Wrapper + iframe (sandboxed so wallet/page scripts can’t intercept the click)
     const wrap = document.createElement('span');
     wrap.id = 'raPreviewSandboxWrap';
     wrap.style.display = 'inline-block';
     wrap.style.verticalAlign = 'middle';
+    wrap.style.marginLeft = '8px';
 
     const ifr = document.createElement('iframe');
     ifr.id = 'raPreviewSandbox';
-    ifr.sandbox = 'allow-scripts allow-popups';   // popups allowed; scripts allowed; no same-origin for safety
+    // NOTE: Safari needs allow-popups-to-escape-sandbox
+    ifr.sandbox = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
     ifr.referrerPolicy = 'no-referrer';
-    ifr.style.width  = (nextTo.offsetWidth  ? nextTo.offsetWidth+'px'  : '132px');
+    ifr.style.width  = (nextTo.offsetWidth  ? nextTo.offsetWidth+'px'  : '138px');
     ifr.style.height = (nextTo.offsetHeight ? nextTo.offsetHeight+'px' : '32px');
     ifr.style.border = '0';
     ifr.style.background = 'transparent';
 
     wrap.appendChild(ifr);
-    parent.insertBefore(wrap, parent.firstChild ? parent.firstChild.nextSibling : null);
+    nextTo.parentNode.insertBefore(wrap, nextTo.nextSibling);
 
-    // Minimal button UI inside iframe
+    // Button UI inside the iframe
     const html = `<!doctype html><html><head><meta charset="utf-8"><style>
       html,body{height:100%;margin:0}
       button{all:unset;display:inline-block;width:100%;height:100%;padding:8px 12px;box-sizing:border-box;
@@ -6967,6 +6980,9 @@ async function loadTokenFromCollection(tokenId, col){
       <script>
         (function(){
           var pending = null;
+          function tryWrite(win, html){
+            try{ win.document.open(); win.document.write(html); win.document.close(); return true; }catch(_){ return false; }
+          }
           function ask(){
             try{
               pending = window.open('about:blank','_blank');
@@ -6977,7 +6993,16 @@ async function loadTokenFromCollection(tokenId, col){
           window.addEventListener('message', function(ev){
             var d = ev && ev.data || {};
             if(d && d.__raResp === 'previewData' && pending){
-              try{ pending.location.replace(d.url || 'about:blank'); }catch(_){}
+              // First try fast path: navigate to blob URL
+              var ok = false;
+              try{ if (d.blobUrl){ pending.location.replace(d.blobUrl); ok = true; } }catch(_){}
+              // Fallback for strict browsers: write HTML with data URL directly
+              if (!ok && d.dataUrl){
+                var html = '<!doctype html><html><head><meta charset=\\'utf-8\\'><title>Preview</title></head>'+
+                           '<body style=\\'margin:0;background:#0b0c10;display:flex;align-items:center;justify-content:center;height:100%\\'>'+
+                           '<img src=\\''+d.dataUrl+'\\' style=\\'display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px\\'></body></html>';
+                tryWrite(pending, html);
+              }
               pending = null;
             }
           });
@@ -6986,6 +7011,7 @@ async function loadTokenFromCollection(tokenId, col){
       </script>
     </body></html>`;
     ifr.srcdoc = html;
+    neutralizeOld(nextTo);
   }
 
   function ensure(){
@@ -6996,7 +7022,6 @@ async function loadTokenFromCollection(tokenId, col){
   function boot(){
     ensure();
     window.addEventListener('message', onMessage);
-    // Keep it stable if the UI rerenders
     new MutationObserver(ensure).observe(document.body, { childList:true, subtree:true });
   }
 
