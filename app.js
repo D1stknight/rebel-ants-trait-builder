@@ -6845,21 +6845,19 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_NEWTAB_DIRECTHTML_v1 — Chrome (wallet) blank‑tab fix; Safari OK ========== */
+/* ========== RA_PNG_PREVIEW_POPOUT_SAFE_v2 — replace old control; Chrome wallet-safe; Safari OK ========== */
 (() => {
-  // Find the Fabric canvas safely
+  // 1) Get your Fabric canvas safely
   function C(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas, canvas.lower-canvas, canvas');
     if (!el) return null;
     try {
-      // common fabric handles
       for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
         const v = el[k];
         if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
       }
     } catch(_){}
-    // last resort: any object that looks like a fabric canvas
     try {
       for (const k in window) {
         const v = window[k];
@@ -6869,59 +6867,35 @@ async function loadTokenFromCollection(tokenId, col){
     return window.canvas || null;
   }
 
-  // Read the export multiplier (HQ ×2, etc.) if present; fallback = 2
+  // 2) Read export multiplier (HQ ×2, etc.); fallback = 2
   function getMultiplier(){
     const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
     if (!el) return 2;
-    const txt = (el.value || el.textContent || '').toString();
-    const n = parseInt(txt.replace(/\D+/g, ''), 10);
-    if (Number.isFinite(n) && n >= 1 && n <= 8) return n;
-    return 2;
+    const n = parseInt(String(el.value || el.textContent || '').replace(/\D+/g, ''), 10);
+    return (Number.isFinite(n) && n >= 1 && n <= 8) ? n : 2;
   }
 
-  // Identify the “Open in new tab” style buttons/links by text
-  function matchOpenNewTabControl(node){
-    const el = node && node.closest && node.closest('button,a');
-    if (!el) return null;
-    const t = (el.textContent || '').replace(/\s+/g,' ').trim().toLowerCase();
-    // Be generous with matching; include both wordings you’ve used
-    return (/open.*new.*tab/.test(t) || /preview.*tab/.test(t)) ? el : null;
-  }
-
-  // Build a tiny HTML page that shows the PNG; no writing into the new tab
+  // 3) Build a tiny HTML page that just shows the PNG; no DOM access from opener needed
   function makeHtmlBlobUrl(dataUrl){
     const html = `<!doctype html>
-<html><head><meta charset="utf-8">
-<title>Preview</title>
+<html><head><meta charset="utf-8"><title>Preview</title>
 <style>
   html,body{height:100%;margin:0;background:#0b0c10;}
   .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
-  img#raImg{
-    display:block; max-width:calc(100vw - 32px); max-height:calc(100vh - 32px);
-    width:auto; height:auto; box-shadow:0 8px 24px rgba(0,0,0,.5); border-radius:8px; image-rendering:auto;
-  }
+  img#raImg{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
+            box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
   .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
        color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
        background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
 </style></head>
 <body>
-  <div class="viewer"><img id="raImg" alt="export" src="${dataUrl}"/></div>
+  <div class="viewer"><img id="raImg" src="${dataUrl}" alt="export"/></div>
   <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
   <script>
     (function(){
-      var img = document.getElementById('raImg');
-      var fit = true;
-      function apply(){
-        if (fit){
-          img.style.maxWidth  = 'calc(100vw - 32px)';
-          img.style.maxHeight = 'calc(100vh - 32px)';
-          img.style.width = 'auto'; img.style.height = 'auto';
-        } else {
-          img.style.maxWidth  = 'none';
-          img.style.maxHeight = 'none';
-          img.style.width = 'auto'; img.style.height = 'auto';
-        }
-      }
+      var img = document.getElementById('raImg'), fit = true;
+      function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
+                        else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
       img.addEventListener('click', function(){ fit = !fit; apply(); });
       apply();
     })();
@@ -6929,46 +6903,78 @@ async function loadTokenFromCollection(tokenId, col){
 </body></html>`;
     const blob = new Blob([html], { type:'text/html' });
     const url  = URL.createObjectURL(blob);
-    // Auto-revoke after a minute (enough time to view/save)
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    setTimeout(()=> URL.revokeObjectURL(url), 60_000); // clean up later
     return url;
   }
 
-  // Open the HTML blob in a new tab; no document writing, no opener access needed
-  function openPreviewTab(){
+  // 4) Open a URL in a new tab via a temporary <a>; avoids window.open + noreferrer blanking
+  function openViaAnchor(url){
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';            // no 'noreferrer' (Chrome can blank blob tabs with it)
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=> a.remove(), 0);
+  }
+
+  // 5) Render PNG → make HTML → open
+  function doPreview(){
     const c = C();
     if (!c){ alert('Canvas not ready yet. Try again in a second.'); return; }
-
-    // Render PNG (sync) so the popup remains user-gesture safe
     let dataUrl;
-    try{
-      const mult = getMultiplier();
-      dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
-    }catch(err){
-      console.error(err);
-      alert('Preview failed. If the image came from a host without CORS, use “Download PNG” instead.');
+    try {
+      dataUrl = c.toDataURL({ format:'png', multiplier:getMultiplier(), enableRetinaScaling:true });
+    } catch (e){
+      console.error(e);
+      alert('Preview failed. If the image is from a host without CORS, use “Download PNG” instead.');
       return;
     }
-
     const htmlUrl = makeHtmlBlobUrl(dataUrl);
-    const w = window.open(htmlUrl, '_blank', 'noopener,noreferrer');
-    if (!w){
-      alert('Popup blocked. Please allow popups for this site and try again.');
-    }
+    openViaAnchor(htmlUrl);
   }
 
-  // Capture clicks on the existing control and replace with our behavior
-  function onClickCapture(e){
-    const el = matchOpenNewTabControl(e.target);
-    if (!el) return;
-    // Stop the default anchor behavior (which some wallet extensions hijack)
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    e.stopPropagation();
-    openPreviewTab();
-    return false;
+  // 6) Find the existing “Open in new tab / Preview Tab” control (and hide it)
+  function findOldControl(){
+    const els = Array.from(document.querySelectorAll('button, a'));
+    return els.find(el => /open\s*in\s*new\s*tab|preview\s*tab/i.test((el.textContent||'').replace(/\s+/g,' ')));
   }
 
-  // Wire once
-  document.addEventListener('click', onClickCapture, true);
+  // 7) Insert our safe button next to it
+  function ensureButton(){
+    const oldBtn = findOldControl();
+    if (!oldBtn || oldBtn.dataset.raPopoutSafe) return;
+
+    // Hide the old one so it can’t trigger extension hooks/navigation
+    oldBtn.style.display = 'none';
+    oldBtn.dataset.raPopoutSafe = 'hidden';
+
+    // Make our neutral-labeled button
+    const safe = document.createElement('button');
+    safe.type = 'button';
+    safe.className = oldBtn.className || 'btn';
+    safe.textContent = 'Pop‑out Preview';  // neutral label avoids extension pattern-matching
+    // match size/spacing
+    safe.style.marginLeft = '0'; safe.style.marginRight = '0';
+
+    // Place it where the old one was
+    oldBtn.parentNode.insertBefore(safe, oldBtn.nextSibling);
+
+    // Direct, synchronous click → render → open
+    safe.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); doPreview(); }, { passive:false });
+
+    // Extra safety: if someone clicks the hidden old control (keyboard focus), cancel it
+    oldBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); return false; }, true);
+  }
+
+  // 8) Run now and keep it present even if the UI re-renders
+  function boot(){
+    ensureButton();
+    // If your UI re-renders, keep our button
+    new MutationObserver(()=> ensureButton()).observe(document.body, { childList:true, subtree:true });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
 })();
