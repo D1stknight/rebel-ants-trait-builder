@@ -6845,9 +6845,9 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
-/* ========== RA_PNG_PREVIEW_POPOUT_SAFE_v3 — wallet-safe new tab + click-guard to stop reload ========== */
+/* ========== RA_PNG_PREVIEW_SANDBOX_IFRAME_v1 — open-preview click isolated from page/wallet ========== */
 (() => {
-  // ——— helpers ———
+  // ---- helpers (parent) ----
   function C(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas, canvas.lower-canvas, canvas');
@@ -6866,19 +6866,17 @@ async function loadTokenFromCollection(tokenId, col){
     } catch(_){}
     return window.canvas || null;
   }
-
   function getMultiplier(){
     const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
     if (!el) return 2;
-    const n = parseInt(String(el.value || el.textContent || '').replace(/\D+/g,''), 10);
+    const n = parseInt(String(el.value || el.textContent || '').replace(/\D+/g,''),10);
     return (Number.isFinite(n) && n >= 1 && n <= 8) ? n : 2;
   }
-
   function makeHtmlBlobUrl(dataUrl){
     const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Preview</title>
 <style>
-  html,body{height:100%;margin:0;background:#0b0c10}
+  html,body{height:100%;margin:0;background:#0b0c10;overflow:auto}
   .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
   img#raImg{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);
             box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px}
@@ -6905,102 +6903,101 @@ async function loadTokenFromCollection(tokenId, col){
     return url;
   }
 
-  function openViaAnchor(url){
-    const a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener';           // do NOT use 'noreferrer' (Chrome can blank blob tabs)
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(()=> a.remove(), 0);
-  }
-
-  function doPreview(){
-    const c = C();
-    if (!c){ alert('Canvas not ready yet. Try again in a second.'); return; }
-    let dataUrl;
+  // Answer the iframe’s request with the PNG viewer URL
+  function onMessage(ev){
+    const d = ev && ev.data || {};
+    if (!d || d.__raReq !== 'previewData') return;
+    let dataUrl = '';
     try {
+      const c = C(); if (!c) throw new Error('canvas not ready');
       dataUrl = c.toDataURL({ format:'png', multiplier:getMultiplier(), enableRetinaScaling:true });
-    } catch (e){
+    } catch(e){
       console.error(e);
-      alert('Preview failed. If the image source blocks CORS, use “Download PNG”.');
+      try { ev.source?.postMessage({ __raResp:'previewData', url:'' }, '*'); } catch(_){}
       return;
     }
-    openViaAnchor(makeHtmlBlobUrl(dataUrl));
+    const url = makeHtmlBlobUrl(dataUrl);
+    try { ev.source?.postMessage({ __raResp:'previewData', url }, '*'); } catch(_){}
   }
 
-  // ——— click-guard: swallow the click sequence ONLY for our button ———
-  const GUARD_MS = 600;
-  let guardUntil = 0;
-  function armGuard(){ guardUntil = Date.now() + GUARD_MS; }
-  function guarding(){ return Date.now() < guardUntil; }
-
-  // Capture-phase global blockers (run before most app/extension handlers)
-  ['pointerdown','mousedown','mouseup','click','pointerup'].forEach(type=>{
-    window.addEventListener(type, (e)=>{
-      if (!guarding()) return;
-      const t = e.target;
-      if (!t) return;
-      const btn = t.closest && t.closest('#raPopoutPreviewBtn');
-      if (!btn) return;
-      try { e.stopImmediatePropagation(); } catch(_){}
-      try { e.stopPropagation(); } catch(_){}
-      try { if (type !== 'pointerup' && type !== 'mouseup') e.preventDefault(); } catch(_){}
-    }, true); // capture
-  });
-
-  // ——— build/insert the safe button; hide the original one ———
-  function findOldControl(){
-    const els = Array.from(document.querySelectorAll('button, a'));
-    return els.find(el => /open\s*in\s*new\s*tab|preview\s*tab/i.test((el.textContent||'').replace(/\s+/g,' ')));
+  // Find the original "Open in New Tab" control by text
+  function findOldOpen(){
+    return Array.from(document.querySelectorAll('button,a')).find(el=>{
+      const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+      return t === 'open in new tab' || /open.*new.*tab/.test(t) || t === 'preview tab' || /preview.*tab/.test(t);
+    }) || null;
   }
 
-  function ensureButton(){
-    const oldBtn = findOldControl();
-    if (!oldBtn) return;
+  function insertSandboxButton(nextTo){
+    if (!nextTo || document.getElementById('raPreviewSandboxWrap')) return;
 
-    if (!oldBtn.dataset.raPopoutSafeHidden){
-      oldBtn.style.display = 'none';
-      oldBtn.dataset.raPopoutSafeHidden = '1';
-      // in case it’s focused via keyboard
-      oldBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); return false; }, true);
-    }
+    // Remove the original control completely so its handlers can’t fire
+    const parent = nextTo.parentNode;
+    try { nextTo.remove(); } catch(_) { nextTo.style.display = 'none'; }
 
-    if (document.getElementById('raPopoutPreviewBtn')) return;
+    // Wrapper + iframe (sandboxed so wallet/page scripts can’t intercept the click)
+    const wrap = document.createElement('span');
+    wrap.id = 'raPreviewSandboxWrap';
+    wrap.style.display = 'inline-block';
+    wrap.style.verticalAlign = 'middle';
 
-    const safe = document.createElement('button');
-    safe.type = 'button';
-    safe.id   = 'raPopoutPreviewBtn';
-    safe.className = oldBtn.className || 'btn';
-    safe.textContent = 'Pop‑out Preview';
+    const ifr = document.createElement('iframe');
+    ifr.id = 'raPreviewSandbox';
+    ifr.sandbox = 'allow-scripts allow-popups';   // popups allowed; scripts allowed; no same-origin for safety
+    ifr.referrerPolicy = 'no-referrer';
+    ifr.style.width  = (nextTo.offsetWidth  ? nextTo.offsetWidth+'px'  : '132px');
+    ifr.style.height = (nextTo.offsetHeight ? nextTo.offsetHeight+'px' : '32px');
+    ifr.style.border = '0';
+    ifr.style.background = 'transparent';
 
-    oldBtn.parentNode.insertBefore(safe, oldBtn.nextSibling);
+    wrap.appendChild(ifr);
+    parent.insertBefore(wrap, parent.firstChild ? parent.firstChild.nextSibling : null);
 
-    // Use pointerdown to arm the guard BEFORE other click handlers run.
-    safe.addEventListener('pointerdown', (e)=>{
-      armGuard();
-      // Slight delay to run preview outside the original click handler’s stack.
-      setTimeout(()=> doPreview(), 0);
-      // We still let the sequence fire, but the capture guard above swallows it.
-    }, { passive:false });
+    // Minimal button UI inside iframe
+    const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+      html,body{height:100%;margin:0}
+      button{all:unset;display:inline-block;width:100%;height:100%;padding:8px 12px;box-sizing:border-box;
+             border:1px solid rgba(255,255,255,.12);background:#1f2430;color:#e6e6e6;border-radius:8px;
+             font:600 12px/1 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;cursor:pointer}
+      button:hover{filter:brightness(1.08)}
+      button:active{transform:translateY(1px)}
+    </style></head>
+    <body>
+      <button id="go" type="button">Pop‑out Preview</button>
+      <script>
+        (function(){
+          var pending = null;
+          function ask(){
+            try{
+              pending = window.open('about:blank','_blank');
+              if(!pending){ alert('Popup blocked. Allow popups for this site.'); return; }
+            }catch(e){ alert('Popup blocked.'); return; }
+            parent.postMessage({ __raReq:'previewData' }, '*');
+          }
+          window.addEventListener('message', function(ev){
+            var d = ev && ev.data || {};
+            if(d && d.__raResp === 'previewData' && pending){
+              try{ pending.location.replace(d.url || 'about:blank'); }catch(_){}
+              pending = null;
+            }
+          });
+          document.getElementById('go').addEventListener('click', ask, { passive:false });
+        })();
+      </script>
+    </body></html>`;
+    ifr.srcdoc = html;
+  }
 
-    // Also guard keyboard activation (Enter/Space)
-    safe.addEventListener('keydown', (e)=>{
-      if (e.key === 'Enter' || e.key === ' '){
-        armGuard();
-        e.preventDefault();
-        setTimeout(()=> doPreview(), 0);
-      }
-    });
+  function ensure(){
+    const old = findOldOpen();
+    if (old) insertSandboxButton(old);
   }
 
   function boot(){
-    // Initial mount
-    ensureButton();
-    // Keep it stable if the UI re-renders
-    const mo = new MutationObserver(()=> ensureButton());
-    mo.observe(document.body, { childList:true, subtree:true });
+    ensure();
+    window.addEventListener('message', onMessage);
+    // Keep it stable if the UI rerenders
+    new MutationObserver(ensure).observe(document.body, { childList:true, subtree:true });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
