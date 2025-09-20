@@ -6843,3 +6843,131 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
+/* ========== RA_OPEN_NEW_TAB_ANCHOR_BLOBONLY_v3 — force blob URL; hide old "Open in new tab" ========== */
+(() => {
+  if (window.__RA_BLOBONLY_V3) return;
+  window.__RA_BLOBONLY_V3 = true;
+
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+  // Find your Fabric canvas instance
+  function findCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = $('canvas.upper-canvas, canvas.lower-canvas, canvas');
+    if (!el) return null;
+    // last-resort: look for a Fabric-like object on window
+    try {
+      for (const k of ['canvas','fabricCanvas','__canvas','fabric','__fabric']) {
+        const v = window[k];
+        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) return v;
+      }
+    } catch(_) {}
+    return null;
+  }
+
+  // Read HQ ×N if present
+  function getMultiplier(){
+    const el = $('#exportMultiplier') || $('#exportQuality');
+    if (!el) return 2;
+    const raw = (el.value || el.textContent || '').replace(/\D+/g,'');
+    const n = parseInt(raw,10);
+    return (n && n>=1 && n<=8) ? n : 2;
+  }
+
+  function findDownloadButton(){
+    // Used only to place our new button next to it
+    return $('#downloadPngBtn')
+        || $('#downloadPNG')
+        || $$('button,a').find(b => /download\s*png/i.test((b.textContent||'').trim()));
+  }
+
+  // Hide any existing "Open in new tab" UI so it can't be clicked
+  function hideOldOpenButtons(){
+    $$('button,a').forEach(el=>{
+      const t = (el.textContent||'').toLowerCase();
+      if (/open\s*in\s*new\s*tab/.test(t)) {
+        if (!el.dataset.raSavedDisplay) el.dataset.raSavedDisplay = el.style.display || '';
+        el.style.display = 'none';
+        if (el.tagName === 'A') {
+          if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
+          el.removeAttribute('href'); el.removeAttribute('target'); el.setAttribute('rel','noopener');
+        }
+      }
+    });
+  }
+
+  // Export to a blob — this avoids data: URLs entirely
+  function exportToBlob(cb){
+    const c = findCanvas();
+    if (!c){ alert('Canvas not ready.'); return; }
+    const mult = getMultiplier();
+
+    // Prefer direct toBlob on the underlying canvas when available
+    try {
+      const el = c.lowerCanvasEl || (c.getElement && c.getElement());
+      if (el && el.toBlob) {
+        el.toBlob((blob)=> cb(blob), 'image/png');
+        return;
+      }
+    } catch(_){}
+
+    // Fallback: toDataURL → convert to Blob
+    try {
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult });
+      const parts = dataUrl.split(','), mime = parts[0].match(/:(.*?);/)[1];
+      const bstr = atob(parts[1]); let n = bstr.length; const u8 = new Uint8Array(n);
+      while (n--) u8[n] = bstr.charCodeAt(n);
+      cb(new Blob([u8], { type: mime }));
+    } catch (e) {
+      console.error(e);
+      alert('Export failed.');
+    }
+  }
+
+  // Open via a temporary anchor (not window.open)
+  function openBlobInNewTab(blob){
+    if (!blob){ alert('No image to open.'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    // Keep URL alive long enough; then clean up
+    setTimeout(()=>{ try{ a.remove(); }catch(_){}; try{ URL.revokeObjectURL(url); }catch(_){}; }, 120000);
+  }
+
+  function insertSafeButton(){
+    const dl = findDownloadButton();
+    if (!dl) { setTimeout(insertSafeButton, 250); return; }
+
+    hideOldOpenButtons();
+
+    if ($('#raPreviewSafe')) return;
+    const btn = document.createElement(dl.tagName || 'button');
+    btn.id = 'raPreviewSafe';
+    btn.textContent = 'Preview Tab (Safe)';
+    btn.className = dl.className || 'btn';
+    btn.style.whiteSpace = 'nowrap';
+    btn.style.marginLeft = '8px';
+
+    if (dl.parentNode) dl.parentNode.insertBefore(btn, dl.nextSibling);
+    else document.body.appendChild(btn);
+
+    btn.addEventListener('click', (e)=>{
+      try{ e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }catch(_){}
+      exportToBlob(openBlobInNewTab);
+      return false;
+    }, true);
+  }
+
+  function boot(){
+    insertSafeButton();
+    // If the export panel re-renders, keep old button hidden and our button present
+    new MutationObserver(()=>{ hideOldOpenButtons(); if (!$('#raPreviewSafe')) insertSafeButton(); })
+      .observe(document.body, { childList:true, subtree:true });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
+})();
