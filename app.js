@@ -749,10 +749,25 @@ canvas.requestRenderAll();
   // ===============================
   //  EXPORT (optional UI IDs: exportPng / openNewTab)
   // ===============================
-  document.addEventListener("DOMContentLoaded", ()=>{
-    safeAddListener("exportPng",   "click", ()=> doExport(false));
-    safeAddListener("openNewTab",  "click", ()=> doExport(true));
-  });
+ document.addEventListener("DOMContentLoaded", ()=>{
+  // make sure the button cannot submit a surrounding <form>
+  const btn = $("openNewTab");
+  if (btn && btn.tagName === "BUTTON") btn.setAttribute("type","button");
+
+  safeAddListener("exportPng","click",()=> doExport(false));
+
+  safeAddListener("openNewTab", "click", (e) => {
+  // Stop the old handler and use the viewer that fits the image to the tab
+  e.preventDefault(); 
+  e.stopPropagation();
+  if (window.raOpenNewTabViewer) {
+    window.raOpenNewTabViewer();
+  } else {
+    // Safety fallback if the viewer hasn’t booted yet
+    doExport(true);
+  }
+});
+   
   function doExport(openTab){
     if (!window.canvas) return;
     const mult=parseInt(($("exportMultiplier")||{}).value||"2",10);
@@ -1001,12 +1016,16 @@ canvas.requestRenderAll();
   }
 
   // Pick the "Open in New Tab" control by label
-  function isOpenNewTabEl(node){
-    const el = node && node.closest && node.closest('button,a');
-    if (!el) return null;
-    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
-    return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
-  }
+ function isOpenNewTabEl(node){
+  const el = node && node.closest && node.closest('button,a,#openNewTab');
+  if (!el) return null;
+
+  // Match either the explicit control id or the text label
+  if (el.id === 'openNewTab') return el;
+
+  const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+  return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
+}
 
   // Prevent native link from navigating current tab
   function neutralizeLinkHref(){
@@ -1022,8 +1041,11 @@ canvas.requestRenderAll();
 
   // New‑tab viewer that fits the image to the viewport
   function openNewTabViewer(){
-    const c = findCanvas();
-    if (!c){ alert('Canvas not ready'); return; }
+  // Expose for the button wiring in EXPORT block
+  window.raOpenNewTabViewer = openNewTabViewer;
+
+  const c = findCanvas();
+  if (!c){ alert('Canvas not ready'); return; }
 
     // Open the tab synchronously (popup‑safe)
     const win = window.open('', '_blank');
