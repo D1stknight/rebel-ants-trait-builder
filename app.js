@@ -2555,17 +2555,21 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V3
-   • Presets for: Everything (viewport), Base only, Overlays only.
-   • Overlay presets now work even if "Everything" is selected (we auto-scope).
-   • Bigger, clearer overlay motions; normalized slide distances (work on any size).
-   • Added a chooseable Easing (Quad/Sine/Cubic/Back/Expo/Linear).
-   • Preview safe: state restored; undo/redo not spammed.
-   • Desktop/mobile layout untouched.
+   RA_ANIMATE_PREVIEW_VIDEO_V4
+   • Presets for: Everything (viewport), Base only, Overlays only, Text only.
+   • Overlay presets still auto-scope when "Everything" is selected.
+   • Broader, safer target detection (text/overlay/base).
+   • Recording: robust MIME selection (VP9→VP8→WebM→MP4 if supported),
+     captureStream FPS, auto download link, and safe fallbacks.
+   • Preview-safe: state restored; undo/redo not spammed; no layout changes.
    ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V3__) return; window.__RA_ANIM_V3__ = true;
+  if (window.__RA_ANIM_V4__) return; window.__RA_ANIM_V4__ = true;
 
+  const VERSION = '4.0.0';
+  const FPS = 30;
+
+  // ---------- Shortcuts ----------
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -2583,17 +2587,18 @@ document.addEventListener("DOMContentLoaded", ()=>{
   };
 
   // ---------- Presets ----------
-  // kind:'viewport' => whole scene via viewport (Everything).
-  // kind:'overlays' => only overlays/text/token label (works even if What: Everything is selected).
+  // kind:'viewport' => whole scene via camera (Everything).
+  // kind:'overlays' => overlay items (stickers, shapes, images that are not base/text).
+  // kind:'text'     => text/token ID only.
   // kind:'base'     => base image only.
   // Viewport params: z (zoom), x/y (normalized pan: -0.1..+0.1).
-  // Overlay/Base params: s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized to W/H).
+  // Object params (overlays/base/text): s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized W/H).
   const PRESETS = [
     // — Viewport / Everything —
     {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:+0.06}},
-{id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
-{id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
-{id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:-0.06}},
+    {id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
+    {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
+    {id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:-0.06}},
     {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
     {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
     {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
@@ -2603,18 +2608,18 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
 
     // — Overlays only —
-    {id:'ov_pop',     name:'Overlays/Text pop (scale)',           kind:'overlays', ease:'ioBack', from:{s:0.90},            to:{s:1.00}},
-    {id:'ov_slide_up',name:'Overlays/Text slide up',              kind:'overlays', ease:'ioSine', from:{dyN:0.14},          to:{dyN:0.00}},
-    {id:'ov_slide_dn',name:'Overlays/Text slide down',            kind:'overlays', ease:'ioSine', from:{dyN:-0.14},         to:{dyN:0.00}},
-    {id:'ov_slide_l', name:'Overlays/Text slide in ←',            kind:'overlays', ease:'ioSine', from:{dxN:-0.18},         to:{dxN:0.00}},
-    {id:'ov_slide_r', name:'Overlays/Text slide in →',            kind:'overlays', ease:'ioSine', from:{dxN: 0.18},         to:{dxN:0.00}},
-    {id:'ov_fade',    name:'Overlays/Text fade in',               kind:'overlays', ease:'ioCubic',from:{alpha:0.00},        to:{alpha:1.00}},
-    {id:'ov_wiggle',  name:'Overlays/Text tiny rotate',           kind:'overlays', ease:'ioSine', from:{rot:-5},            to:{rot:0}},
-    {id:'ov_pop_big', name:'Overlays/Text big pop (stronger)',    kind:'overlays', ease:'ioBack', from:{s:0.85},            to:{s:1.00}},
+    {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},     to:{s:1.00}},
+    {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},   to:{dyN:0.00}},
+    {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14},  to:{dyN:0.00}},
+    {id:'ov_slide_l',  name:'Overlays/Text slide in ←',         kind:'overlays', ease:'ioSine', from:{dxN:-0.18},  to:{dxN:0.00}},
+    {id:'ov_slide_r',  name:'Overlays/Text slide in →',         kind:'overlays', ease:'ioSine', from:{dxN: 0.18},  to:{dxN:0.00}},
+    {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00}, to:{alpha:1.00}},
+    {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},     to:{rot:0}},
+    {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},     to:{s:1.00}},
 
-    // — Base only (optional fun) —
-    {id:'base_nudge', name:'Base nudge (gentle zoom in)',     kind:'base',     ease:'ioSine', from:{s:1.00},          to:{s:1.06}},
-    {id:'base_slide', name:'Base slide right a bit',          kind:'base',     ease:'ioQuad', from:{dxN:-0.06},       to:{dxN:0.00}}
+    // — Base only —
+    {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},     to:{s:1.06}},
+    {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06},  to:{dxN:0.00}}
   ];
 
   // ---------- UI dock ----------
@@ -2629,13 +2634,15 @@ document.addEventListener("DOMContentLoaded", ()=>{
     dock.innerHTML = `
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <strong>Animate</strong>
+        <span style="opacity:.55;font-size:12px">v${VERSION}</span>
         <label style="display:flex;gap:6px;align-items:center">
           What:
-        <select id="raAnimScope">
-  <option value="all">Everything</option>
-  <option value="base">Base only</option>
-  <option value="overlays">Text & overlays</option>
-</select>
+          <select id="raAnimScope">
+            <option value="all">Everything (camera)</option>
+            <option value="base">Base only</option>
+            <option value="overlays">Overlays only</option>
+            <option value="text">Text only</option>
+          </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
           Preset:
@@ -2653,13 +2660,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
           </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
-          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" style="width:60px">s
+          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" step="0.1" style="width:60px">s
         </label>
         <button id="raAnimPreview" class="btn small">Preview</button>
         <button id="raAnimExport"  class="btn small">Export video</button>
         <span id="raAnimMsg" style="font-size:12px;opacity:.75;"></span>
       </div>
       <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+      <div id="raAnimDL" style="margin-top:6px"></div>
     `;
     host.appendChild(dock);
 
@@ -2688,161 +2696,228 @@ document.addEventListener("DOMContentLoaded", ()=>{
   }
 
   function msg(t){
-    const m = $('#raAnimMsg');
-    if (!m) return;
+    const m = $('#raAnimMsg'); if (!m) return;
     m.textContent = t||'';
-    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2000);
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2200);
   }
 
   // ---------- Helpers ----------
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const lerp=(a,b,t)=>a+(b-a)*t;
 
-  function findBaseObjs(c){ return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect); }
+  const isBg    = o => !!o._isBgRect;
+  const isBase  = o => !!(o._isBase && !o._isBgRect);
+  const isText  = o => {
+    const k = (o._kind||'').toLowerCase();
+    const t = (o.type||'').toLowerCase();
+    return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
+  };
+  const isOverlay = o => {
+    if (isBg(o) || isBase(o) || isText(o)) return false;
+    const k = (o._kind||'').toLowerCase();
+    // Treat any non-base/non-text drawable as overlay by default.
+    return k==='overlay' || k==='sticker' || k==='icon' || true;
+  };
+
   function pickTargets(c, scope){
-  const objs = (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase);
-  if (scope==='text')     return objs.filter(o => o._kind==='customText' || o._kind==='tokenId');
-  if (scope==='overlays') return objs.filter(o => o._kind==='overlay');
-  if (scope==='base')     return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect);
-  return []; // 'all' uses viewport animation only
-}
+    const objs = (c.getObjects?.()||[]).filter(o => !isBg(o));
+    if (scope==='text')     return objs.filter(isText);
+    if (scope==='overlays') return objs.filter(isOverlay);
+    if (scope==='base')     return objs.filter(isBase);
+    return []; // 'all' uses viewport animation only
+  }
 
   // ---------- Core ----------
   let running=false;
-async function run(record){
-  const c=C(); if(!c){ alert('Canvas not ready'); return; }
-  if (running) return;
+  let lastURL=null;
 
-  ensureDock();
-  const scopeEl = $('#raAnimScope');
-  const presetEl= $('#raAnimPreset');
-  const easeEl  = $('#raAnimEase');
-  const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
-  const dur     = Math.round(durSec*1000);
+  async function run(record){
+    const c=C(); if(!c){ alert('Canvas not ready'); return; }
+    if (running) return;
 
-  const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
-  const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
-  const scope   = scopeEl?.value || 'all';
+    ensureDock();
+    const scopeEl = $('#raAnimScope');
+    const presetEl= $('#raAnimPreset');
+    const easeEl  = $('#raAnimEase');
+    const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
+    const dur     = Math.round(durSec*1000);
 
-  const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
+    const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
+    const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
+    const scope   = scopeEl?.value || 'all';
 
-  // Decide mode/targets strictly via the UI scope + your pickTargets()
-  const viewportOnly = (preset.kind==='viewport' && scope==='all');
-  const targets = viewportOnly ? [] : (typeof pickTargets==='function' ? pickTargets(c, scope) : []);
+    const W=c.getWidth?.()||0, H=c.getHeight?.()||0, cx=W/2, cy=H/2;
 
-  // Guard rails for empty selections
-  if (!viewportOnly && targets.length===0){
-    if (scope==='base'){      msg('Load an image first'); return; }
-    if (scope==='overlays'){  msg('Add an overlay first'); return; }
-    if (scope==='text'){      msg('Add custom text or token ID first'); return; }
-  }
+    // Decide mode/targets strictly via the UI scope + pickTargets()
+    const viewportOnly = (preset.kind==='viewport' && scope==='all');
+    const targets = viewportOnly ? [] : pickTargets(c, scope);
 
-  running=true; msg(record?'Recording…':'Playing…');
-
-  // Save state
-  const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-  const active = c.getActiveObject(); c.discardActiveObject(); c.requestRenderAll();
-
-  // Snapshots for object animations
-  const snap = new Map();
-  const store = o => snap.set(o, { left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity });
-  targets.forEach(store);
-
-  // Optional recording
-  let rec, chunks=[];
-  if (record){
-    try{
-      const el = (c.lowerCanvasEl || c.upperCanvasEl);
-      const stream = el.captureStream ? el.captureStream(30) : null;
-      if (stream){
-        rec = new MediaRecorder(stream, { mimeType:'video/webm;codecs=vp9' });
-        rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
-        rec.start();
-      } else {
-        msg('Recording not supported');
-      }
-    }catch(_){ msg('Recording not supported'); }
-  }
-
-  const t0 = performance.now(); let rafId=0;
-
-  function applyViewport(z,xN,yN){
-    const e = (1 - z) * cx + xN * W;
-    const f = (1 - z) * cy + yN * H;
-    c.setViewportTransform([z,0,0,z, e, f]);
-  }
-
-  function step(now){
-    const raw = clamp((now - t0)/dur, 0, 1);
-    const t   = ease(raw);
-
-    if (viewportOnly){
-      const z  = lerp(preset.from.z, preset.to.z, t);
-      const xn = lerp(preset.from.x, preset.to.x, t);
-      const yn = lerp(preset.from.y, preset.to.y, t);
-      applyViewport(z, xn, yn);
-    } else {
-      const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
-      const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
-      const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
-
-      const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
-      const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
-      const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
-      const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
-
-      const dpx = dx + dxN*W;
-      const dpy = dy + dyN*H;
-
-      const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
-      const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
-      const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
-
-      targets.forEach(o=>{
-        const o0 = snap.get(o); if(!o0) return;
-        o.scaleX = o0.scaleX * s;
-        o.scaleY = o0.scaleY * s;
-        o.left   = o0.left + dpx;
-        o.top    = o0.top  + dpy;
-        if (hasRot)   o.angle   = o0.angle + rot;
-        if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
-        o.setCoords();
-      });
+    // Guard rails for empty selections
+    if (!viewportOnly && targets.length===0){
+      if (scope==='base'){      msg('Load an image first'); return; }
+      if (scope==='overlays'){  msg('Add an overlay first'); return; }
+      if (scope==='text'){      msg('Add custom text or token ID first'); return; }
     }
 
-    c.requestRenderAll();
-    if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
-  }
+    running=true; msg(record?'Recording…':'Playing…');
 
-  function finish(){
-    cancelAnimationFrame(rafId);
-    if (rec){
-      try{
-        rec.onstop = ()=>{
-          const blob = new Blob(chunks, {type:'video/webm'});
-          const url  = URL.createObjectURL(blob);
-          const vid  = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
-          msg('Done. Use the video menu to download.');
-        };
-        rec.stop();
-      }catch(_){}
-    } else {
-      msg('Done');
-    }
+    // Save state
+    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
+    const active = c.getActiveObject?.(); c.discardActiveObject?.(); c.requestRenderAll?.();
 
-    try { c.setViewportTransform(vt0); } catch(_){}
-    targets.forEach(o=>{
-      const s = snap.get(o); if(!s) return;
-      o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
-      o.setCoords();
+    // Snapshots for object animations
+    const snap = new Map();
+    const store = o => snap.set(o, {
+      left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY,
+      angle:o.angle, opacity:(o.opacity==null?1:o.opacity)
     });
-    if (active) try{ c.setActiveObject(active); }catch(_){}
-    c.requestRenderAll();
-    running=false;
+    targets.forEach(store);
+
+    // Clean previous URL if any
+    if (lastURL){ try{ URL.revokeObjectURL(lastURL); }catch(_){ } lastURL=null; }
+    $('#raAnimDL')?.replaceChildren?.();
+
+    // Optional recording
+    let rec, chunks=[];
+    const vidEl = $('#raAnimOut');
+    if (record){
+      try{
+        const el = (c.lowerCanvasEl || c.upperCanvasEl);
+        const stream = el?.captureStream ? el.captureStream(FPS) : null;
+        const type = pickMimeType();
+        if (stream && typeof MediaRecorder!=='undefined'){
+          const opts = type ? { mimeType:type } : undefined;
+          rec = new MediaRecorder(stream, opts);
+          rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
+          rec.start();
+        } else {
+          msg('Recording not supported in this browser');
+        }
+      }catch(_){ msg('Recording not supported'); }
+    }
+
+    const t0 = performance.now(); let rafId=0;
+
+    function applyViewport(z,xN,yN){
+      // Center-aware transform: translation keeps origin stable while panning by normalized canvas units
+      const e = (1 - z) * cx + xN * W;
+      const f = (1 - z) * cy + yN * H;
+      c.setViewportTransform?.([z,0,0,z, e, f]);
+    }
+
+    function step(now){
+      const raw = clamp((now - t0)/dur, 0, 1);
+      const t   = ease(raw);
+
+      if (viewportOnly){
+        const z  = lerp(preset.from.z, preset.to.z, t);
+        const xn = lerp(preset.from.x, preset.to.x, t);
+        const yn = lerp(preset.from.y, preset.to.y, t);
+        applyViewport(z, xn, yn);
+      } else {
+        const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
+        const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
+        const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
+
+        const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
+        const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
+        const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
+        const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
+
+        const dpx = dx + dxN*W;
+        const dpy = dy + dyN*H;
+
+        const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
+        const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
+        const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
+
+        targets.forEach(o=>{
+          const o0 = snap.get(o); if(!o0) return;
+          o.scaleX = o0.scaleX * s;
+          o.scaleY = o0.scaleY * s;
+          o.left   = o0.left + dpx;
+          o.top    = o0.top  + dpy;
+          if (hasRot)   o.angle   = o0.angle + rot;
+          if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
+          o.setCoords?.();
+        });
+      }
+
+      c.requestRenderAll?.();
+      if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
+    }
+
+    function finish(){
+      cancelAnimationFrame(rafId);
+
+      if (rec){
+        try{
+          rec.onstop = ()=>{
+            const type = rec.mimeType || 'video/webm';
+            const blob = new Blob(chunks, {type});
+            const url  = URL.createObjectURL(blob);
+            lastURL = url;
+
+            // Video element
+            if (vidEl){
+              vidEl.style.display='block';
+              vidEl.src = url;
+              vidEl.play?.().catch(()=>{});
+            }
+
+            // Download link
+            const dl = $('#raAnimDL');
+            if (dl){
+              dl.innerHTML = '';
+              const a = document.createElement('a');
+              a.textContent = 'Download animation';
+              a.href = url;
+              a.download = `animation_${Date.now()}.${extFromMime(type)}`;
+              a.className = 'btn small';
+              dl.appendChild(a);
+            }
+
+            msg('Done. Preview above or use “Download animation”.');
+          };
+          rec.stop();
+        }catch(_){ /* ignore */ }
+      } else {
+        msg('Done');
+      }
+
+      // Restore state
+      try { c.setViewportTransform?.(vt0); } catch(_){}
+      targets.forEach(o=>{
+        const s = snap.get(o); if(!s) return;
+        o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
+        o.setCoords?.();
+      });
+      if (active) try{ c.setActiveObject?.(active); }catch(_){}
+      c.requestRenderAll?.();
+      running=false;
+    }
+
+    requestAnimationFrame(step);
   }
 
-  requestAnimationFrame(step);
-}
+  // ---------- Utilities ----------
+  function pickMimeType(){
+    const pref = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4' // may be unsupported in many browsers for MediaRecorder
+    ];
+    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
+    for (const t of pref){ if (MediaRecorder.isTypeSupported(t)) return t; }
+    return '';
+  }
+  function extFromMime(t){
+    if (!t) return 'webm';
+    if (t.includes('mp4')) return 'mp4';
+    return 'webm';
+  }
+
   // Build UI now/when ready
   if (document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded', ensureDock, {once:true});
