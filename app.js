@@ -873,6 +873,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
     }
   };
 });
+  })();
+
 /* =========================
    RA_CANVAS_RESIZE_SYNC_ONLY_V8
    ========================= */
