@@ -748,26 +748,25 @@ canvas.requestRenderAll();
 
 // ===============================
 //  EXPORT (optional UI IDs: exportPng / openNewTab)
+//  — self-contained: includes the New Tab viewer (fit ↔ actual size)
 // ===============================
 document.addEventListener("DOMContentLoaded", ()=>{
-  // make sure the button cannot submit a surrounding <form>
-  const btn = $("openNewTab");
-  if (btn && btn.tagName === "BUTTON") btn.setAttribute("type","button");
+  // Make sure the UI button can’t submit a surrounding <form>
+  const openBtn = $("openNewTab");
+  if (openBtn && openBtn.tagName === "BUTTON") openBtn.setAttribute("type","button");
 
+  // Regular PNG download
   safeAddListener("exportPng","click",()=> doExport(false));
 
+  // New‑tab viewer (prevents Chrome navigating the current tab)
   safeAddListener("openNewTab", "click", (e) => {
-    // Stop the old handler and use the viewer that fits the image to the tab
     e.preventDefault();
     e.stopPropagation();
-    if (window.raOpenNewTabViewer) {
-      window.raOpenNewTabViewer();
-    } else {
-      // Safety fallback if the viewer hasn’t booted yet
-      doExport(true);
-    }
+    // Open the viewer
+    raOpenNewTabViewer();
   });
 
+  // High‑quality PNG export used by both paths
   function doExport(openTab){
     if (!window.canvas) return;
     const mult = parseInt(($("exportMultiplier")||{}).value||"2",10);
@@ -779,23 +778,101 @@ document.addEventListener("DOMContentLoaded", ()=>{
       return;
     }
     const prev = $("exportPreview"); if (prev) prev.src = dataURL;
-    const a = document.createElement("a"); a.href = dataURL; a.download = "rebel-ant-overlay.png";
-    const manual = $("manualLink"); if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
 
-    if(openTab){
+    // Manual “save last export” link (if present in UI)
+    const manual = $("manualLink");
+    if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
+
+    if (openTab){
+      // Fallback path (rarely needed since we have a nicer viewer below)
       fetch(dataURL).then(r=>r.blob()).then(blob=>{
         const url = URL.createObjectURL(blob);
         const w = window.open(url,"_blank","noopener");
         if(!w){ window.location.href = url; }
       });
     }else{
+      const a = document.createElement("a");
+      a.href = dataURL; a.download = "rebel-ant-overlay.png";
       document.body.appendChild(a); a.click(); a.remove();
     }
   }
+
+  // ---- Inline, popup‑safe viewer that fits to the browser tab ----
+  // Exposed globally so other code can reuse: window.raOpenNewTabViewer()
+  window.raOpenNewTabViewer = function raOpenNewTabViewer(){
+    if (!window.canvas){ alert("Canvas not ready"); return; }
+
+    // Open a blank tab synchronously (avoids popup blockers)
+    const win = window.open("", "_blank", "noopener");
+    if (!win){ alert("Popup blocked. Allow popups for this site."); return; }
+
+    // Minimal head+styles
+    win.document.title = "Export";
+    win.document.head.innerHTML = `
+      <meta charset="utf-8">
+      <title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img#raImg{
+          display:block;
+          max-width:calc(100vw - 32px);
+          max-height:calc(100vh - 32px);
+          width:auto;height:auto;
+          box-shadow:0 8px 24px rgba(0,0,0,.5);
+          border-radius:8px;
+          image-rendering:auto;
+        }
+        .hud{
+          position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+          color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none
+        }
+      </style>
+    `;
+    win.document.body.innerHTML = `
+      <div class="viewer"><img id="raImg" alt="export"/></div>
+      <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+    `;
+
+    // Read export multiplier from UI (1..8), default 2
+    const multEl = document.getElementById("exportMultiplier") || document.getElementById("exportQuality");
+    let mult = 2;
+    if (multEl){
+      const v = parseInt((multEl.value||multEl.textContent||"").replace(/\D+/g,""),10);
+      if (v && v>=1 && v<=8) mult = v;
+    }
+
+    try{
+      const dataUrl = canvas.toDataURL({ format:"png", multiplier: mult, enableRetinaScaling:true });
+      const img = win.document.getElementById("raImg");
+      img.src = dataUrl;
+
+      // Fit ↔ Actual size toggle
+      let fit = true;
+      function applyFit(){
+        if (fit){
+          img.style.maxWidth  = "calc(100vw - 32px)";
+          img.style.maxHeight = "calc(100vh - 32px)";
+          img.style.width = "auto";
+          img.style.height = "auto";
+        } else {
+          img.style.maxWidth  = "none";
+          img.style.maxHeight = "none";
+          img.style.width = "auto";  // natural size
+          img.style.height = "auto";
+        }
+      }
+      img.addEventListener("click", ()=>{ fit = !fit; applyFit(); });
+      applyFit();
+    }catch(e){
+      win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">' +
+        'Export failed (CORS/security). Try a different image or use a CORS‑enabled host.' +
+        '</div>';
+    }
+  };
 });
-})(); // <-- closes the very first (function(){ ... at the top)
-
-
 /* =========================
    RA_CANVAS_RESIZE_SYNC_ONLY_V8
    ========================= */
@@ -951,60 +1028,30 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_OPEN_NEW_TAB_VIEWER_V1
+   RA_OPEN_NEW_TAB_VIEWER_V2 — Chrome-safe (no same-tab nav)
+   - Replaces any prior "open-new-tab" patch.
+   - Always prevents default navigation in the current tab.
+   - Opens a blank tab synchronously, then fills it with a
+     fitted PNG preview. No window.location fallback.
    ========================================================== */
-(function RA_OPEN_NEW_TAB_VIEWER_V1(){
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[k]; if (v && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
-      }
-    }
-    try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    }catch(_){}
-    return null;
+(function RA_OPEN_NEW_TAB_VIEWER_V2(){
+  function canvas(){
+    return (window.canvas && typeof window.canvas.toDataURL === 'function')
+      ? window.canvas : null;
   }
 
   function getMultiplier(){
     const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
-    if (el){
-      const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
-      if (v && v >= 1 && v <= 8) return v;
-    }
-    return 2;
+    if (!el) return 2;
+    const v = parseInt((el.value || el.textContent || '').replace(/\D+/g,''), 10);
+    return (v && v >= 1 && v <= 8) ? v : 2;
   }
 
-  function isOpenNewTabEl(node){
-    const el = node && node.closest && node.closest('button,a,#openNewTab');
-    if (!el) return null;
-    if (el.id === 'openNewTab') return el;
-    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
-    return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
-  }
-
-  function neutralizeLinkHref(){
-    const el = Array.from(document.querySelectorAll('a,button'))
-      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
-    if (el && el.tagName === 'A'){
-      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
-      el.setAttribute('href','javascript:void(0)');
-      el.removeAttribute('target');
-      el.setAttribute('rel','noopener');
-    }
-  }
-
-  function openNewTabViewer(){
-    const c = findCanvas();
-    if (!c){ alert('Canvas not ready'); return; }
-
-    const win = window.open('', '_blank');
+  function openViewerWithDataURL(dataUrl){
+    // Open synchronously (popup-safe)
+    const win = window.open('', '_blank', 'noopener,noreferrer');
     if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
+
     win.document.title = 'Export';
     win.document.head.innerHTML = `
       <meta charset="utf-8">
@@ -1020,6 +1067,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
           box-shadow:0 8px 24px rgba(0,0,0,.5);
           border-radius:8px;
           image-rendering:auto;
+          cursor: zoom-in;
         }
         .hud{
           position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
@@ -1032,67 +1080,81 @@ document.addEventListener("DOMContentLoaded", ()=>{
       <div class="viewer"><img id="raImg" alt="export"/></div>
       <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
     `;
+    const img = win.document.getElementById('raImg');
+    img.src = dataUrl;
 
+    let fit = true;
+    function applyFit(){
+      if (fit){
+        img.style.maxWidth  = 'calc(100vw - 32px)';
+        img.style.maxHeight = 'calc(100vh - 32px)';
+        img.style.width = 'auto';
+        img.style.height = 'auto';
+        img.style.cursor = 'zoom-in';
+      } else {
+        img.style.maxWidth  = 'none';
+        img.style.maxHeight = 'none';
+        img.style.width = 'auto';
+        img.style.height = 'auto';
+        img.style.cursor = 'zoom-out';
+      }
+    }
+    img.addEventListener('click', ()=>{ fit = !fit; applyFit(); });
+    applyFit();
+  }
+
+  function renderAndOpen(){
+    const c = canvas();
+    if (!c){ alert('Canvas not ready'); return; }
     try{
       const mult = getMultiplier();
       const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
-      const img = win.document.getElementById('raImg');
-      img.src = dataUrl;
-
-      let fit = true;
-      function applyFit(){
-        if (fit){
-          img.style.maxWidth  = 'calc(100vw - 32px)';
-          img.style.maxHeight = 'calc(100vh - 32px)';
-          img.style.width = 'auto';
-          img.style.height = 'auto';
-        } else {
-          img.style.maxWidth  = 'none';
-          img.style.maxHeight = 'none';
-          img.style.width = 'auto';
-          img.style.height = 'auto';
-        }
-      }
-      img.addEventListener('click', ()=>{ fit = !fit; applyFit(); });
-      applyFit();
+      openViewerWithDataURL(dataUrl);
     }catch(e){
-      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Try a different image or use a CORS‑enabled host.</div>';
+      alert('Export blocked (CORS). Use images with CORS headers or same-origin.');
     }
   }
 
-  let lastAt = 0;
-  function onClickCapture(e){
-    const el = isOpenNewTabEl(e.target);
-    if (!el) return;
-    const now = Date.now();
-    if (now - lastAt < 400){ e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false; }
-    lastAt = now;
+  // Recognize "Open in New Tab" controls by id or label text
+  function looksLikeOpenNewTab(el){
+    const id = (el.id||'').toLowerCase();
+    if (id === 'opennewtab') return true;
+    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+    return /^open in new tab$/.test(t) || /open.*new.*tab/.test(t);
+  }
 
+  function neutralizeAnchors(){
+    // Prevent default navigation on anchors that look like "Open in new tab"
+    Array.from(document.querySelectorAll('a,button')).forEach(n=>{
+      if (!looksLikeOpenNewTab(n)) return;
+      if (n.tagName === 'A'){
+        if (!n.dataset.raSavedHref) n.dataset.raSavedHref = n.getAttribute('href') || '';
+        n.setAttribute('href','javascript:void(0)');
+        n.removeAttribute('target');
+        n.setAttribute('rel','noopener');
+      }
+    });
+  }
+
+  // Capture clicks early and stop them from bubbling to any legacy handlers
+  function onClickCapture(e){
+    const el = e.target && e.target.closest && e.target.closest('button,a');
+    if (!el || !looksLikeOpenNewTab(el)) return;
     e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
-    openNewTabViewer();
+    renderAndOpen();
     return false;
   }
 
-  function boot(){
-    // expose early so other modules can call it
-    window.raOpenNewTabViewer = openNewTabViewer;
-    neutralizeLinkHref();
-    document.addEventListener('click', onClickCapture, true);
+  // Wire up
+  neutralizeAnchors();
+  document.addEventListener('click', onClickCapture, true);
+  new MutationObserver(neutralizeAnchors).observe(document.body, { childList:true, subtree:true });
 
-    const startObserver = () => {
-      if (!document.body) { document.addEventListener('DOMContentLoaded', startObserver, { once:true }); return; }
-      new MutationObserver(neutralizeLinkHref).observe(document.body, { childList:true, subtree:true });
-    };
-    startObserver();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
-  }
-
-  document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
+  // Also support explicit programmatic dispatch from doExport(true)
+  window.addEventListener('ra:open-export-tab', (ev)=>{
+    const provided = ev && ev.detail && ev.detail.dataURL;
+    if (provided) openViewerWithDataURL(provided); else renderAndOpen();
+  });
 })();
 
 /* =========================================
