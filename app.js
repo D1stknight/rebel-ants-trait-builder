@@ -2765,10 +2765,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const t0 = performance.now(); let rafId=0;
 
     function applyViewport(z,xN,yN){
-      const e = (1 - z) * cx + xN * W;
-      const f = (1 - z) * cy + yN * H;
-      c.setViewportTransform([z,0,0,z, e, f]);
-    }
+  // Positive xN/yN now means visually pan → / ↓ (matches the arrows in the UI)
+  const e = (1 - z) * cx - xN * W;
+  const f = (1 - z) * cy - yN * H;
+  c.setViewportTransform([z,0,0,z, e, f]);
+}
 
     function step(now){
       const raw = clamp((now - t0)/dur, 0, 1);
