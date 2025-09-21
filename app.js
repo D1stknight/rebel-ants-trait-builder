@@ -789,7 +789,7 @@ canvas.requestRenderAll();
       document.body.appendChild(a); a.click(); a.remove();
     }
   }
-})();
+});
 
 /* =========================
    RA_CANVAS_RESIZE_SYNC_ONLY_V8
