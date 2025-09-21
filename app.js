@@ -746,10 +746,10 @@ canvas.requestRenderAll();
     }
   });
 
-  // ===============================
-  //  EXPORT (optional UI IDs: exportPng / openNewTab)
-  // ===============================
- document.addEventListener("DOMContentLoaded", ()=>{
+// ===============================
+//  EXPORT (optional UI IDs: exportPng / openNewTab)
+// ===============================
+document.addEventListener("DOMContentLoaded", ()=>{
   // make sure the button cannot submit a surrounding <form>
   const btn = $("openNewTab");
   if (btn && btn.tagName === "BUTTON") btn.setAttribute("type","button");
@@ -757,51 +757,50 @@ canvas.requestRenderAll();
   safeAddListener("exportPng","click",()=> doExport(false));
 
   safeAddListener("openNewTab", "click", (e) => {
-  // Stop the old handler and use the viewer that fits the image to the tab
-  e.preventDefault(); 
-  e.stopPropagation();
-  if (window.raOpenNewTabViewer) {
-    window.raOpenNewTabViewer();
-  } else {
-    // Safety fallback if the viewer hasn’t booted yet
-    doExport(true);
-  }
-});
-   
+    // Stop the old handler and use the viewer that fits the image to the tab
+    e.preventDefault();
+    e.stopPropagation();
+    if (window.raOpenNewTabViewer) {
+      window.raOpenNewTabViewer();
+    } else {
+      // Safety fallback if the viewer hasn’t booted yet
+      doExport(true);
+    }
+  });
+
   function doExport(openTab){
     if (!window.canvas) return;
-    const mult=parseInt(($("exportMultiplier")||{}).value||"2",10);
+    const mult = parseInt(($("exportMultiplier")||{}).value||"2",10);
     let dataURL;
     try{
-      dataURL=canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
-    }catch(_){ alert("Export blocked (CORS). Use images with CORS headers or same-origin."); return; }
+      dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
+    }catch(_){
+      alert("Export blocked (CORS). Use images with CORS headers or same-origin.");
+      return;
+    }
     const prev = $("exportPreview"); if (prev) prev.src = dataURL;
-    const a=document.createElement("a"); a.href=dataURL; a.download="rebel-ant-overlay.png";
-    const manual=$("manualLink"); if (manual){ manual.href=dataURL; manual.textContent="Open last export (manual save)"; }
+    const a = document.createElement("a"); a.href = dataURL; a.download = "rebel-ant-overlay.png";
+    const manual = $("manualLink"); if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
 
     if(openTab){
       fetch(dataURL).then(r=>r.blob()).then(blob=>{
-        const url=URL.createObjectURL(blob);
-        const w=window.open(url,"_blank","noopener");
-        if(!w){ window.location.href=url; }
+        const url = URL.createObjectURL(blob);
+        const w = window.open(url,"_blank","noopener");
+        if(!w){ window.location.href = url; }
       });
     }else{
       document.body.appendChild(a); a.click(); a.remove();
     }
   }
-});
+}); // <-- was '})();' before
+
 
 /* =========================
    RA_CANVAS_RESIZE_SYNC_ONLY_V8
-   - Scales ALL content when canvas size changes (700/900/1024/1200 or size input)
-   - Re-centers everything and resets pan/zoom
-   - Does not touch Admin/Published overlays at all
    ========================= */
 (function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
-  // Safe handle to the Fabric canvas
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
-  // Main resizer: scale+recenter all objects to a new (square) size
   function resizeCanvasAndScale(newSize){
     const c = C(); if (!c) return;
     newSize = parseInt(newSize, 10);
@@ -810,18 +809,16 @@ canvas.requestRenderAll();
     const oldW = c.getWidth(), oldH = c.getHeight();
     if (!oldW || !oldH) return;
 
-    // No change? just normalize zoom/pan
     if (oldW === newSize && oldH === newSize){
       try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
       try { c.requestRenderAll(); } catch(_) {}
       return;
     }
 
-    const s = newSize / oldW;                 // uniform scale (square canvas)
+    const s = newSize / oldW;
     const oldCenter = new fabric.Point(oldW/2, oldH/2);
     const newCenter = new fabric.Point(newSize/2, newSize/2);
 
-    // Snapshot objects (exclude nothing here — base, overlays, text all follow)
     const objs = (c.getObjects() || []).slice();
     const info = objs.map(o => ({
       o,
@@ -830,11 +827,9 @@ canvas.requestRenderAll();
       sy: o.scaleY || 1
     }));
 
-    // Resize canvas
     c.setWidth(newSize);
     c.setHeight(newSize);
 
-    // If your code exposes a backgroundRect globally, update it too (safe no-op otherwise)
     const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
     if (bgRect) {
       try {
@@ -843,9 +838,7 @@ canvas.requestRenderAll();
       } catch(_) {}
     }
 
-    // Scale & reposition everything relative to the canvas center
     info.forEach(({o, ctr, sx, sy}) => {
-      // keep backgroundRect updated above; here we still scale if someone wants it scaled too
       try {
         const vx = ctr.x - oldCenter.x;
         const vy = ctr.y - oldCenter.y;
@@ -862,18 +855,14 @@ canvas.requestRenderAll();
       } catch(_) {}
     });
 
-    // Reset viewport pan/zoom so it never looks like “zoom only”
     try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
     const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
-
     try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Expose/override for any existing callers
   window.raResizeCanvasAndScale = resizeCanvasAndScale;
   window.setCanvasSize = resizeCanvasAndScale;
 
-  // Wire the size input (left panel)
   function wireSizeInput(){
     const el = document.getElementById('canvasSize');
     if (el && !el.__raBound) {
@@ -882,7 +871,6 @@ canvas.requestRenderAll();
     }
   }
 
-  // Intercept the quick size buttons (700 / 900 / 1024 / 1200)
   function wireQuickButtons(){
     if (document.__raSizeCaptureOnly) return;
     document.__raSizeCaptureOnly = true;
@@ -897,35 +885,27 @@ canvas.requestRenderAll();
     }, true);
   }
 
-  // Boot
   function boot(){ wireSizeInput(); wireQuickButtons(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
 
 /* ==========================================================
    RA_FIXED_CENTER_CANVAS_V1
-   Keeps the canvas card centered in the viewport on scroll.
-   - No layout jump (uses a ghost placeholder).
-   - Stays horizontally aligned with its column.
-   - Recomputes on resize and when canvas size changes.
-   Paste at the very bottom of app.js.
    ========================================================== */
 (function RA_FIXED_CENTER_CANVAS_V1(){
   function byId(id){ return document.getElementById(id); }
   function getCanvasCard(){
-    const c = byId('c');                           // <canvas id="c">
+    const c = byId('c');
     if (!c) return null;
-    // Find the visual card that holds the canvas
     return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
   }
 
   function install(){
     const card = getCanvasCard();
     if (!card) { setTimeout(install, 200); return; }
-    if (card.__raFixedCenter) return;              // don’t double‑install
+    if (card.__raFixedCenter) return;
     card.__raFixedCenter = true;
 
-    // 1) Make a ghost to hold space so the layout doesn’t collapse
     const ghost = document.createElement('div');
     ghost.id = 'raCanvasGhost';
     ghost.style.width = card.offsetWidth + 'px';
@@ -934,7 +914,6 @@ canvas.requestRenderAll();
     ghost.style.pointerEvents = 'none';
     card.parentNode.insertBefore(ghost, card);
 
-    // 2) Fix the real card to the viewport (we’ll align it to the ghost)
     Object.assign(card.style, {
       position: 'fixed',
       zIndex: 4,
@@ -945,29 +924,21 @@ canvas.requestRenderAll();
       transform: 'none'
     });
 
-    // 3) Function to position the fixed card so it:
-    //    - shares the ghost’s left/width (stays in its column)
-    //    - is vertically centered in the viewport
     function place(){
       const rect = ghost.getBoundingClientRect();
-      // keep horizontal alignment with the column
       card.style.width = rect.width + 'px';
       card.style.left  = rect.left + 'px';
 
-      // vertical center; clamp if card is taller than viewport
       const h   = card.offsetHeight || rect.height;
       const top = Math.max(12, Math.round((window.innerHeight - h) / 2));
       card.style.top = top + 'px';
     }
 
-    // 4) Recalculate whenever things change
     window.addEventListener('scroll', place, { passive: true });
     window.addEventListener('resize', place);
     try { new ResizeObserver(place).observe(card); } catch(_) {}
     try { new ResizeObserver(place).observe(ghost); } catch(_) {}
     document.addEventListener('ra:canvas-ready', place);
-
-    // First placement
     place();
   }
 
@@ -980,13 +951,8 @@ canvas.requestRenderAll();
 
 /* ==========================================================
    RA_OPEN_NEW_TAB_VIEWER_V1
-   - Opens export in a NEW TAB
-   - Fits image to the browser window (no more giant render)
-   - Click image to toggle: Fit ↔ Actual size (100%)
-   Paste at the very bottom of app.js (replace any prior open-new-tab patch).
    ========================================================== */
 (function RA_OPEN_NEW_TAB_VIEWER_V1(){
-  // Find Fabric canvas safely
   function findCanvas(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
@@ -1004,30 +970,23 @@ canvas.requestRenderAll();
     return null;
   }
 
-  // Read export multiplier (HQ ×2 etc.)
   function getMultiplier(){
     const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
     if (el){
       const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
       if (v && v >= 1 && v <= 8) return v;
     }
-    // fallback default
     return 2;
   }
 
-  // Pick the "Open in New Tab" control by label
- function isOpenNewTabEl(node){
-  const el = node && node.closest && node.closest('button,a,#openNewTab');
-  if (!el) return null;
+  function isOpenNewTabEl(node){
+    const el = node && node.closest && node.closest('button,a,#openNewTab');
+    if (!el) return null;
+    if (el.id === 'openNewTab') return el;
+    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+    return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
+  }
 
-  // Match either the explicit control id or the text label
-  if (el.id === 'openNewTab') return el;
-
-  const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
-  return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
-}
-
-  // Prevent native link from navigating current tab
   function neutralizeLinkHref(){
     const el = Array.from(document.querySelectorAll('a,button'))
       .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
@@ -1039,15 +998,10 @@ canvas.requestRenderAll();
     }
   }
 
-  // New‑tab viewer that fits the image to the viewport
   function openNewTabViewer(){
-  // Expose for the button wiring in EXPORT block
-  window.raOpenNewTabViewer = openNewTabViewer;
+    const c = findCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
 
-  const c = findCanvas();
-  if (!c){ alert('Canvas not ready'); return; }
-
-    // Open the tab synchronously (popup‑safe)
     const win = window.open('', '_blank');
     if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
     win.document.title = 'Export';
@@ -1084,7 +1038,6 @@ canvas.requestRenderAll();
       const img = win.document.getElementById('raImg');
       img.src = dataUrl;
 
-      // Fit ↔ Actual size toggle
       let fit = true;
       function applyFit(){
         if (fit){
@@ -1095,7 +1048,7 @@ canvas.requestRenderAll();
         } else {
           img.style.maxWidth  = 'none';
           img.style.maxHeight = 'none';
-          img.style.width = 'auto';  // natural size
+          img.style.width = 'auto';
           img.style.height = 'auto';
         }
       }
@@ -1106,7 +1059,6 @@ canvas.requestRenderAll();
     }
   }
 
-  // Capture click → always open in new tab viewer
   let lastAt = 0;
   function onClickCapture(e){
     const el = isOpenNewTabEl(e.target);
@@ -1120,11 +1072,25 @@ canvas.requestRenderAll();
     return false;
   }
 
-  function wire(){ neutralizeLinkHref(); }
+  function boot(){
+    // expose early so other modules can call it
+    window.raOpenNewTabViewer = openNewTabViewer;
+    neutralizeLinkHref();
+    document.addEventListener('click', onClickCapture, true);
 
-  wire();
-  document.addEventListener('click', onClickCapture, true);
-  new MutationObserver(wire).observe(document.body, { childList:true, subtree:true });
+    const startObserver = () => {
+      if (!document.body) { document.addEventListener('DOMContentLoaded', startObserver, { once:true }); return; }
+      new MutationObserver(neutralizeLinkHref).observe(document.body, { childList:true, subtree:true });
+    };
+    startObserver();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+
   document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
 })();
 
