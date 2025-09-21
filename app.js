@@ -792,7 +792,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
       document.body.appendChild(a); a.click(); a.remove();
     }
   }
-}); // <-- was '})();' before
+});
+})(); // <-- closes the very first (function(){ ... at the top)
 
 
 /* =========================
