@@ -2710,141 +2710,140 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   // ---------- Core ----------
   let running=false;
-  async function run(record){
-    const c=C(); if(!c){ alert('Canvas not ready'); return; }
-    if (running) return;
+async function run(record){
+  const c=C(); if(!c){ alert('Canvas not ready'); return; }
+  if (running) return;
 
-    ensureDock();
-    const scopeEl = $('#raAnimScope');
-    const presetEl= $('#raAnimPreset');
-    const easeEl  = $('#raAnimEase');
-    const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
-    const dur     = Math.round(durSec*1000);
+  ensureDock();
+  const scopeEl = $('#raAnimScope');
+  const presetEl= $('#raAnimPreset');
+  const easeEl  = $('#raAnimEase');
+  const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
+  const dur     = Math.round(durSec*1000);
 
-    const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
-    const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
-    let   scope   = scopeEl?.value || 'all';
+  const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
+  const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
+  const scope   = scopeEl?.value || 'all';
 
-    // Auto-scope overlays if user picked an overlay preset
-    if (preset.kind==='overlays') scope = 'overlays';
+  const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
 
-    const baseObjs    = findBaseObjs(c);
-    const overlayObjs = findOverlayObjs(c);
+  // Decide mode/targets strictly via the UI scope + your pickTargets()
+  const viewportOnly = (preset.kind==='viewport' && scope==='all');
+  const targets = viewportOnly ? [] : (typeof pickTargets==='function' ? pickTargets(c, scope) : []);
 
-    if (scope==='base' && baseObjs.length===0){ msg('Load an image first'); return; }
-    if (scope==='overlays' && overlayObjs.length===0){ msg('Add an overlay or text first'); return; }
+  // Guard rails for empty selections
+  if (!viewportOnly && targets.length===0){
+    if (scope==='base'){      msg('Load an image first'); return; }
+    if (scope==='overlays'){  msg('Add an overlay first'); return; }
+    if (scope==='text'){      msg('Add custom text or token ID first'); return; }
+  }
 
-    running=true; msg(record?'Recording…':'Playing…');
+  running=true; msg(record?'Recording…':'Playing…');
 
-    // Save state
-    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-    const active = c.getActiveObject(); c.discardActiveObject(); c.requestRenderAll();
+  // Save state
+  const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
+  const active = c.getActiveObject(); c.discardActiveObject(); c.requestRenderAll();
 
-    // Snapshots
-    const snap = new Map();
-    const store = o => snap.set(o, { left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity });
-
-    const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
-
-    let targets = [];
-if (preset.kind==='viewport' && scope==='all'){
-  targets = []; // viewport-only (Everything)
-} else {
-  targets = pickTargets(c, scope);
+  // Snapshots for object animations
+  const snap = new Map();
+  const store = o => snap.set(o, { left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity });
   targets.forEach(store);
-}
 
-    // Recording (optional)
-    let rec, chunks=[];
-    if (record){
-      try{
-        const stream = (c.lowerCanvasEl || c.upperCanvasEl).captureStream(30);
+  // Optional recording
+  let rec, chunks=[];
+  if (record){
+    try{
+      const el = (c.lowerCanvasEl || c.upperCanvasEl);
+      const stream = el.captureStream ? el.captureStream(30) : null;
+      if (stream){
         rec = new MediaRecorder(stream, { mimeType:'video/webm;codecs=vp9' });
         rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
         rec.start();
-      }catch(_){ msg('Recording not supported'); }
-    }
-
-    const t0 = performance.now(); let rafId=0;
-
-    function applyViewport(z,xN,yN){
-  // Positive xN/yN now means visually pan → / ↓ (matches the arrows in the UI)
-  const e = (1 - z) * cx - xN * W;
-  const f = (1 - z) * cy - yN * H;
-  c.setViewportTransform([z,0,0,z, e, f]);
-}
-
-    function step(now){
-      const raw = clamp((now - t0)/dur, 0, 1);
-      const t   = ease(raw);
-
-      if (preset.kind==='viewport' && scope==='all'){
-        const z  = lerp(preset.from.z, preset.to.z, t);
-        const xn = lerp(preset.from.x, preset.to.x, t);
-        const yn = lerp(preset.from.y, preset.to.y, t);
-        applyViewport(z, xn, yn);
       } else {
-        const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
-        const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
-        const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
-
-        const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
-        const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
-        const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
-        const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
-
-        const dpx = dx + dxN*W;
-        const dpy = dy + dyN*H;
-
-        const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
-        const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
-        const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
-
-        targets.forEach(o=>{
-          const o0 = snap.get(o); if(!o0) return;
-          o.scaleX = o0.scaleX * s;
-          o.scaleY = o0.scaleY * s;
-          o.left   = o0.left + dpx;
-          o.top    = o0.top  + dpy;
-          if (hasRot)   o.angle   = o0.angle + rot;
-          if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
-          o.setCoords();
-        });
+        msg('Recording not supported');
       }
-
-      c.requestRenderAll();
-      if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
-    }
-
-    function finish(){
-      cancelAnimationFrame(rafId);
-      if (rec){
-        try{
-          rec.onstop = ()=>{
-            const blob = new Blob(chunks, {type:'video/webm'});
-            const url  = URL.createObjectURL(blob);
-            const vid  = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
-            msg('Done. Use the video menu to download.');
-          };
-          rec.stop();
-        }catch(_){}
-      } else {
-        msg('Done');
-      }
-      try { c.setViewportTransform(vt0); } catch(_){}
-      targets.forEach(o=>{
-        const s = snap.get(o); if(!s) return;
-        o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
-        o.setCoords();
-      });
-      if (active) try{ c.setActiveObject(active); }catch(_){}
-      c.requestRenderAll();
-      running=false;
-    }
-
-    requestAnimationFrame(step);
+    }catch(_){ msg('Recording not supported'); }
   }
 
+  const t0 = performance.now(); let rafId=0;
+
+  function applyViewport(z,xN,yN){
+    const e = (1 - z) * cx + xN * W;
+    const f = (1 - z) * cy + yN * H;
+    c.setViewportTransform([z,0,0,z, e, f]);
+  }
+
+  function step(now){
+    const raw = clamp((now - t0)/dur, 0, 1);
+    const t   = ease(raw);
+
+    if (viewportOnly){
+      const z  = lerp(preset.from.z, preset.to.z, t);
+      const xn = lerp(preset.from.x, preset.to.x, t);
+      const yn = lerp(preset.from.y, preset.to.y, t);
+      applyViewport(z, xn, yn);
+    } else {
+      const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
+      const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
+      const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
+
+      const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
+      const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
+      const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
+      const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
+
+      const dpx = dx + dxN*W;
+      const dpy = dy + dyN*H;
+
+      const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
+      const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
+      const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
+
+      targets.forEach(o=>{
+        const o0 = snap.get(o); if(!o0) return;
+        o.scaleX = o0.scaleX * s;
+        o.scaleY = o0.scaleY * s;
+        o.left   = o0.left + dpx;
+        o.top    = o0.top  + dpy;
+        if (hasRot)   o.angle   = o0.angle + rot;
+        if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
+        o.setCoords();
+      });
+    }
+
+    c.requestRenderAll();
+    if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
+  }
+
+  function finish(){
+    cancelAnimationFrame(rafId);
+    if (rec){
+      try{
+        rec.onstop = ()=>{
+          const blob = new Blob(chunks, {type:'video/webm'});
+          const url  = URL.createObjectURL(blob);
+          const vid  = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
+          msg('Done. Use the video menu to download.');
+        };
+        rec.stop();
+      }catch(_){}
+    } else {
+      msg('Done');
+    }
+
+    try { c.setViewportTransform(vt0); } catch(_){}
+    targets.forEach(o=>{
+      const s = snap.get(o); if(!s) return;
+      o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
+      o.setCoords();
+    });
+    if (active) try{ c.setActiveObject(active); }catch(_){}
+    c.requestRenderAll();
+    running=false;
+  }
+
+  requestAnimationFrame(step);
+}
   // Build UI now/when ready
   if (document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded', ensureDock, {once:true});
