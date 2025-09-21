@@ -2590,10 +2590,10 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // Overlay/Base params: s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized to W/H).
   const PRESETS = [
     // — Viewport / Everything —
-    {id:'kb_in_ur',  name:'Ken Burns — in ↗',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
-    {id:'kb_in_ul',  name:'Ken Burns — in ↖',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y:-0.06}},
-    {id:'kb_in_dr',  name:'Ken Burns — in ↘',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y: 0.06}},
-    {id:'kb_in_dl',  name:'Ken Burns — in ↙',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y: 0.06}},
+    {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:+0.06}},
+{id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
+{id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
+{id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:-0.06}},
     {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
     {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
     {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
@@ -2603,14 +2603,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
 
     // — Overlays only —
-    {id:'ov_pop',     name:'Overlays pop (scale)',           kind:'overlays', ease:'ioBack', from:{s:0.90},            to:{s:1.00}},
-    {id:'ov_slide_up',name:'Overlays slide up',              kind:'overlays', ease:'ioSine', from:{dyN:0.14},          to:{dyN:0.00}},
-    {id:'ov_slide_dn',name:'Overlays slide down',            kind:'overlays', ease:'ioSine', from:{dyN:-0.14},         to:{dyN:0.00}},
-    {id:'ov_slide_l', name:'Overlays slide in ←',            kind:'overlays', ease:'ioSine', from:{dxN:-0.18},         to:{dxN:0.00}},
-    {id:'ov_slide_r', name:'Overlays slide in →',            kind:'overlays', ease:'ioSine', from:{dxN: 0.18},         to:{dxN:0.00}},
-    {id:'ov_fade',    name:'Overlays fade in',               kind:'overlays', ease:'ioCubic',from:{alpha:0.00},        to:{alpha:1.00}},
-    {id:'ov_wiggle',  name:'Overlays tiny rotate',           kind:'overlays', ease:'ioSine', from:{rot:-5},            to:{rot:0}},
-    {id:'ov_pop_big', name:'Overlays big pop (stronger)',    kind:'overlays', ease:'ioBack', from:{s:0.85},            to:{s:1.00}},
+    {id:'ov_pop',     name:'Overlays/Text pop (scale)',           kind:'overlays', ease:'ioBack', from:{s:0.90},            to:{s:1.00}},
+    {id:'ov_slide_up',name:'Overlays/Text slide up',              kind:'overlays', ease:'ioSine', from:{dyN:0.14},          to:{dyN:0.00}},
+    {id:'ov_slide_dn',name:'Overlays/Text slide down',            kind:'overlays', ease:'ioSine', from:{dyN:-0.14},         to:{dyN:0.00}},
+    {id:'ov_slide_l', name:'Overlays/Text slide in ←',            kind:'overlays', ease:'ioSine', from:{dxN:-0.18},         to:{dxN:0.00}},
+    {id:'ov_slide_r', name:'Overlays/Text slide in →',            kind:'overlays', ease:'ioSine', from:{dxN: 0.18},         to:{dxN:0.00}},
+    {id:'ov_fade',    name:'Overlays/Text fade in',               kind:'overlays', ease:'ioCubic',from:{alpha:0.00},        to:{alpha:1.00}},
+    {id:'ov_wiggle',  name:'Overlays/Text tiny rotate',           kind:'overlays', ease:'ioSine', from:{rot:-5},            to:{rot:0}},
+    {id:'ov_pop_big', name:'Overlays/Text big pop (stronger)',    kind:'overlays', ease:'ioBack', from:{s:0.85},            to:{s:1.00}},
 
     // — Base only (optional fun) —
     {id:'base_nudge', name:'Base nudge (gentle zoom in)',     kind:'base',     ease:'ioSine', from:{s:1.00},          to:{s:1.06}},
@@ -2631,11 +2631,10 @@ document.addEventListener("DOMContentLoaded", ()=>{
         <strong>Animate</strong>
         <label style="display:flex;gap:6px;align-items:center">
           What:
-         <select id="raAnimScope">
+        <select id="raAnimScope">
   <option value="all">Everything</option>
   <option value="base">Base only</option>
-  <option value="overlays">Overlays only</option>
-  <option value="text">Text only</option>
+  <option value="overlays">Text & overlays</option>
 </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
