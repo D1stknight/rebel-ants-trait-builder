@@ -783,14 +783,22 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const manual = $("manualLink");
     if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
 
-    if (openTab){
-      // Fallback path (rarely needed since we have a nicer viewer below)
-      fetch(dataURL).then(r=>r.blob()).then(blob=>{
-        const url = URL.createObjectURL(blob);
-        const w = window.open(url,"_blank","noopener");
-        if(!w){ window.location.href = url; }
-      });
-    }else{
+   if (openTab) {
+  fetch(dataURL).then(r => r.blob()).then(blob => {
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, "_blank", "noopener");
+    if (!w) {
+      // Popup blocked → trigger a download instead of navigating away
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "rebel-ant-overlay.png";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+    }
+  });
+}
+    else{
       const a = document.createElement("a");
       a.href = dataURL; a.download = "rebel-ant-overlay.png";
       document.body.appendChild(a); a.click(); a.remove();
@@ -6975,3 +6983,99 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
+/* ==========================================================
+   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED)
+   - Hooks ONLY the button with id="openNewTab" (no text sniffing)
+   - Opens a clean viewer tab first, then sends a Blob URL (Safari‑safe)
+   - Never navigates the original tab
+   - Paste at the VERY BOTTOM of app.js
+   ========================================================== */
+(function RA_OPEN_NEW_TAB_VIEWER_V2(){
+  function getCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k in window){
+        try{
+          const v = window[k];
+          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
+        }catch(_){}
+      }
+    }
+    return null;
+  }
+
+  function getMultiplier(){
+    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
+    if (!el) return 2;
+    const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
+    return (v && v >= 1 && v <= 8) ? v : 2;
+  }
+
+  function openViewer(){
+    const c = getCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
+
+    // Open the tab immediately (keeps it a user gesture → popup‑safe)
+    const win = window.open('about:blank','_blank');
+    if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
+
+    // Lightweight viewer shell
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
+            box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
+        .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+             color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+             background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
+      </style></head><body>
+        <div class="viewer"><img id="raImg" alt="export"></div>
+        <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+        <script>
+          (function(){
+            var img = document.getElementById('raImg'), fit = true;
+            function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
+                              else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
+            img.addEventListener('click', function(){ fit=!fit; apply(); });
+            apply();
+            window.addEventListener('message', function(ev){
+              if (ev && ev.data && ev.data.type==='ra-img') { img.src = ev.data.url; }
+            }, false);
+            setTimeout(function(){
+              if (!img.src) { document.body.insertAdjacentHTML('beforeend',
+                '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'); }
+            }, 2000);
+          })();
+        <\/script>
+      </body></html>`;
+    win.document.open(); win.document.write(html); win.document.close();
+
+    // Produce the PNG and send a Blob URL to the viewer (more reliable than giant data: URLs)
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+      fetch(dataUrl).then(r=>r.blob()).then(blob=>{
+        const url = URL.createObjectURL(blob);
+        try { win.postMessage({ type:'ra-img', url }, '*'); } catch(_){}
+        // Revoke when the tab closes
+        const tid = setInterval(()=>{ if (win.closed){ URL.revokeObjectURL(url); clearInterval(tid); } }, 4000);
+      }).catch(()=>{
+        try{ win.document.body.innerHTML =
+          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same‑origin or CORS‑enabled images.</div>'; }catch(_){}
+      });
+    }catch(e){
+      try{ win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same‑origin or CORS‑enabled images.</div>'; }catch(_){}
+    }
+  }
+
+  // Capture ONLY the actual “Open in new tab” button (id="openNewTab")
+  document.addEventListener('click', function(e){
+    const btn = e.target && e.target.closest && e.target.closest('#openNewTab');
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    openViewer();
+  }, true);
+})();
