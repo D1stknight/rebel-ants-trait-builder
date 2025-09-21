@@ -2631,11 +2631,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
         <strong>Animate</strong>
         <label style="display:flex;gap:6px;align-items:center">
           What:
-          <select id="raAnimScope">
-            <option value="all">Everything</option>
-            <option value="base">Base only</option>
-            <option value="overlays">Overlays only</option>
-          </select>
+         <select id="raAnimScope">
+  <option value="all">Everything</option>
+  <option value="base">Base only</option>
+  <option value="overlays">Overlays only</option>
+  <option value="text">Text only</option>
+</select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
           Preset:
@@ -2699,10 +2700,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
   const lerp=(a,b,t)=>a+(b-a)*t;
 
   function findBaseObjs(c){ return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect); }
-  function findOverlayObjs(c){
-    // overlays + custom text + tokenId label; exclude base/background
-    return (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase && (o._kind==='overlay' || o._kind==='customText' || o._kind==='tokenId'));
-  }
+  function pickTargets(c, scope){
+  const objs = (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase);
+  if (scope==='text')     return objs.filter(o => o._kind==='customText' || o._kind==='tokenId');
+  if (scope==='overlays') return objs.filter(o => o._kind==='overlay');
+  if (scope==='base')     return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect);
+  return []; // 'all' uses viewport animation only
+}
 
   // ---------- Core ----------
   let running=false;
@@ -2743,13 +2747,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
 
     let targets = [];
-    if (preset.kind==='viewport' && scope==='all'){
-      targets = []; // viewport only
-    } else if (scope==='base'){
-      baseObjs.forEach(store); targets = baseObjs.slice();
-    } else if (scope==='overlays'){
-      overlayObjs.forEach(store); targets = overlayObjs.slice();
-    }
+if (preset.kind==='viewport' && scope==='all'){
+  targets = []; // viewport-only (Everything)
+} else {
+  targets = pickTargets(c, scope);
+  targets.forEach(store);
+}
 
     // Recording (optional)
     let rec, chunks=[];
