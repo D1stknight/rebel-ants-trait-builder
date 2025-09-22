@@ -389,6 +389,73 @@ canvas.requestRenderAll();
       await loadBaseImage(data, false);
     });
 
+/* -------- Base image: load by token (multi‑collection) --------
+   Reads the selected collection’s contract from your dropdown and
+   loads the token’s image via Reservoir (works for Chumpz, Saints, Rebel, etc.)
+   UI ids expected:
+     - collectionSelect  (or collectionKey)  ← your collection dropdown
+     - tokenIdInput      ← input where you type the token id
+     - tokenStatus       ← small <span> to show status text (optional)
+     - loadToken         ← the “Load Token ID” button
+*/
+safeAddListener("loadToken","click", async ()=>{
+  const statusEl = $("tokenStatus");
+  const tokenId  = (($("tokenIdInput")||{}).value || "").trim();
+  if (!tokenId){ if(statusEl) statusEl.textContent = "Enter a token ID."; return; }
+
+  // Find the contract for the currently selected collection
+  function selectedContract(){
+    const sel = $("collectionSelect") || $("collectionKey") || document.querySelector("[data-ra-collection-select]");
+    const opt = sel?.selectedOptions?.[0];
+    const fromData = opt?.dataset?.contract || opt?.getAttribute?.("data-contract");
+    const val = (fromData || sel?.value || "").trim();
+
+    // If the value already looks like an address, use it
+    if (/^0x[a-fA-F0-9]{40}$/.test(val)) return val;
+
+    // Otherwise try a global list if you have one (RA_COLLECTIONS, etc.)
+    const list = (window.RA_COLLECTIONS && Array.isArray(window.RA_COLLECTIONS)) ? window.RA_COLLECTIONS : [];
+    const hit  = list.find(x => x.key===val || x.slug===val || x.name===val);
+    if (hit && (hit.address || hit.contract)) return (hit.address || hit.contract);
+
+    // Safe fallback: your Rebel Ants contract
+    return (typeof CONTRACT === "string" && CONTRACT) ? CONTRACT : "0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221";
+  }
+
+  const contract = selectedContract();
+
+  if (statusEl) statusEl.textContent = "Fetching token…";
+  try{
+    // Uses your existing helper (already in your file)
+    const imgUrl = await fetchImageByTokenId(contract, tokenId);
+    if (!imgUrl){ if(statusEl) statusEl.textContent = "No image URL found."; return; }
+
+    if (statusEl) statusEl.textContent = "Downloading image…";
+    const data = await fetchAsDataURL(imgUrl);
+
+    // Mark as token image (no watermarks) and load
+    await loadBaseImage(data, true);
+
+    // Tag the base object with the contract so watermark/branding logic can read it
+    try{
+      const objs = canvas.getObjects() || [];
+      const base = objs.find(o => o._isBase && !o._isBgRect);
+      if (base) base._tokenContract = contract;
+    }catch(_){}
+
+    // Add/update the on‑canvas token label (you already have this helper)
+    try { addOrUpdateTokenLabel(tokenId); } catch(_){}
+
+    if (statusEl) statusEl.textContent = "Loaded 👍";
+
+    // Let any watermark/brand‑footer listeners re‑evaluate
+    try { document.dispatchEvent(new Event("ra-wm-recalc")); } catch(_){}
+    try { canvas.requestRenderAll(); } catch(_){}
+  }catch(_){
+    if (statusEl) statusEl.textContent = "Failed to load token.";
+  }
+});
+
     // -------- Canvas controls
     safeAddListener("zoomIn","click",  ()=> setZoom(zoom*1.1));
     safeAddListener("zoomOut","click", ()=> setZoom(zoom/1.1));
