@@ -726,153 +726,151 @@ canvas.requestRenderAll();
     }
   });
 
- // ===============================
-//  EXPORT (stable: download + preview)
-//  - No builder reload (ever)
-//  - Works with wallet connected (Chrome) and Safari
-//  - Leaves a manual link to the last export
+
 // ===============================
-(() => {
-  function $(id){ return document.getElementById(id); }
+//  EXPORT (optional UI IDs: exportPng / openNewTab)
+//  — self-contained: includes the New Tab viewer (fit ↔ actual size)
+// ===============================
+document.addEventListener("DOMContentLoaded", ()=>{
+  // Make sure the UI button can’t submit a surrounding <form>
+  const openBtn = $("openNewTab");
+  if (openBtn && openBtn.tagName === "BUTTON") openBtn.setAttribute("type","button");
 
-  function getCanvas(){
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas, canvas.lower-canvas, canvas');
-    if (!el) return null;
-    // Try common fabric handles
-    for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']) {
-      try {
-        const v = el[k];
-        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
-      } catch(_){}
+  // Regular PNG download
+  safeAddListener("exportPng","click",()=> doExport(false));
+
+  // New‑tab viewer (prevents Chrome navigating the current tab)
+  safeAddListener("openNewTab", "click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Open the viewer
+    raOpenNewTabViewer();
+  });
+
+  // High‑quality PNG export used by both paths
+  function doExport(openTab){
+    if (!window.canvas) return;
+    const mult = parseInt(($("exportMultiplier")||{}).value||"2",10);
+    let dataURL;
+    try{
+      dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
+    }catch(_){
+      alert("Export blocked (CORS). Use images with CORS headers or same-origin.");
+      return;
     }
-    // Last resort: scan window
-    try {
-      for (const k in window) {
-        const v = window[k];
-        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    } catch(_){}
-    return window.canvas || null;
-  }
+    const prev = $("exportPreview"); if (prev) prev.src = dataURL;
 
-  function getMultiplier(){
-    const el = $('exportMultiplier') || $('exportQuality');
-    if (!el) return 2;
-    const n = parseInt(String(el.value || el.textContent || '').replace(/\D+/g,''),10);
-    return (Number.isFinite(n) && n >= 1 && n <= 8) ? n : 2;
-  }
+    // Manual “save last export” link (if present in UI)
+    const manual = $("manualLink");
+    if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
 
-  function exportDataURL(){
-    const c = getCanvas();
-    if (!c){ alert('Canvas not ready.'); return null; }
-    try {
-      return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier:getMultiplier() });
-    } catch(_){
-      alert('Export blocked (CORS). Use same‑origin or CORS‑enabled images.');
-      return null;
-    }
-  }
-
-  function setManualLink(dataURL){
-    const manual = $('manualLink');
-    if (manual){
-      manual.href = dataURL;
-      manual.textContent = 'Open last export (manual save)';
-    }
-  }
-
-  function downloadPNG(){
-    const dataURL = exportDataURL(); if (!dataURL) return;
-    const a = document.createElement('a');
-    a.href = dataURL;
-    a.download = 'rebel-ant-overlay.png';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setManualLink(dataURL);
-  }
-
-  // Always open a blank tab synchronously, then WRITE the HTML with the PNG.
-  // (We never navigate the current tab; no blob URL fallback that could reload.)
-  function previewInNewTab(){
-    const dataURL = exportDataURL(); if (!dataURL) return;
-
-    // Open synchronously from the click gesture (popup‑safe)
-    const w = window.open('about:blank', '_blank', 'noopener,noreferrer');
-    if (!w){ alert('Popup blocked. Allow popups for this site.'); return; }
-
-    const html = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Preview</title>
-<style>
-  html,body{height:100%;margin:0;background:#0b0c10;overflow:auto}
-  .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
-  img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);
-      box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px}
-  .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
-       color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-       background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
-</style></head>
-<body>
-  <div class="viewer"><img id="img" alt="export"/></div>
-  <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
-  <script>
-    (function(){
-      var img = document.getElementById('img'), fit = true;
-      function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
-                        else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
-      img.addEventListener('click', function(){ fit = !fit; apply(); });
-      img.src = '${dataURL}';
-      apply();
-    })();
-  </script>
-</body></html>`;
-
-    try { w.document.open(); w.document.write(html); w.document.close(); }
-    catch(_){ /* very rare */ }
-
-    setManualLink(dataURL);
-  }
-
-  // Wire buttons (ids optional; we also fall back to matching by text)
-  function findByText(regex){
-    return Array.from(document.querySelectorAll('button,a')).find(el => regex.test((el.textContent||'').trim().toLowerCase()));
-  }
-  document.addEventListener('DOMContentLoaded', () => {
-    const dlBtn   = $('exportPng')  || findByText(/download\s*png/);
-    const prevBtn = $('openNewTab') || findByText(/open.*new.*tab|preview.*tab/);
-
-    if (dlBtn)   dlBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); downloadPNG(); }, true);
-
-    if (prevBtn){
-      // Neutralize native link behavior so nothing else navigates the page
-      if (prevBtn.tagName === 'A'){
-        prevBtn.removeAttribute('href');
-        prevBtn.removeAttribute('target');
-        prevBtn.setAttribute('rel','noopener');
-      }
-      prevBtn.addEventListener('click', (e)=>{
-  e.preventDefault();
-  e.stopPropagation();
-  e.stopImmediatePropagation();   // <— add this line
-  previewInNewTab();
-  return false;                    // <— and this (extra safety)
-}, true);
+   if (openTab) {
+  fetch(dataURL).then(r => r.blob()).then(blob => {
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, "_blank", "noopener");
+    if (!w) {
+      // Popup blocked → trigger a download instead of navigating away
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "rebel-ant-overlay.png";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
     }
   });
-})();
+}
+    else{
+      const a = document.createElement("a");
+      a.href = dataURL; a.download = "rebel-ant-overlay.png";
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+  }
+
+  // ---- Inline, popup‑safe viewer that fits to the browser tab ----
+  // Exposed globally so other code can reuse: window.raOpenNewTabViewer()
+  window.raOpenNewTabViewer = function raOpenNewTabViewer(){
+    if (!window.canvas){ alert("Canvas not ready"); return; }
+
+    // Open a blank tab synchronously (avoids popup blockers)
+    const win = window.open("", "_blank", "noopener");
+    if (!win){ alert("Popup blocked. Allow popups for this site."); return; }
+
+    // Minimal head+styles
+    win.document.title = "Export";
+    win.document.head.innerHTML = `
+      <meta charset="utf-8">
+      <title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img#raImg{
+          display:block;
+          max-width:calc(100vw - 32px);
+          max-height:calc(100vh - 32px);
+          width:auto;height:auto;
+          box-shadow:0 8px 24px rgba(0,0,0,.5);
+          border-radius:8px;
+          image-rendering:auto;
+        }
+        .hud{
+          position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+          color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none
+        }
+      </style>
+    `;
+    win.document.body.innerHTML = `
+      <div class="viewer"><img id="raImg" alt="export"/></div>
+      <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+    `;
+
+    // Read export multiplier from UI (1..8), default 2
+    const multEl = document.getElementById("exportMultiplier") || document.getElementById("exportQuality");
+    let mult = 2;
+    if (multEl){
+      const v = parseInt((multEl.value||multEl.textContent||"").replace(/\D+/g,""),10);
+      if (v && v>=1 && v<=8) mult = v;
+    }
+
+    try{
+      const dataUrl = canvas.toDataURL({ format:"png", multiplier: mult, enableRetinaScaling:true });
+      const img = win.document.getElementById("raImg");
+      img.src = dataUrl;
+
+      // Fit ↔ Actual size toggle
+      let fit = true;
+      function applyFit(){
+        if (fit){
+          img.style.maxWidth  = "calc(100vw - 32px)";
+          img.style.maxHeight = "calc(100vh - 32px)";
+          img.style.width = "auto";
+          img.style.height = "auto";
+        } else {
+          img.style.maxWidth  = "none";
+          img.style.maxHeight = "none";
+          img.style.width = "auto";  // natural size
+          img.style.height = "auto";
+        }
+      }
+      img.addEventListener("click", ()=>{ fit = !fit; applyFit(); });
+      applyFit();
+    }catch(e){
+      win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">' +
+        'Export failed (CORS/security). Try a different image or use a CORS‑enabled host.' +
+        '</div>';
+    }
+  };
+});
+  })();
+
 
 /* =========================
    RA_CANVAS_RESIZE_SYNC_ONLY_V8
-   - Scales ALL content when canvas size changes (700/900/1024/1200 or size input)
-   - Re-centers everything and resets pan/zoom
-   - Does not touch Admin/Published overlays at all
    ========================= */
 (function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
-  // Safe handle to the Fabric canvas
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
-  // Main resizer: scale+recenter all objects to a new (square) size
   function resizeCanvasAndScale(newSize){
     const c = C(); if (!c) return;
     newSize = parseInt(newSize, 10);
@@ -881,18 +879,16 @@ canvas.requestRenderAll();
     const oldW = c.getWidth(), oldH = c.getHeight();
     if (!oldW || !oldH) return;
 
-    // No change? just normalize zoom/pan
     if (oldW === newSize && oldH === newSize){
       try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
       try { c.requestRenderAll(); } catch(_) {}
       return;
     }
 
-    const s = newSize / oldW;                 // uniform scale (square canvas)
+    const s = newSize / oldW;
     const oldCenter = new fabric.Point(oldW/2, oldH/2);
     const newCenter = new fabric.Point(newSize/2, newSize/2);
 
-    // Snapshot objects (exclude nothing here — base, overlays, text all follow)
     const objs = (c.getObjects() || []).slice();
     const info = objs.map(o => ({
       o,
@@ -901,11 +897,9 @@ canvas.requestRenderAll();
       sy: o.scaleY || 1
     }));
 
-    // Resize canvas
     c.setWidth(newSize);
     c.setHeight(newSize);
 
-    // If your code exposes a backgroundRect globally, update it too (safe no-op otherwise)
     const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
     if (bgRect) {
       try {
@@ -914,9 +908,7 @@ canvas.requestRenderAll();
       } catch(_) {}
     }
 
-    // Scale & reposition everything relative to the canvas center
     info.forEach(({o, ctr, sx, sy}) => {
-      // keep backgroundRect updated above; here we still scale if someone wants it scaled too
       try {
         const vx = ctr.x - oldCenter.x;
         const vy = ctr.y - oldCenter.y;
@@ -933,18 +925,14 @@ canvas.requestRenderAll();
       } catch(_) {}
     });
 
-    // Reset viewport pan/zoom so it never looks like “zoom only”
     try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
     const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
-
     try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Expose/override for any existing callers
   window.raResizeCanvasAndScale = resizeCanvasAndScale;
   window.setCanvasSize = resizeCanvasAndScale;
 
-  // Wire the size input (left panel)
   function wireSizeInput(){
     const el = document.getElementById('canvasSize');
     if (el && !el.__raBound) {
@@ -953,7 +941,6 @@ canvas.requestRenderAll();
     }
   }
 
-  // Intercept the quick size buttons (700 / 900 / 1024 / 1200)
   function wireQuickButtons(){
     if (document.__raSizeCaptureOnly) return;
     document.__raSizeCaptureOnly = true;
@@ -968,35 +955,27 @@ canvas.requestRenderAll();
     }, true);
   }
 
-  // Boot
   function boot(){ wireSizeInput(); wireQuickButtons(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
 
 /* ==========================================================
    RA_FIXED_CENTER_CANVAS_V1
-   Keeps the canvas card centered in the viewport on scroll.
-   - No layout jump (uses a ghost placeholder).
-   - Stays horizontally aligned with its column.
-   - Recomputes on resize and when canvas size changes.
-   Paste at the very bottom of app.js.
    ========================================================== */
 (function RA_FIXED_CENTER_CANVAS_V1(){
   function byId(id){ return document.getElementById(id); }
   function getCanvasCard(){
-    const c = byId('c');                           // <canvas id="c">
+    const c = byId('c');
     if (!c) return null;
-    // Find the visual card that holds the canvas
     return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
   }
 
   function install(){
     const card = getCanvasCard();
     if (!card) { setTimeout(install, 200); return; }
-    if (card.__raFixedCenter) return;              // don’t double‑install
+    if (card.__raFixedCenter) return;
     card.__raFixedCenter = true;
 
-    // 1) Make a ghost to hold space so the layout doesn’t collapse
     const ghost = document.createElement('div');
     ghost.id = 'raCanvasGhost';
     ghost.style.width = card.offsetWidth + 'px';
@@ -1005,7 +984,6 @@ canvas.requestRenderAll();
     ghost.style.pointerEvents = 'none';
     card.parentNode.insertBefore(ghost, card);
 
-    // 2) Fix the real card to the viewport (we’ll align it to the ghost)
     Object.assign(card.style, {
       position: 'fixed',
       zIndex: 4,
@@ -1016,29 +994,21 @@ canvas.requestRenderAll();
       transform: 'none'
     });
 
-    // 3) Function to position the fixed card so it:
-    //    - shares the ghost’s left/width (stays in its column)
-    //    - is vertically centered in the viewport
     function place(){
       const rect = ghost.getBoundingClientRect();
-      // keep horizontal alignment with the column
       card.style.width = rect.width + 'px';
       card.style.left  = rect.left + 'px';
 
-      // vertical center; clamp if card is taller than viewport
       const h   = card.offsetHeight || rect.height;
       const top = Math.max(12, Math.round((window.innerHeight - h) / 2));
       card.style.top = top + 'px';
     }
 
-    // 4) Recalculate whenever things change
     window.addEventListener('scroll', place, { passive: true });
     window.addEventListener('resize', place);
     try { new ResizeObserver(place).observe(card); } catch(_) {}
     try { new ResizeObserver(place).observe(ghost); } catch(_) {}
     document.addEventListener('ra:canvas-ready', place);
-
-    // First placement
     place();
   }
 
@@ -2509,17 +2479,21 @@ canvas.requestRenderAll();
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V3
-   • Presets for: Everything (viewport), Base only, Overlays only.
-   • Overlay presets now work even if "Everything" is selected (we auto-scope).
-   • Bigger, clearer overlay motions; normalized slide distances (work on any size).
-   • Added a chooseable Easing (Quad/Sine/Cubic/Back/Expo/Linear).
-   • Preview safe: state restored; undo/redo not spammed.
-   • Desktop/mobile layout untouched.
+   RA_ANIMATE_PREVIEW_VIDEO_V4
+   • Presets for: Everything (viewport), Base only, Overlays only, Text only.
+   • Overlay presets still auto-scope when "Everything" is selected.
+   • Broader, safer target detection (text/overlay/base).
+   • Recording: robust MIME selection (VP9→VP8→WebM→MP4 if supported),
+     captureStream FPS, auto download link, and safe fallbacks.
+   • Preview-safe: state restored; undo/redo not spammed; no layout changes.
    ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V3__) return; window.__RA_ANIM_V3__ = true;
+  if (window.__RA_ANIM_V4__) return; window.__RA_ANIM_V4__ = true;
 
+  const VERSION = '4.0.0';
+  const FPS = 30;
+
+  // ---------- Shortcuts ----------
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -2537,17 +2511,18 @@ canvas.requestRenderAll();
   };
 
   // ---------- Presets ----------
-  // kind:'viewport' => whole scene via viewport (Everything).
-  // kind:'overlays' => only overlays/text/token label (works even if What: Everything is selected).
+  // kind:'viewport' => whole scene via camera (Everything).
+  // kind:'overlays' => overlay items (stickers, shapes, images that are not base/text).
+  // kind:'text'     => text/token ID only.
   // kind:'base'     => base image only.
   // Viewport params: z (zoom), x/y (normalized pan: -0.1..+0.1).
-  // Overlay/Base params: s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized to W/H).
+  // Object params (overlays/base/text): s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized W/H).
   const PRESETS = [
     // — Viewport / Everything —
-    {id:'kb_in_ur',  name:'Ken Burns — in ↗',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
-    {id:'kb_in_ul',  name:'Ken Burns — in ↖',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y:-0.06}},
-    {id:'kb_in_dr',  name:'Ken Burns — in ↘',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y: 0.06}},
-    {id:'kb_in_dl',  name:'Ken Burns — in ↙',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y: 0.06}},
+    {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:+0.06}},
+    {id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
+    {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
+    {id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:-0.06}},
     {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
     {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
     {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
@@ -2557,18 +2532,18 @@ canvas.requestRenderAll();
     {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
 
     // — Overlays only —
-    {id:'ov_pop',     name:'Overlays pop (scale)',           kind:'overlays', ease:'ioBack', from:{s:0.90},            to:{s:1.00}},
-    {id:'ov_slide_up',name:'Overlays slide up',              kind:'overlays', ease:'ioSine', from:{dyN:0.14},          to:{dyN:0.00}},
-    {id:'ov_slide_dn',name:'Overlays slide down',            kind:'overlays', ease:'ioSine', from:{dyN:-0.14},         to:{dyN:0.00}},
-    {id:'ov_slide_l', name:'Overlays slide in ←',            kind:'overlays', ease:'ioSine', from:{dxN:-0.18},         to:{dxN:0.00}},
-    {id:'ov_slide_r', name:'Overlays slide in →',            kind:'overlays', ease:'ioSine', from:{dxN: 0.18},         to:{dxN:0.00}},
-    {id:'ov_fade',    name:'Overlays fade in',               kind:'overlays', ease:'ioCubic',from:{alpha:0.00},        to:{alpha:1.00}},
-    {id:'ov_wiggle',  name:'Overlays tiny rotate',           kind:'overlays', ease:'ioSine', from:{rot:-5},            to:{rot:0}},
-    {id:'ov_pop_big', name:'Overlays big pop (stronger)',    kind:'overlays', ease:'ioBack', from:{s:0.85},            to:{s:1.00}},
+    {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},     to:{s:1.00}},
+    {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},   to:{dyN:0.00}},
+    {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14},  to:{dyN:0.00}},
+    {id:'ov_slide_l',  name:'Overlays/Text slide in ←',         kind:'overlays', ease:'ioSine', from:{dxN:-0.18},  to:{dxN:0.00}},
+    {id:'ov_slide_r',  name:'Overlays/Text slide in →',         kind:'overlays', ease:'ioSine', from:{dxN: 0.18},  to:{dxN:0.00}},
+    {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00}, to:{alpha:1.00}},
+    {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},     to:{rot:0}},
+    {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},     to:{s:1.00}},
 
-    // — Base only (optional fun) —
-    {id:'base_nudge', name:'Base nudge (gentle zoom in)',     kind:'base',     ease:'ioSine', from:{s:1.00},          to:{s:1.06}},
-    {id:'base_slide', name:'Base slide right a bit',          kind:'base',     ease:'ioQuad', from:{dxN:-0.06},       to:{dxN:0.00}}
+    // — Base only —
+    {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},     to:{s:1.06}},
+    {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06},  to:{dxN:0.00}}
   ];
 
   // ---------- UI dock ----------
@@ -2583,12 +2558,14 @@ canvas.requestRenderAll();
     dock.innerHTML = `
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <strong>Animate</strong>
+        <span style="opacity:.55;font-size:12px">v${VERSION}</span>
         <label style="display:flex;gap:6px;align-items:center">
           What:
           <select id="raAnimScope">
-            <option value="all">Everything</option>
+            <option value="all">Everything (camera)</option>
             <option value="base">Base only</option>
             <option value="overlays">Overlays only</option>
+            <option value="text">Text only</option>
           </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
@@ -2607,13 +2584,14 @@ canvas.requestRenderAll();
           </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
-          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" style="width:60px">s
+          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" step="0.1" style="width:60px">s
         </label>
         <button id="raAnimPreview" class="btn small">Preview</button>
         <button id="raAnimExport"  class="btn small">Export video</button>
         <span id="raAnimMsg" style="font-size:12px;opacity:.75;"></span>
       </div>
       <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+      <div id="raAnimDL" style="margin-top:6px"></div>
     `;
     host.appendChild(dock);
 
@@ -2642,24 +2620,41 @@ canvas.requestRenderAll();
   }
 
   function msg(t){
-    const m = $('#raAnimMsg');
-    if (!m) return;
+    const m = $('#raAnimMsg'); if (!m) return;
     m.textContent = t||'';
-    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2000);
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2200);
   }
 
   // ---------- Helpers ----------
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const lerp=(a,b,t)=>a+(b-a)*t;
 
-  function findBaseObjs(c){ return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect); }
-  function findOverlayObjs(c){
-    // overlays + custom text + tokenId label; exclude base/background
-    return (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase && (o._kind==='overlay' || o._kind==='customText' || o._kind==='tokenId'));
+  const isBg    = o => !!o._isBgRect;
+  const isBase  = o => !!(o._isBase && !o._isBgRect);
+  const isText  = o => {
+    const k = (o._kind||'').toLowerCase();
+    const t = (o.type||'').toLowerCase();
+    return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
+  };
+  const isOverlay = o => {
+    if (isBg(o) || isBase(o) || isText(o)) return false;
+    const k = (o._kind||'').toLowerCase();
+    // Treat any non-base/non-text drawable as overlay by default.
+    return k==='overlay' || k==='sticker' || k==='icon' || true;
+  };
+
+  function pickTargets(c, scope){
+    const objs = (c.getObjects?.()||[]).filter(o => !isBg(o));
+    if (scope==='text')     return objs.filter(isText);
+    if (scope==='overlays') return objs.filter(isOverlay);
+    if (scope==='base')     return objs.filter(isBase);
+    return []; // 'all' uses viewport animation only
   }
 
   // ---------- Core ----------
   let running=false;
+  let lastURL=null;
+
   async function run(record){
     const c=C(); if(!c){ alert('Canvas not ready'); return; }
     if (running) return;
@@ -2673,62 +2668,72 @@ canvas.requestRenderAll();
 
     const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
     const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
-    let   scope   = scopeEl?.value || 'all';
+    const scope   = scopeEl?.value || 'all';
 
-    // Auto-scope overlays if user picked an overlay preset
-    if (preset.kind==='overlays') scope = 'overlays';
+    const W=c.getWidth?.()||0, H=c.getHeight?.()||0, cx=W/2, cy=H/2;
 
-    const baseObjs    = findBaseObjs(c);
-    const overlayObjs = findOverlayObjs(c);
+    // Decide mode/targets strictly via the UI scope + pickTargets()
+    const viewportOnly = (preset.kind==='viewport' && scope==='all');
+    const targets = viewportOnly ? [] : pickTargets(c, scope);
 
-    if (scope==='base' && baseObjs.length===0){ msg('Load an image first'); return; }
-    if (scope==='overlays' && overlayObjs.length===0){ msg('Add an overlay or text first'); return; }
+    // Guard rails for empty selections
+    if (!viewportOnly && targets.length===0){
+      if (scope==='base'){      msg('Load an image first'); return; }
+      if (scope==='overlays'){  msg('Add an overlay first'); return; }
+      if (scope==='text'){      msg('Add custom text or token ID first'); return; }
+    }
 
     running=true; msg(record?'Recording…':'Playing…');
 
     // Save state
     const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-    const active = c.getActiveObject(); c.discardActiveObject(); c.requestRenderAll();
+    const active = c.getActiveObject?.(); c.discardActiveObject?.(); c.requestRenderAll?.();
 
-    // Snapshots
+    // Snapshots for object animations
     const snap = new Map();
-    const store = o => snap.set(o, { left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity });
+    const store = o => snap.set(o, {
+      left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY,
+      angle:o.angle, opacity:(o.opacity==null?1:o.opacity)
+    });
+    targets.forEach(store);
 
-    const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
+    // Clean previous URL if any
+    if (lastURL){ try{ URL.revokeObjectURL(lastURL); }catch(_){ } lastURL=null; }
+    $('#raAnimDL')?.replaceChildren?.();
 
-    let targets = [];
-    if (preset.kind==='viewport' && scope==='all'){
-      targets = []; // viewport only
-    } else if (scope==='base'){
-      baseObjs.forEach(store); targets = baseObjs.slice();
-    } else if (scope==='overlays'){
-      overlayObjs.forEach(store); targets = overlayObjs.slice();
-    }
-
-    // Recording (optional)
+    // Optional recording
     let rec, chunks=[];
+    const vidEl = $('#raAnimOut');
     if (record){
       try{
-        const stream = (c.lowerCanvasEl || c.upperCanvasEl).captureStream(30);
-        rec = new MediaRecorder(stream, { mimeType:'video/webm;codecs=vp9' });
-        rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
-        rec.start();
+        const el = (c.lowerCanvasEl || c.upperCanvasEl);
+        const stream = el?.captureStream ? el.captureStream(FPS) : null;
+        const type = pickMimeType();
+        if (stream && typeof MediaRecorder!=='undefined'){
+          const opts = type ? { mimeType:type } : undefined;
+          rec = new MediaRecorder(stream, opts);
+          rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
+          rec.start();
+        } else {
+          msg('Recording not supported in this browser');
+        }
       }catch(_){ msg('Recording not supported'); }
     }
 
     const t0 = performance.now(); let rafId=0;
 
     function applyViewport(z,xN,yN){
+      // Center-aware transform: translation keeps origin stable while panning by normalized canvas units
       const e = (1 - z) * cx + xN * W;
       const f = (1 - z) * cy + yN * H;
-      c.setViewportTransform([z,0,0,z, e, f]);
+      c.setViewportTransform?.([z,0,0,z, e, f]);
     }
 
     function step(now){
       const raw = clamp((now - t0)/dur, 0, 1);
       const t   = ease(raw);
 
-      if (preset.kind==='viewport' && scope==='all'){
+      if (viewportOnly){
         const z  = lerp(preset.from.z, preset.to.z, t);
         const xn = lerp(preset.from.x, preset.to.x, t);
         const yn = lerp(preset.from.y, preset.to.y, t);
@@ -2758,41 +2763,83 @@ canvas.requestRenderAll();
           o.top    = o0.top  + dpy;
           if (hasRot)   o.angle   = o0.angle + rot;
           if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
-          o.setCoords();
+          o.setCoords?.();
         });
       }
 
-      c.requestRenderAll();
+      c.requestRenderAll?.();
       if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
     }
 
     function finish(){
       cancelAnimationFrame(rafId);
+
       if (rec){
         try{
           rec.onstop = ()=>{
-            const blob = new Blob(chunks, {type:'video/webm'});
+            const type = rec.mimeType || 'video/webm';
+            const blob = new Blob(chunks, {type});
             const url  = URL.createObjectURL(blob);
-            const vid  = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
-            msg('Done. Use the video menu to download.');
+            lastURL = url;
+
+            // Video element
+            if (vidEl){
+              vidEl.style.display='block';
+              vidEl.src = url;
+              vidEl.play?.().catch(()=>{});
+            }
+
+            // Download link
+            const dl = $('#raAnimDL');
+            if (dl){
+              dl.innerHTML = '';
+              const a = document.createElement('a');
+              a.textContent = 'Download animation';
+              a.href = url;
+              a.download = `animation_${Date.now()}.${extFromMime(type)}`;
+              a.className = 'btn small';
+              dl.appendChild(a);
+            }
+
+            msg('Done. Preview above or use “Download animation”.');
           };
           rec.stop();
-        }catch(_){}
+        }catch(_){ /* ignore */ }
       } else {
         msg('Done');
       }
-      try { c.setViewportTransform(vt0); } catch(_){}
+
+      // Restore state
+      try { c.setViewportTransform?.(vt0); } catch(_){}
       targets.forEach(o=>{
         const s = snap.get(o); if(!s) return;
         o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
-        o.setCoords();
+        o.setCoords?.();
       });
-      if (active) try{ c.setActiveObject(active); }catch(_){}
-      c.requestRenderAll();
+      if (active) try{ c.setActiveObject?.(active); }catch(_){}
+      c.requestRenderAll?.();
       running=false;
     }
 
     requestAnimationFrame(step);
+  }
+
+  // ---------- Utilities ----------
+  function pickMimeType(){
+    const pref = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4' // may be unsupported in many browsers for MediaRecorder
+    ];
+    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
+    for (const t of pref){ if (MediaRecorder.isTypeSupported(t)) return t; }
+    return '';
+  }
+  function extFromMime(t){
+    if (!t) return 'webm';
+    if (t.includes('mp4')) return 'mp4';
+    return 'webm';
   }
 
   // Build UI now/when ready
@@ -6788,3 +6835,99 @@ async function loadTokenFromCollection(tokenId, col){
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
 })();
 
+/* ==========================================================
+   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED)
+   - Hooks ONLY the button with id="openNewTab" (no text sniffing)
+   - Opens a clean viewer tab first, then sends a Blob URL (Safari‑safe)
+   - Never navigates the original tab
+   - Paste at the VERY BOTTOM of app.js
+   ========================================================== */
+(function RA_OPEN_NEW_TAB_VIEWER_V2(){
+  function getCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k in window){
+        try{
+          const v = window[k];
+          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
+        }catch(_){}
+      }
+    }
+    return null;
+  }
+
+  function getMultiplier(){
+    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
+    if (!el) return 2;
+    const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
+    return (v && v >= 1 && v <= 8) ? v : 2;
+  }
+
+  function openViewer(){
+    const c = getCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
+
+    // Open the tab immediately (keeps it a user gesture → popup‑safe)
+    const win = window.open('about:blank','_blank');
+    if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
+
+    // Lightweight viewer shell
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
+            box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
+        .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+             color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+             background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
+      </style></head><body>
+        <div class="viewer"><img id="raImg" alt="export"></div>
+        <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+        <script>
+          (function(){
+            var img = document.getElementById('raImg'), fit = true;
+            function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
+                              else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
+            img.addEventListener('click', function(){ fit=!fit; apply(); });
+            apply();
+            window.addEventListener('message', function(ev){
+              if (ev && ev.data && ev.data.type==='ra-img') { img.src = ev.data.url; }
+            }, false);
+            setTimeout(function(){
+              if (!img.src) { document.body.insertAdjacentHTML('beforeend',
+                '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'); }
+            }, 2000);
+          })();
+        <\/script>
+      </body></html>`;
+    win.document.open(); win.document.write(html); win.document.close();
+
+    // Produce the PNG and send a Blob URL to the viewer (more reliable than giant data: URLs)
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+      fetch(dataUrl).then(r=>r.blob()).then(blob=>{
+        const url = URL.createObjectURL(blob);
+        try { win.postMessage({ type:'ra-img', url }, '*'); } catch(_){}
+        // Revoke when the tab closes
+        const tid = setInterval(()=>{ if (win.closed){ URL.revokeObjectURL(url); clearInterval(tid); } }, 4000);
+      }).catch(()=>{
+        try{ win.document.body.innerHTML =
+          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same‑origin or CORS‑enabled images.</div>'; }catch(_){}
+      });
+    }catch(e){
+      try{ win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same‑origin or CORS‑enabled images.</div>'; }catch(_){}
+    }
+  }
+
+  // Capture ONLY the actual “Open in new tab” button (id="openNewTab")
+  document.addEventListener('click', function(e){
+    const btn = e.target && e.target.closest && e.target.closest('#openNewTab');
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    openViewer();
+  }, true);
+})();
