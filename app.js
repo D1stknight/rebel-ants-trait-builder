@@ -2,8 +2,13 @@
   // ===============================
   //  CONFIG
   // ===============================
-  const CONTRACT  = "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
-  const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
+  // Prefer ?contract=… or window._RA_CONTRACT, else default to Rebel Ants
+const CONTRACT =
+  new URLSearchParams(location.search).get('contract')
+  || (window._RA_CONTRACT && String(window._RA_CONTRACT))
+  || "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+
+const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
   // ---- Watermark (single source, easy to change) ----
   // Edit the string below to the EXACT watermark image you want.
