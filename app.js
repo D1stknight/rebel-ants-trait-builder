@@ -129,6 +129,33 @@ function isAllowedAssetURL(u){
     if (idLabel) canvas.bringToFront(idLabel);
   }
 
+  /* ===== RA_LAYER_ORDER_ENFORCER ===== */
+(function(){
+  if (window.__RA_LAYER_ORDER_ENFORCER__) return;
+  window.__RA_LAYER_ORDER_ENFORCER__ = true;
+
+  window.raEnforceLayerOrder = function(){
+    const c = window.canvas; if (!c) return;
+    try{
+      // 1) Background always lowest
+      if (typeof backgroundRect !== 'undefined' && backgroundRect) c.sendToBack(backgroundRect);
+
+      // 2) Base image/group sits just above background
+      const objs = c.getObjects() || [];
+      const base = objs.find(o => o && o._isBase);
+      if (base) c.sendToBack(base);
+
+      // 3) Overlays above base
+      objs.filter(o => o && o._kind === 'overlay').forEach(o => c.bringToFront(o));
+
+      // 4) System/UI (token label, footers, etc.) at the very top
+      objs.filter(o => o && (o._raSys || o._raTokenId)).forEach(o => c.bringToFront(o));
+
+      c.requestRenderAll();
+    }catch(_){}
+  };
+})();
+
   function initBackgroundRect(fill){
     backgroundRect = new fabric.Rect({
       left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(),
@@ -383,53 +410,66 @@ canvas.requestRenderAll();
     let out=''; for(const [sym,val] of map){ while(num>=val){ out+=sym; num-=val; } } return out;
   }
 
-  // ===============================
-  //  DOM READY
-  // ===============================
-  document.addEventListener("DOMContentLoaded", () => {
-    if(!window.fabric){ alert("fabric.js failed to load. Open via a local server or check internet."); return; }
+ // ===============================
+//  DOM READY
+// ===============================
+document.addEventListener("DOMContentLoaded", () => {
+  if(!window.fabric){
+    alert("fabric.js failed to load. Open via a local server or check internet.");
+    return;
+  }
 
-    // Create Fabric canvas
-    canvas=new fabric.Canvas("c", {
-      backgroundColor:"transparent",
-      preserveObjectStacking:true,
-      enableRetinaScaling:true,
-      selectionBorderColor:'#22d3ee',
-      selectionColor:'rgba(34,211,238,.08)'
-    });
-    window.canvas = canvas;
+  // Create Fabric canvas
+  canvas = new fabric.Canvas("c", {
+    backgroundColor:"transparent",
+    preserveObjectStacking:true,
+    enableRetinaScaling:true,
+    selectionBorderColor:'#22d3ee',
+    selectionColor:'rgba(34,211,238,.08)'
+  });
+  window.canvas = canvas;
 
-    // Background and initial size
-    initBackgroundRect("#0d0e13");
-    const sizeEl = $("canvasSize");
-    if (sizeEl) sizeEl.value = "700";
-    setCanvasSize(parseInt(sizeEl?sizeEl.value:"700",10));
-    setZoom(1);
+  // Background and initial size
+  initBackgroundRect("#0d0e13");
+  const sizeEl = $("canvasSize");
+  if (sizeEl) sizeEl.value = "700";
+  setCanvasSize(parseInt(sizeEl ? sizeEl.value : "700", 10));
+  setZoom(1);
 
-    // Permanents → embed to the grid
-    overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name:m.name, src:m.src, perm:true }));
-    renderOverlayGrid();
+  // >>> NEW: run once right after initial layout
+  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
 
-    // -------- Base image: local upload
-    safeAddListener("baseUpload","change", async (e)=>{
-      const f=e.target.files && e.target.files[0];
-      if (!f) return;
-      const data = await fileToDataURL(f);
-      await loadBaseImage(data, false); // non‑token => watermark
-    });
-    safeAddListener("clearUpload","click", ()=>{
-      const inp=$("baseUpload"); if (inp) inp.value="";
-      clearBaseOnly();
-    });
+  // >>> NEW: keep layers sane after *any* canvas change
+  try {
+    canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+    canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+  } catch(_) {}
 
-    // -------- Base image: paste URL
-    safeAddListener("loadUrl","click", async ()=>{
-  const url = ($("baseUrl") && $("baseUrl").value || "").trim();
-  if (!url) return;
-  if (!isAllowedAssetURL(url)) { alert("That URL type isn’t allowed. Use http(s) or a relative path."); return; }
-  const data = await fetchAsDataURL(url);
-  await loadBaseImage(data, false);
-});
+  // --- keep the rest of your existing boot code below this line ---
+  // Permanents → embed to the grid
+  overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name:m.name, src:m.src, perm:true }));
+  renderOverlayGrid();
+
+  // -------- Base image: local upload
+  safeAddListener("baseUpload","change", async (e)=>{
+    const f=e.target.files && e.target.files[0];
+    if (!f) return;
+    const data = await fileToDataURL(f);
+    await loadBaseImage(data, false); // non-token => watermark
+  });
+  safeAddListener("clearUpload","click", ()=>{
+    const inp=$("baseUpload"); if (inp) inp.value="";
+    clearBaseOnly();
+  });
+
+  // -------- Base image: paste URL
+  safeAddListener("loadUrl","click", async ()=>{
+    const url = ($("baseUrl") && $("baseUrl").value || "").trim();
+    if (!url) return;
+    if (!isAllowedAssetURL(url)) { alert("That URL type isn’t allowed. Use http(s) or a relative path."); return; }
+    const data = await fetchAsDataURL(url);
+    await loadBaseImage(data, false);
+  });
 
 /* -------- Base image: load by token (multi‑collection) --------
    Reads the selected collection’s contract from your dropdown and
