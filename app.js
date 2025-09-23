@@ -2358,7 +2358,6 @@ const candidates = [
     addTempFabricWM,
     removeTempFabricWM
     });
-})();
 
 /* ==========================================================
    RA_UNDO_REDO_SAFE_MINI_V1
