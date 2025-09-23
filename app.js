@@ -229,32 +229,39 @@ function isAllowedAssetURL(u){
 
   // Place two corner stamps into a center-origin group
   async function makeStampedGroup(img, bw, bh, wmWidthRatio){
-    const wmTL = await fabricFromURL(WM_SRC);
-    const wmBR = await fabricFromURL(WM_SRC);
-    const wmTargetW = Math.max(16, bw * wmWidthRatio);
-    const margin    = Math.max(6,  bw * 0.02);
+  const wmTL = await fabricFromURL(WM_SRC);
+  const wmBR = await fabricFromURL(WM_SRC);
+  const wmTargetW = Math.max(16, bw * wmWidthRatio);
+  const margin    = Math.max(6,  bw * 0.02);
 
-    const scaleTL = wmTargetW / wmTL.width;
-    const scaleBR = wmTargetW / wmBR.width;
-    wmTL.scale(scaleTL); wmBR.scale(scaleBR);
+  const scaleTL = wmTargetW / wmTL.width;
+  const scaleBR = wmTargetW / wmBR.width;
+  wmTL.scale(scaleTL); wmBR.scale(scaleBR);
 
-    Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:"TL" });
-    Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:"BR" });
+  Object.assign(wmTL, {
+    selectable:false, evented:false, hasControls:false,
+    _isWatermark:true, _raSys:true, raWM:true, raPos:"TL"
+  });
+  Object.assign(wmBR, {
+    selectable:false, evented:false, hasControls:false,
+    _isWatermark:true, _raSys:true, raWM:true, raPos:"BR"
+  });
 
-    wmTL.set({
-      originX:"center", originY:"center",
-      left: -bw/2 + margin + wmTL.width*scaleTL/2,
-      top:  -bh/2 + margin + wmTL.height*scaleTL/2
-    });
-    wmBR.set({
-      originX:"center", originY:"center",
-      left:  bw/2 - margin - wmBR.width*scaleBR/2,
-      top:   bh/2 - margin - wmBR.height*scaleBR/2
-    });
+  wmTL.set({
+    originX:"center", originY:"center",
+    left: -bw/2 + margin + wmTL.width*scaleTL/2,
+    top:  -bh/2 + margin + wmTL.height*scaleTL/2
+  });
+  wmBR.set({
+    originX:"center", originY:"center",
+    left:  bw/2 - margin - wmBR.width*scaleBR/2,
+    top:   bh/2 - margin - wmBR.height*scaleBR/2
+  });
 
-    const group = new fabric.Group([img, wmTL, wmBR], { originX:"center", originY:"center" });
-    return group;
-  }
+  const group = new fabric.Group([img, wmTL, wmBR], { originX:"center", originY:"center" });
+  return group;
+}
+
 
   async function loadBaseImage(dataUrl, isToken){
     clearBaseOnly();
@@ -467,9 +474,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // >>> NEW: keep layers sane after *any* canvas change
   try {
-    canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-    canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-  } catch(_) {}
+  canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+  canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+  canvas.on('object:removed',  () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+} catch(_) {}
 
   // --- keep the rest of your existing boot code below this line ---
   // Permanents → embed to the grid
@@ -496,6 +504,32 @@ document.addEventListener("DOMContentLoaded", () => {
     const data = await fetchAsDataURL(url);
     await loadBaseImage(data, false);
   });
+
+  /* ===== RA_ENFORCE_AFTER_LOADFROMJSON ===== */
+(function(){
+  if (window.__RA_AFTER_LOADFROMJSON__) return;
+  window.__RA_AFTER_LOADFROMJSON__ = true;
+
+  const getC = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function patch(c){
+    if (!c || c.__raPatchedLoadJSON) return;
+    const orig = c.loadFromJSON.bind(c);
+    c.loadFromJSON = function(json, cb, reviver){
+      const next = (typeof cb === 'function') ? cb : function(){};
+      return orig(json, function(){
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        next();
+      }, reviver);
+    };
+    c.__raPatchedLoadJSON = true;
+  }
+
+  (function wait(){
+    const c = getC(); if (!c) return setTimeout(wait, 150);
+    patch(c);
+  })();
+})();
 
 /* -------- Base image: load by token (multi‑collection) --------
    Reads the selected collection’s contract from your dropdown and
@@ -7267,23 +7301,32 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   async function reservoirCandidates(contract, tokenId, chainSlug){
-  // Normalize slugs for Reservoir
   let rsSlug = (chainSlug||'').toLowerCase();
-  if (rsSlug === 'apechain' || rsSlug === 'ape' || rsSlug === 'apecoinchain') rsSlug = 'apecoin';
+  // standardize our internal slugs
   if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
   if (rsSlug === 'base') rsSlug = 'base';
+  if (rsSlug === 'ape' || rsSlug === 'apechain' || rsSlug === 'apecoinchain') rsSlug = 'apechain';
 
-  const url = `https://api.reservoir.tools/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&chain=${encodeURIComponent(rsSlug)}&limit=1`;
+  // choose correct host per chain (per Reservoir docs)
+  // https://nft.reservoir.tools/reference/supported-chains
+  const HOST = (
+    rsSlug === 'apechain'  ? 'https://api-apechain.reservoir.tools' :
+    rsSlug === 'base'      ? 'https://api-base.reservoir.tools'     :
+                             'https://api.reservoir.tools'           // ethereum default
+  );
+
+  const url = `${HOST}/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&limit=1`;
   const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
-    if (!r.ok) return [];
-    const j = await r.json();
-    const t = j?.tokens?.[0]?.token || {};
-    const m = t.media || {};
-    return [
-      m?.original?.url || m?.original?.mediaUrl,
-      t.imageLarge, t.image, t.imageUrl, t.imageSmall
-    ].filter(Boolean).map(normalizeUrl);
-  }
+  if (!r.ok) return [];
+  const j = await r.json();
+  const t = j?.tokens?.[0]?.token || {};
+  const m = t.media || {};
+  return [
+    m?.original?.url || m?.original?.mediaUrl,
+    t.imageLarge, t.image, t.imageUrl, t.imageSmall
+  ].filter(Boolean).map(normalizeUrl);
+}
+
 
   function killOldBase(c){
     (c.getObjects() || []).slice().forEach(o => { if (o && o._isBase) c.remove(o); });
