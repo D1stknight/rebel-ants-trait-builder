@@ -10,11 +10,15 @@ const CONTRACT =
 
 const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
-  // ---- Watermark (single source, easy to change) ----
-  // Edit the string below to the EXACT watermark image you want.
-  // You can also override at runtime with ?wm=https://.../your.png
-  const __wmQS = new URLSearchParams(location.search).get('wm');
+// ---- ApeChain RPC default (only if not already set elsewhere) ----
+if (typeof window.__APECHAIN_RPC === 'undefined' || !window.__APECHAIN_RPC) {
+  window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
+}
+
+// ---- Watermark (single source, easy to change) ----
+const __wmQS = new URLSearchParams(location.search).get('wm');
 let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
+
 
   (function checkWatermark(){
     const test = new Image();
@@ -7029,8 +7033,7 @@ async function loadTokenFromCollection(tokenId, col){
   if (window.__RA_APE_RPC_FALLBACK__) return;
   window.__RA_APE_RPC_FALLBACK__ = true;
 
-  // Set this once (in index.html or before app.js runs) to your ApeChain RPC endpoint:
-  // window.__APECHAIN_RPC = "https://api.apecoinchain.org"; // example — use your preferred endpoint
+  // We set a safe default earlier in CONFIG. You can still override window.__APECHAIN_RPC at runtime if needed.
 
   async function jsonRpc(url, body){
     const r = await fetch(url, {
@@ -7051,9 +7054,8 @@ async function loadTokenFromCollection(tokenId, col){
     return u;
   }
 
-  // Expose a helper the loader can call:
   window.__fetchApechainImageURL = async function(contract, tokenId){
-    const rpc = window.__APECHAIN_RPC;
+    const rpc = window.__APECHAIN_RPC;  // now guaranteed to exist
     if (!rpc) return null;
 
     // tokenURI(uint256) = 0xc87b56dd
@@ -7062,7 +7064,8 @@ async function loadTokenFromCollection(tokenId, col){
     const call  = { to: contract, data };
 
     const res = await jsonRpc(rpc, { jsonrpc:'2.0', id:1, method:'eth_call', params:[call, 'latest'] });
-    // Decode ABI string
+
+    // decode ABI string result
     const hex = (res||'').replace(/^0x/,'');
     if (hex.length < 128) return null;
     const len = parseInt(hex.slice(64,128),16);
@@ -7070,7 +7073,7 @@ async function loadTokenFromCollection(tokenId, col){
     let uri = '';
     for (let i=0;i<dataHex.length;i+=2) uri += String.fromCharCode(parseInt(dataHex.slice(i,i+2),16));
 
-    // Pull metadata and return image
+    // fetch metadata → image
     const metaUrl = ipfsToHttp(uri);
     const mRes = await fetch(metaUrl, {cache:'no-store'});
     if (!mRes.ok) return null;
@@ -7078,6 +7081,7 @@ async function loadTokenFromCollection(tokenId, col){
     return ipfsToHttp(meta && (meta.image || meta.image_url || meta.imageUrl));
   };
 })();
+
 
 /* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
 ;(() => {
@@ -7226,9 +7230,15 @@ async function loadTokenFromCollection(tokenId, col){
     img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
 
     c.add(img);
-    try { c.sendToBack(img); } catch(_){}
-    c.requestRenderAll();
-    return true;
+try { c.sendToBack(img); } catch(_){}
+try {
+  // ensure any overlays/labels/UI sit above base
+  const objs = c.getObjects() || [];
+  objs.forEach(o => { if (o && (o._kind==='overlay' || o._raSys)) c.bringToFront(o); });
+} catch(_){}
+c.requestRenderAll();
+return true;
+
   }
 
   function annotateBase(meta){
