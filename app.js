@@ -13,8 +13,8 @@ const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
   // ---- Watermark (single source, easy to change) ----
   // Edit the string below to the EXACT watermark image you want.
   // You can also override at runtime with ?wm=https://.../your.png
-  let WM_SRC = new URLSearchParams(location.search).get('wm')
-            || "/assets/watermark.png?v=wm10"; // <--- CHANGE THIS PATH IF NEEDED
+  const __wmQS = new URLSearchParams(location.search).get('wm');
+let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
 
   (function checkWatermark(){
     const test = new Image();
@@ -50,24 +50,55 @@ const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
   function safeAddListener(id, ev, fn){ const el=$(id); if (el) el.addEventListener(ev, fn); }
 
   async function fileToDataURL(file){
-    return await new Promise((res,rej)=>{
-      const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
-    });
+  // Hard cap: 15 MB per image (tweak if you want)
+  const MAX = 15 * 1024 * 1024;
+  if (file && file.size > MAX){
+    alert("That file is too large (max ~15 MB).");
+    throw new Error("file-too-large");
   }
+  return await new Promise((res,rej)=>{
+    const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
+  });
+}
   async function fetchAsDataURL(url){
-    const r=await fetch(url,{mode:"cors"});
+  // Safety: block disallowed schemes *again* (defense-in-depth)
+  if (!isAllowedAssetURL(url)) throw new Error("Blocked URL scheme");
+  const ac = new AbortController();
+  const t = setTimeout(()=>ac.abort(), 12000); // 12s timeout
+  try{
+    const r = await fetch(url, { mode:"cors", signal: ac.signal, cache:"no-store" });
     if(!r.ok) throw new Error("Fetch failed");
-    const b=await r.blob();
-    return await new Promise((res)=>{
-      const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b);
+    const b = await r.blob();
+    return await new Promise((res,rej)=>{
+      const fr=new FileReader();
+      fr.onload=()=>res(fr.result);
+      fr.onerror=rej;
+      fr.readAsDataURL(b);
     });
-  }
+  } finally { clearTimeout(t); }
+}
   function normalize(u){
     if(!u) return null;
     if(u.startsWith("ipfs://")) return "https://cloudflare-ipfs.com/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
     if(u.startsWith("ar://"))   return "https://arweave.net/"+u.replace("ar://","");
     return u;
   }
+
+  // ——— Security helpers ———
+function isAllowedAssetURL(u){
+  if (!u) return false;
+  // Hard-block dangerous schemes up front
+  if (/^\s*(javascript:|data:|blob:)/i.test(String(u))) return false;
+  try{
+    const url = new URL(u, location.origin);
+    // Allow: same-origin relative URLs, http(s)
+    return url.protocol === 'http:' || url.protocol === 'https:' || !/^[a-z][a-z0-9+\-.]*:/i.test(u);
+  }catch(_){
+    // If URL() fails, treat as a relative path (allowed) unless it *looks* like a scheme
+    return !/^[a-z][a-z0-9+\-.]*:/i.test(String(u));
+  }
+}
+  
   async function fetchImageByTokenId(contract, tokenId){
     const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
     const r = await fetch(u,{headers:{'accept':'application/json'}, cache:'no-store'});
@@ -388,11 +419,12 @@ canvas.requestRenderAll();
 
     // -------- Base image: paste URL
     safeAddListener("loadUrl","click", async ()=>{
-      const url = ($("baseUrl") && $("baseUrl").value || "").trim();
-      if (!url) return;
-      const data = await fetchAsDataURL(url);
-      await loadBaseImage(data, false);
-    });
+  const url = ($("baseUrl") && $("baseUrl").value || "").trim();
+  if (!url) return;
+  if (!isAllowedAssetURL(url)) { alert("That URL type isn’t allowed. Use http(s) or a relative path."); return; }
+  const data = await fetchAsDataURL(url);
+  await loadBaseImage(data, false);
+});
 
 /* -------- Base image: load by token (multi‑collection) --------
    Reads the selected collection’s contract from your dropdown and
@@ -782,16 +814,26 @@ safeAddListener("loadToken","click", async ()=>{
         const grid=$("ra2ShelfGrid"); if (!grid) return;
         grid.innerHTML='';
         getShelf().forEach(item=>{
-          const tile=document.createElement('div');
-          tile.style.cssText='position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-          tile.innerHTML = `
-            <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-              <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-            </div>
-            <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
-          `;
-          tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
-          grid.appendChild(tile);
+          const tile = document.createElement('div');
+tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+
+const frame = document.createElement('div');
+frame.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
+const img = document.createElement('img');
+img.src = item.dataURL;
+img.alt = item.name || '';
+img.style.cssText = 'max-width:100%;max-height:80px;';
+frame.appendChild(img);
+
+const cap = document.createElement('div');
+cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+cap.textContent = item.name || '';
+
+tile.appendChild(frame);
+tile.appendChild(cap);
+
+tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
+grid.appendChild(tile);
         });
       }
       draw();
@@ -822,7 +864,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // High‑quality PNG export used by both paths
   function doExport(openTab){
     if (!window.canvas) return;
-    const mult = parseInt(($("exportMultiplier")||{}).value||"2",10);
+    const rawMult = parseInt(($("exportMultiplier")||{}).value || "2", 10);
+const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
     let dataURL;
     try{
       dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
@@ -946,7 +989,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
   function resizeCanvasAndScale(newSize){
     const c = C(); if (!c) return;
     newSize = parseInt(newSize, 10);
-    if (!newSize || !isFinite(newSize)) return;
+if (!isFinite(newSize)) return;
+newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
 
     const oldW = c.getWidth(), oldH = c.getHeight();
     if (!oldW || !oldH) return;
@@ -1526,78 +1570,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     document.addEventListener('DOMContentLoaded', injectButton, { once:true });
   } else {
     injectButton();
-  }
-})();
-
-/* ================= RA_FONT_PICKER_CLEAN_V1 =================
-   Shows friendly names in the font dropdown while keeping
-   correct CSS font stacks as the actual values.
-   Works for #fontFamily (Custom Text). If you also have an
-   #idFontFamily picker for the token ID, it will apply there too.
-   ========================================================== */
-(function RA_FONT_PICKER_CLEAN_V1(){
-  const FONTS = [
-    { name: 'Impact',            stack: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
-    { name: 'Arial Black',       stack: "'Arial Black', Gadget, sans-serif" },
-    { name: 'Arial',             stack: "Arial, Helvetica, sans-serif" },
-    { name: 'Helvetica Neue',    stack: "'Helvetica Neue', Helvetica, Arial, sans-serif" },
-    { name: 'Verdana',           stack: "Verdana, Geneva, sans-serif" },
-    { name: 'Tahoma',            stack: "Tahoma, Geneva, sans-serif" },
-    { name: 'Trebuchet MS',      stack: "'Trebuchet MS', Helvetica, sans-serif" },
-    { name: 'Georgia',           stack: "Georgia, 'Times New Roman', serif" },
-    { name: 'Times New Roman',   stack: "'Times New Roman', Times, serif" },
-    { name: 'Palatino',          stack: "Palatino, 'Palatino Linotype', serif" },
-    { name: 'Garamond',          stack: "Garamond, Baskerville, 'Baskerville Old Face', 'Times New Roman', serif" },
-    { name: 'Optima',            stack: "Optima, Segoe, 'Segoe UI', Candara, Calibri, Arial, sans-serif" },
-    { name: 'Century Gothic',    stack: "'Century Gothic', AppleGothic, sans-serif" },
-    { name: 'Gill Sans',         stack: "'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" },
-    { name: 'Avenir',            stack: "Avenir, 'Avenir Next', 'Segoe UI', sans-serif" },
-    { name: 'Copperplate',       stack: "Copperplate, 'Copperplate Gothic Light', fantasy" },
-    { name: 'Papyrus',           stack: "Papyrus, fantasy" },
-    { name: 'Brush Script MT',   stack: "'Brush Script MT', cursive" },
-    { name: 'Lucida Sans',       stack: "'Lucida Sans Unicode','Lucida Grande', sans-serif" },
-    { name: 'Lucida Console',    stack: "'Lucida Console', Monaco, monospace" },
-    { name: 'Consolas',          stack: "Consolas, 'Lucida Console', Monaco, monospace" },
-    { name: 'Courier',           stack: "Courier, 'Courier New', monospace" },
-    { name: 'Menlo',             stack: "Menlo, Monaco, Consolas, 'Courier New', monospace" },
-    { name: 'System UI',         stack: "system-ui, -apple-system, 'Segoe UI', Roboto, Arial" }
-  ];
-
-  function applyToPicker(el){
-    if (!el) return;
-
-    // keep current value if it matches one of our stacks
-    const current = (el.value || '').trim();
-    const keep = FONTS.some(f => f.stack === current) ? current : null;
-
-    // only repopulate if it's a <select> (so we keep existing listeners)
-    if (el.tagName.toLowerCase() === 'select'){
-      el.innerHTML = '';
-      FONTS.forEach(f => {
-        const opt = document.createElement('option');
-        opt.value = f.stack;          // what fabric uses
-        opt.textContent = f.name;     // what user sees
-        el.appendChild(opt);
-      });
-      el.value = keep || FONTS[0].stack;
-
-      // fire a change so the canvas updates if needed
-      try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_) {}
-    } else {
-      // if it’s an <input>, just ensure it has a sane default stack
-      if (!keep) el.value = FONTS[0].stack;
-    }
-  }
-
-  function run(){
-    applyToPicker(document.getElementById('fontFamily'));   // Custom Text font
-    applyToPicker(document.getElementById('idFontFamily')); // (optional) Token ID font, if present
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', run, { once:true });
-  } else {
-    run();
   }
 })();
 
@@ -2186,12 +2158,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
   };
 
   // ---------- Watermark loader (robust + CORS-safe) ----------
-  const queryWM = new URLSearchParams(location.search).get('wm');
-  const candidates = [
-    queryWM,                             // highest priority if provided
-    '/assets/watermark.png?v=wm10',      // your current primary
-    '/watermark.png?v=wm10'              // fallback
-  ].filter(Boolean);
+  const wmQS = new URLSearchParams(location.search).get('wm');
+const queryWM = isAllowedAssetURL(wmQS) ? wmQS : null;
+const candidates = [
+  queryWM,
+  '/assets/watermark.png?v=wm10',
+  '/watermark.png?v=wm10'
+].filter(Boolean);
 
   const STATE = {
     url: null,
@@ -3033,9 +3006,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
   } catch(_){} };
 
   // ---------- load watermark image (same precedence you’ve used) ----------
-  const queryWM = new URLSearchParams(location.search).get('wm');
-  const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
-
+  const wmQS = new URLSearchParams(location.search).get('wm');
+const queryWM = isAllowedAssetURL(wmQS) ? wmQS : null;
+const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
   async function fetchAsDataURL(u){
     const r = await fetch(u, { cache:'no-store', mode:'cors' });
     if (!r.ok) throw new Error('x');
@@ -3368,16 +3341,23 @@ const shouldShow =
     wrap.innerHTML = '';
     items.forEach((item, idx) => {
       const tile = document.createElement('div');
-      tile.style.cssText =
-        'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          ${item.name||''}
-        </div>
-      `;
+tile.style.cssText =
+  'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+
+const frame = document.createElement('div');
+frame.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
+const img = document.createElement('img');
+img.src = item.dataURL;
+img.alt = item.name || '';
+img.style.cssText = 'max-width:100%;max-height:80px;';
+frame.appendChild(img);
+
+const cap = document.createElement('div');
+cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+cap.textContent = item.name || '';
+
+tile.appendChild(frame);
+tile.appendChild(cap);
 
       // Click = add overlay (ignore if clicking the delete button)
       tile.addEventListener('click', (ev) => {
