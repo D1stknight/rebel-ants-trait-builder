@@ -103,6 +103,42 @@ function raSafeClear(keepBg=true){
   }
 }
 
+  /* ===== RA_CLEAR_PATCH_DELAYED_GUARD — preserve base/sys only if NO JSON restore follows ===== */
+(function RA_CLEAR_PATCH_DELAYED_GUARD(){
+  if (window.__RA_CLEAR_PATCH_DELAYED_GUARD__) return;
+  window.__RA_CLEAR_PATCH_DELAYED_GUARD__ = true;
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function patch(c){
+    if (!c || c.__raClearPatched) return;
+    const _clear = c.clear.bind(c);
+
+    c.clear = function(){
+      // snapshot objects we’d like to preserve on manual clears
+      const keep = [];
+      (this.getObjects?.()||[]).forEach(o=>{
+        if (o && (o._isBase || o._raSys)) keep.push(o);
+      });
+
+      _clear(); // perform the real clear
+
+      // If a JSON restore (Undo/Redo/Restore Draft) is happening, skip re-add.
+      const me = this;
+      setTimeout(()=>{
+        if (window.__raLoadingJSON) return; // history is restoring; don’t fight it
+        try { keep.forEach(o=> me.add(o)); } catch(_){}
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { me.requestRenderAll(); } catch(_){}
+      }, 80);
+    };
+
+    c.__raClearPatched = true;
+  }
+
+  (function wait(){ const c=C(); if (!c){ setTimeout(wait,120); return; } patch(c); })();
+})();
+
   // ——— Security helpers ———
 function isAllowedAssetURL(u){
   if (!u) return false;
@@ -515,65 +551,55 @@ safeAddListener("clearUpload","click", ()=>{
 
 // Token ID Styles → place/update the on-canvas label
 (function wireTokenIdButtons(){
-  const readTokenInputValue = ()=>{
+  function readTokenInputValue(){
+    // Check both the left input and the styles panel display, plus common fallbacks
     const candidates = [
+      "#tokenIdDisplay",                // styles panel field that often shows "#5"
       "#tokenIdInput", "#tokenId", "#token",
       'input[name="tokenId"]', 'input[name="token"]',
       'input[placeholder*="Token"]', 'input[placeholder*="ID"]'
     ];
     for (const sel of candidates){
       const el = document.querySelector(sel);
-      const v  = (el && (el.value || el.textContent) || "").trim();
-      if (v) return v;
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? "").trim();
+      if (!raw) continue;
+      // Accept "#5" or "5" → keep only digits
+      const digits = (raw.match(/\d+/) || ["" ])[0];
+      if (digits) return digits;
     }
     return "";
-  };
+  }
 
   const handler = (e)=>{
-    // Ignore the *image* loader button; we only place the label here
+    // Ignore the *image loader* button; we only place the TEXT label here
     const t = (e?.target?.textContent || e?.target?.value || "").toLowerCase();
     if (/load\s+by\s+token/.test(t)) return;
 
-    const val = readTokenInputValue();
-    if (!val) return;
-    try { addOrUpdateTokenLabel(val); } catch(_){}
+    const idStr = readTokenInputValue();
+    if (!idStr) return;
+    try { addOrUpdateTokenLabel(idStr); } catch(_){}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
   };
 
-  // Bind by common IDs
+  // Bind by common IDs (bind once)
   ["loadTokenId","loadTokenID","tokenIdLoad","placeTokenId"].forEach(id=>{
     safeAddListener(id, "click", handler);
   });
 
-  // Fallback: bind by button text
+  // Fallback: match by visible button text in the panel
   document.addEventListener('click', (e)=>{
     const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!btn) return;
     const txt = (btn.textContent || btn.value || "").toLowerCase().trim();
     if (!txt) return;
+    // Match “Load Token ID”, “Place Token ID”, “Show Token ID”
     if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
       e.preventDefault();
       handler(e);
     }
   }, true);
 })();
-
-// Ensure layer order after pressing UI Undo/Redo buttons
-["undo","redo","restoreDraft","saveDraft"].forEach(id=>{
-  safeAddListener(id, "click", ()=>{
-    setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 50);
-  });
-});
-
-// -------- Base image: paste URL
-safeAddListener("loadUrl","click", async ()=>{
-  const url = ($("baseUrl") && $("baseUrl").value || "").trim();
-  if (!url) return;
-  if (!isAllowedAssetURL(url)) { alert("That URL type isn’t allowed. Use http(s) or a relative path."); return; }
-  const data = await fetchAsDataURL(url);
-  await loadBaseImage(data, false);
-});
-
 
  /* ===== RA_JSON_RESTORE_GUARD ===== */
 (function RA_JSON_RESTORE_GUARD(){
