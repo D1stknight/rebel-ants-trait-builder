@@ -584,7 +584,20 @@ safeAddListener("loadToken","click", async ()=>{
     safeAddListener("flipX","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipX'); canvas.requestRenderAll(); });
     safeAddListener("flipY","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipY'); canvas.requestRenderAll(); });
     safeAddListener("lock","click",      ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.set({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true, lockScalingX:true, lockScalingY:true, lockRotation:true }); canvas.requestRenderAll(); });
-    safeAddListener("unlockAll","click", ()=>{ canvas.getObjects().forEach(o=>{ if(!o._isBase){ o.set({ selectable:true, evented:true, hasControls:true, lockMovementX:false, lockMovementY:false, lockScalingX:false, lockScalingY:false, lockRotation:false }); }}); canvas.requestRenderAll(); });
+    // ---- FIXED: do not unlock backgroundRect or _isBase objects ----
+safeAddListener("unlockAll","click", ()=>{
+  canvas.getObjects().forEach(o=>{
+    if (o === backgroundRect || o._isBase) return; // <-- keep these locked
+    o.set({
+      selectable:true, evented:true, hasControls:true,
+      lockMovementX:false, lockMovementY:false,
+      lockScalingX:false, lockScalingY:false,
+      lockRotation:false
+    });
+  });
+  canvas.requestRenderAll();
+});
+
     safeAddListener("clearAllOverlays","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='overlay') canvas.remove(o); }); canvas.requestRenderAll(); });
 
     // -------- Overlays panel & uploads
@@ -7011,6 +7024,61 @@ async function loadTokenFromCollection(tokenId, col){
   (function wait(){ const c=C(); if (!c){ setTimeout(wait,150); return; } patch(c); })();
 })();
 
+/* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
+(function(){
+  if (window.__RA_APE_RPC_FALLBACK__) return;
+  window.__RA_APE_RPC_FALLBACK__ = true;
+
+  // Set this once (in index.html or before app.js runs) to your ApeChain RPC endpoint:
+  // window.__APECHAIN_RPC = "https://api.apecoinchain.org"; // example — use your preferred endpoint
+
+  async function jsonRpc(url, body){
+    const r = await fetch(url, {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error('rpc http '+r.status);
+    const j = await r.json();
+    if (j.error) throw new Error('rpc error '+(j.error.message||''));
+    return j.result;
+  }
+
+  function ipfsToHttp(u){
+    if (!u) return u;
+    if (u.startsWith('ipfs://ipfs/')) return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(12);
+    if (u.startsWith('ipfs://'))      return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(7);
+    return u;
+  }
+
+  // Expose a helper the loader can call:
+  window.__fetchApechainImageURL = async function(contract, tokenId){
+    const rpc = window.__APECHAIN_RPC;
+    if (!rpc) return null;
+
+    // tokenURI(uint256) = 0xc87b56dd
+    const idHex = '0x' + BigInt(String(tokenId).replace(/[^0-9]/g,'')||'0').toString(16);
+    const data  = '0xc87b56dd' + idHex.replace(/^0x/,'').padStart(64,'0');
+    const call  = { to: contract, data };
+
+    const res = await jsonRpc(rpc, { jsonrpc:'2.0', id:1, method:'eth_call', params:[call, 'latest'] });
+    // Decode ABI string
+    const hex = (res||'').replace(/^0x/,'');
+    if (hex.length < 128) return null;
+    const len = parseInt(hex.slice(64,128),16);
+    const dataHex = hex.slice(128, 128+len*2);
+    let uri = '';
+    for (let i=0;i<dataHex.length;i+=2) uri += String.fromCharCode(parseInt(dataHex.slice(i,i+2),16));
+
+    // Pull metadata and return image
+    const metaUrl = ipfsToHttp(uri);
+    const mRes = await fetch(metaUrl, {cache:'no-store'});
+    if (!mRes.ok) return null;
+    const meta = await mRes.json().catch(()=>null);
+    return ipfsToHttp(meta && (meta.image || meta.image_url || meta.imageUrl));
+  };
+})();
+
 /* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
 ;(() => {
   'use strict';
@@ -7207,8 +7275,20 @@ async function loadTokenFromCollection(tokenId, col){
     if (!c || !f) { alert('Canvas not ready'); return; }
 
     // 1) Query Reservoir with the correct chain
-    const urls = await reservoirCandidates(contract, tokenId, chain);
-    if (!urls.length){ alert('No image found for that token.'); return; }
+    let urls = await reservoirCandidates(contract, tokenId, chain);
+
+// ApeChain often needs tokenURI → metadata fallback
+if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
+  try{
+    const u = await window.__fetchApechainImageURL(contract, tokenId);
+    if (u) urls = [u];
+  }catch(_){}
+}
+
+if (!urls || !urls.length){
+  alert('No image found for that token.');
+  return;
+}
 
     // 2) CORS‑safe path first (best for export)
     killOldBase(c);
@@ -7218,9 +7298,11 @@ async function loadTokenFromCollection(tokenId, col){
         const img  = await loadViaDataURL(data);
         if (img){
           fitAndAddAsBase(img);
-          annotateBase({ contract, chain, name: name || '' });
-          upsertTokenLabel(tokenId);
-          return;
+          // ...after fitAndAddAsBase(...)
+annotateBase({ contract, chain, name: name || '' });
+// no automatic label here — user controls it from “Token ID Styles”
+return;
+
         }
       }catch(_){}
     }
