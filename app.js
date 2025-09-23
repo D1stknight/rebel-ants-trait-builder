@@ -7024,7 +7024,7 @@ async function loadTokenFromCollection(tokenId, col){
   }, true);
 })();
 
-<!-- ===== RA_TOKEN_LOADER_XCHAIN_V2 — paste at the very bottom of app.js ===== -->
+/* ===== RA_TOKEN_LOADER_XCHAIN_V2 — paste at the very bottom of app.js =====
 ;(() => {
   if (window.__RA_TOKEN_LOADER_XCHAIN_V2__) return;
   window.__RA_TOKEN_LOADER_XCHAIN_V2__ = true;
