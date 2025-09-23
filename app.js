@@ -2357,7 +2357,7 @@ const candidates = [
     paintOnCtx: paintWMOnCtx,
     addTempFabricWM,
     removeTempFabricWM
-  });
+  }
 })();
 
 /* ==========================================================
