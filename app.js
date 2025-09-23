@@ -10,14 +10,15 @@ const CONTRACT =
 
 const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
-// ---- ApeChain RPC default (only if not already set elsewhere) ----
-if (typeof window.__APECHAIN_RPC === 'undefined' || !window.__APECHAIN_RPC) {
+// ---- ApeChain RPC default (only if not provided elsewhere)
+if (!window.__APECHAIN_RPC) {
   window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
 }
 
-// ---- Watermark (single source, easy to change) ----
+// ---- Watermark...
 const __wmQS = new URLSearchParams(location.search).get('wm');
 let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
+
 
 
   (function checkWatermark(){
