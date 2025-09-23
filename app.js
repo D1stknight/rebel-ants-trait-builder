@@ -577,7 +577,6 @@ safeAddListener("clearUpload","click", ()=>{
 
     const idStr = readTokenInputValue();
     if (!idStr) return;
-    try { addOrUpdateTokenLabel(idStr); } catch(_){}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
   };
 
@@ -705,10 +704,13 @@ safeAddListener("loadToken","click", async ()=>{
     });
     safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
     safeAddListener("clearBase","click", clearBaseOnly);
-  safeAddListener("clearCanvas","click", ()=>{
-  raSafeClear(true); // keep backgroundRect, clear everything else
-  idLabel=null; baseGroup=null;
+safeAddListener("clearCanvas","click", ()=>{
+  raSafeClear(true);          // keep backgroundRect, clear everything else
+  idLabel = null; baseGroup = null;
+  // After UI clears, re-enforce order on idle so Undo/Restore isn't racing our redraw
+  setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 60);
 });
+
 
     // -------- Token ID style live controls (if present)
     ["change","input"].forEach(ev=>{
