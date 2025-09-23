@@ -570,15 +570,17 @@ safeAddListener("clearUpload","click", ()=>{
     return "";
   }
 
-  const handler = (e)=>{
-    // Ignore the *image loader* button; we only place the TEXT label here
-    const t = (e?.target?.textContent || e?.target?.value || "").toLowerCase();
-    if (/load\s+by\s+token/.test(t)) return;
+ const handler = (e)=>{
+  // Ignore the *image loader* button; we only place the TEXT label here
+  const t = (e?.target?.textContent || e?.target?.value || "").toLowerCase();
+  if (/load\s+by\s+token/.test(t)) return;
 
-    const idStr = readTokenInputValue();
-    if (!idStr) return;
-    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-  };
+  const idStr = readTokenInputValue();
+  if (!idStr) return;
+  try { addOrUpdateTokenLabel(idStr); } catch(_) {}   // <-- add this call
+  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+};
+
 
   // Bind by common IDs (bind once)
   ["loadTokenId","loadTokenID","tokenIdLoad","placeTokenId"].forEach(id=>{
@@ -681,9 +683,6 @@ safeAddListener("loadToken","click", async ()=>{
       const base = objs.find(o => o._isBase && !o._isBgRect);
       if (base) base._tokenContract = contract;
     }catch(_){}
-
-    // Add/update the on‑canvas token label (you already have this helper)
-    try { addOrUpdateTokenLabel(tokenId); } catch(_){}
 
     if (statusEl) statusEl.textContent = "Loaded 👍";
 
