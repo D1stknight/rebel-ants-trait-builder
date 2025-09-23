@@ -238,14 +238,15 @@ function isAllowedAssetURL(u){
   const scaleBR = wmTargetW / wmBR.width;
   wmTL.scale(scaleTL); wmBR.scale(scaleBR);
 
-  Object.assign(wmTL, {
-    selectable:false, evented:false, hasControls:false,
-    _isWatermark:true, _raSys:true, raWM:true, raPos:"TL"
-  });
-  Object.assign(wmBR, {
-    selectable:false, evented:false, hasControls:false,
-    _isWatermark:true, _raSys:true, raWM:true, raPos:"BR"
-  });
+Object.assign(wmTL, {
+  selectable:false, evented:false, hasControls:false,
+  _isWatermark:true, raWM:true, raPos:"TL"
+});
+Object.assign(wmBR, {
+  selectable:false, evented:false, hasControls:false,
+  _isWatermark:true, raWM:true, raPos:"BR"
+});
+
 
   wmTL.set({
     originX:"center", originY:"center",
@@ -496,6 +497,21 @@ document.addEventListener("DOMContentLoaded", () => {
     clearBaseOnly();
   });
 
+  // Token ID Styles → place/update the on-canvas label from the input’s value
+safeAddListener("loadTokenId","click", ()=>{
+  const val = (($("tokenIdInput")||{}).value || "").trim();
+  if (!val) return;
+  try { addOrUpdateTokenLabel(val); } catch(_){}
+  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+});
+
+// Ensure layer order after pressing UI Undo/Redo buttons
+["undo","redo","restoreDraft","saveDraft"].forEach(id=>{
+  safeAddListener(id, "click", ()=>{
+    setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 50);
+  });
+});
+  
   // -------- Base image: paste URL
   safeAddListener("loadUrl","click", async ()=>{
     const url = ($("baseUrl") && $("baseUrl").value || "").trim();
