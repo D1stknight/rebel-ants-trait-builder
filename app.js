@@ -447,6 +447,21 @@ Object.assign(wmBR, {
     strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
   };
 
+  function addOrUpdateTokenLabel(id){
+  const display = $("tokenIdDisplay");
+  if (display) display.value = "#"+id;
+
+  const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
+  const text = formatTokenId("#"+id, fmt);
+
+  const style = {
+    fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+    fontSize: parseInt(($("idSize")||{}).value||"52",10),
+    fill: ($("idColor")||{}).value || "#ffffff",
+    stroke: ($("idStrokeColor")||{}).value || "transparent",
+    strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
+  };
+
   if (!idLabel) {
     idLabel = new fabric.Text(text, {
       left: canvas.getWidth()/2,
@@ -459,10 +474,13 @@ Object.assign(wmBR, {
       paintFirst: "stroke",
       objectCaching: false,
       perPixelTargetFind: true,
+      selectable: false,      // <- non-interactive
+      evented: false,         // <- non-interactive
+      hasControls: false,     // <- non-interactive
       ...style
     });
     idLabel._kind = 'tokenId';
-    idLabel._raTokenId = true; // <- make the enforcer keep it on top
+    idLabel._raTokenId = true;
     idLabel._raSys     = true;
     canvas.add(idLabel);
   } else {
@@ -470,6 +488,22 @@ Object.assign(wmBR, {
     idLabel._raTokenId = true;
     idLabel._raSys     = true;
   }
+
+  // Recompute bounds and FORCE to very top
+  idLabel.set({ width: undefined });
+  idLabel.initDimensions && idLabel.initDimensions();
+  idLabel.setCoords();
+
+  try {
+    const objs = canvas.getObjects() || [];
+    canvas.bringToFront(idLabel);
+    canvas.moveTo(idLabel, objs.length - 1);
+  } catch(_) {}
+
+  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+  canvas.requestRenderAll();
+}
+
 
   idLabel.set({ width: undefined });
   idLabel.initDimensions && idLabel.initDimensions();
@@ -570,16 +604,30 @@ safeAddListener("clearUpload","click", ()=>{
     return "";
   }
 
- const handler = (e)=>{
+const handler = (e)=>{
   // Ignore the *image loader* button; we only place the TEXT label here
   const t = (e?.target?.textContent || e?.target?.value || "").toLowerCase();
   if (/load\s+by\s+token/.test(t)) return;
 
   const idStr = readTokenInputValue();
   if (!idStr) return;
-  try { addOrUpdateTokenLabel(idStr); } catch(_) {}   // <-- add this call
+
+  // CREATE / UPDATE the label
+  try { addOrUpdateTokenLabel(idStr); } catch(_) {}
+
+  // FORCE to very top (cannot be behind anything)
+  try {
+    const objs = canvas.getObjects() || [];
+    if (idLabel) {
+      canvas.bringToFront(idLabel);
+      canvas.moveTo(idLabel, objs.length - 1);
+    }
+  } catch(_) {}
+
   try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+  try { canvas.requestRenderAll(); } catch(_){}
 };
+
 
 
   // Bind by common IDs (bind once)
