@@ -6983,30 +6983,35 @@ async function loadTokenFromCollection(tokenId, col){
   }, true);
 })();
 
-/* ===== RA_TOKEN_LOADER_XCHAIN_V2 — paste at the very bottom of app.js =====
+/* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
 ;(() => {
-  if (window.__RA_TOKEN_LOADER_XCHAIN_V2__) return;
-  window.__RA_TOKEN_LOADER_XCHAIN_V2__ = true;
+  'use strict';
+  if (window.__RA_TOKEN_LOADER_XCHAIN_V3__) return;
+  window.__RA_TOKEN_LOADER_XCHAIN_V3__ = true;
 
   // ---------- small helpers ----------
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const $ = (sel, r=document) => r.querySelector(sel);
+  const getCanvas = () =>
+    (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $ = (sel, r = document) => r.querySelector(sel);
 
+  // Known collections → {address, chain}
   const KNOWN = {
-    // name       → { address, chain }
-    'rebel ants':       { address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chain:'ethereum' },
-    'saints of la':     { address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chain:'ethereum' },
-    'chumpz':           { address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chain:'apechain' }
+    // name (lowercase) : { address, chain }
+    'rebel ants':   { address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chain:'ethereum' },
+    'saints of la': { address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chain:'ethereum' },
+    'chumpz':       { address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chain:'apechain' }
   };
+
+  // Quick map: contract → chain
   const CONTRACT_FOR = {
     '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221': 'ethereum',
     '0xbed2470ded2519c13eaaf3bd970015ef404d3d20': 'ethereum',
     '0xa9a1d086623475595a02991664742e4a1cbafcb8': 'apechain'
   };
 
-  function normHex(s){ return (s||'').toLowerCase(); }
+  const normHex = s => (s || '').toLowerCase();
   function slugFromChain(v){
-    const x = (v||'').toString().toLowerCase().trim();
+    const x = (v || '').toString().toLowerCase().trim();
     if (x === '0x1' || x === '1' || x === 'eth' || x.includes('ether')) return 'ethereum';
     if (x === '0x8173' || x.includes('ape')) return 'apechain';
     if (x === '0x2105' || x.includes('base')) return 'base';
@@ -7014,47 +7019,65 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   function detectSelectionName(){
-    // If you have the “Collections” row (RA_COLLECTIONS_RESET), read its status text.
+    // From status row (if present)
     const st = $('#raColStatus');
     if (st && st.textContent) {
       // "Using: Chumpz (ApeChain)" → "chumpz"
-      const name = st.textContent.replace(/^.*using:\s*/i,'').split('—')[0].split('(')[0].trim().toLowerCase();
-      return name || null;
+      const name = st.textContent
+        .replace(/^.*using:\s*/i,'')
+        .split('—')[0]
+        .split('(')[0]
+        .trim()
+        .toLowerCase();
+      if (name) return name;
     }
-    // Or look at the visible select text if present.
+    // From visible select (if present)
     const sel = $('#raColSelect');
     if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
-      const t = (sel.selectedOptions[0].textContent||'').split('—')[0].split('(')[0].trim().toLowerCase();
-      return t || null;
+      const t = (sel.selectedOptions[0].textContent || '')
+        .split('—')[0].split('(')[0].trim().toLowerCase();
+      if (t) return t;
     }
     return null;
   }
 
   function detectContractAndChain(){
-    // Highest priority: explicit overrides
+    // Highest priority: URL/query or explicit window overrides
     const q     = new URLSearchParams(location.search);
     const cQ    = q.get('contract') || q.get('c') || '';
     const chQ   = q.get('chain') || q.get('network') || '';
     const cWin  = window.__RA_CONTRACT || window._RA_CONTRACT || '';
     const chWin = window.__RA_CHAIN    || window._RA_CHAIN    || '';
-    if (cQ || cWin) return { contract: normHex(cQ || cWin), chain: slugFromChain(chQ || chWin || CONTRACT_FOR[normHex(cQ||cWin)]) };
+    if (cQ || cWin) {
+      const c = normHex(cQ || cWin);
+      const ch = slugFromChain(chQ || chWin || CONTRACT_FOR[c]);
+      return { contract: c, chain: ch, name: '' };
+    }
 
-    // Next: collection name → contract mapping (Rebels/Saints/Chumpz out of the box)
+    // Next: look up by collection name shown in UI
     const name = detectSelectionName();
-    if (name && KNOWN[name]) return { contract: normHex(KNOWN[name].address), chain: KNOWN[name].chain };
+    if (name && KNOWN[name]) {
+      return { contract: normHex(KNOWN[name].address), chain: KNOWN[name].chain, name };
+    }
 
-    // As a last resort, do nothing; let the app’s original loader handle it (works for Rebels/Saints).
+    // Otherwise, do nothing; let the app’s original loader handle it
     return null;
   }
 
   function readTokenId(){
     const ids = [
-      '#tokenId', '#token', 'input[name="token"]', 'input[name="tokenId"]',
-      'input[placeholder*="Token"]', '#tokenIdInput'
+      '#tokenId', '#token', '#tokenIdInput',
+      'input[name="token"]', 'input[name="tokenId"]',
+      'input[placeholder*="Token"]'
     ];
-    for (const s of ids){ const el=$(s); if (el && (el.value||'').trim()) return (el.value||'').trim(); }
-    // Also check a plain text box inside the Token ID Styles card (some builds use that)
-    const maybe = Array.from(document.querySelectorAll('input,textarea')).find(el => /token/i.test(el.placeholder||'') && (el.value||'').trim());
+    for (const s of ids){
+      const el = $(s);
+      const v  = (el && (el.value || '').trim()) || '';
+      if (v) return v;
+    }
+    // Fallback: any input/textarea with "token" in placeholder + a value
+    const maybe = Array.from(document.querySelectorAll('input,textarea'))
+      .find(el => /token/i.test(el.placeholder || '') && (el.value || '').trim());
     return maybe ? maybe.value.trim() : '';
   }
 
@@ -7069,44 +7092,55 @@ async function loadTokenFromCollection(tokenId, col){
     const r = await fetch(url, { mode:'cors', cache:'no-store' });
     if (!r.ok) throw new Error('fetch failed');
     const b = await r.blob();
-    return await new Promise(res => { const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
+    return await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(b);
+    });
   }
 
   async function reservoirCandidates(contract, tokenId, chainSlug){
     const url = `https://api.reservoir.tools/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&chain=${encodeURIComponent(chainSlug)}&limit=1`;
     const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
     if (!r.ok) return [];
-    const j  = await r.json();
-    const t  = j?.tokens?.[0]?.token || {};
-    const m  = t.media || {};
-    return [ m?.original?.url || m?.original?.mediaUrl, t.imageLarge, t.image, t.imageUrl, t.imageSmall ]
-      .filter(Boolean).map(normalizeUrl);
+    const j = await r.json();
+    const t = j?.tokens?.[0]?.token || {};
+    const m = t.media || {};
+    return [
+      m?.original?.url || m?.original?.mediaUrl,
+      t.imageLarge, t.image, t.imageUrl, t.imageSmall
+    ].filter(Boolean).map(normalizeUrl);
   }
 
-  function killOldBase(c){ (c.getObjects()||[]).slice().forEach(o => { if (o && o._isBase) c.remove(o); }); }
+  function killOldBase(c){
+    (c.getObjects() || []).slice().forEach(o => { if (o && o._isBase) c.remove(o); });
+  }
+
   function fitAndAddAsBase(img){
-    const c = C(); if (!c) return false;
+    const c = getCanvas(); if (!c) return false;
     img.set({ originX:'center', originY:'center' });
     const cw=c.getWidth(), ch=c.getHeight();
     const sc = Math.min(cw/(img.width||cw), ch/(img.height||ch), 1);
     if (Number.isFinite(sc) && sc>0) img.scale(sc);
     img.left = cw/2; img.top = ch/2; img.setCoords();
+
     // lock as base
     img._isBase = true;
     img.selectable=false; img.evented=false; img.hasControls=false;
     img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
+
     c.add(img);
-    try{ c.sendToBack(img); }catch(_){}
+    try { c.sendToBack(img); } catch(_){}
     c.requestRenderAll();
     return true;
   }
 
   function annotateBase(meta){
-    const c = C(); if (!c) return;
+    const c = getCanvas(); if (!c) return;
     const base = (c.getObjects?.()||[]).find(o => o && o._isBase && !o._isBgRect);
     if (!base) return;
-    base._tokenContract = normHex(meta.contract);
-    base._tokenChain    = meta.chain;      // 'ethereum' | 'apechain' | 'base'
+    base._tokenContract = normHex(meta.contract || '');
+    base._tokenChain    = meta.chain || '';  // 'ethereum' | 'apechain' | 'base'
     base._tokenName     = meta.name || '';
     try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
     try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
@@ -7114,7 +7148,7 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   function upsertTokenLabel(id){
-    const c=C(); if(!c || !window.fabric) return;
+    const c = getCanvas(); if (!c || !window.fabric) return;
     (c.getObjects()||[]).forEach(o => { if (o && o._raTokenId) c.remove(o); });
     const txt = new fabric.Text('#'+String(id), {
       originX:'center', originY:'top',
@@ -7124,7 +7158,8 @@ async function loadTokenFromCollection(tokenId, col){
       selectable:false, evented:false
     });
     txt._raTokenId = true; txt._raSys = true;
-    c.add(txt); try{ c.bringToFront(txt); }catch(_){}
+    c.add(txt);
+    try{ c.bringToFront(txt); }catch(_){}
   }
 
   async function loadViaDataURL(u){
@@ -7134,46 +7169,58 @@ async function loadTokenFromCollection(tokenId, col){
   }
   async function loadViaNoCors(u){
     return await new Promise(res => {
-      // Intentionally no {crossOrigin:'anonymous'} to avoid blocking when host has no CORS.
+      // Intentionally no {crossOrigin:'anonymous'} to avoid blocking where host has no CORS.
       fabric.Image.fromURL(u, img => res(img), {});
     });
   }
 
   async function runLoader({ contract, chain, name }, tokenId){
-    const c=C(), f=window.fabric; if (!c || !f) { alert('Canvas not ready'); return; }
+    const c = getCanvas(), f = window.fabric;
+    if (!c || !f) { alert('Canvas not ready'); return; }
 
     // 1) Query Reservoir with the correct chain
     const urls = await reservoirCandidates(contract, tokenId, chain);
     if (!urls.length){ alert('No image found for that token.'); return; }
 
-    // 2) Try CORS‑safe path first (export‑friendly)
+    // 2) CORS‑safe path first (best for export)
     killOldBase(c);
     for (const u of urls){
       try{
         const data = await fetchAsDataURL(u);
         const img  = await loadViaDataURL(data);
-        if (img){ fitAndAddAsBase(img); annotateBase({ contract, chain, name: name||'' }); upsertTokenLabel(tokenId); return; }
+        if (img){
+          fitAndAddAsBase(img);
+          annotateBase({ contract, chain, name: name || '' });
+          upsertTokenLabel(tokenId);
+          return;
+        }
       }catch(_){}
     }
 
-    // 3) Fall back to view‑only (no‑CORS) so it still shows in Admin
+    // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
     const img = await loadViaNoCors(urls[0]);
-    if (img){ fitAndAddAsBase(img); annotateBase({ contract, chain, name: name||'' }); upsertTokenLabel(tokenId); return; }
+    if (img){
+      fitAndAddAsBase(img);
+      annotateBase({ contract, chain, name: name || '' });
+      upsertTokenLabel(tokenId);
+      return;
+    }
 
     alert('Failed to load token image.');
   }
 
   // ---------- wire once (capture phase). We only hijack when we know the contract+chain. ----------
-  function isLoadByTokenButton(node){
+  function looksLikeLoadByToken(node){
     if (!node) return false;
-    if (node.id && /loadbytoken|loadtoken/i.test(node.id)) return true;
-    const txt = (node.textContent||'').toLowerCase();
-    return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(txt);
+    const btn = node.id && /loadbytoken|loadtoken/i.test(node.id);
+    if (btn) return true;
+    const t = (node.textContent || '').toLowerCase().replace(/\s+/g,' ');
+    return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
   }
 
   function onClick(e){
-    const btn = e.target && e.target.closest && e.target.closest('button');
-    if (!btn || !isLoadByTokenButton(btn)) return;
+    const el = e.target && e.target.closest && e.target.closest('button, a');
+    if (!el || !looksLikeLoadByToken(el)) return;
 
     const tokenId  = readTokenId();
     const detected = detectContractAndChain();
