@@ -501,18 +501,35 @@ safeAddListener("clearUpload","click", ()=>{
 });
 
 // Token ID Styles → place/update the on-canvas label from the input’s value
+// Token ID Styles → place/update the on-canvas label
 (function wireTokenIdButtons(){
+  const readTokenInputValue = ()=>{
+    const candidates = [
+      "#tokenIdInput", "#tokenId", "#token",
+      'input[name="tokenId"]', 'input[name="token"]',
+      'input[placeholder*="Token"]'
+    ];
+    for (const sel of candidates){
+      const el = document.querySelector(sel);
+      const v  = (el && (el.value || el.textContent) || "").trim();
+      if (v) return v;
+    }
+    return "";
+  };
+
   const handler = ()=>{
-    const val = (($("tokenIdInput")||{}).value || "").trim();
+    const val = readTokenInputValue();
     if (!val) return;
     try { addOrUpdateTokenLabel(val); } catch(_){}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
   };
-  // Try multiple ids to be safe (bind once, unified handler)
+
+  // Bind once across likely button IDs
   ["loadTokenId","loadTokenID","tokenIdLoad","placeTokenId"].forEach(id=>{
     safeAddListener(id, "click", handler);
   });
 })();
+
 
 // Ensure layer order after pressing UI Undo/Redo buttons
 ["undo","redo","restoreDraft","saveDraft"].forEach(id=>{
@@ -7138,36 +7155,42 @@ async function loadTokenFromCollection(tokenId, col){
   }, true);
 })();
 
-
-/* ===== RA_CLEAR_PATCH_WITH_GUARD — preserve base/sys on manual clears, BUT NOT during JSON loads ===== */
-(function RA_CLEAR_PATCH_WITH_GUARD(){
-  if (window.__RA_CLEAR_PATCH_WITH_GUARD__) return;
-  window.__RA_CLEAR_PATCH_WITH_GUARD__ = true;
+/* ===== RA_CLEAR_PATCH_DELAYED_GUARD — preserve base/sys only if NO JSON restore follows ===== */
+(function RA_CLEAR_PATCH_DELAYED_GUARD(){
+  if (window.__RA_CLEAR_PATCH_DELAYED_GUARD__) return;
+  window.__RA_CLEAR_PATCH_DELAYED_GUARD__ = true;
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
   function patch(c){
     if (!c || c.__raClearPatched) return;
     const _clear = c.clear.bind(c);
+
     c.clear = function(){
-      if (window.__raLoadingJSON) {
-        // Let JSON restore a clean stack
-        return _clear();
-      }
+      // Snapshot keepers BEFORE clearing
       const keep = [];
       (this.getObjects?.()||[]).forEach(o=>{
         if (o && (o._isBase || o._raSys)) keep.push(o);
       });
+
+      // Perform the real clear
       _clear();
-      keep.forEach(o=> this.add(o));
-      try { this.requestRenderAll(); } catch(_) {}
+
+      // Defer re-add: if a JSON load kicks off immediately, we skip
+      const me = this;
+      setTimeout(()=> {
+        if (window.__raLoadingJSON) return; // JSON restore in progress → do not re-add
+        try { keep.forEach(o=> me.add(o)); } catch(_){}
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { me.requestRenderAll(); } catch(_){}
+      }, 80);
     };
+
     c.__raClearPatched = true;
   }
 
   (function wait(){ const c=C(); if (!c){ setTimeout(wait,150); return; } patch(c); })();
 })();
-
 
 /* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
 (function(){
