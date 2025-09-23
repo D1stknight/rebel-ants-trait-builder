@@ -89,6 +89,89 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
     return u;
   }
 
+  /* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
+(function(){
+  if (window.__RA_TOKEN_ID_DEBUG_AND_FORCE__) return;
+  window.__RA_TOKEN_ID_DEBUG_AND_FORCE__ = true;
+
+  // Find the styles panel "Token ID" card by heading text
+  function findTokenIdCard(){
+    const hs = Array.from(document.querySelectorAll('h2,h3,h4,h5'));
+    const h  = hs.find(n => /token\s*id/i.test((n.textContent||'').trim()));
+    return h ? (h.closest('.card, .panel, section, form, div') || h.parentElement) : null;
+  }
+
+  // Read value from the common places (includes #tokenIdDisplay which often shows "#123")
+  function readTokenIdValue(){
+    const candidates = [
+      '#tokenIdDisplay',
+      '#tokenIdInput', '#tokenId', '#token',
+      'input[name="tokenId"]', 'input[name="token"]',
+      'input[placeholder*="Token"]', 'input[placeholder*="ID"]'
+    ];
+    for (const sel of candidates){
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      if (!raw) continue;
+      const digits = (raw.match(/\d+/) || [''])[0]; // accept "#15" or "15"
+      if (digits) return digits;
+    }
+    return '';
+  }
+
+  // Ensure label exists, is non-interactive, and sits at the very top
+  function ensureLabelOnTop(idStr){
+    try {
+      if (!window.addOrUpdateTokenLabel) return false;
+      window.addOrUpdateTokenLabel(String(idStr));
+      if (window.idLabel && window.canvas){
+        const c = window.canvas;
+        const objs = c.getObjects() || [];
+        // Non-interactive safety
+        try { window.idLabel.selectable=false; window.idLabel.evented=false; window.idLabel.hasControls=false; } catch(_){}
+        try { c.bringToFront(window.idLabel); c.moveTo(window.idLabel, objs.length-1); } catch(_){}
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { c.requestRenderAll(); } catch(_){}
+      }
+      return true;
+    } catch(_) { return false; }
+  }
+
+  function wire(){
+    const card = findTokenIdCard();
+    if (!card){ setTimeout(wire, 250); return; }
+
+    // Bind any button in this card whose text looks like "Load/Place/Show Token ID"
+    Array.from(card.querySelectorAll('button, input[type="button"], input[type="submit"], a')).forEach(btn=>{
+      if (btn.__raTokIdWired) return;
+      const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
+      if (!/^(load|place|show)\s*token\s*id$/.test(txt)) return;
+
+      btn.__raTokIdWired = true;
+      btn.addEventListener('click', (e)=>{
+        // Avoid hijacking the image loader button if it's in the same panel (defensive)
+        const t = (e?.target?.textContent || e?.target?.value || '').toLowerCase();
+        if (/load\s+by\s+token/.test(t)) return;
+
+        const v = readTokenIdValue();
+        // DEBUG: flash footer because you reported a flash—log the actual value to console
+        try { console.log('[TokenID] button click -> value:', v); } catch(_){}
+
+        if (!v) return;
+        e.preventDefault();
+        e.stopPropagation();
+        ensureLabelOnTop(v);
+      }, true);
+    });
+  }
+
+  // Run now and again after small DOM changes
+  wire();
+  const obs = new MutationObserver(()=>wire());
+  obs.observe(document.body, { childList:true, subtree:true });
+})();
+
   /* ===== RA_SAFE_CLEAR ===== */
 function raSafeClear(keepBg=true){
   const c = window.canvas; if (!c) return;
@@ -628,8 +711,6 @@ const handler = (e)=>{
   try { canvas.requestRenderAll(); } catch(_){}
 };
 
-
-
   // Bind by common IDs (bind once)
   ["loadTokenId","loadTokenID","tokenIdLoad","placeTokenId"].forEach(id=>{
     safeAddListener(id, "click", handler);
@@ -646,6 +727,38 @@ const handler = (e)=>{
       handler(e);
     }
   }, true);
+})();
+
+  /* ===== RA_HISTORY_STABILIZER ===== */
+(function(){
+  if (window.__RA_HISTORY_STABILIZER__) return;
+  window.__RA_HISTORY_STABILIZER__ = true;
+
+  function tickFew(){
+    let tries = 0;
+    const step = ()=>{
+      try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+      try { window.canvas && window.canvas.requestRenderAll && window.canvas.requestRenderAll(); } catch(_){}
+      if (++tries < 5) setTimeout(step, 60);
+    };
+    setTimeout(step, 60);
+  }
+
+  // 1) If your UI uses buttons, catch generic labels (works even if IDs changed)
+  document.addEventListener('click', (e)=>{
+    const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+    if (!el) return;
+    const t = (el.textContent || el.value || '').toLowerCase().trim();
+    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
+      tickFew();
+    }
+  }, true);
+
+  // 2) Also stabilize after JSON restores (your loadFromJSON wrapper sets window.__raLoadingJSON)
+  const mark = setInterval(()=>{
+    if (window.__raLoadingJSON) return; // we only post-stabilize after it finishes
+    // no-op; just keep the interval alive for future actions
+  }, 500);
 })();
 
  /* ===== RA_JSON_RESTORE_GUARD ===== */
