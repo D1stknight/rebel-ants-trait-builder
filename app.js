@@ -7371,4 +7371,3 @@ async function loadTokenFromCollection(tokenId, col){
     document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
   }
 })();
-</script>
