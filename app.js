@@ -129,32 +129,58 @@ function isAllowedAssetURL(u){
     if (idLabel) canvas.bringToFront(idLabel);
   }
 
-  /* ===== RA_LAYER_ORDER_ENFORCER ===== */
+  /* ===== RA_LAYER_ORDER_ENFORCER — deterministic indices ===== */
 (function(){
   if (window.__RA_LAYER_ORDER_ENFORCER__) return;
   window.__RA_LAYER_ORDER_ENFORCER__ = true;
 
+  function getBase(c){
+    const objs = c.getObjects() || [];
+    return objs.find(o => o && o._isBase) || null;
+  }
+
   window.raEnforceLayerOrder = function(){
     const c = window.canvas; if (!c) return;
     try{
-      // 1) Background always lowest
-      if (typeof backgroundRect !== 'undefined' && backgroundRect) c.sendToBack(backgroundRect);
-
-      // 2) Base image/group sits just above background
       const objs = c.getObjects() || [];
-      const base = objs.find(o => o && o._isBase);
-      if (base) c.sendToBack(base);
 
-      // 3) Overlays above base
-      objs.filter(o => o && o._kind === 'overlay').forEach(o => c.bringToFront(o));
+      // 0) Make sure backgroundRect is locked and non-interactive
+      if (typeof backgroundRect !== 'undefined' && backgroundRect){
+        backgroundRect.selectable = false;
+        backgroundRect.evented = false;
+        backgroundRect.hasControls = false;
+      }
 
-      // 4) System/UI (token label, footers, etc.) at the very top
-      objs.filter(o => o && (o._raSys || o._raTokenId)).forEach(o => c.bringToFront(o));
+      // 1) Background at index 0
+      if (backgroundRect){
+        const idx = objs.indexOf(backgroundRect);
+        if (idx !== 0) c.moveTo(backgroundRect, 0);
+      }
+
+      // 2) Base at index 1
+      const base = getBase(c);
+      if (base){
+        const target = backgroundRect ? 1 : 0;
+        const idx = objs.indexOf(base);
+        if (idx !== target) c.moveTo(base, target);
+      }
+
+      // 3) Overlays next (in their current relative order)
+      let next = (backgroundRect ? 1 : 0) + (base ? 1 : 0);
+      objs.filter(o => o && o._kind === 'overlay').forEach(o => {
+        c.moveTo(o, next++);
+      });
+
+      // 4) System/UI elements on top (token label, footers, UI)
+      objs.filter(o => o && (o._raSys || o._raTokenId)).forEach(o => {
+        c.moveTo(o, next++);
+      });
 
       c.requestRenderAll();
     }catch(_){}
   };
 })();
+
 
   function initBackgroundRect(fill){
     backgroundRect = new fabric.Rect({
@@ -7152,12 +7178,12 @@ async function loadTokenFromCollection(tokenId, col){
 
   const normHex = s => (s || '').toLowerCase();
   function slugFromChain(v){
-    const x = (v || '').toString().toLowerCase().trim();
-    if (x === '0x1' || x === '1' || x === 'eth' || x.includes('ether')) return 'ethereum';
-    if (x === '0x8173' || x.includes('ape')) return 'apechain';
-    if (x === '0x2105' || x.includes('base')) return 'base';
-    return x || 'ethereum';
-  }
+  const x = (v || '').toString().toLowerCase().trim();
+  if (x === '0x1'    || x === '1'    || x === 'eth' || x.includes('ether')) return 'ethereum';
+  if (x === '0x2105' || x.includes('base'))                                 return 'base';
+  if (x === '0x8173' || x.includes('ape'))                                  return 'apecoin';
+  return x || 'ethereum';
+}
 
   function detectSelectionName(){
     // From status row (if present)
@@ -7241,8 +7267,14 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   async function reservoirCandidates(contract, tokenId, chainSlug){
-    const url = `https://api.reservoir.tools/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&chain=${encodeURIComponent(chainSlug)}&limit=1`;
-    const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
+  // Normalize slugs for Reservoir
+  let rsSlug = (chainSlug||'').toLowerCase();
+  if (rsSlug === 'apechain' || rsSlug === 'ape' || rsSlug === 'apecoinchain') rsSlug = 'apecoin';
+  if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
+  if (rsSlug === 'base') rsSlug = 'base';
+
+  const url = `https://api.reservoir.tools/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&chain=${encodeURIComponent(rsSlug)}&limit=1`;
+  const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
     if (!r.ok) return [];
     const j = await r.json();
     const t = j?.tokens?.[0]?.token || {};
@@ -7270,15 +7302,12 @@ async function loadTokenFromCollection(tokenId, col){
     img.selectable=false; img.evented=false; img.hasControls=false;
     img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
 
-    c.add(img);
-try { c.sendToBack(img); } catch(_){}
-try {
-  // ensure any overlays/labels/UI sit above base
-  const objs = c.getObjects() || [];
-  objs.forEach(o => { if (o && (o._kind==='overlay' || o._raSys)) c.bringToFront(o); });
-} catch(_){}
+c.add(img);
+// Let the deterministic enforcer set exact indices
+try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
 c.requestRenderAll();
 return true;
+
 
   }
 
