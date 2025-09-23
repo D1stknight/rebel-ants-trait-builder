@@ -2159,7 +2159,15 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
 
   // ---------- Watermark loader (robust + CORS-safe) ----------
   const wmQS = new URLSearchParams(location.search).get('wm');
-const queryWM = isAllowedAssetURL(wmQS) ? wmQS : null;
+const queryWM = (() => {
+  if (!wmQS) return null;
+  try {
+    const u = new URL(wmQS, location.origin);
+    return u.origin === location.origin ? u.href : null;   // same‑origin allowlist
+  } catch {
+    return null;  // bad URL → ignore
+  }
+})();
 const candidates = [
   queryWM,
   '/assets/watermark.png?v=wm10',
