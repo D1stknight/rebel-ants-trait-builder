@@ -2158,52 +2158,12 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
   };
 
   // ---------- Watermark loader (robust + CORS-safe) ----------
- const queryWM = new URLSearchParams(location.search).get('wm');
-
-const candidates = [
-  queryWM,                        // highest priority if provided
-  '/assets/watermark.png?v=wm10', // your current primary
-  '/watermark.png?v=wm10'         // fallback
-].filter(Boolean);
-
-const STATE = { url: null, img: null, dataURL: null };
-
-async function fetchAsDataURL(url){
-  // NOTE: external hosts must allow CORS (Access-Control-Allow-Origin)
-  const r = await fetch(url, { cache: 'no-store', mode: 'cors' });
-  if (!r.ok) throw new Error('fetch failed');
-  const b = await r.blob();
-  return await new Promise(res => {
-    const fr = new FileReader();
-    fr.onload = () => res(fr.result);
-    fr.readAsDataURL(b);
-  });
-}
-
-async function loadWatermark(){
-  for (const u of candidates){
-    try{
-      // Turn any external https URL into a same-origin dataURL (avoids tainted canvas)
-      const src = /^data:|^blob:/i.test(u) ? u : await fetchAsDataURL(u);
-      const img = await new Promise((res, rej) => {
-        const im = new Image();
-        im.onload = () => res(im);
-        im.onerror = rej;
-        im.crossOrigin = 'anonymous';
-        im.src = src;
-      });
-      STATE.url = u; STATE.img = img; STATE.dataURL = src;
-      return true;
-    }catch(_){ /* try next candidate */ }
-  }
-  return false;
-}
-})();
-const candidates = [
-  queryWM,
-  '/assets/watermark.png?v=wm10',
-  '/watermark.png?v=wm10'
-].filter(Boolean);
+  const queryWM = new URLSearchParams(location.search).get('wm');
+  const candidates = [
+    queryWM,                             // highest priority if provided
+    '/assets/watermark.png?v=wm10',      // your current primary
+    '/watermark.png?v=wm10'              // fallback
+  ].filter(Boolean);
 
   const STATE = {
     url: null,
@@ -2357,8 +2317,8 @@ const candidates = [
     paintOnCtx: paintWMOnCtx,
     addTempFabricWM,
     removeTempFabricWM
-    });
-
+  });
+})();
 /* ==========================================================
    RA_UNDO_REDO_SAFE_MINI_V1
    • Super‑safe: never restores anything unless you click Undo/Redo.
