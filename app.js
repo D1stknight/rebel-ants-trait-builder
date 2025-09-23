@@ -383,49 +383,52 @@ Object.assign(wmBR, {
   }
 
   function addOrUpdateTokenLabel(id){
-    const display = $("tokenIdDisplay");
-    if (display) display.value = "#"+id;
+  const display = $("tokenIdDisplay");
+  if (display) display.value = "#"+id;
 
-    const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
-    const text = formatTokenId("#"+id, fmt);
+  const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
+  const text = formatTokenId("#"+id, fmt);
 
-    const style = {
-  fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-  fontSize: parseInt(($("idSize")||{}).value||"52",10),
-  fill: ($("idColor")||{}).value || "#ffffff",
-  stroke: ($("idStrokeColor")||{}).value || "transparent",
-  strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
-};
+  const style = {
+    fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+    fontSize: parseInt(($("idSize")||{}).value||"52",10),
+    fill: ($("idColor")||{}).value || "#ffffff",
+    stroke: ($("idStrokeColor")||{}).value || "transparent",
+    strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
+  };
 
-if (!idLabel) {
-  // Use single-line Text (tight bounds), no forced width
-  idLabel = new fabric.Text(text, {
-    left: canvas.getWidth()/2,
-    top: 40,
-    originX: "center",
-    originY: "top",
-    textAlign: "center",
-    editable: false,               // stays non-editable
-    strokeUniform: true,
-    paintFirst: "stroke",
-    objectCaching: false,
-    perPixelTargetFind: true,
-    ...style
-  });
-  idLabel._kind = 'tokenId';
-  canvas.add(idLabel);
-} else {
-  idLabel.set({ text, ...style });
+  if (!idLabel) {
+    idLabel = new fabric.Text(text, {
+      left: canvas.getWidth()/2,
+      top:  40,
+      originX: "center",
+      originY: "top",
+      textAlign: "center",
+      editable: false,
+      strokeUniform: true,
+      paintFirst: "stroke",
+      objectCaching: false,
+      perPixelTargetFind: true,
+      ...style
+    });
+    idLabel._kind = 'tokenId';
+    idLabel._raTokenId = true; // <- make the enforcer keep it on top
+    idLabel._raSys     = true;
+    canvas.add(idLabel);
+  } else {
+    idLabel.set({ text, ...style });
+    idLabel._raTokenId = true;
+    idLabel._raSys     = true;
+  }
+
+  idLabel.set({ width: undefined });
+  idLabel.initDimensions && idLabel.initDimensions();
+  idLabel.setCoords();
+
+  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+  canvas.requestRenderAll();
 }
 
-// Force Fabric to recompute tight bounds
-idLabel.set({ width: undefined });
-idLabel.initDimensions && idLabel.initDimensions();
-idLabel.setCoords();
-
-bringInterfaceToFront();
-canvas.requestRenderAll();
-  }
 
   function formatTokenId(displayVal, fmt){
     let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
@@ -485,25 +488,31 @@ document.addEventListener("DOMContentLoaded", () => {
   overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name:m.name, src:m.src, perm:true }));
   renderOverlayGrid();
 
-  // -------- Base image: local upload
-  safeAddListener("baseUpload","change", async (e)=>{
-    const f=e.target.files && e.target.files[0];
-    if (!f) return;
-    const data = await fileToDataURL(f);
-    await loadBaseImage(data, false); // non-token => watermark
-  });
-  safeAddListener("clearUpload","click", ()=>{
-    const inp=$("baseUpload"); if (inp) inp.value="";
-    clearBaseOnly();
-  });
-
-  // Token ID Styles → place/update the on-canvas label from the input’s value
-safeAddListener("loadTokenId","click", ()=>{
-  const val = (($("tokenIdInput")||{}).value || "").trim();
-  if (!val) return;
-  try { addOrUpdateTokenLabel(val); } catch(_){}
-  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+ // -------- Base image: local upload
+safeAddListener("baseUpload","change", async (e)=>{
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const data = await fileToDataURL(f);
+  await loadBaseImage(data, false); // non-token => watermark
 });
+safeAddListener("clearUpload","click", ()=>{
+  const inp = $("baseUpload"); if (inp) inp.value = "";
+  clearBaseOnly();
+});
+
+// Token ID Styles → place/update the on-canvas label from the input’s value
+(function wireTokenIdButtons(){
+  const handler = ()=>{
+    const val = (($("tokenIdInput")||{}).value || "").trim();
+    if (!val) return;
+    try { addOrUpdateTokenLabel(val); } catch(_){}
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+  };
+  // Try multiple ids to be safe (bind once, unified handler)
+  ["loadTokenId","loadTokenID","tokenIdLoad","placeTokenId"].forEach(id=>{
+    safeAddListener(id, "click", handler);
+  });
+})();
 
 // Ensure layer order after pressing UI Undo/Redo buttons
 ["undo","redo","restoreDraft","saveDraft"].forEach(id=>{
@@ -511,17 +520,18 @@ safeAddListener("loadTokenId","click", ()=>{
     setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 50);
   });
 });
-  
-  // -------- Base image: paste URL
-  safeAddListener("loadUrl","click", async ()=>{
-    const url = ($("baseUrl") && $("baseUrl").value || "").trim();
-    if (!url) return;
-    if (!isAllowedAssetURL(url)) { alert("That URL type isn’t allowed. Use http(s) or a relative path."); return; }
-    const data = await fetchAsDataURL(url);
-    await loadBaseImage(data, false);
-  });
 
-  /* ===== RA_ENFORCE_AFTER_LOADFROMJSON ===== */
+// -------- Base image: paste URL
+safeAddListener("loadUrl","click", async ()=>{
+  const url = ($("baseUrl") && $("baseUrl").value || "").trim();
+  if (!url) return;
+  if (!isAllowedAssetURL(url)) { alert("That URL type isn’t allowed. Use http(s) or a relative path."); return; }
+  const data = await fetchAsDataURL(url);
+  await loadBaseImage(data, false);
+});
+
+
+ /* ===== RA_ENFORCE_AFTER_LOADFROMJSON (with guard flag) ===== */
 (function(){
   if (window.__RA_AFTER_LOADFROMJSON__) return;
   window.__RA_AFTER_LOADFROMJSON__ = true;
@@ -533,10 +543,18 @@ safeAddListener("loadTokenId","click", ()=>{
     const orig = c.loadFromJSON.bind(c);
     c.loadFromJSON = function(json, cb, reviver){
       const next = (typeof cb === 'function') ? cb : function(){};
-      return orig(json, function(){
+      window.__raLoadingJSON = true;
+      const done = ()=>{
+        window.__raLoadingJSON = false;
         try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
         next();
-      }, reviver);
+      };
+      try {
+        return orig(json, done, reviver);
+      } catch (e) {
+        window.__raLoadingJSON = false;
+        throw e;
+      }
     };
     c.__raPatchedLoadJSON = true;
   }
@@ -546,6 +564,7 @@ safeAddListener("loadTokenId","click", ()=>{
     patch(c);
   })();
 })();
+
 
 /* -------- Base image: load by token (multi‑collection) --------
    Reads the selected collection’s contract from your dropdown and
@@ -7120,10 +7139,10 @@ async function loadTokenFromCollection(tokenId, col){
 })();
 
 
-/* ===== RA_PRESERVE_CLEAR_ONCE — keep _isBase and _raSys across canvas.clear() ===== */
-(function RA_PRESERVE_CLEAR_ONCE(){
-  if (window.__RA_PRESERVE_CLEAR_ONCE__) return;
-  window.__RA_PRESERVE_CLEAR_ONCE__ = true;
+/* ===== RA_CLEAR_PATCH_WITH_GUARD — preserve base/sys on manual clears, BUT NOT during JSON loads ===== */
+(function RA_CLEAR_PATCH_WITH_GUARD(){
+  if (window.__RA_CLEAR_PATCH_WITH_GUARD__) return;
+  window.__RA_CLEAR_PATCH_WITH_GUARD__ = true;
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
@@ -7131,6 +7150,10 @@ async function loadTokenFromCollection(tokenId, col){
     if (!c || c.__raClearPatched) return;
     const _clear = c.clear.bind(c);
     c.clear = function(){
+      if (window.__raLoadingJSON) {
+        // Let JSON restore a clean stack
+        return _clear();
+      }
       const keep = [];
       (this.getObjects?.()||[]).forEach(o=>{
         if (o && (o._isBase || o._raSys)) keep.push(o);
@@ -7144,6 +7167,7 @@ async function loadTokenFromCollection(tokenId, col){
 
   (function wait(){ const c=C(); if (!c){ setTimeout(wait,150); return; } patch(c); })();
 })();
+
 
 /* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
 (function(){
