@@ -3014,8 +3014,9 @@ const candidates = [
   } catch(_){} };
 
   // ---------- load watermark image (same precedence you’ve used) ----------
-  const wmQS = new URLSearchParams(location.search).get('wm');
-const queryWM = isAllowedAssetURL(wmQS) ? wmQS : null;
+const wmParam = new URLSearchParams(location.search).get('wm') || '';
+// Allow absolute http(s) URLs or same‑origin absolute paths (block data:, javascript:, etc.)
+const queryWM = (/^https?:\/\//i.test(wmParam) || wmParam.startsWith('/')) ? wmParam : null;
 const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
   async function fetchAsDataURL(u){
     const r = await fetch(u, { cache:'no-store', mode:'cors' });
