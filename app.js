@@ -89,6 +89,20 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
     return u;
   }
 
+  /* ===== RA_SAFE_CLEAR ===== */
+function raSafeClear(keepBg=true){
+  const c = window.canvas; if (!c) return;
+  // if your UI wants a true reset, pass keepBg=false
+  if (keepBg && typeof backgroundRect !== 'undefined' && backgroundRect){
+    // remove everything except backgroundRect
+    c.getObjects().slice().forEach(o=>{ if(o!==backgroundRect) c.remove(o); });
+    c.requestRenderAll();
+  } else {
+    // do a real clear (history ops will immediately load JSON)
+    try { c.clear(); } catch(_){}
+  }
+}
+
   // ——— Security helpers ———
 function isAllowedAssetURL(u){
   if (!u) return false;
@@ -429,7 +443,6 @@ Object.assign(wmBR, {
   canvas.requestRenderAll();
 }
 
-
   function formatTokenId(displayVal, fmt){
     let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
     if(Number.isNaN(num)) return String(displayVal);
@@ -500,14 +513,13 @@ safeAddListener("clearUpload","click", ()=>{
   clearBaseOnly();
 });
 
-// Token ID Styles → place/update the on-canvas label from the input’s value
 // Token ID Styles → place/update the on-canvas label
 (function wireTokenIdButtons(){
   const readTokenInputValue = ()=>{
     const candidates = [
       "#tokenIdInput", "#tokenId", "#token",
       'input[name="tokenId"]', 'input[name="token"]',
-      'input[placeholder*="Token"]'
+      'input[placeholder*="Token"]', 'input[placeholder*="ID"]'
     ];
     for (const sel of candidates){
       const el = document.querySelector(sel);
@@ -517,19 +529,34 @@ safeAddListener("clearUpload","click", ()=>{
     return "";
   };
 
-  const handler = ()=>{
+  const handler = (e)=>{
+    // Ignore the *image* loader button; we only place the label here
+    const t = (e?.target?.textContent || e?.target?.value || "").toLowerCase();
+    if (/load\s+by\s+token/.test(t)) return;
+
     const val = readTokenInputValue();
     if (!val) return;
     try { addOrUpdateTokenLabel(val); } catch(_){}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
   };
 
-  // Bind once across likely button IDs
+  // Bind by common IDs
   ["loadTokenId","loadTokenID","tokenIdLoad","placeTokenId"].forEach(id=>{
     safeAddListener(id, "click", handler);
   });
-})();
 
+  // Fallback: bind by button text
+  document.addEventListener('click', (e)=>{
+    const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+    if (!btn) return;
+    const txt = (btn.textContent || btn.value || "").toLowerCase().trim();
+    if (!txt) return;
+    if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
+      e.preventDefault();
+      handler(e);
+    }
+  }, true);
+})();
 
 // Ensure layer order after pressing UI Undo/Redo buttons
 ["undo","redo","restoreDraft","saveDraft"].forEach(id=>{
@@ -548,40 +575,35 @@ safeAddListener("loadUrl","click", async ()=>{
 });
 
 
- /* ===== RA_ENFORCE_AFTER_LOADFROMJSON (with guard flag) ===== */
-(function(){
-  if (window.__RA_AFTER_LOADFROMJSON__) return;
-  window.__RA_AFTER_LOADFROMJSON__ = true;
+ /* ===== RA_JSON_RESTORE_GUARD ===== */
+(function RA_JSON_RESTORE_GUARD(){
+  if (window.__RA_JSON_RESTORE_GUARD__) return;
+  window.__RA_JSON_RESTORE_GUARD__ = true;
 
-  const getC = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
   function patch(c){
     if (!c || c.__raPatchedLoadJSON) return;
     const orig = c.loadFromJSON.bind(c);
+
     c.loadFromJSON = function(json, cb, reviver){
       const next = (typeof cb === 'function') ? cb : function(){};
       window.__raLoadingJSON = true;
       const done = ()=>{
         window.__raLoadingJSON = false;
         try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { c.requestRenderAll(); } catch(_){}
         next();
       };
-      try {
-        return orig(json, done, reviver);
-      } catch (e) {
-        window.__raLoadingJSON = false;
-        throw e;
-      }
+      try { return orig(json, done, reviver); }
+      catch(e){ window.__raLoadingJSON = false; throw e; }
     };
+
     c.__raPatchedLoadJSON = true;
   }
 
-  (function wait(){
-    const c = getC(); if (!c) return setTimeout(wait, 150);
-    patch(c);
-  })();
+  (function wait(){ const c=C(); if (!c) return setTimeout(wait,120); patch(c); })();
 })();
-
 
 /* -------- Base image: load by token (multi‑collection) --------
    Reads the selected collection’s contract from your dropdown and
@@ -659,11 +681,10 @@ safeAddListener("loadToken","click", async ()=>{
     });
     safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
     safeAddListener("clearBase","click", clearBaseOnly);
-    safeAddListener("clearCanvas","click", ()=>{
-      const keep=[backgroundRect];
-      canvas.getObjects().slice().forEach(o=>{ if(!keep.includes(o)) canvas.remove(o); });
-      idLabel=null; baseGroup=null; canvas.requestRenderAll();
-    });
+  safeAddListener("clearCanvas","click", ()=>{
+  raSafeClear(true); // keep backgroundRect, clear everything else
+  idLabel=null; baseGroup=null;
+});
 
     // -------- Token ID style live controls (if present)
     ["change","input"].forEach(ev=>{
