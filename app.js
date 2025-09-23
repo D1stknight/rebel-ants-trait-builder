@@ -6889,11 +6889,14 @@ async function loadTokenFromCollection(tokenId, col){
 /* ==========================================================
    RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED)
    - Hooks ONLY the button with id="openNewTab" (no text sniffing)
-   - Opens a clean viewer tab first, then sends a Blob URL (Safari‑safe)
+   - Opens a clean viewer tab first, then sends a Blob URL (Safari-safe)
    - Never navigates the original tab
    - Paste at the VERY BOTTOM of app.js
    ========================================================== */
 (function RA_OPEN_NEW_TAB_VIEWER_V2(){
+  if (window.__RA_OPEN_NEW_TAB_VIEWER_V2__) return;
+  window.__RA_OPEN_NEW_TAB_VIEWER_V2__ = true;
+
   function getCanvas(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
@@ -6910,16 +6913,16 @@ async function loadTokenFromCollection(tokenId, col){
 
   function getMultiplier(){
     const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
-    if (!el) return 2;
-    const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
-    return (v && v >= 1 && v <= 8) ? v : 2;
+    const raw = (el?.value || el?.textContent || '').trim();
+    const m = parseInt((raw.match(/([1-8])/)||[])[1] || '2', 10);
+    return Math.min(8, Math.max(1, m || 2));
   }
 
   function openViewer(){
     const c = getCanvas();
     if (!c){ alert('Canvas not ready'); return; }
 
-    // Open the tab immediately (keeps it a user gesture → popup‑safe)
+    // Open the tab immediately (user gesture → popup-safe)
     const win = window.open('about:blank','_blank');
     if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
 
@@ -6962,15 +6965,14 @@ async function loadTokenFromCollection(tokenId, col){
       fetch(dataUrl).then(r=>r.blob()).then(blob=>{
         const url = URL.createObjectURL(blob);
         try { win.postMessage({ type:'ra-img', url }, '*'); } catch(_){}
-        // Revoke when the tab closes
         const tid = setInterval(()=>{ if (win.closed){ URL.revokeObjectURL(url); clearInterval(tid); } }, 4000);
       }).catch(()=>{
         try{ win.document.body.innerHTML =
-          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same‑origin or CORS‑enabled images.</div>'; }catch(_){}
+          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
       });
     }catch(e){
       try{ win.document.body.innerHTML =
-        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same‑origin or CORS‑enabled images.</div>'; }catch(_){}
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
     }
   }
 
@@ -6981,6 +6983,32 @@ async function loadTokenFromCollection(tokenId, col){
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     openViewer();
   }, true);
+})();
+
+
+/* ===== RA_PRESERVE_CLEAR_ONCE — keep _isBase and _raSys across canvas.clear() ===== */
+(function RA_PRESERVE_CLEAR_ONCE(){
+  if (window.__RA_PRESERVE_CLEAR_ONCE__) return;
+  window.__RA_PRESERVE_CLEAR_ONCE__ = true;
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function patch(c){
+    if (!c || c.__raClearPatched) return;
+    const _clear = c.clear.bind(c);
+    c.clear = function(){
+      const keep = [];
+      (this.getObjects?.()||[]).forEach(o=>{
+        if (o && (o._isBase || o._raSys)) keep.push(o);
+      });
+      _clear();
+      keep.forEach(o=> this.add(o));
+      try { this.requestRenderAll(); } catch(_) {}
+    };
+    c.__raClearPatched = true;
+  }
+
+  (function wait(){ const c=C(); if (!c){ setTimeout(wait,150); return; } patch(c); })();
 })();
 
 /* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
