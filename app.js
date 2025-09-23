@@ -554,7 +554,7 @@ safeAddListener("clearUpload","click", ()=>{
   function readTokenInputValue(){
     // Check both the left input and the styles panel display, plus common fallbacks
     const candidates = [
-      "#tokenIdDisplay",                // styles panel field that often shows "#5"
+      "#tokenIdDisplay",              // styles panel often holds "#5"
       "#tokenIdInput", "#tokenId", "#token",
       'input[name="tokenId"]', 'input[name="token"]',
       'input[placeholder*="Token"]', 'input[placeholder*="ID"]'
@@ -564,8 +564,7 @@ safeAddListener("clearUpload","click", ()=>{
       if (!el) continue;
       const raw = (el.value ?? el.textContent ?? "").trim();
       if (!raw) continue;
-      // Accept "#5" or "5" → keep only digits
-      const digits = (raw.match(/\d+/) || ["" ])[0];
+      const digits = (raw.match(/\d+/) || [""])[0]; // accept "#5" or "5"
       if (digits) return digits;
     }
     return "";
@@ -593,7 +592,6 @@ safeAddListener("clearUpload","click", ()=>{
     if (!btn) return;
     const txt = (btn.textContent || btn.value || "").toLowerCase().trim();
     if (!txt) return;
-    // Match “Load Token ID”, “Place Token ID”, “Show Token ID”
     if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
       e.preventDefault();
       handler(e);
