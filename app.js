@@ -7867,205 +7867,35 @@ if (img){
     return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
   }
 
-  function onClick(e){
-    const el = e.target && e.target.closest && e.target.closest('button, a');
-    if (!el || !looksLikeLoadByToken(el)) return;
+ // Helper: find the Token ID Styles card so we can skip hijacking inside it
+function findTokenIdStylesCard(){
+  const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
+  const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
+  return h ? (h.closest('.card,section,div') || h.parentElement) : null;
+}
 
-    const tokenId  = readTokenId();
-    const detected = detectContractAndChain();
+function onClick(e){
+  const el = e.target && e.target.closest && e.target.closest('button, a');
+  if (!el) return;
 
-    // Only take over if we have a token id AND a confident contract+chain.
-    if (tokenId && detected && detected.contract) {
-      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-      runLoader(detected, tokenId);
-    }
-    // else: fall through to the app’s original handler (works for Rebels/Saints already)
+  // ⛔️ Do NOT hijack clicks in the Token ID Styles card (this button is for the label UI)
+  const stylesCard = findTokenIdStylesCard();
+  if (stylesCard && stylesCard.contains(el)) return;
+
+  if (!looksLikeLoadByToken(el)) return;
+
+  const tokenId  = readTokenId();
+  const detected = detectContractAndChain();
+
+  if (tokenId && detected && detected.contract) {
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    runLoader(detected, tokenId);
   }
+}
 
   // Boot
   if (!document.__raTokenLoaderXChainBound){
     document.__raTokenLoaderXChainBound = true;
     document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
   }
-})();
-
-/* ===== RA_TOKEN_ID_LABEL_EDIT_TOGGLE_V1 — place safely, then toggle edit/lock for styling ===== */
-;(() => {
-  if (window.__RA_TOKEN_ID_LABEL_EDIT_TOGGLE_V1__) return;
-  window.__RA_TOKEN_ID_LABEL_EDIT_TOGGLE_V1__ = true;
-
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  function readTokenIdValue(){
-    const sels = [
-      '#raTokenIdDisplay', '#tokenIdDisplay',
-      '#tokenIdInput', '#tokenId', '#token',
-      'input[name="tokenId"]','input[name="token"]',
-      'input[placeholder*="Token"]'
-    ];
-    for (const sel of sels){
-      const el = document.querySelector(sel);
-      if (!el) continue;
-      const raw = (el.value ?? el.textContent ?? '').trim();
-      const d = (raw.match(/\d+/) || [''])[0];
-      if (d) return d;
-    }
-    return '';
-  }
-
-  // Use existing formatter if present; else simple '#123'
-  function formatShown(n){
-    try {
-      const fmtSel = document.getElementById('idFormat');
-      if (typeof window.formatTokenId === 'function') return window.formatTokenId('#'+n, fmtSel);
-    } catch(_) {}
-    return '#'+String(n).replace(/^#+/,'');
-  }
-
-  function ensureLabel(){
-    const c = C(); if (!c) return null;
-    let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
-    if (!l && window.fabric){
-      l = new fabric.Text('#', {
-        originX:'center', originY:'top',
-        left:c.getWidth()/2, top:32,
-        fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-        fontSize:48, fill:'#ffffff',
-        stroke:'#000000', strokeWidth:2, strokeUniform:true,
-        selectable:false, evented:false, hasControls:false
-      });
-      l._raTokenId = true; l._raSys = true;
-      c.add(l); c.requestRenderAll();
-    }
-    window.idLabel = l || window.idLabel;
-    return l;
-  }
-
-  function placeLabelSafe(){
-    const c = C(); if (!c) return;
-    const v = readTokenIdValue(); if (!v) return;
-    const l = ensureLabel(); if (!l) return;
-
-    const shown = formatShown(v);
-    if (l.text !== shown) l.set({ text: shown });
-
-    // keep non-interactive & topmost (no re-add → no blink)
-    l.selectable=false; l.evented=false; l.hasControls=false;
-    try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
-    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-    c.requestRenderAll();
-  }
-
-  let EDIT_ON = false;
-  function setEdit(on){
-    const c = C(); const l = ensureLabel(); if (!c || !l) return;
-    EDIT_ON = !!on;
-
-    // Toggle interactivity only; never remove/add (no blink)
-    l.selectable = EDIT_ON;
-    l.evented    = EDIT_ON;
-    l.hasControls= EDIT_ON;
-    // When entering edit, make sure the label is active on top
-    if (EDIT_ON){
-      try { c.setActiveObject(l); } catch(_){}
-      try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
-      l.setCoords();
-    } else {
-      // lock back & keep it on top
-      l.selectable=false; l.evented=false; l.hasControls=false;
-      try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
-      l.setCoords();
-      // Let your enforcer tidy layers
-      try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-    }
-    c.requestRenderAll();
-    // UI hint
-    const t = document.getElementById('raTokEditToggle');
-    if (t) t.textContent = EDIT_ON ? 'Done Editing' : 'Edit Label';
-  }
-
-  // Live-style wiring: hook your existing controls to the label while EDIT_ON
-  function wireStyleControls(){
-    const c = C(); if (!c) return;
-    const ctl = {
-      fmt:   document.getElementById('idFormat'),
-      size:  document.getElementById('idSize'),
-      fill:  document.getElementById('idColor'),
-      strk:  document.getElementById('idStrokeColor'),
-      sw:    document.getElementById('idStrokeWidth'),
-    };
-    const apply = ()=>{
-      if (!EDIT_ON) return;
-      const l = ensureLabel(); if (!l) return;
-
-      // Text (reformat from token input/display)
-      const v = readTokenIdValue();
-      if (v) {
-        const shown = formatShown(v);
-        if (l.text !== shown) l.set({ text: shown });
-      }
-      // Style
-      if (ctl.size && ctl.size.value)  l.set('fontSize', parseInt(ctl.size.value||'48',10));
-      if (ctl.fill && ctl.fill.value)  l.set('fill',     ctl.fill.value);
-      if (ctl.strk && ctl.strk.value)  l.set('stroke',   ctl.strk.value);
-      if (ctl.sw   && ctl.sw.value)    l.set('strokeWidth', parseInt(ctl.sw.value||'0',10));
-
-      l.setCoords(); c.requestRenderAll();
-    };
-    ['change','input'].forEach(ev=>{
-      [ctl.fmt, ctl.size, ctl.fill, ctl.strk, ctl.sw].forEach(el=>{
-        if (!el || el.__raTokStyle) return;
-        el.__raTokStyle = true;
-        el.addEventListener(ev, apply);
-      });
-    });
-  }
-
-  // Add two small buttons into the Token ID Styles card
-  function card(){
-    const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
-    const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
-    return h ? (h.closest('.card,section,div') || h.parentElement) : null;
-  }
-  function ensureButtons(){
-    const host = card() || document.body;
-    if (!document.getElementById('raTokPlaceSafe')){
-      const b = document.createElement('button');
-      b.id='raTokPlaceSafe'; b.className='btn small'; b.textContent='Place Label (safe)';
-      b.style.marginLeft='8px';
-      host.appendChild(b);
-      b.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); placeLabelSafe(); }, true);
-    }
-    if (!document.getElementById('raTokEditToggle')){
-      const t = document.createElement('button');
-      t.id='raTokEditToggle'; t.className='btn small'; t.textContent='Edit Label';
-      t.style.marginLeft='8px';
-      host.appendChild(t);
-      t.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); setEdit(!EDIT_ON); }, true);
-    }
-  }
-
-  // Keep label on top after Undo/Redo/Restore
-  function wireAfterHistory(){
-    const c = C(); if (!c || c.__raTokKeepTop) return;
-    c.__raTokKeepTop = true;
-    const keepTop = ()=>{
-      const l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId);
-      if (!l) return;
-      try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
-      c.requestRenderAll();
-    };
-    c.on('object:added', keepTop);
-    c.on('object:modified', keepTop);
-    c.on('object:removed', keepTop);
-  }
-
-  // boot
-  function boot(){
-    if (!C()) return setTimeout(boot, 200);
-    ensureButtons();
-    wireStyleControls();
-    wireAfterHistory();
-  }
-  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); } else { boot(); }
 })();
