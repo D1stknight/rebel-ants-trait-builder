@@ -1344,7 +1344,8 @@ function renderPublishedShelf(){
   }
   draw();
 }
-// ===============================
+
+ // ===============================
 //  EXPORT (optional UI IDs: exportPng / openNewTab)
 //  — self-contained: includes the New Tab viewer (fit ↔ actual size)
 // ===============================
@@ -1356,7 +1357,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // Regular PNG download
   safeAddListener("exportPng","click",()=> doExport(false));
 
-  // New‑tab viewer (prevents Chrome navigating the current tab)
+  // New-tab viewer (prevents Chrome navigating the current tab)
   safeAddListener("openNewTab", "click", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1364,11 +1365,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
     raOpenNewTabViewer();
   });
 
-  // High‑quality PNG export used by both paths
+  // High-quality PNG export used by both paths
   function doExport(openTab){
     if (!window.canvas) return;
-    const rawMult = parseInt(($("exportMultiplier")||{}).value || "2", 10);
-const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
+    const rawMult = parseInt((($("exportMultiplier")||{}).value) || "2", 10);
+    const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
     let dataURL;
     try{
       dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
@@ -1382,29 +1383,28 @@ const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
     const manual = $("manualLink");
     if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
 
-   if (openTab) {
-  fetch(dataURL).then(r => r.blob()).then(blob => {
-    const url = URL.createObjectURL(blob);
-    const w = window.open(url, "_blank", "noopener");
-    if (!w) {
-      // Popup blocked → trigger a download instead of navigating away
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "rebel-ant-overlay.png";
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
-    }
-  });
-}
-    else{
+    if (openTab) {
+      fetch(dataURL).then(r => r.blob()).then(blob => {
+        const url = URL.createObjectURL(blob);
+        const w = window.open(url, "_blank", "noopener");
+        if (!w) {
+          // Popup blocked → trigger a download instead of navigating away
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "rebel-ant-overlay.png";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+        }
+      });
+    } else {
       const a = document.createElement("a");
       a.href = dataURL; a.download = "rebel-ant-overlay.png";
       document.body.appendChild(a); a.click(); a.remove();
     }
   }
 
-  // ---- Inline, popup‑safe viewer that fits to the browser tab ----
+  // ---- Inline, popup-safe viewer that fits to the browser tab ----
   // Exposed globally so other code can reuse: window.raOpenNewTabViewer()
   window.raOpenNewTabViewer = function raOpenNewTabViewer(){
     if (!window.canvas){ alert("Canvas not ready"); return; }
@@ -1475,13 +1475,11 @@ const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
     }catch(e){
       win.document.body.innerHTML =
         '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">' +
-        'Export failed (CORS/security). Try a different image or use a CORS‑enabled host.' +
+        'Export failed (CORS/security). Try a different image or use a CORS-enabled host.' +
         '</div>';
     }
   };
-});
-  })();
-
+});  // <-- closes DOMContentLoaded
 
 /* =========================
    RA_CANVAS_RESIZE_SYNC_ONLY_V8
