@@ -7783,3 +7783,6 @@ return;
     document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
   }
 })();
+
+})(); // Close the inner function/section from line 83
+})(); // Close the main IIFE from line 1
