@@ -2769,38 +2769,39 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     return JSON.stringify(j);
   }
 
-  function restore(jsonStr, label=''){
-    if (!c || !jsonStr) return;
-    MUTE++;
-    window.__RA_RESTORING__ = true;    
-    try{
-      const data = JSON.parse(jsonStr);
-      c.loadFromJSON(data, () => {
-        try{
-          if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
-          if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
+ function restore(jsonStr, label=''){
+  if (!c || !jsonStr) return;
+  MUTE++;
+  window.__RA_RESTORING__ = true;             // ← set the guard
 
-          // keep base/bg not selectable
-          c.getObjects().forEach(o=>{
-            if (o._isBase){
-              o.selectable=false; o.evented=false; o.hasControls=false;
-              o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
-            }
-          });
+  try{
+    const data = JSON.parse(jsonStr);
+    c.loadFromJSON(data, () => {
+      try{
+        if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
+        if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
 
-          c.requestRenderAll();
-        } finally {
-          MUTE--;
-          window.__RA_RESTORING__ = false;          
-          refresh(label);
-        }
-      });
-    } catch(_){
-      MUTE--; window.__RA_RESTORING__ = false;      
-      refresh(label);
-    }
+        // keep base/bg not selectable
+        c.getObjects().forEach(o=>{
+          if (o._isBase){
+            o.selectable=false; o.evented=false; o.hasControls=false;
+            o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+          }
+        });
+
+        c.requestRenderAll();
+      } finally {
+        MUTE--;
+        window.__RA_RESTORING__ = false;      // ← clear after restore settles
+        refresh(label);
+      }
+    });
+  } catch(_){
+    MUTE--;
+    window.__RA_RESTORING__ = false;          // ← also clear on error
+    refresh(label);
   }
-
+}
   function push(label=''){
     const s = serialize(); if (!s) return;
     // if we undid into the middle, drop the tail
@@ -7601,43 +7602,69 @@ async function loadTokenFromCollection(tokenId, col){
 
 function killOldBase(c){
   const objs = (c.getObjects() || []).slice();
+  const cw = c.getWidth(), ch = c.getHeight();
 
-  // If the active object looks like a base, drop the selection first (prevents Fabric errors)
-  const active = c.getActiveObject && c.getActiveObject();
-  const isImageLike = o => o && (o.type === 'image' || o._element);
-  const area = o => {
+  const imgLike = o => o && (o.type === 'image' || o._element);
+  const isGroup = o => o && o.type === 'group';
+
+  const boundsArea = o => {
+    try {
+      const br = o.getBoundingRect(true, true);
+      return (br?.width || 0) * (br?.height || 0);
+    } catch(_) { return 0; }
+  };
+
+  const imageArea = o => {
     const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0) * (o.scaleX||1));
     const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0) * (o.scaleY||1));
     return w * h;
   };
 
-  // Find all image-like objects that are NOT sys/label
-  const imgNonSys = objs.filter(o => isImageLike(o) && !o._raSys && !o._raTokenId);
+  // Collect all candidates we may want to remove; compute a reasonable threshold
+  const imgNonSys = objs.filter(o => imgLike(o) && !o._raSys && !o._raTokenId && !o._isBgRect);
+  const maxImageA = imgNonSys.length ? Math.max(...imgNonSys.map(imageArea)) : 0;
+  const bigImageThreshold = Math.max(cw * ch * 0.25, maxImageA * 0.75); // robust threshold
 
-  if (active && imgNonSys.includes(active)) {
-    try { c.discardActiveObject(); } catch(_){}
-  }
+  // If the active object is one of the candidates, drop selection first (avoids drawControls errors)
+  try {
+    const active = c.getActiveObject && c.getActiveObject();
+    if (active && (imgNonSys.includes(active) || isGroup(active))) {
+      c.discardActiveObject();
+    }
+  } catch(_) {}
 
-  if (!imgNonSys.length) return;
+  objs.forEach(o => {
+    if (!o) return;
+    if (o._isBgRect || o._raSys || o._raTokenId) return;  // never touch bg/sys/label
 
-  // Use "largest image" heuristic in case flags are missing
-  const maxA = Math.max.apply(null, imgNonSys.map(area));
+    let looksLikeBase = false;
 
-  imgNonSys.forEach(o => {
-    // Base candidates = flagged base OR fingerprinted OR token-marked
-    // OR large, non-overlay images (overlay groups set _kind='overlay')
-    const looksLikeBase =
-      o._isBase ||
-      o._raBaseSig === 'BASE_V1' ||
-      !!o._tokenContract ||
-      (o._kind !== 'overlay' && area(o) >= maxA * 0.75);
+    // Explicit flags or fingerprints
+    if (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract) {
+      looksLikeBase = true;
+    }
+
+    // Large non-overlay image = probable base
+    if (!looksLikeBase && imgLike(o) && o._kind !== 'overlay') {
+      const a = imageArea(o);
+      if (a >= bigImageThreshold) looksLikeBase = true;
+    }
+
+    // Group base (e.g., old non-token base with corner stamps)
+    if (!looksLikeBase && isGroup(o)) {
+      if (o._kind !== 'overlay') {
+        const A = boundsArea(o);
+        const stamps = Array.isArray(o._objects) && o._objects.some(ch => ch && (ch._isWatermark || ch.raWM || ch.raPos));
+        if (A >= cw * ch * 0.25 || stamps) looksLikeBase = true;
+      }
+    }
 
     if (looksLikeBase) {
-      try { c.remove(o); } catch(_){}
+      try { c.remove(o); } catch(_) {}
     }
   });
 
-  try { c.requestRenderAll(); } catch(_){}
+  try { c.requestRenderAll(); } catch(_) {}
 }
 
   function fitAndAddAsBase(img){
@@ -7723,6 +7750,7 @@ if (!urls || !urls.length){
 }
 
     // 2) CORS‑safe path first (best for export)
+    try { c.discardActiveObject(); } catch(_){}
     killOldBase(c);
     for (const u of urls){
       try{
