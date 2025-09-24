@@ -8074,172 +8074,83 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_RESTORE_MUTE_AND_ORDER_V1 — mute history during restore; hide sys dupes; strict order ===== */
-;(() => {
-  if (window.__RA_RESTORE_MUTE_AND_ORDER_V1__) return;
-  window.__RA_RESTORE_MUTE_AND_ORDER_V1__ = true;
+/* ===== RA_HISTORY_RESTORE_FINAL_v1 — mute sys commits + strict order + dedupe ===== */
+(() => {
+  if (window.__RA_HISTORY_RESTORE_FINAL__) return;
+  window.__RA_HISTORY_RESTORE_FINAL__ = true;
 
-  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // liberal detectors
-  const isBg   = o => !!(o && o._isBgRect);
-  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
-  const isId   = o => !!(o && o._raTokenId);
-  const isWmLike = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
-                                 (typeof o.name==='string' && /watermark|powered/i.test(o.name)) ||
-                                 (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
-  const isSys  = o => !!(o && (o._raSys || o._raBrandFooter || isWmLike(o) || isId(o)));
-  const isUser = o => !!o && !isBg(o) && !isBase(o) && !isSys(o);
+  function isSys(o) {
+    return !!(o && (o._raSys || o._raWMCenter || o._raBrandFooter || o._raTokenId || o._isBgRect));
+  }
 
-  const area = o => {
-    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
-    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
-    return w*h;
-  };
+  // Force canonical order: BG → BASE → overlays/text → footer → watermark
+  function enforceOrder(c) {
+    if (!c) return;
+    const objs = c.getObjects() || [];
+    const bg   = objs.filter(o => o._isBgRect);
+    const base = objs.filter(o => o._isBase);
+    const over = objs.filter(o => !isSys(o) && !o._isBase && !o._isBgRect);
+    const foot = objs.filter(o => o._raBrandFooter);
+    const wm   = objs.filter(o => o._raWMCenter);
 
-  // Keep ONE by chooser, make others invisible (do NOT remove while restoring)
-  function keepOneHideRest(arr, chooser){
-    if (!arr.length) return null;
-    const keep = chooser(arr);
-    arr.forEach(o => {
-      if (o !== keep) {
-        o._raZombieSys = true;
-        o.visible = false;     // hide duplicate sys instead of removing
+    c._objects = [].concat(bg, base, over, foot, wm);
+    c.requestRenderAll();
+  }
+
+  // Deduplicate sys layers (footer, WM, token ID, etc.)
+  function dedupe(c) {
+    if (!c) return;
+    const seen = new Set();
+    (c.getObjects() || []).slice().forEach(o => {
+      if (isSys(o)) {
+        const sig = o.type + (o._raBrandFooter ? 'footer' :
+                              o._raWMCenter   ? 'wm'     :
+                              o._raTokenId    ? 'tokenId': 'sys');
+        if (seen.has(sig)) {
+          try { c.remove(o); } catch(_){}
+        } else {
+          seen.add(sig);
+        }
       }
     });
-    return keep;
   }
 
-  function strictOrder(){
-    const c = getC(); if (!c) return;
-    const objs = c.getObjects ? c.getObjects() : [];
-
-    // Dedupe BG
-    const bgs = objs.filter(isBg);
-    const bg  = keepOneHideRest(bgs, arr => arr[0]) || null;
-
-    // Dedupe Base: fingerprint → token → largest
-    const bases = objs.filter(isBase);
-    const base  = keepOneHideRest(bases, arr => {
-      let f = arr.find(o => o._raBaseSig==='BASE_V1'); if (f) return f;
-      f = arr.find(o => o._tokenContract); if (f) return f;
-      return arr.slice().sort((a,b)=>area(b)-area(a))[0];
-    }) || null;
-
-    // Dedupe WM/footer: keep largest wm-like
-    const wms = objs.filter(isWmLike);
-    const wm  = keepOneHideRest(wms, arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]) || null;
-
-    // Dedupe Token-ID: keep latest
-    const ids = objs.filter(isId);
-    const id  = keepOneHideRest(ids, arr => arr[arr.length-1]) || null;
-
-    // Lock real base safely
-    if (base){
-      base._isBase = true;
-      base._raBaseSig = base._raBaseSig || 'BASE_V1';
-      base.selectable=false; base.evented=false; base.hasControls=false;
-      base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
-      try { base.setCoords(); } catch(_){}
-    }
-    if (bg) bg._isBgRect = true;
-    if (wm) wm._raSys = true;
-
-    // Rebuild order: 0 bg, 1 base, 2.. users, then id, wm, and other sys
-    const users = objs.filter(o => isUser(o) && o.visible!==false);
-    let i=0;
-    if (bg)   c.moveTo(bg,   i++);
-    if (base) c.moveTo(base, i++);
-    users.forEach(o => c.moveTo(o, i++));
-    if (id && id.visible!==false) c.moveTo(id, i++);
-    if (wm && wm.visible!==false) c.moveTo(wm, i++);
-    objs.filter(o => isSys(o) && o!==wm && o!==id && o.visible!==false).forEach(o => c.moveTo(o, i++));
-
-    // Keep globals fresh
-    if (bg)   window.backgroundRect = bg;
-    if (base) window.baseObject     = base;
-
-    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
+  function normalize(c) {
+    if (!c) return;
+    dedupe(c);
+    enforceOrder(c);
   }
 
-  // Mute canvas.fire() during restore so our cleanup doesn't push new history entries
-  function withHistoryMute(c, fn){
-    const origFire = c.fire ? c.fire.bind(c) : null;
-    if (!origFire) return fn();
+  function wire() {
+    const c = C(); if (!c) return setTimeout(wire, 200);
 
-    c.fire = function(evt, opts){
-      if (window.__RA_RESTORING__) {
-        // swallow events that would create history noise
-        if (/^(object:added|object:removed|object:modified|history:.*)$/i.test(evt)) return;
-      }
-      return origFire(evt, opts);
+    // Intercept restore/load so sys layers don’t spam history
+    const origLoad = c.loadFromJSON.bind(c);
+    c.loadFromJSON = function(json, cb, reviver) {
+      window.__raRestoring = true;
+      return origLoad(json, (...args) => {
+        try { normalize(c); } catch(_){}
+        window.__raRestoring = false;
+        if (cb) cb(...args);
+      }, reviver);
     };
 
-    try { return fn(); }
-    finally { c.fire = origFire; }
+    // Normalize after undo/redo or manual restore
+    ['history:undo','history:redo','history:restore'].forEach(ev=>{
+      c.on(ev, () => setTimeout(()=>normalize(c),0));
+    });
+
+    // Safety: also normalize on render
+    c.on('after:render', () => {
+      if (!window.__raRestoring) normalize(c);
+    });
   }
 
-  // Wrap the live canvas
-  function wrapCanvas(){
-    const c = getC(); if (!c || c.__raRestoreMuted) return;
-    c.__raRestoreMuted = true;
-
-    const origLoad = c.loadFromJSON && c.loadFromJSON.bind(c);
-    if (origLoad){
-      c.loadFromJSON = function(json, cb, reviver){
-        window.__RA_RESTORING__ = true;
-        return withHistoryMute(c, () => origLoad(json, (...args)=>{
-          // allow a few frames for Fabric to settle, still muted
-          let n=0; const settle=()=>{ strictOrder(); if (++n<3) setTimeout(settle, 60); };
-          settle();
-          window.__RA_RESTORING__ = false;
-          if (typeof cb==='function') cb(...args);
-        }, reviver));
-      };
-    }
-
-    // Also keep order sane after any change (post-undo settle), but mute if mid-restore
-    const kick = ()=> {
-      if (window.__RA_RESTORING__) return;
-      strictOrder();
-    };
-    c.on('object:added',    kick);
-    c.on('object:modified', kick);
-    c.on('object:removed',  kick);
+  if (document.readyState==='loading') {
+    document.addEventListener('DOMContentLoaded', wire, {once:true});
+  } else {
+    wire();
   }
-
-  // Watch for canvas instance swaps
-  function watch(){
-    let last = null;
-    const tick = ()=>{
-      const cur = getC();
-      if (cur && cur !== last){ wrapCanvas(); last = cur; }
-    };
-    tick();
-    setInterval(tick, 250);
-  }
-
-  // Nudge after UI Undo/Redo/Restore buttons & keyboard (non-mutating; just ordering)
-  function wireUI(){
-    const bump = ()=> setTimeout(()=>{ if (!window.__RA_RESTORING__) strictOrder(); }, 30);
-    document.addEventListener('click', (e)=>{
-      const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-      if (!el) return;
-      const t = (el.textContent || el.value || '').toLowerCase().trim();
-      if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) bump();
-    }, true);
-    document.addEventListener('keydown', (e)=>{
-      const k = e.key && e.key.toLowerCase();
-      if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')) bump();
-    }, true);
-  }
-
-  function boot(){
-    if (!getC()) { setTimeout(boot, 200); return; }
-    watch();
-    wireUI();
-  }
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
-  else boot();
 })();
