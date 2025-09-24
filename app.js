@@ -8049,3 +8049,71 @@ function onClick(e){
   if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', boot, { once:true }); }
   else { boot(); }
 })();
+
+/* ===== RA_UNDO_ORDER_FIX_V1 — keep base/overlays/label ordered after Undo/Redo/Restore ===== */
+;(() => {
+  if (window.__RA_UNDO_ORDER_FIX_V1__) return;
+  window.__RA_UNDO_ORDER_FIX_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // If _isBase got lost in restore, retag the most-likely base (prefers token-marked; else largest image)
+  function reTagBaseIfMissing(){
+    const c = C(); if (!c) return;
+    const objs = c.getObjects ? c.getObjects() : [];
+    const hasBase = objs.some(o => o && o._isBase && !o._isBgRect);
+    if (hasBase) return;
+
+    // Prefer something with a token marker; else largest image
+    let cand = objs.find(o => o && o._tokenContract && (o.type === 'image' || o._element));
+    if (!cand){
+      const imgs = objs.filter(o => (o && (o.type === 'image' || o._element)) && !o._isBgRect);
+      cand = imgs.sort((a,b)=>{
+        const aw = (a.getScaledWidth ? a.getScaledWidth() : (a.width||0)*(a.scaleX||1));
+        const ah = (a.getScaledHeight? a.getScaledHeight: (a.height||0)*(a.scaleY||1));
+        const bw = (b.getScaledWidth ? b.getScaledWidth() : (b.width||0)*(b.scaleX||1));
+        const bh = (b.getScaledHeight? b.getScaledHeight: (b.height||0)*(b.scaleY||1));
+        return (bw*bh) - (aw*ah);
+      })[0];
+    }
+    if (cand){
+      cand._isBase = true;
+      // lock like a base should be
+      cand.selectable=false; cand.evented=false; cand.hasControls=false;
+      cand.lockMovementX=cand.lockMovementY=cand.lockScalingX=cand.lockScalingY=cand.lockRotation=true;
+      try { cand.setCoords(); } catch(_) {}
+    }
+  }
+
+  // Run the order fix a few times as history settles
+  function fixOrderFew(times=4, delay=60){
+    let i = 0;
+    const step = () => {
+      try { reTagBaseIfMissing(); } catch(_) {}
+      try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+      try { const c=C(); c && c.requestRenderAll && c.requestRenderAll(); } catch(_) {}
+      if (++i < times) setTimeout(step, delay);
+    };
+    setTimeout(step, 0);
+  }
+
+  // Hook common Undo/Redo/Restore UI (buttons by text) and keyboard (Cmd/Ctrl+Z)
+  document.addEventListener('click', (e)=>{
+    const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+    if (!el) return;
+    const t = (el.textContent || el.value || '').toLowerCase().trim();
+    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
+      setTimeout(()=>fixOrderFew(), 50);
+    }
+  }, true);
+
+  document.addEventListener('keydown', (e)=>{
+    const z = e.key && e.key.toLowerCase() === 'z';
+    if ((e.metaKey || e.ctrlKey) && z){
+      setTimeout(()=>fixOrderFew(), 50);
+    }
+  }, true);
+
+  // Safety: if loadFromJSON finishes (your RA_JSON_RESTORE_GUARD already calls once), we double down
+  // (No extra wrapper needed here; the post-delay loop smooths out multi-frame settle.)
+})();
