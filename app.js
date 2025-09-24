@@ -7888,3 +7888,87 @@ if (img){
     document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
   }
 })();
+
+/* ===== RA_TOKEN_ID_BUTTON_FIX_V1 — make “Load Token ID” place the label every time ===== */
+;(() => {
+  if (window.__RA_TOKEN_ID_BUTTON_FIX_V1__) return;
+  window.__RA_TOKEN_ID_BUTTON_FIX_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Read token from the Styles card display or the main Token input on the left
+  function readTokenIdValue(){
+    // 1) Styles panel field (often shows "#123")
+    const stylesCandidates = [
+      '#raTokenIdDisplay', '#tokenIdDisplay',
+      '#tokenIdInput', '#tokenId', '#token',
+      'input[name="tokenId"]', 'input[name="token"]'
+    ];
+    for (const sel of stylesCandidates){
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      const d = (raw.match(/\d+/) || [''])[0];
+      if (d) return d;
+    }
+    // 2) Main Token ID input on the left Upload card
+    const mainCandidates = [
+      '#tokenId', '#token', '#tokenIdInput',
+      'input[name="tokenId"]', 'input[name="token"]',
+      'input[placeholder*="Token"]'
+    ];
+    for (const sel of mainCandidates){
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      const d = (raw.match(/\d+/) || [''])[0];
+      if (d) return d;
+    }
+    return '';
+  }
+
+  function placeLabelOnTop(idStr){
+    if (!idStr) return;
+    if (typeof window.addOrUpdateTokenLabel !== 'function') return;
+    window.addOrUpdateTokenLabel(String(idStr));
+    const c = C(), l = window.idLabel;
+    if (c && l){
+      const n = (c.getObjects()||[]).length;
+      try { c.bringToFront(l); c.moveTo(l, n-1); } catch(_){}
+      try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+      try { c.requestRenderAll(); } catch(_){}
+    }
+  }
+
+  // Scope to the Token ID Styles card (so we don’t hijack the image loader)
+  function tokenIdCard(){
+    const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
+    const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
+    return h ? (h.closest('.card,section,div') || h.parentElement) : document.body;
+  }
+
+  // Bind by common IDs (if present)
+  ['raLoadTokenIdBtn','loadTokenId','loadTokenID','tokenIdLoad','placeTokenId'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (!el || el.__raTokFix) return;
+    el.__raTokFix = true;
+    el.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      const idStr = readTokenIdValue();
+      placeLabelOnTop(idStr);
+    }, true);
+  });
+
+  // Also bind by visible button text inside the Styles card
+  const scope = tokenIdCard();
+  scope.addEventListener('click', (e)=>{
+    const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+    if (!btn || !scope.contains(btn)) return;
+    const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
+    if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      const idStr = readTokenIdValue();
+      placeLabelOnTop(idStr);
+    }
+  }, true);
+})();
