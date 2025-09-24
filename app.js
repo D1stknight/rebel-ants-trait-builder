@@ -266,7 +266,7 @@ function isAllowedAssetURL(u){
     if (idLabel) canvas.bringToFront(idLabel);
   }
 
-  /* ===== RA_LAYER_ORDER_ENFORCER — deterministic indices ===== */
+/* ===== RA_LAYER_ORDER_ENFORCER — deterministic indices ===== */
 (function(){
   if (window.__RA_LAYER_ORDER_ENFORCER__) return;
   window.__RA_LAYER_ORDER_ENFORCER__ = true;
@@ -318,54 +318,58 @@ function isAllowedAssetURL(u){
   };
 })();
 
+/* (tiny helper used below — keep label above other UI if present) */
+function bringInterfaceToFront(){
+  try { if (typeof idLabel !== 'undefined' && idLabel) canvas.bringToFront(idLabel); } catch(_){}
+}
 
-  function initBackgroundRect(fill){
-    backgroundRect = new fabric.Rect({
-      left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(),
-      fill:fill, selectable:false, evented:false, hasControls:false
-    });
-    backgroundRect._isBgRect = true;
-    canvas.add(backgroundRect);
-    canvas.sendToBack(backgroundRect);
-  }
+function initBackgroundRect(fill){
+  backgroundRect = new fabric.Rect({
+    left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(),
+    fill:fill, selectable:false, evented:false, hasControls:false
+  });
+  backgroundRect._isBgRect = true;
+  canvas.add(backgroundRect);
+  canvas.sendToBack(backgroundRect);
+}
 
-  function setCanvasSize(size){
-    const prevW=canvas.getWidth()||size, prevH=canvas.getHeight()||size;
-    const sx=size/prevW, sy=size/prevH;
-    canvas.setWidth(size); canvas.setHeight(size);
-    if(backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
-    canvas.getObjects().forEach(o=>{
-      if (o===backgroundRect) return;
-      o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
-    });
-    canvas.setViewportTransform([1,0,0,1,0,0]);
-    canvas.requestRenderAll();
-  }
+function setCanvasSize(size){
+  const prevW = canvas.getWidth() || size, prevH = canvas.getHeight() || size;
+  const sx = size / prevW, sy = size / prevH;
+  canvas.setWidth(size); canvas.setHeight(size);
+  if (backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
+  canvas.getObjects().forEach(o=>{
+    if (o === backgroundRect) return;
+    o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
+  });
+  canvas.setViewportTransform([1,0,0,1,0,0]);
+  canvas.requestRenderAll();
+}
 
-  function setZoom(v){
-    zoom=Math.max(0.25,Math.min(6,v));
-    canvas.setZoom(zoom);
-    const zv=$("zoomVal"); if(zv) zv.textContent=Math.round(zoom*100)+"%";
-    canvas.requestRenderAll();
-  }
+function setZoom(v){
+  zoom = Math.max(0.25, Math.min(6, v));
+  canvas.setZoom(zoom);
+  const zv = $("zoomVal"); if (zv) zv.textContent = Math.round(zoom*100) + "%";
+  canvas.requestRenderAll();
+}
 
-  function lockBaseObject(o){
-    if (!o) return;
-    o._isBase = true;
-    o.selectable = false;
-    o.evented = false;
-    o.hasControls = false;
-    o.lockMovementX = o.lockMovementY = true;
-    try { canvas.sendToBack(o); } catch(_){}
-  }
+function lockBaseObject(o){
+  if (!o) return;
+  o._isBase = true;
+  o.selectable = false;
+  o.evented = false;
+  o.hasControls = false;
+  o.lockMovementX = o.lockMovementY = true;
+  try { canvas.sendToBack(o); } catch(_){}
+}
 
-  function clearBaseOnly(){
-    canvas.getObjects().slice().forEach(o=>{ if(o._isBase) canvas.remove(o); });
-    baseGroup=null; canvas.requestRenderAll();
-  }
+function clearBaseOnly(){
+  canvas.getObjects().slice().forEach(o=>{ if (o._isBase) canvas.remove(o); });
+  baseGroup = null; canvas.requestRenderAll();
+}
 
-  // Place two corner stamps into a center-origin group
-  async function makeStampedGroup(img, bw, bh, wmWidthRatio){
+// Place two corner stamps into a center-origin group
+async function makeStampedGroup(img, bw, bh, wmWidthRatio){
   const wmTL = await fabricFromURL(WM_SRC);
   const wmBR = await fabricFromURL(WM_SRC);
   const wmTargetW = Math.max(16, bw * wmWidthRatio);
@@ -375,15 +379,14 @@ function isAllowedAssetURL(u){
   const scaleBR = wmTargetW / wmBR.width;
   wmTL.scale(scaleTL); wmBR.scale(scaleBR);
 
-Object.assign(wmTL, {
-  selectable:false, evented:false, hasControls:false,
-  _isWatermark:true, raWM:true, raPos:"TL"
-});
-Object.assign(wmBR, {
-  selectable:false, evented:false, hasControls:false,
-  _isWatermark:true, raWM:true, raPos:"BR"
-});
-
+  Object.assign(wmTL, {
+    selectable:false, evented:false, hasControls:false,
+    _isWatermark:true, raWM:true, raPos:"TL"
+  });
+  Object.assign(wmBR, {
+    selectable:false, evented:false, hasControls:false,
+    _isWatermark:true, raWM:true, raPos:"BR"
+  });
 
   wmTL.set({
     originX:"center", originY:"center",
@@ -400,153 +403,137 @@ Object.assign(wmBR, {
   return group;
 }
 
+async function loadBaseImage(dataUrl, isToken){
+  clearBaseOnly();
+  const img = await fabricFromURL(dataUrl);
+  img.set({ originX:"center", originY:"center" });
 
-  async function loadBaseImage(dataUrl, isToken){
-    clearBaseOnly();
-    const img = await fabricFromURL(dataUrl);
-    img.set({ originX:"center", originY:"center" });
+  // fit to canvas (no upscaling)
+  const cw = canvas.getWidth(), ch = canvas.getHeight();
+  const sc = Math.min(cw / img.width, ch / img.height, 1);
+  img.scale(sc);
 
-    // fit to canvas (no upscaling)
-    const cw=canvas.getWidth(), ch=canvas.getHeight();
-    const sc=Math.min(cw/img.width, ch/img.height, 1);
-    img.scale(sc);
+  const bw = img.width * sc, bh = img.height * sc;
 
-    const bw = img.width*sc, bh = img.height*sc;
+  let obj;
+  if (isToken) {
+    // Token = RA (real asset) => NO watermarks
+    img._isBase = true;
+    lockBaseObject(img);
+    img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+    obj = img;
+  } else {
+    // Non-token => add corner stamps
+    const group = await makeStampedGroup(img, bw, bh, 0.15);
+    group._isBase = true;
+    lockBaseObject(group);
+    group.set({ left:cw/2, top:ch/2 }); group.setCoords();
+    obj = group;
+  }
 
-    let obj;
-    if (isToken) {
-      // Token = RA (real asset) => NO watermarks
-      img._isBase = true;
-      lockBaseObject(img);
-      img.set({ left:cw/2, top:ch/2 }); img.setCoords();
-      obj = img;
-    } else {
-      // Non-token => add corner stamps
-      const group = await makeStampedGroup(img, bw, bh, 0.15);
-      group._isBase = true;
-      lockBaseObject(group);
-      group.set({ left:cw/2, top:ch/2 }); group.setCoords();
-      obj = group;
+  canvas.add(obj);
+  baseGroup = obj;
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+}
+
+// Add overlay (with small corner stamps unless permanent)
+async function addOverlayToCanvas(src, isPermanent){
+  const img = await fabricFromURL(src);
+  img.set({ originX:"center", originY:"center" });
+
+  // initial scale ~ 60% of canvas' smaller side
+  const cw = canvas.getWidth(), ch = canvas.getHeight();
+  const maxDim = Math.min(cw, ch) * 0.60;
+  const iw = img.width || maxDim, ih = img.height || maxDim;
+  const sc = Math.min(1, maxDim / Math.max(iw, ih));
+  if (isFinite(sc) && sc > 0) img.scale(sc);
+
+  let obj;
+  if (isPermanent) {
+    img._kind = "overlay";
+    obj = img;
+  } else {
+    const group = await makeStampedGroup(img, (img.width||maxDim)*sc, (img.height||maxDim)*sc, 0.08);
+    group._kind = "overlay";
+    obj = group;
+  }
+
+  canvas.add(obj);
+  obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
+  canvas.setActiveObject(obj);
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+  return obj;
+}
+
+function renderOverlayGrid(){
+  const grid = $("overlayGrid"); if (!grid) return;
+  grid.innerHTML = "";
+  overlayList.forEach((item, idx)=>{
+    const tile = document.createElement("div");
+    tile.className = "tile" + (item.perm ? " perm" : "");
+    tile.style.cursor = "pointer";
+
+    const img = document.createElement("img");
+    img.src = item.src; img.alt = item.name || ""; img.title = item.name || (item.perm ? "" : "");
+    img.style.maxWidth = "100%"; img.style.display = "block";
+    img.addEventListener("click", async ()=>{ await addOverlayToCanvas(item.src, item.perm); });
+
+    tile.appendChild(img);
+
+    const cap = document.createElement("div");
+    cap.style.fontSize = "11px"; cap.style.color = "#9ca3af"; cap.style.marginTop = "4px";
+    cap.textContent = item.name || "overlay";
+    tile.appendChild(cap);
+
+    if (!item.perm){
+      const x = document.createElement("div");
+      x.textContent = "×"; x.title = "Remove";
+      x.style.cssText = "position:absolute;top:4px;right:6px;cursor:pointer;color:#bbb";
+      x.addEventListener("click",(e)=>{ e.stopPropagation(); overlayList.splice(idx,1); renderOverlayGrid(); });
+      tile.style.position = "relative";
+      tile.appendChild(x);
     }
+    grid.appendChild(tile);
+  });
+}
 
-    canvas.add(obj);
-    baseGroup = obj;
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
+function reorderOverlay(dir){
+  const o = canvas.getActiveObject(); if (!o || o._kind !== "overlay") return;
+  const objs = canvas.getObjects();
+  const overlays = objs.filter(x=>x._kind === "overlay");
+  if (overlays.length <= 1) return;
+
+  const overlayIndices = overlays.map(x=>objs.indexOf(x)).sort((a,b)=>a-b);
+  const topIdx    = overlayIndices[overlayIndices.length-1];
+  const bottomIdx = overlayIndices[0];
+
+  if (dir === "front"){
+    canvas.moveTo(o, topIdx + 1);
+  } else if (dir === "back"){
+    canvas.moveTo(o, bottomIdx);
+    const baseIdx = objs.findIndex(x=>x._isBase);
+    const idx = objs.indexOf(o);
+    if (baseIdx >= 0 && idx <= baseIdx){ canvas.moveTo(o, baseIdx + 1); }
   }
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+}
 
-  // Add overlay (with small corner stamps unless permanent)
-  async function addOverlayToCanvas(src, isPermanent){
-    const img = await fabricFromURL(src);
-    img.set({ originX:"center", originY:"center" });
-
-    // initial scale ~ 60% of canvas' smaller side
-    const cw=canvas.getWidth(), ch=canvas.getHeight();
-    const maxDim = Math.min(cw, ch) * 0.60;
-    const iw = img.width||maxDim, ih = img.height||maxDim;
-    const sc = Math.min(1, maxDim / Math.max(iw, ih));
-    if (isFinite(sc) && sc>0) img.scale(sc);
-
-    let obj;
-    if (isPermanent) {
-      img._kind = "overlay";
-      obj = img;
-    } else {
-      const group = await makeStampedGroup(img, (img.width||maxDim)*sc, (img.height||maxDim)*sc, 0.08);
-      group._kind = "overlay";
-      obj = group;
-    }
-
-    canvas.add(obj);
-    obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
-    canvas.setActiveObject(obj);
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-    return obj;
-  }
-
-  function renderOverlayGrid(){
-    const grid = $("overlayGrid"); if (!grid) return;
-    grid.innerHTML="";
-    overlayList.forEach((item, idx)=>{
-      const tile=document.createElement("div");
-      tile.className = "tile" + (item.perm ? " perm" : "");
-      tile.style.cursor = "pointer";
-
-      const img=document.createElement("img");
-      img.src=item.src; img.alt=item.name||""; img.title=item.name||(item.perm?"":"");
-      img.style.maxWidth="100%"; img.style.display="block";
-      img.addEventListener("click", async ()=>{ await addOverlayToCanvas(item.src, item.perm); });
-
-      tile.appendChild(img);
-
-      const cap=document.createElement("div");
-      cap.style.fontSize="11px"; cap.style.color="#9ca3af"; cap.style.marginTop="4px";
-      cap.textContent=item.name||"overlay";
-      tile.appendChild(cap);
-
-      if (!item.perm){
-        const x=document.createElement("div");
-        x.textContent="×"; x.title="Remove";
-        x.style.cssText="position:absolute;top:4px;right:6px;cursor:pointer;color:#bbb";
-        x.addEventListener("click",(e)=>{ e.stopPropagation(); overlayList.splice(idx,1); renderOverlayGrid(); });
-        tile.style.position="relative";
-        tile.appendChild(x);
-      }
-      grid.appendChild(tile);
-    });
-  }
-
-  function reorderOverlay(dir){
-    const o=canvas.getActiveObject(); if(!o || o._kind!=="overlay") return;
-    const objs=canvas.getObjects();
-    const overlays = objs.filter(x=>x._kind==="overlay");
-    if(overlays.length<=1) return;
-
-    const overlayIndices = overlays.map(x=>objs.indexOf(x)).sort((a,b)=>a-b);
-    const topIdx    = overlayIndices[overlayIndices.length-1];
-    const bottomIdx = overlayIndices[0];
-
-    if (dir==="front"){
-      canvas.moveTo(o, topIdx+1);
-    } else if (dir==="back"){
-      canvas.moveTo(o, bottomIdx);
-      const baseIdx = objs.findIndex(x=>x._isBase);
-      const idx = objs.indexOf(o);
-      if (baseIdx>=0 && idx<=baseIdx){ canvas.moveTo(o, baseIdx+1); }
-    }
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-  }
-
-  function addOrUpdateTokenLabel(id){
+function addOrUpdateTokenLabel(id){
   const display = $("tokenIdDisplay");
-  if (display) display.value = "#"+id;
+  if (display) display.value = "#" + id;
 
   const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
-  const text = formatTokenId("#"+id, fmt);
+  const text = formatTokenId("#" + id, fmt);
 
   const style = {
     fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-    fontSize: parseInt(($("idSize")||{}).value||"52",10),
-    fill: ($("idColor")||{}).value || "#ffffff",
-    stroke: ($("idStrokeColor")||{}).value || "transparent",
-    strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
-  };
-
-  function addOrUpdateTokenLabel(id){
-  const display = $("tokenIdDisplay");
-  if (display) display.value = "#"+id;
-
-  const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
-  const text = formatTokenId("#"+id, fmt);
-
-  const style = {
-    fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-    fontSize: parseInt(($("idSize")||{}).value||"52",10),
-    fill: ($("idColor")||{}).value || "#ffffff",
-    stroke: ($("idStrokeColor")||{}).value || "transparent",
-    strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
+    fontSize: parseInt((($("idSize")||{}).value)||"52",10),
+    fill: (($("idColor")||{}).value) || "#ffffff",
+    stroke: (($("idStrokeColor")||{}).value) || "transparent",
+    strokeWidth: parseInt((($("idStrokeWidth")||{}).value)||"0",10),
   };
 
   if (!idLabel) {
@@ -561,9 +548,9 @@ Object.assign(wmBR, {
       paintFirst: "stroke",
       objectCaching: false,
       perPixelTargetFind: true,
-      selectable: false,      // <- non-interactive
-      evented: false,         // <- non-interactive
-      hasControls: false,     // <- non-interactive
+      selectable: false,      // non-interactive
+      evented: false,         // non-interactive
+      hasControls: false,     // non-interactive
       ...style
     });
     idLabel._kind = 'tokenId';
@@ -578,7 +565,7 @@ Object.assign(wmBR, {
 
   // Recompute bounds and FORCE to very top
   idLabel.set({ width: undefined });
-  idLabel.initDimensions && idLabel.initDimensions();
+  if (idLabel.initDimensions) idLabel.initDimensions();
   idLabel.setCoords();
 
   try {
@@ -591,32 +578,25 @@ Object.assign(wmBR, {
   canvas.requestRenderAll();
 }
 
-
-  idLabel.set({ width: undefined });
-  idLabel.initDimensions && idLabel.initDimensions();
-  idLabel.setCoords();
-
-  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-  canvas.requestRenderAll();
+function formatTokenId(displayVal, fmt){
+  let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
+  if (Number.isNaN(num)) return String(displayVal);
+  switch(fmt){
+    case "roman":  return toRoman(num);
+    case "hex":    return "0x"+num.toString(16).toUpperCase();
+    case "binary": return "0b"+num.toString(2);
+    case "leading":return "#"+String(num).padStart(4,'0');
+    default:       return "#"+num;
+  }
 }
 
-  function formatTokenId(displayVal, fmt){
-    let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
-    if(Number.isNaN(num)) return String(displayVal);
-    switch(fmt){
-      case "roman":  return toRoman(num);
-      case "hex":    return "0x"+num.toString(16).toUpperCase();
-      case "binary": return "0b"+num.toString(2);
-      case "leading":return "#"+String(num).padStart(4,'0');
-      default:       return "#"+num;
-    }
-  }
-  function toRoman(num){
-    if (num<=0) return String(num);
-    const map=[['M',1000],['CM',900],['D',500],['CD',400],['C',100],['XC',90],['L',50],['XL',40],['X',10],['IX',9],['V',5],['IV',4],['I',1]];
-    let out=''; for(const [sym,val] of map){ while(num>=val){ out+=sym; num-=val; } } return out;
-  }
-
+function toRoman(num){
+  if (num <= 0) return String(num);
+  const map = [['M',1000],['CM',900],['D',500],['CD',400],['C',100],['XC',90],['L',50],['XL',40],['X',10],['IX',9],['V',5],['IV',4],['I',1]];
+  let out = '';
+  for (const [sym,val] of map){ while(num >= val){ out += sym; num -= val; } }
+  return out;
+}
  // ===============================
 //  DOM READY
 // ===============================
@@ -670,12 +650,19 @@ safeAddListener("clearUpload","click", ()=>{
   clearBaseOnly();
 });
 
-// Token ID Styles → place/update the on-canvas label
+/* ===== RA_TOKEN_ID_WIRING — place/update on-canvas Token ID label ===== */
 ;(() => {
   if (window.__RA_WIRE_TOKENID_BTN__) return;
   window.__RA_WIRE_TOKENID_BTN__ = true;
 
-  // Use the Styles panel display first, then the left input(s), then the last loaded token (memory)
+  // Scope to the Token ID Styles card (reduces false positives)
+  function findTokenIdCard(){
+    const hs = Array.from(document.querySelectorAll('h2,h3,h4,h5'));
+    const h  = hs.find(n => /token\s*id/i.test((n.textContent||'').trim()));
+    return h ? (h.closest('.card, .panel, section, form, div') || h.parentElement) : document.body;
+  }
+
+  // Prefer the styles panel display, then other inputs, then last loaded token memory
   function readTokenInputValue(){
     // 1) Styles panel display (often shows "#123")
     const display = document.querySelector('#tokenIdDisplay');
@@ -697,48 +684,61 @@ safeAddListener("clearUpload","click", ()=>{
       if (d){ digitsFB = d; break; }
     }
 
-    // 3) Last loaded token from the image loader (we set window.__raTokenMemory there)
+    // 3) Last loaded token remembered by the image loader
     const mem = (window.__raTokenMemory || '').trim();
 
     return digitsDisp || digitsFB || mem || '';
   }
 
+  function placeLabelOnTop(idStr){
+    try {
+      if (typeof window.addOrUpdateTokenLabel !== 'function') return;
+      window.addOrUpdateTokenLabel(String(idStr));
+      const c = window.canvas, l = window.idLabel;
+      if (c && l){
+        // ensure it sits at the very top
+        const n = (c.getObjects()||[]).length;
+        try { c.bringToFront(l); c.moveTo(l, n-1); } catch(_){}
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { c.requestRenderAll(); } catch(_){}
+      }
+    } catch(_){}
+  }
+
   const handler = (e)=>{
-    // Ignore the *image loader* button; we only place the TEXT label here
+    // Ignore the *image* loader button; we only place the TEXT label here
     const t = (e?.target?.textContent || e?.target?.value || '').toLowerCase();
     if (/load\s+by\s+token/.test(t)) return;
 
     const idStr = readTokenInputValue();
     if (!idStr) return;
 
-    // CREATE / UPDATE label and force it on top
-    try { addOrUpdateTokenLabel(idStr); } catch(_){}
-    try {
-      const c = window.canvas, l = window.idLabel;
-      if (c && l){ const n = (c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1); }
-    } catch(_){}
-    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-    try { window.canvas && window.canvas.requestRenderAll && window.canvas.requestRenderAll(); } catch(_){}
+    e.preventDefault?.();
+    e.stopPropagation?.();
+    placeLabelOnTop(idStr);
   };
 
-  // Bind by common IDs (bind once)
+  // 1) Bind by common button IDs (if they exist)
   ['loadTokenId','loadTokenID','tokenIdLoad','placeTokenId'].forEach(id=>{
     const el = document.getElementById(id);
-    if (el && !el.__raTokIdWired){ el.__raTokIdWired = true; el.addEventListener('click', handler, true); }
+    if (el && !el.__raTokIdWired){
+      el.__raTokIdWired = true;
+      el.addEventListener('click', handler, true);
+    }
   });
 
-  // Fallback: match by visible button text in the Token ID card
-  document.addEventListener('click', (e)=>{
+  // 2) Fallback: bind by visible text inside the Token ID Styles card
+  const scope = findTokenIdCard();
+  scope.addEventListener('click', (e)=>{
     const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-    if (!btn) return;
+    if (!btn || !scope.contains(btn)) return;
     const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
     if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
-      e.preventDefault();
       handler(e);
     }
   }, true);
 })();
-
+  
 /* ===== RA_HISTORY_STABILIZER ===== */
 ;(() => {
   if (window.__RA_HISTORY_STABILIZER__) return;
