@@ -4324,8 +4324,10 @@ tile.appendChild(cap);
   }
 
   function wire(){
-    const c=C(); if(!c || c.__raGuidesTopWired) return setTimeout(wire, 120);
-    c.__raGuidesTopWired = true;
+  const c = C();
+  if (!c) return setTimeout(wire, 120);
+  if (c.__raGuidesTopWired) return;
+  c.__raGuidesTopWired = true;
 
     // Remove any older overlay‑canvas guides layer if present
     const old = document.getElementById('raGuidesOverlay'); if (old) try{ old.remove(); }catch(_){}
@@ -7451,15 +7453,13 @@ async function loadTokenFromCollection(tokenId, col){
               if (ev && ev.data && ev.data.type==='ra-img') { img.src = ev.data.url; }
             }, false);
             setTimeout(function(){
-              if (!img.src) { document.body.insertAdjacentHTML('beforeend',
-                setTimeout(function(){
-  if (!img.src) {
-    document.body.insertAdjacentHTML(
-      'beforeend',
-      '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'
-    );
-  }
-}, 2000);
+              if (!img.src) {
+                document.body.insertAdjacentHTML(
+                  'beforeend',
+                  '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'
+                );
+              }
+            }, 2000);
           })();
         <\/script>
       </body></html>`;
@@ -7831,13 +7831,13 @@ return;
     }
 
     // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
-    const img = await loadViaNoCors(urls[0]);
-    if (img){
-      fitAndAddAsBase(img);
-      annotateBase({ contract, chain, name: name || '' });
-      upsertTokenLabel(tokenId);
-      return;
-    }
+const img = await loadViaNoCors(urls[0]);
+if (img){
+  fitAndAddAsBase(img);
+  annotateBase({ contract, chain, name: name || '' });
+  // no auto label — user adds it from “Token ID Styles”
+  return;
+}
 
     alert('Failed to load token image.');
   }
