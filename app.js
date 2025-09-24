@@ -816,17 +816,13 @@ document.addEventListener("DOMContentLoaded", () => {
      - tokenStatus       ← small <span> to show status text (optional)
      - loadToken         ← the “Load Token ID” button
 */
-
 safeAddListener("loadToken","click", async ()=>{
   const statusEl = $("tokenStatus");
   const tokenId  = (($("tokenIdInput")||{}).value || "").trim();
-  if (!tokenId){ if(statusEl) statusEl.textContent = "Enter a token ID."; return; }
+  if (!tokenId){ if (statusEl) statusEl.textContent = "Enter a token ID."; return; }
 
-// Remember last loaded token for the Styles button
-try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_){}
-
-// (no automatic label here — user adds it from “Token ID Styles”)
-
+  // Remember last loaded token for the Styles button
+  try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_){}
 
   // Find the contract for the currently selected collection
   function selectedContract(){
@@ -853,7 +849,7 @@ try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_)
   try{
     // Uses your existing helper (already in your file)
     const imgUrl = await fetchImageByTokenId(contract, tokenId);
-    if (!imgUrl){ if(statusEl) statusEl.textContent = "No image URL found."; return; }
+    if (!imgUrl){ if (statusEl) statusEl.textContent = "No image URL found."; return; }
 
     if (statusEl) statusEl.textContent = "Downloading image…";
     const data = await fetchAsDataURL(imgUrl);
@@ -870,7 +866,7 @@ try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_)
 
     if (statusEl) statusEl.textContent = "Loaded 👍";
 
-    // Let any watermark/brand‑footer listeners re‑evaluate
+    // Let any watermark/brand-footer listeners re-evaluate
     try { document.dispatchEvent(new Event("ra-wm-recalc")); } catch(_){}
     try { canvas.requestRenderAll(); } catch(_){}
   }catch(_){
@@ -878,15 +874,15 @@ try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_)
   }
 });
 
-    // -------- Canvas controls
-    safeAddListener("zoomIn","click",  ()=> setZoom(zoom*1.1));
-    safeAddListener("zoomOut","click", ()=> setZoom(zoom/1.1));
-    safeAddListener("zoomReset","click", ()=>{
-      setZoom(1);
-      canvas.setViewportTransform([1,0,0,1,0,0]);
-    });
-    safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
-    safeAddListener("clearBase","click", clearBaseOnly);
+/* -------- Canvas controls -------- */
+safeAddListener("zoomIn","click",  ()=> setZoom(zoom*1.1));
+safeAddListener("zoomOut","click", ()=> setZoom(zoom/1.1));
+safeAddListener("zoomReset","click", ()=>{
+  setZoom(1);
+  canvas.setViewportTransform([1,0,0,1,0,0]);
+});
+safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
+safeAddListener("clearBase","click", clearBaseOnly);
 safeAddListener("clearCanvas","click", ()=>{
   raSafeClear(true);          // keep backgroundRect, clear everything else
   idLabel = null; baseGroup = null;
@@ -894,19 +890,45 @@ safeAddListener("clearCanvas","click", ()=>{
   setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 60);
 });
 
+/* -------- Token ID style live controls (if present) -------- */
+["change","input"].forEach(ev=>{
+  safeAddListener("idFormat", ev, ()=>{
+    if (idLabel){
+      idLabel.text = formatTokenId((($("tokenIdDisplay")||{}).value)||"", (($("idFormat")||{}).value)||"plain");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idSize", ev, ()=>{
+    if (idLabel){
+      idLabel.set('fontSize', parseInt((($("idSize")||{}).value)||"52",10));
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idColor", ev, ()=>{
+    if (idLabel){
+      idLabel.set('fill', (($("idColor")||{}).value)||"#fff");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idStrokeColor", ev, ()=>{
+    if (idLabel){
+      idLabel.set('stroke', (($("idStrokeColor")||{}).value)||"transparent");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idStrokeWidth", ev, ()=>{
+    if (idLabel){
+      idLabel.set('strokeWidth', parseInt((($("idStrokeWidth")||{}).value)||"0",10));
+      canvas.requestRenderAll();
+    }
+  });
+});
+safeAddListener("deleteTokenId","click", ()=>{
+  if (idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }
+});
 
-    // -------- Token ID style live controls (if present)
-    ["change","input"].forEach(ev=>{
-      safeAddListener("idFormat", ev, ()=>{ if(idLabel){ idLabel.text = formatTokenId(($("tokenIdDisplay")||{}).value||"", $("idFormat").value); canvas.requestRenderAll(); }});
-      safeAddListener("idSize", ev, ()=>{ if(idLabel){ idLabel.set('fontSize', parseInt(($("idSize")||{}).value||"52",10)); canvas.requestRenderAll(); }});
-      safeAddListener("idColor", ev, ()=>{ if(idLabel){ idLabel.set('fill', ($("idColor")||{}).value||"#fff"); canvas.requestRenderAll(); }});
-      safeAddListener("idStrokeColor", ev, ()=>{ if(idLabel){ idLabel.set('stroke', ($("idStrokeColor")||{}).value||"transparent"); canvas.requestRenderAll(); }});
-      safeAddListener("idStrokeWidth", ev, ()=>{ if(idLabel){ idLabel.set('strokeWidth', parseInt(($("idStrokeWidth")||{}).value||"0",10)); canvas.requestRenderAll(); }});
-    });
-    safeAddListener("deleteTokenId","click", ()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
-
-    // -------- Custom text (optional UI)
-   safeAddListener("addCustomText","click", ()=>{
+/* -------- Custom text (optional UI) -------- */
+safeAddListener("addCustomText","click", ()=>{
   const val = (($("customText")||{}).value||"").trim(); if (!val) return;
 
   // Use IText (editable single-line) → tight bounds, no forced width
@@ -916,11 +938,11 @@ safeAddListener("clearCanvas","click", ()=>{
     originX: "center",
     originY: "center",
     textAlign: "left",
-    fontFamily: ($("fontFamily")||{}).value || "Arial, sans-serif",
-    fontSize: parseInt(($("fontSize")||{}).value||"48",10),
-    fill: ($("fontColor")||{}).value || "#ffffff",
-    stroke: ($("strokeColor")||{}).value || "transparent",
-    strokeWidth: parseInt(($("strokeWidth")||{}).value||"0",10),
+    fontFamily: (($("fontFamily")||{}).value) || "Arial, sans-serif",
+    fontSize: parseInt((($("fontSize")||{}).value)||"48",10),
+    fill: (($("fontColor")||{}).value) || "#ffffff",
+    stroke: (($("strokeColor")||{}).value) || "transparent",
+    strokeWidth: parseInt((($("strokeWidth")||{}).value)||"0",10),
     strokeUniform: true,
     paintFirst: "stroke",
     objectCaching: false,
@@ -930,7 +952,7 @@ safeAddListener("clearCanvas","click", ()=>{
 
   // Tighten bounds (ensure no cached wide box)
   txt.set({ width: undefined });
-  txt.initDimensions && txt.initDimensions();
+  if (txt.initDimensions) txt.initDimensions();
   txt.setCoords();
 
   txt._kind = 'customText';
@@ -939,23 +961,57 @@ safeAddListener("clearCanvas","click", ()=>{
   bringInterfaceToFront();
   canvas.requestRenderAll();
 });
-    ["change","input"].forEach(ev=>{
-      safeAddListener("fontFamily", ev, ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', $("fontFamily").value); canvas.requestRenderAll(); }});
-      safeAddListener("fontSize", ev,   ()=>{   const o = canvas.getActiveObject();   if (o && o._kind === 'customText') {     o.set('fontSize', parseInt((($("fontSize")||{}).value)||"48",10));     canvas.requestRenderAll();   } });;
-      safeAddListener("fontColor", ev,  ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fill', $("fontColor").value); canvas.requestRenderAll(); }});
-      safeAddListener("strokeColor", ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('stroke', $("strokeColor").value); canvas.requestRenderAll(); }});
-   safeAddListener("strokeWidth", ev, ()=>{
-  const o = canvas.getActiveObject();
-  if (o && o._kind === 'customText') {
-    o.set('strokeWidth', parseInt((($("strokeWidth")||{}).value)||"0",10));
-    canvas.requestRenderAll();
-  }
-});
-    safeAddListener("delSelectedText","click", ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }});
-    safeAddListener("delAllText","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='customText') canvas.remove(o); }); canvas.requestRenderAll(); });
 
-    // -------- Selection tools
-    safeAddListener("duplicate","click", ()=>{
+["change","input"].forEach(ev=>{
+  safeAddListener("fontFamily", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind==='customText'){
+      o.set('fontFamily', (($("fontFamily")||{}).value)||o.fontFamily||"Arial, sans-serif");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("fontSize", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind === 'customText') {
+      o.set('fontSize', parseInt((($("fontSize")||{}).value)||"48",10));
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("fontColor", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind==='customText'){
+      o.set('fill', (($("fontColor")||{}).value)||o.fill||"#ffffff");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("strokeColor", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind==='customText'){
+      o.set('stroke', (($("strokeColor")||{}).value)||o.stroke||"transparent");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("strokeWidth", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind === 'customText') {
+      o.set('strokeWidth', parseInt((($("strokeWidth")||{}).value)||"0",10));
+      canvas.requestRenderAll();
+    }
+  });
+});
+
+safeAddListener("delSelectedText","click", ()=>{
+  const o=canvas.getActiveObject();
+  if (o && o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }
+});
+
+safeAddListener("delAllText","click", ()=>{
+  canvas.getObjects().slice().forEach(o=>{ if (o._kind==='customText') canvas.remove(o); });
+  canvas.requestRenderAll();
+});
+
+/* -------- Selection tools -------- */
+safeAddListener("duplicate","click", ()=>{
   const o = canvas.getActiveObject(); if (!o) return;
   o.clone(c=>{
     c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
@@ -963,30 +1019,47 @@ safeAddListener("clearCanvas","click", ()=>{
     canvas.requestRenderAll();
   });
 });
-    safeAddListener("delete","click", ()=>{
+
+safeAddListener("delete","click", ()=>{
   const o = canvas.getActiveObject();
   if (!o || o===backgroundRect || o._isBase) return;
 
   // If it’s the Token ID, clear the pointer so it won’t pop back
-  try { if (o === idLabel) { idLabel = null; } } catch(_) {}
+  try { if (o === idLabel) { idLabel = null; } } catch(_){}
 
   // Drop the selection layer first (prevents the tall ghost strip)
-  try { canvas.discardActiveObject(); } catch(_) {}
+  try { canvas.discardActiveObject(); } catch(_){}
 
   canvas.remove(o);
   canvas.requestRenderAll();
 });
-    safeAddListener("opacity","input", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value||"1")); canvas.requestRenderAll(); });
-    safeAddListener("blendMode","change", (e)=>{
+
+safeAddListener("opacity","input", (e)=>{
+  const o=canvas.getActiveObject(); if(!o) return;
+  o.set('opacity', parseFloat(e.target.value||"1"));
+  canvas.requestRenderAll();
+});
+
+safeAddListener("blendMode","change", (e)=>{
   const o = canvas.getActiveObject(); if (!o) return;
   o.globalCompositeOperation = (e.target.value === "normal") ? null : e.target.value;
   canvas.requestRenderAll();
 });
-    safeAddListener("bringFront","click", ()=> reorderOverlay('front'));
-    safeAddListener("sendBack","click",  ()=> reorderOverlay('back'));
-    safeAddListener("flipX","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipX'); canvas.requestRenderAll(); });
-    safeAddListener("flipY","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipY'); canvas.requestRenderAll(); });
-    safeAddListener("lock","click", ()=>{
+
+safeAddListener("bringFront","click", ()=> reorderOverlay('front'));
+safeAddListener("sendBack","click",  ()=> reorderOverlay('back'));
+
+safeAddListener("flipX","click", ()=>{
+  const o=canvas.getActiveObject(); if(!o) return;
+  o.toggle && o.toggle('flipX'); canvas.requestRenderAll();
+});
+
+safeAddListener("flipY","click", ()=>{
+  const o=canvas.getActiveObject(); if(!o) return;
+  o.toggle && o.toggle('flipY'); canvas.requestRenderAll();
+});
+
+safeAddListener("lock","click", ()=>{
   const o = canvas.getActiveObject(); if (!o) return;
   o.set({
     selectable:false, evented:false, hasControls:false,
@@ -996,10 +1069,11 @@ safeAddListener("clearCanvas","click", ()=>{
   });
   canvas.requestRenderAll();
 });
-    // ---- FIXED: do not unlock backgroundRect or _isBase objects ----
+
+// ---- FIXED: do not unlock backgroundRect or _isBase objects ----
 safeAddListener("unlockAll","click", ()=>{
   canvas.getObjects().forEach(o=>{
-    if (o === backgroundRect || o._isBase) return; // <-- keep these locked
+    if (o === backgroundRect || o._isBase) return; // keep these locked
     o.set({
       selectable:true, evented:true, hasControls:true,
       lockMovementX:false, lockMovementY:false,
@@ -1010,262 +1084,266 @@ safeAddListener("unlockAll","click", ()=>{
   canvas.requestRenderAll();
 });
 
-    safeAddListener("clearAllOverlays","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='overlay') canvas.remove(o); }); canvas.requestRenderAll(); });
+safeAddListener("clearAllOverlays","click", ()=>{
+  canvas.getObjects().slice().forEach(o=>{ if (o._kind==='overlay') canvas.remove(o); });
+  canvas.requestRenderAll();
+});
 
-    // -------- Overlays panel & uploads
-    safeAddListener("overlayUpload","change", async (e)=>{
-      const files=Array.from(e.target.files||[]);
-      for(const f of files){
-        const data=await fileToDataURL(f);
-        overlayList.unshift({name:f.name, src:data, perm:false});
-        await addOverlayToCanvas(data,false);
-      }
-      renderOverlayGrid(); e.target.value="";
-    });
-    safeAddListener("clearOverlayGrid","click", ()=>{
-      overlayList = overlayList.filter(o=>o.perm); renderOverlayGrid();
-    });
-
-    // -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
-    document.addEventListener("keydown", (e)=>{
-      const tag = (e.target && e.target.tagName || "").toLowerCase();
-      if (e.target && (e.target.isContentEditable || tag==="input" || tag==="textarea" || tag==="select")) return;
-
-      const o = canvas.getActiveObject();
-
-      // Delete selection
-     if (o && (e.key==="Delete" || e.key==="Backspace")){
-  if (!o._isBase && o!==backgroundRect){
-    // If it’s the Token ID, clear the pointer so it won’t pop back
-    try { if (o === idLabel) { idLabel = null; } } catch(_) {}
-
-    // Drop the selection layer first (prevents the tall ghost strip)
-    try { canvas.discardActiveObject(); } catch(_) {}
-
-    canvas.remove(o);
-    canvas.requestRenderAll();
+/* -------- Overlays panel & uploads -------- */
+safeAddListener("overlayUpload","change", async (e)=>{
+  const files=Array.from(e.target.files||[]);
+  for(const f of files){
+    const data=await fileToDataURL(f);
+    overlayList.unshift({name:f.name, src:data, perm:false});
+    await addOverlayToCanvas(data,false);
   }
-  e.preventDefault(); return;
-}
-      // Duplicate
-      if (o && ( (e.metaKey && e.key.toLowerCase()==="d") || (e.ctrlKey && e.key.toLowerCase()==="d") )){
-        try { o.clone(cl=>{ cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 }); canvas.add(cl); canvas.setActiveObject(cl); canvas.requestRenderAll(); }); } catch(_){}
-        e.preventDefault(); return;
-      }
-      // Nudge
-      const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
-      if (o && arrows.includes(e.key)){
-        const step = e.shiftKey ? 10 : 1;
-        if (e.key==="ArrowLeft")  o.left -= step;
-        if (e.key==="ArrowRight") o.left += step;
-        if (e.key==="ArrowUp")    o.top  -= step;
-        if (e.key==="ArrowDown")  o.top  += step;
-        o.setCoords(); canvas.requestRenderAll();
-        e.preventDefault();
-      }
-    });
+  renderOverlayGrid(); e.target.value="";
+});
 
-    // -------- SNAP + ALIGN UI
-    (function snapAlign(){
-      // UI row (Center buttons + Snap toggle)
-      const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
-      const holder = header ? header.parentNode : document.body;
-      if (!$("raSnapRow")){
-        const row = document.createElement("div");
-        row.id="raSnapRow";
-        row.style.cssText="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
-        row.innerHTML = `
-          <button class="btn small" id="raCenterH">Center H</button>
-          <button class="btn small" id="raCenterV">Center V</button>
-          <button class="btn small" id="raCenterHV">Center HV</button>
-          <button class="btn small" id="raSnapToggle">Snap: On</button>
-          <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
-        `;
-        holder.appendChild(row);
-        $("raSnapToggle").onclick = ()=>{
-          window.__snapOn = !window.__snapOn;
-          $("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
-        };
-        function center(which){
-          const o=canvas.getActiveObject(); if(!o) return;
-          if (which==="H" || which==="HV") o.left = canvas.getWidth()/2;
-          if (which==="V" || which==="HV") o.top  = canvas.getHeight()/2;
-          o.setCoords(); canvas.requestRenderAll();
-        }
-        $("raCenterH").onclick  = ()=>center("H");
-        $("raCenterV").onclick  = ()=>center("V");
-        $("raCenterHV").onclick = ()=>center("HV");
-      }
+safeAddListener("clearOverlayGrid","click", ()=>{
+  overlayList = overlayList.filter(o=>o.perm);
+  renderOverlayGrid();
+});
 
-      window.__snapOn = true;
-      if (!canvas.__snapWired){
-        function halfW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)) / 2; }
-        function halfH(o){ return (o.getScaledHeight?o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2; }
-        function clampSnap(o){
-          if (!window.__snapOn) return;
-          const tol = 8, cw=canvas.getWidth(), ch=canvas.getHeight();
-          const hw=halfW(o), hh=halfH(o);
-          // centers
-          if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
-          if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
-          // edges
-          if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
-          if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
-          if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
-          if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
-        }
-        canvas.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
-        canvas.on("mouse:up", ()=> canvas.requestRenderAll());
-        canvas.__snapWired = true;
-      }
-    })();
+/* -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D) -------- */
+document.addEventListener("keydown", (e)=>{
+  const tag = (e.target && e.target.tagName || "").toLowerCase();
+  if (e.target && (e.target.isContentEditable || tag==="input" || tag==="textarea" || tag==="select")) return;
 
-    // -------- ADMIN PORTAL (toggle with ?admin=1)
-    (function adminDock(){
-      const isAdmin = /\badmin=1\b/i.test(location.search);
-      if (!isAdmin) { renderPublishedShelf(); return; }
+  const o = canvas.getActiveObject();
 
-      if ($("raAdminDock2")) { renderPublishedShelf(); return; }
-
-      function fileToDataURL2(file){
-        return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
-      }
-      function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
-      function setShelf(arr){ try{ (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(arr||[])); }catch(_){} }
-      function setMsg(t){ const el=$("ra2Msg"); if (el) el.textContent=t||''; }
-
-      const dock = document.createElement('div');
-      dock.id = 'raAdminDock2';
-      dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
-      dock.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
-          <strong>Admin Overlays</strong>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <button id="ra2"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
-            <button id="ra2Hide"    style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
-          </div>
-        </div>
-        <div id="ra2Body" style="padding:10px 12px;">
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-            <button id="ra2Add"   style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
-            <button id="ra2Clear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
-            <div id="ra2Msg" style="opacity:.75;min-height:18px"></div>
-          </div>
-          <div id="ra2Grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
-          <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add items to the shelf below for everyone.</div>
-        </div>
-      `;
-      document.body.appendChild(dock);
-
-      $("ra2Hide").onclick = ()=>{
-        const b=$("ra2Body"); const btn=$("ra2Hide");
-        const h = b.style.display==='none'; b.style.display=h?'block':'none'; btn.textContent=h?'Hide':'Show';
-      };
-      $("ra2Export").onclick = ()=>{
-        const blob = new Blob([JSON.stringify({version:1,items:getShelf()})], {type:'application/json'});
-        const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='overlays.json'; document.body.appendChild(a); a.click();
-        setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
-      };
-      $("ra2Add").onclick = ()=>{
-        const inp=document.createElement('input');
-        inp.type='file'; inp.accept='image/png'; inp.multiple=true; inp.style.display='none';
-        inp.onchange = async (e)=>{
-          const files = Array.from(e.target.files||[]);
-          files.forEach(async f=>{
-            const dataURL = await fileToDataURL2(f);
-            addTile({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' '), dataURL });
-          });
-          inp.remove();
-        };
-        document.body.appendChild(inp); inp.click();
-      };
-      $("ra2Clear").onclick = ()=>{
-        const g=$("ra2Grid"); if (g) g.innerHTML='';
-        setMsg('Cleared');
-        setTimeout(()=>setMsg(''), 800);
-      };
-
-      function addTile(item){
-        const grid=$("ra2Grid"); if (!grid) return;
-        const tile=document.createElement("div");
-        tile.style.cssText='position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;';
-        tile.innerHTML = `
-          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-            <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-          </div>
-          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
-          <div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">
-            <button data-act="publish" class="raTinyBtn2">Publish</button>
-            <button data-act="add"      class="raTinyBtn2">Add</button>
-            <button data-act="del"      class="raTinyBtn2" title="Remove">×</button>
-          </div>
-        `;
-        tile.querySelectorAll('.raTinyBtn2').forEach(b=>{
-          b.style.cssText='background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:3px 8px;cursor:pointer;font-size:12px;';
-        });
-        tile.addEventListener("click", (ev)=>{
-          const btn=ev.target.closest("button"); if(!btn) return;
-          const act=btn.getAttribute("data-act");
-          if (act==="del"){ tile.remove(); return; }
-          if (act==="publish"){
-            const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
-            setMsg(`Published: ${item.name}`); setTimeout(()=>setMsg(''), 800);
-          }
-          if (act==="add"){ addOverlayToCanvas(item.dataURL,false); setMsg(`Added: ${item.name}`); setTimeout(()=>setMsg(''), 800); }
-        });
-        grid.appendChild(tile);
-      }
-
-      renderPublishedShelf();
-    })();
-
-    // Render Published shelf (visible for everyone)
-    function renderPublishedShelf(){
-      function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
-      function ensureShelf(){
-        if ($("ra2Shelf")) return true;
-        const h3 = Array.from(document.querySelectorAll('h3')).find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-        const card = h3 ? h3.parentNode : null; if (!card) return false;
-        const wrap = document.createElement('div'); wrap.id='ra2Shelf'; wrap.style.marginTop='8px';
-        wrap.innerHTML = `
-          <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
-          <div id="ra2ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
-        `;
-        card.appendChild(wrap); return true;
-      }
-      function addToCanvas(src){ addOverlayToCanvas(src,false); }
-      function draw(){
-        if (!ensureShelf()) { setTimeout(draw,300); return; }
-        const grid=$("ra2ShelfGrid"); if (!grid) return;
-        grid.innerHTML='';
-        getShelf().forEach(item=>{
-          const tile = document.createElement('div');
-tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-
-const frame = document.createElement('div');
-frame.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
-const img = document.createElement('img');
-img.src = item.dataURL;
-img.alt = item.name || '';
-img.style.cssText = 'max-width:100%;max-height:80px;';
-frame.appendChild(img);
-
-const cap = document.createElement('div');
-cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-cap.textContent = item.name || '';
-
-tile.appendChild(frame);
-tile.appendChild(cap);
-
-tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
-grid.appendChild(tile);
-        });
-      }
-      draw();
+  // Delete selection
+  if (o && (e.key==="Delete" || e.key==="Backspace")){
+    if (!o._isBase && o!==backgroundRect){
+      try { if (o === idLabel) { idLabel = null; } } catch(_){}
+      try { canvas.discardActiveObject(); } catch(_){}
+      canvas.remove(o);
+      canvas.requestRenderAll();
     }
-  });
+    e.preventDefault(); return;
+  }
 
+  // Duplicate
+  if (o && ( (e.metaKey && e.key.toLowerCase()==="d") || (e.ctrlKey && e.key.toLowerCase()==="d") )){
+    try {
+      o.clone(cl=>{
+        cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 });
+        canvas.add(cl); canvas.setActiveObject(cl); canvas.requestRenderAll();
+      });
+    } catch(_){}
+    e.preventDefault(); return;
+  }
 
+  // Nudge
+  const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
+  if (o && arrows.includes(e.key)){
+    const step = e.shiftKey ? 10 : 1;
+    if (e.key==="ArrowLeft")  o.left -= step;
+    if (e.key==="ArrowRight") o.left += step;
+    if (e.key==="ArrowUp")    o.top  -= step;
+    if (e.key==="ArrowDown")  o.top  += step;
+    o.setCoords(); canvas.requestRenderAll();
+    e.preventDefault();
+  }
+});
+
+/* -------- SNAP + ALIGN UI -------- */
+(function snapAlign(){
+  // UI row (Center buttons + Snap toggle)
+  const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
+  const holder = header ? header.parentNode : document.body;
+  if (!$("raSnapRow")){
+    const row = document.createElement("div");
+    row.id="raSnapRow";
+    row.style.cssText="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
+    row.innerHTML = `
+      <button class="btn small" id="raCenterH">Center H</button>
+      <button class="btn small" id="raCenterV">Center V</button>
+      <button class="btn small" id="raCenterHV">Center HV</button>
+      <button class="btn small" id="raSnapToggle">Snap: On</button>
+      <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
+    `;
+    holder.appendChild(row);
+    $("raSnapToggle").onclick = ()=>{
+      window.__snapOn = !window.__snapOn;
+      $("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
+    };
+    function center(which){
+      const o=canvas.getActiveObject(); if(!o) return;
+      if (which==="H" || which==="HV") o.left = canvas.getWidth()/2;
+      if (which==="V" || which==="HV") o.top  = canvas.getHeight()/2;
+      o.setCoords(); canvas.requestRenderAll();
+    }
+    $("raCenterH").onclick  = ()=>center("H");
+    $("raCenterV").onclick  = ()=>center("V");
+    $("raCenterHV").onclick = ()=>center("HV");
+  }
+
+  window.__snapOn = true;
+  if (!canvas.__snapWired){
+    function halfW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)) / 2; }
+    function halfH(o){ return (o.getScaledHeight?o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2; }
+    function clampSnap(o){
+      if (!window.__snapOn) return;
+      const tol = 8, cw=canvas.getWidth(), ch=canvas.getHeight();
+      const hw=halfW(o), hh=halfH(o);
+      // centers
+      if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
+      if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
+      // edges
+      if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
+      if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
+      if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
+      if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
+    }
+    canvas.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
+    canvas.on("mouse:up", ()=> canvas.requestRenderAll());
+    canvas.__snapWired = true;
+  }
+})();
+
+/* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
+(function adminDock(){
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+  if (!isAdmin) { renderPublishedShelf(); return; }
+
+  if ($("raAdminDock2")) { renderPublishedShelf(); return; }
+
+  function fileToDataURL2(file){
+    return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
+  }
+  function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+  function setShelf(arr){ try{ (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(arr||[])); }catch(_){} }
+  function setMsg(t){ const el=$("ra2Msg"); if (el) el.textContent=t||''; }
+
+  const dock = document.createElement('div');
+  dock.id = 'raAdminDock2';
+  dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
+  dock.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
+      <strong>Admin Overlays</strong>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="ra2Export"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
+        <button id="ra2Hide"    style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+      </div>
+    </div>
+    <div id="ra2Body" style="padding:10px 12px;">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <button id="ra2Add"   style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
+        <button id="ra2Clear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
+        <div id="ra2Msg" style="opacity:.75;min-height:18px"></div>
+      </div>
+      <div id="ra2Grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
+      <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add items to the shelf below for everyone.</div>
+    </div>
+  `;
+  document.body.appendChild(dock);
+
+  $("ra2Hide").onclick = ()=>{
+    const b=$("ra2Body"); const btn=$("ra2Hide");
+    const h = b.style.display==='none'; b.style.display=h?'block':'none'; btn.textContent=h?'Hide':'Show';
+  };
+  $("ra2Export").onclick = ()=>{
+    const blob = new Blob([JSON.stringify({version:1,items:getShelf()})], {type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='overlays.json'; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
+  };
+  $("ra2Add").onclick = ()=>{
+    const inp=document.createElement('input');
+    inp.type='file'; inp.accept='image/png'; inp.multiple=true; inp.style.display='none';
+    inp.onchange = async (e)=>{
+      const files = Array.from(e.target.files||[]);
+      files.forEach(async f=>{
+        const dataURL = await fileToDataURL2(f);
+        addTile({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' '), dataURL });
+      });
+      inp.remove();
+    };
+    document.body.appendChild(inp); inp.click();
+  };
+  $("ra2Clear").onclick = ()=>{
+    const g=$("ra2Grid"); if (g) g.innerHTML='';
+    setMsg('Cleared');
+    setTimeout(()=>setMsg(''), 800);
+  };
+
+  function addTile(item){
+    const grid=$("ra2Grid"); if (!grid) return;
+    const tile=document.createElement("div");
+    tile.style.cssText='position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;';
+    tile.innerHTML = `
+      <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+        <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+      </div>
+      <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+      <div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">
+        <button data-act="publish" class="raTinyBtn2">Publish</button>
+        <button data-act="add"      class="raTinyBtn2">Add</button>
+        <button data-act="del"      class="raTinyBtn2" title="Remove">×</button>
+      </div>
+    `;
+    tile.querySelectorAll('.raTinyBtn2').forEach(b=>{
+      b.style.cssText='background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:3px 8px;cursor:pointer;font-size:12px;';
+    });
+    tile.addEventListener("click", (ev)=>{
+      const btn=ev.target.closest("button"); if(!btn) return;
+      const act=btn.getAttribute("data-act");
+      if (act==="del"){ tile.remove(); return; }
+      if (act==="publish"){
+        const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
+        setMsg(`Published: ${item.name}`); setTimeout(()=>setMsg(''), 800);
+      }
+      if (act==="add"){ addOverlayToCanvas(item.dataURL,false); setMsg(`Added: ${item.name}`); setTimeout(()=>setMsg(''), 800); }
+    });
+    grid.appendChild(tile);
+  }
+
+  renderPublishedShelf();
+})();
+
+/* -------- Render Published shelf (visible for everyone) -------- */
+function renderPublishedShelf(){
+  function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+  function ensureShelf(){
+    if ($("ra2Shelf")) return true;
+    const h3 = Array.from(document.querySelectorAll('h3')).find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+    const card = h3 ? h3.parentNode : null; if (!card) return false;
+    const wrap = document.createElement('div'); wrap.id='ra2Shelf'; wrap.style.marginTop='8px';
+    wrap.innerHTML = `
+      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+      <div id="ra2ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+    `;
+    card.appendChild(wrap); return true;
+  }
+  function addToCanvas(src){ addOverlayToCanvas(src,false); }
+  function draw(){
+    if (!ensureShelf()) { setTimeout(draw,300); return; }
+    const grid=$("ra2ShelfGrid"); if (!grid) return;
+    grid.innerHTML='';
+    getShelf().forEach(item=>{
+      const tile = document.createElement('div');
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+
+      const frame = document.createElement('div');
+      frame.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
+      const img = document.createElement('img');
+      img.src = item.dataURL;
+      img.alt = item.name || '';
+      img.style.cssText = 'max-width:100%;max-height:80px;';
+      frame.appendChild(img);
+
+      const cap = document.createElement('div');
+      cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      cap.textContent = item.name || '';
+
+      tile.appendChild(frame);
+      tile.appendChild(cap);
+      tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
+      grid.appendChild(tile);
+    });
+  }
+  draw();
+}
 // ===============================
 //  EXPORT (optional UI IDs: exportPng / openNewTab)
 //  — self-contained: includes the New Tab viewer (fit ↔ actual size)
