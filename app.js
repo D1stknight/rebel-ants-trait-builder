@@ -928,6 +928,36 @@ safeAddListener("delete","click", ()=>{
   try { c.requestRenderAll(); } catch(_) {}
 });
 
+// -------- Keyboard Delete/Backspace (same rules as Selection → Delete)
+document.addEventListener('keydown', (e)=>{
+  // ignore when typing in inputs/textareas or contenteditable
+  const tag = (e.target && e.target.tagName || '').toLowerCase();
+  if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
+
+  const isDeleteKey = (e.key === 'Delete') || (e.key === 'Backspace');
+  if (!isDeleteKey) return;
+
+  const c = window.canvas;
+  if (!c) return;
+  const o = c.getActiveObject && c.getActiveObject();
+  if (!o) return;
+
+  // Never delete background, base, or system items from keyboard
+  if (o._isBgRect || o._isBase || o._raSys) { e.preventDefault(); return; }
+
+  // If it’s the Token-ID label, clear the pointer so it won’t come back
+  try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
+
+  // Drop selection first to avoid Fabric drawControls/getRetinaScaling crash
+  try { c.discardActiveObject(); } catch(_) {}
+
+  // Remove and render
+  try { c.remove(o); } catch(_) {}
+  try { c.requestRenderAll(); } catch(_) {}
+
+  e.preventDefault();  // consume the key so browser doesn’t do anything else
+}, true);
+
 safeAddListener("opacity","input", (e)=>{
   const o=canvas.getActiveObject(); if(!o) return;
   o.set('opacity', parseFloat(e.target.value||"1"));
