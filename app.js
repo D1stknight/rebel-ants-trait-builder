@@ -8071,164 +8071,121 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_HISTORY_SANITIZER_V1 — save/restore only user layers; keep base/bg/sys/ID stable ===== */
+/* ===== RA_HISTORY_HARD_NORMALIZE_V2 — dedupe sys layers + strict order after Undo/Redo/Restore ===== */
 ;(() => {
-  if (window.__RA_HISTORY_SANITIZER_V1__) return;
-  window.__RA_HISTORY_SANITIZER_V1__ = true;
+  if (window.__RA_HISTORY_HARD_NORMALIZE_V2__) return;
+  window.__RA_HISTORY_HARD_NORMALIZE_V2__ = true;
 
-  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Tag helpers
+  // Identify types
   const isBg   = o => !!(o && o._isBgRect);
-  const isBase = o => !!(o && o._isBase) || !!(o && o._raBaseSig === 'BASE_V1') || !!(o && o._tokenContract);
-  const isSys  = o => !!(o && (o._raSys || o._raBrandFooter || o._raWMCenter));
+  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
   const isId   = o => !!(o && o._raTokenId);
-  const isUser = o => !!o && !isBg(o) && !isBase(o) && !isSys(o) && !isId(o);
+  // Be liberal about watermark/footer detection (different code paths use different flags)
+  const isWM   = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
+                               (typeof o.name==='string' && /watermark|powered/i.test(o.name))));
+  const isSys  = o => !!(o && (o._raSys || isWM(o) || isId(o) || o._raBrandFooter));
 
-  // Rebuild order deterministically
-  function rebuildOrder(c){
+  const isUser = o => !!o && !isBg(o) && !isBase(o) && !isSys(o);
+
+  function area(o){
+    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1));
+    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1));
+    return w*h;
+  }
+
+  // Keep exactly one of a set; remove others
+  function keepOne(c, arr, chooser){
+    if (!arr.length) return null;
+    const keep = chooser(arr);
+    arr.forEach(o => { if (o !== keep) { try { c.remove(o); } catch(_) {} } });
+    return keep;
+  }
+
+  function dedupeSysAndOrder(){
+    const c = C(); if (!c) return;
     const objs = c.getObjects ? c.getObjects() : [];
-    const bg   = objs.find(isBg)   || null;
-    const base = objs.find(isBase) || null;
-    const id   = objs.find(isId)   || null;
-    const sys  = objs.filter(o => isSys(o) && !isId(o));
-    const over = objs.filter(isUser);
 
-    // Tag for any legacy code that reads these
-    objs.forEach(o => { if (!o) return; o._isBgRect = (o===bg); o._isBase = (o===base); });
+    // Dedupe BG
+    const bgs   = objs.filter(isBg);
+    const bg    = keepOne(c, bgs, arr => arr[0]) || null;
 
+    // Dedupe Base: prefer fingerprint → token-marked → largest image
+    const bases = objs.filter(isBase);
+    const base  = keepOne(c, bases, arr => {
+      let f = arr.find(o => o._raBaseSig === 'BASE_V1');
+      if (f) return f;
+      f = arr.find(o => o._tokenContract);
+      if (f) return f;
+      return arr.slice().sort((a,b) => area(b) - area(a))[0];
+    }) || null;
+
+    // Dedupe watermark: keep the largest watermark-ish image
+    const wms   = objs.filter(isWM);
+    const wm    = keepOne(c, wms, arr => arr.slice().sort((a,b) => area(b)-area(a))[0]) || null;
+
+    // Dedupe Token-ID label: keep the most recently added (highest index)
+    const ids   = objs.filter(isId);
+    const id    = keepOne(c, ids, arr => arr[arr.length-1]) || null;
+
+    // Lock base (again) to be safe
+    if (base){
+      base._isBase = true;
+      base._raBaseSig = base._raBaseSig || 'BASE_V1';
+      base.selectable=false; base.evented=false; base.hasControls=false;
+      base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
+      try { base.setCoords(); } catch(_) {}
+    }
+    if (bg) bg._isBgRect = true;
+    if (wm) wm._raSys = true;
+
+    // Rebuild stack: 0 BG, 1 BASE, 2.. overlays, then ID, then WM/other SYS on top
+    const users = (c.getObjects()||[]).filter(isUser);
     let i = 0;
     if (bg)   c.moveTo(bg,   i++);
     if (base) c.moveTo(base, i++);
-    over.forEach(o => c.moveTo(o, i++));
+    users.forEach(o => c.moveTo(o, i++));
     if (id)   c.moveTo(id,   i++);
-    sys.forEach(o => c.moveTo(o, i++));
-    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
+    if (wm)   c.moveTo(wm,   i++);
+    // Any other sys items (footer, etc.) above
+    (c.getObjects()||[]).filter(o => isSys(o) && !isId(o) && o !== wm).forEach(o => c.moveTo(o, i++));
+
+    // Keep globals fresh (for any legacy references)
+    if (bg)   window.backgroundRect = bg;
+    if (base) window.baseObject     = base;
+
+    // Bring token label topmost if present
+    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_) {}
+    try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Take a live snapshot of current sys layers (so we can preserve them across history restores)
-  function snapshotSys(c){
-    const objs = c.getObjects ? c.getObjects() : [];
-    return {
-      bg   : objs.find(isBg)   || null,
-      base : objs.find(isBase) || null,
-      id   : objs.find(isId)   || null,
-      sys  : objs.filter(o => isSys(o) && !isId(o))
-    };
+  // Run a few frames to catch multi-frame restores
+  function schedule(times=3, delay=60){
+    let n=0; const step=()=>{ dedupeSysAndOrder(); if (++n<times) setTimeout(step, delay); };
+    setTimeout(step, 0);
   }
 
-  // Filter a JSON snapshot to keep only user layers
-  function filterJSON(json){
-    if (!json || !Array.isArray(json.objects)) return json;
-    const out = { ...json };
-    out.objects = json.objects.filter(o => {
-      const _bg   = !!o._isBgRect;
-      const _base = !!o._isBase || o._raBaseSig === 'BASE_V1' || !!o._tokenContract;
-      const _sys  = !!(o._raSys || o._raBrandFooter || o._raWMCenter);
-      const _id   = !!o._raTokenId;
-      return !(_bg || _base || _sys || _id);
-    });
-    return out;
-  }
+  // Hook UI undo/redo/restore and keyboard
+  document.addEventListener('click', (e)=>{
+    const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+    if (!el) return;
+    const t = (el.textContent || el.value || '').toLowerCase().trim();
+    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) setTimeout(()=>schedule(), 30);
+  }, true);
+  document.addEventListener('keydown', (e)=>{
+    const k = e.key && e.key.toLowerCase();
+    if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')) setTimeout(()=>schedule(), 30);
+  }, true);
 
-  // Wrap the live canvas so history saves/loads user layers only
-  function wrapCanvas(c){
-    if (!c || c.__raHistSanitized) return;
-    c.__raHistSanitized = true;
-
-    // Wrap toJSON / toDatalessJSON (so your history saver records only user layers)
-    const origToJSON = c.toJSON ? c.toJSON.bind(c) : null;
-    if (origToJSON){
-      c.toJSON = function(...args){
-        const j = origToJSON(...args);
-        return filterJSON(j);
-      };
-    }
-    const origToDataless = c.toDatalessJSON ? c.toDatalessJSON.bind(c) : null;
-    if (origToDataless){
-      c.toDatalessJSON = function(...args){
-        const j = origToDataless(...args);
-        return filterJSON(j);
-      };
-    }
-
-    // Wrap loadFromJSON (so restores apply only user layers; sys layers preserved)
-    const origLoad = c.loadFromJSON ? c.loadFromJSON.bind(c) : null;
-    if (origLoad){
-      c.loadFromJSON = function(json, cb, reviver){
-        let j = json;
-        try { j = (typeof json==='string') ? JSON.parse(json) : (json||{}); } catch(_){}
-        j = filterJSON(j);
-
-        const keep = snapshotSys(c); // save current sys layers before clear+restore
-
-        return origLoad(j, (...args)=>{
-          try {
-            // Re-add preserved sys layers if absent
-            const objs = c.getObjects ? c.getObjects() : [];
-            const hasBg   = objs.some(isBg);
-            const hasBase = objs.some(isBase);
-            const hasId   = objs.some(isId);
-
-            if (keep.bg   && !hasBg)   c.add(keep.bg);
-            if (keep.base && !hasBase){
-              keep.base._isBase = true;
-              keep.base._raBaseSig = keep.base._raBaseSig || 'BASE_V1';
-              keep.base.selectable=false; keep.base.evented=false; keep.base.hasControls=false;
-              keep.base.lockMovementX=keep.base.lockMovementY=keep.base.lockScalingX=keep.base.lockScalingY=keep.base.lockRotation=true;
-              try { keep.base.setCoords(); } catch(_){}
-              c.add(keep.base);
-            }
-            if (keep.id   && !hasId)   c.add(keep.id);
-            (keep.sys||[]).forEach(s => { if (!objs.includes(s)) c.add(s); });
-
-            rebuildOrder(c);
-          } catch(_) {}
-
-          if (typeof cb === 'function') cb(...args);
-        }, reviver);
-      };
-    }
-
-    // Also keep order sane after any change (helps post-undo settle)
-    const kick = ()=> rebuildOrder(c);
+  // Normalize after any add/modify/remove as a safety net
+  (function wireChanges(){
+    const c = C(); if (!c) { setTimeout(wireChanges, 200); return; }
+    if (c.__raHardNorm) return;
+    c.__raHardNorm = true;
+    const kick = ()=> schedule(2,60);
     c.on('object:added',    kick);
     c.on('object:modified', kick);
     c.on('object:removed',  kick);
-  }
-
-  // Watch for the current live canvas (your app may swap window.canvas)
-  function watchAndWrap(){
-    let last = null;
-    const tryWrap = ()=>{
-      const cur = getC();
-      if (cur && cur !== last){ wrapCanvas(cur); last = cur; }
-    };
-    tryWrap();
-    setInterval(tryWrap, 250);
-  }
-
-  // Also nudge order after UI Undo/Redo/Restore buttons & keyboard
-  function wireUI(){
-    const bump = ()=> setTimeout(()=>{ const c=getC(); c && rebuildOrder(c); }, 30);
-    document.addEventListener('click', (e)=>{
-      const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-      if (!el) return;
-      const t = (el.textContent || el.value || '').toLowerCase().trim();
-      if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) bump();
-    }, true);
-    document.addEventListener('keydown', (e)=>{
-      const k = e.key && e.key.toLowerCase();
-      if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')) bump();
-    }, true);
-  }
-
-  function boot(){
-    watchAndWrap();
-    wireUI();
-  }
-
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
-  else boot();
+  })();
 })();
