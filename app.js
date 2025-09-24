@@ -7889,104 +7889,75 @@ if (img){
   }
 })();
 
-/* ===== RA_TOKEN_ID_FORCE_PLACER_V2 — reliable “Load Token ID” label placer (non-blocking) ===== */
+/* ===== RA_TOKEN_ID_LABEL_SAFE_V3 — non-destructive label updater (no blink, 1 undo) ===== */
 ;(() => {
-  if (window.__RA_TOKEN_ID_FORCE_PLACER_V2__) return;
-  window.__RA_TOKEN_ID_FORCE_PLACER_V2__ = true;
+  if (window.__RA_TOKEN_ID_LABEL_SAFE_V3__) return;
+  window.__RA_TOKEN_ID_LABEL_SAFE_V3__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  function readTokenIdValue(){
-    const sels = [
-      '#raTokenIdDisplay','#tokenIdDisplay',
-      '#tokenIdInput','#tokenId','#token',
-      'input[name="tokenId"]','input[name="token"]',
-      'input[placeholder*="Token"]'
-    ];
-    for (const sel of sels){
-      const el = document.querySelector(sel);
-      if (!el) continue;
-      const raw = (el.value ?? el.textContent ?? '').trim();
-      const d = (raw.match(/\d+/) || [''])[0];
-      if (d) return d;
+  function ensureLabel(c){
+    // Reuse global if present, else find one on canvas, else create once
+    let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
+    if (!l && window.fabric){
+      l = new fabric.Text('#', {
+        originX:'center', originY:'top',
+        left:c.getWidth()/2, top:32,
+        fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+        fontSize:48, fill:'#ffffff',
+        stroke:'#000000', strokeWidth:2, strokeUniform:true,
+        selectable:false, evented:false, hasControls:false
+      });
+      l._raTokenId = true; l._raSys = true;
+      c.add(l);
     }
-    return '';
+    window.idLabel = l || window.idLabel; // remember for next time
+    return l;
   }
 
-  // Create/update using your helper if present; else do a safe fallback
-  function placeOnce(idStr){
+  function setTokenIdLabel(id){
     const c = C(); if (!c) return false;
-    if (!idStr) return false;
+    const n = String(id ?? '').trim();
+    if (!n) return false;
 
-    if (typeof window.addOrUpdateTokenLabel === 'function') {
-      window.addOrUpdateTokenLabel(String(idStr));
-    } else if (window.fabric) {
-      // fallback create
-      const txt = new fabric.Text('#'+String(idStr), {
-        originX:'center', originY:'top', left:c.getWidth()/2, top:32,
-        fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-        fontSize:48, fill:'#fff', stroke:'#000', strokeWidth:2, strokeUniform:true,
-        selectable:false, evented:false
-      });
-      txt._raTokenId = true; txt._raSys = true;
-      // remove old token ids
-      (c.getObjects()||[]).forEach(o=>{ if (o && o._raTokenId) try{ c.remove(o); }catch(_){ } });
-      c.add(txt);
-    } else {
-      return false;
-    }
+    const l = ensureLabel(c);
+    if (!l) return false;
 
-    // Find the label (global idLabel or by flag) and force it to the very top
-    let l = window.idLabel;
-    if (!l){
-      l = (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
-    }
-    if (l){
-      try { l.visible = true; }catch(_){}
-      try {
-        const n = (c.getObjects()||[]).length;
-        c.bringToFront(l); c.moveTo(l, n-1);
-      } catch(_){}
-    }
+    // Update text only (no remove/re-add) → 1 history delta max
+    const shown = '#' + n.replace(/^#+/,'');
+    if (l.text !== shown) l.set({ text: shown });
+
+    // Reassert non-interactive + topmost
+    l.selectable=false; l.evented=false; l.hasControls=false;
+    try {
+      const objs = c.getObjects() || [];
+      c.bringToFront(l); c.moveTo(l, objs.length - 1);
+    } catch(_){}
+
+    // Let your layer enforcer keep it above overlays
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
     try { c.requestRenderAll(); } catch(_){}
     return true;
   }
 
-  // Run a few times (UI often reflows right after the click)
-  function placeWithRetries(){
-    const idStr = readTokenIdValue();
-    const tries = [0, 60, 160, 320]; // ms
-    tries.forEach(t => setTimeout(()=> placeOnce(idStr), t));
-  }
+  // Override both helpers to be non-destructive
+  window.addOrUpdateTokenLabel = function(id){ return setTokenIdLabel(id); };
+  window.upsertTokenLabel      = function(id){ return setTokenIdLabel(id); };
 
-  // Scope to the “Token ID Styles” card if present, else body (we do NOT stop propagation)
-  function tokenIdCard(){
-    const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
-    const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
-    return h ? (h.closest('.card,section,div') || h.parentElement) : document.body;
-  }
-
-  // Bind by common IDs (no stopPropagation; we run alongside your UI)
-  ['raLoadTokenIdBtn','loadTokenId','loadTokenID','tokenIdLoad','placeTokenId'].forEach(id=>{
-    const el = document.getElementById(id);
-    if (!el || el.__raTokFix2) return;
-    el.__raTokFix2 = true;
-    el.addEventListener('click', placeWithRetries, true);
-  });
-
-  // Also bind by visible button text inside the card
-  const scope = tokenIdCard();
-  scope.addEventListener('click', (e)=>{
-    const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-    if (!btn || !scope.contains(btn)) return;
-    const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
-    if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
-      // let the app run; we’ll place label after its own work
-      setTimeout(placeWithRetries, 0);
+  // Optional: expose a manual nudge for debugging
+  window.raPlaceTokenIdLabelNow = () => {
+    // Try to read from common fields if caller doesn’t pass a value
+    const cand = [
+      '#raTokenIdDisplay','#tokenIdDisplay','#tokenIdInput','#tokenId','#token',
+      'input[name="tokenId"]','input[name="token"]','input[placeholder*="Token"]'
+    ];
+    let v = '';
+    for (const sel of cand){
+      const el = document.querySelector(sel);
+      const raw = (el && (el.value ?? el.textContent) || '').trim();
+      const d = (raw.match(/\d+/) || [''])[0];
+      if (d){ v = d; break; }
     }
-  }, true);
-
-  // Debug helper (optional): window.raPlaceTokenIdLabelNow()
-  window.raPlaceTokenIdLabelNow = placeWithRetries;
+    if (v) setTokenIdLabel(v);
+  };
 })();
