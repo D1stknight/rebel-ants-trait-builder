@@ -8074,14 +8074,14 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_RESTORE_FLAG_DEDUPE_V1 — block sys spawning during restore + dedupe SYS after ===== */
+/* ===== RA_RESTORE_MUTE_AND_ORDER_V1 — mute history during restore; hide sys dupes; strict order ===== */
 ;(() => {
-  if (window.__RA_RESTORE_FLAG_DEDUPE_V1__) return;
-  window.__RA_RESTORE_FLAG_DEDUPE_V1__ = true;
+  if (window.__RA_RESTORE_MUTE_AND_ORDER_V1__) return;
+  window.__RA_RESTORE_MUTE_AND_ORDER_V1__ = true;
 
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // liberal SYS detectors
+  // liberal detectors
   const isBg   = o => !!(o && o._isBgRect);
   const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
   const isId   = o => !!(o && o._raTokenId);
@@ -8097,41 +8097,44 @@ window.raDump = () => {
     return w*h;
   };
 
-  function pickOne(arr, chooser){
+  // Keep ONE by chooser, make others invisible (do NOT remove while restoring)
+  function keepOneHideRest(arr, chooser){
     if (!arr.length) return null;
     const keep = chooser(arr);
-    return { keep, drop: arr.filter(o=>o!==keep) };
+    arr.forEach(o => {
+      if (o !== keep) {
+        o._raZombieSys = true;
+        o.visible = false;     // hide duplicate sys instead of removing
+      }
+    });
+    return keep;
   }
 
-  // remove all but one for each SYS class, then rebuild stacking
-  function dedupeSysAndReorder(){
-    const c = C(); if (!c) return;
+  function strictOrder(){
+    const c = getC(); if (!c) return;
     const objs = c.getObjects ? c.getObjects() : [];
 
-    // BG: keep first
-    let bgRes   = pickOne(objs.filter(isBg),  arr => arr[0]);
-    let baseRes = pickOne(objs.filter(isBase),arr => {
-      let f = arr.find(o => o._raBaseSig === 'BASE_V1'); if (f) return f;
+    // Dedupe BG
+    const bgs = objs.filter(isBg);
+    const bg  = keepOneHideRest(bgs, arr => arr[0]) || null;
+
+    // Dedupe Base: fingerprint → token → largest
+    const bases = objs.filter(isBase);
+    const base  = keepOneHideRest(bases, arr => {
+      let f = arr.find(o => o._raBaseSig==='BASE_V1'); if (f) return f;
       f = arr.find(o => o._tokenContract); if (f) return f;
       return arr.slice().sort((a,b)=>area(b)-area(a))[0];
-    });
-    // Footer/WM: keep largest wm-like
-    let wmRes   = pickOne(objs.filter(isWmLike), arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]);
-    // Token ID: keep most recent
-    let idRes   = pickOne(objs.filter(isId), arr => arr[arr.length-1]);
+    }) || null;
 
-    // drop extras
-    [bgRes, baseRes, wmRes, idRes].forEach(res=>{
-      if (!res) return;
-      res.drop.forEach(o=>{ try{ C().remove(o); }catch(_){} });
-    });
+    // Dedupe WM/footer: keep largest wm-like
+    const wms = objs.filter(isWmLike);
+    const wm  = keepOneHideRest(wms, arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]) || null;
 
-    const bg   = bgRes   && bgRes.keep   || null;
-    const base = baseRes && baseRes.keep || null;
-    const wm   = wmRes   && wmRes.keep   || null;
-    const id   = idRes   && idRes.keep   || null;
+    // Dedupe Token-ID: keep latest
+    const ids = objs.filter(isId);
+    const id  = keepOneHideRest(ids, arr => arr[arr.length-1]) || null;
 
-    // lock base safely
+    // Lock real base safely
     if (base){
       base._isBase = true;
       base._raBaseSig = base._raBaseSig || 'BASE_V1';
@@ -8142,55 +8145,84 @@ window.raDump = () => {
     if (bg) bg._isBgRect = true;
     if (wm) wm._raSys = true;
 
-    // rebuild order: 0 bg, 1 base, 2.. users, then id, then wm/sys
-    const users = (c.getObjects()||[]).filter(isUser);
+    // Rebuild order: 0 bg, 1 base, 2.. users, then id, wm, and other sys
+    const users = objs.filter(o => isUser(o) && o.visible!==false);
     let i=0;
     if (bg)   c.moveTo(bg,   i++);
     if (base) c.moveTo(base, i++);
     users.forEach(o => c.moveTo(o, i++));
-    if (id)   c.moveTo(id,   i++);
-    if (wm)   c.moveTo(wm,   i++);
-    (c.getObjects()||[]).filter(o => isSys(o) && o!==wm && !isId(o)).forEach(o => c.moveTo(o, i++));
+    if (id && id.visible!==false) c.moveTo(id, i++);
+    if (wm && wm.visible!==false) c.moveTo(wm, i++);
+    objs.filter(o => isSys(o) && o!==wm && o!==id && o.visible!==false).forEach(o => c.moveTo(o, i++));
+
+    // Keep globals fresh
+    if (bg)   window.backgroundRect = bg;
+    if (base) window.baseObject     = base;
 
     try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
     try { c.requestRenderAll(); } catch(_){}
   }
 
-  // wrap the live canvas with a restore flag so sys code can skip spawning footers during restore
-  function wrapCanvas(){
-    const c = C(); if (!c || c.__raRestoreFlagWrapped) return;
-    c.__raRestoreFlagWrapped = true;
+  // Mute canvas.fire() during restore so our cleanup doesn't push new history entries
+  function withHistoryMute(c, fn){
+    const origFire = c.fire ? c.fire.bind(c) : null;
+    if (!origFire) return fn();
 
-    const orig = c.loadFromJSON && c.loadFromJSON.bind(c);
-    if (orig){
+    c.fire = function(evt, opts){
+      if (window.__RA_RESTORING__) {
+        // swallow events that would create history noise
+        if (/^(object:added|object:removed|object:modified|history:.*)$/i.test(evt)) return;
+      }
+      return origFire(evt, opts);
+    };
+
+    try { return fn(); }
+    finally { c.fire = origFire; }
+  }
+
+  // Wrap the live canvas
+  function wrapCanvas(){
+    const c = getC(); if (!c || c.__raRestoreMuted) return;
+    c.__raRestoreMuted = true;
+
+    const origLoad = c.loadFromJSON && c.loadFromJSON.bind(c);
+    if (origLoad){
       c.loadFromJSON = function(json, cb, reviver){
         window.__RA_RESTORING__ = true;
-        return orig(json, (...args)=>{
-          window.__RA_RESTORING__ = false;
-          // run a few frames to eliminate dupes that slipped in and rebuild order
-          let n=0; const settle=()=>{ dedupeSysAndReorder(); if (++n<3) setTimeout(settle, 60); };
+        return withHistoryMute(c, () => origLoad(json, (...args)=>{
+          // allow a few frames for Fabric to settle, still muted
+          let n=0; const settle=()=>{ strictOrder(); if (++n<3) setTimeout(settle, 60); };
           settle();
+          window.__RA_RESTORING__ = false;
           if (typeof cb==='function') cb(...args);
-        }, reviver);
+        }, reviver));
       };
     }
 
-    // Also keep order sane after any change (post-undo settle)
-    const kick = ()=> { let n=0; const t=()=>{ dedupeSysAndReorder(); if(++n<2) setTimeout(t,60); }; t(); };
+    // Also keep order sane after any change (post-undo settle), but mute if mid-restore
+    const kick = ()=> {
+      if (window.__RA_RESTORING__) return;
+      strictOrder();
+    };
     c.on('object:added',    kick);
     c.on('object:modified', kick);
     c.on('object:removed',  kick);
   }
 
+  // Watch for canvas instance swaps
   function watch(){
-    wrapCanvas();
-    // in case your app swaps window.canvas, re-wrap the new instance
-    let last = C();
-    setInterval(()=>{ const cur=C(); if (cur && cur!==last){ wrapCanvas(); last=cur; } }, 250);
+    let last = null;
+    const tick = ()=>{
+      const cur = getC();
+      if (cur && cur !== last){ wrapCanvas(); last = cur; }
+    };
+    tick();
+    setInterval(tick, 250);
   }
 
+  // Nudge after UI Undo/Redo/Restore buttons & keyboard (non-mutating; just ordering)
   function wireUI(){
-    const bump = ()=> setTimeout(()=>dedupeSysAndReorder(), 30);
+    const bump = ()=> setTimeout(()=>{ if (!window.__RA_RESTORING__) strictOrder(); }, 30);
     document.addEventListener('click', (e)=>{
       const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
       if (!el) return;
@@ -8204,11 +8236,10 @@ window.raDump = () => {
   }
 
   function boot(){
-    if (!C()) { setTimeout(boot,200); return; }
+    if (!getC()) { setTimeout(boot, 200); return; }
     watch();
     wireUI();
   }
-
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
   else boot();
 })();
