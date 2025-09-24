@@ -8051,147 +8051,6 @@ function onClick(e){
   else { boot(); }
 })();
 
-/* ===== RA_UNDO_STRICT_ORDER_FINAL — fingerprinted base + full-stack rebuild after history ===== */
-;(() => {
-  if (window.__RA_UNDO_STRICT_ORDER_FINAL__) return;
-  window.__RA_UNDO_STRICT_ORDER_FINAL__ = true;
-
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  // Retag bg/base strictly and normalize _kind after a JSON restore
-  function retag(c){
-    const objs = c.getObjects ? c.getObjects() : [];
-
-    // --- choose exactly ONE background ---
-    // Prefer existing _isBgRect; otherwise pick the rect that matches canvas size best
-    let bgs = objs.filter(o => o && o._isBgRect);
-    if (!bgs.length){
-      const cW = c.getWidth(), cH = c.getHeight();
-      const rects = objs.filter(o => o && o.type === 'rect');
-      rects.forEach(o=>{
-        const w = (o.width||0)*(o.scaleX||1), h=(o.height||0)*(o.scaleY||1);
-        const score = Math.abs(w - cW) + Math.abs(h - cH);
-        o.__bgScore = score;
-      });
-      bgs = rects.sort((a,b)=>(a.__bgScore||1e9)-(b.__bgScore||1e9)).slice(0,1);
-    }
-    const bg = bgs[0] || null;
-    // Demote all others
-    objs.forEach(o=>{ if (o && o!==bg) o._isBgRect = false; });
-    if (bg) bg._isBgRect = true;
-
-    // --- choose exactly ONE base ---
-    // 1) fingerprint BASE_V1, 2) token-marked image, 3) largest image
-    const images = objs.filter(o => o && (o.type==='image' || o._element));
-    let base = images.find(o => o._raBaseSig === 'BASE_V1') ||
-               images.find(o => o._tokenContract) ||
-               images.sort((a,b)=>{
-                 const aw=(a.getScaledWidth?a.getScaledWidth(): (a.width||0)*(a.scaleX||1));
-                 const ah=(a.getScaledHeight? a.getScaledHeight(): (a.height||0)*(a.scaleY||1));
-                 const bw=(b.getScaledWidth?b.getScaledWidth(): (b.width||0)*(b.scaleX||1));
-                 const bh=(b.getScaledHeight? b.getScaledHeight(): (b.height||0)*(b.scaleY||1));
-                 return (bw*bh)-(aw*ah);
-               })[0] || null;
-
-    // Demote everyone first, then promote exactly one
-    objs.forEach(o=>{
-      if (!o) return;
-      if (o!==base) o._isBase = false;
-    });
-    if (base){
-      base._isBase = true;
-      base._raBaseSig = base._raBaseSig || 'BASE_V1';
-      // lock like a base
-      base.selectable=false; base.evented=false; base.hasControls=false;
-      base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
-      try { base.setCoords(); } catch(_) {}
-    }
-
-    // Tag overlays (images not bg/base/sys/label) so the enforcer can place them
-    objs.forEach(o=>{
-      if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
-      if (o.type==='image' || o._element) o._kind = o._kind || 'overlay';
-    });
-  }
-
-  // Deterministic rebuild: 0=bg, 1=base, 2..=overlays, top=sys/labels
-  function rebuild(c){
-    const objs = c.getObjects ? c.getObjects() : [];
-    const bg   = objs.find(o => o && o._isBgRect) || null;
-    const base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
-    const sys  = objs.filter(o => o && (o._raSys || o._raTokenId));
-    const over = objs.filter(o => o && !o._isBgRect && !o._isBase && !(o._raSys || o._raTokenId));
-
-    let i = 0;
-    if (bg)   c.moveTo(bg,   i++);
-    if (base) c.moveTo(base, i++);
-    over.forEach(o => c.moveTo(o, i++));
-    sys .forEach(o => c.moveTo(o, i++));
-  }
-
-  function polish(){
-    const c = C(); if (!c) return;
-    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
-    try { if (window.raEnforceLayerOrder) window.raEnforceLayerOrder(); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  function normalizeOnce(){
-    const c = C(); if (!c) return;
-    retag(c);
-    rebuild(c);
-    polish();
-  }
-
-  function scheduleNormalize(times=4, delay=60){
-    let n=0; const step=()=>{ normalizeOnce(); if (++n<times) setTimeout(step, delay); };
-    setTimeout(step, 0);
-  }
-
-  // Buttons (Undo / Redo / Restore Draft)
-  document.addEventListener('click', (e)=>{
-    const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-    if (!el) return;
-    const t = (el.textContent || el.value || '').toLowerCase().trim();
-    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
-      setTimeout(()=>scheduleNormalize(), 30);
-    }
-  }, true);
-
-  // Keyboard undo/redo (Cmd/Ctrl+Z / Y)
-  document.addEventListener('keydown', (e)=>{
-    const k = e.key && e.key.toLowerCase();
-    if ((e.metaKey||e.ctrlKey) && (k==='z' || k==='y')){
-      setTimeout(()=>scheduleNormalize(), 30);
-    }
-  }, true);
-
-  // Wrap loadFromJSON so every JSON restore normalizes afterwards
-  (function wrapLoadFromJSON(){
-    const c = C(); if (!c || c.__raUndoWrap) return;
-    c.__raUndoWrap = true;
-    const orig = c.loadFromJSON.bind(c);
-    c.loadFromJSON = function(json, cb, reviver){
-      return orig(json, (...args)=>{
-        try { scheduleNormalize(); } catch(_){}
-        if (typeof cb === 'function') cb(...args);
-      }, reviver);
-    };
-  })();
-
-  // After an overlay is added post-restore, normalize once more
-  (function wireAdd(){
-    const c = C(); if (!c || c.__raNormalizeAdd) return;
-    c.__raNormalizeAdd = true;
-    c.on('object:added', (e)=>{
-      const o=e && e.target; if (!o) return;
-      if (o.type==='image' || o._element){
-        setTimeout(()=>scheduleNormalize(2,60), 0);
-      }
-    });
-  })();
-})();
-
 // ===== DEBUG: dump current stacking and tags (run in console: raDump()) =====
 window.raDump = () => {
   const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -8211,3 +8070,139 @@ window.raDump = () => {
     );
   });
 };
+
+/* ===== RA_STRICT_ORDER_GUARD_V1 — single base/bg, full rebuild on any change/restore ===== */
+;(() => {
+  if (window.__RA_STRICT_ORDER_GUARD_V1__) return;
+  window.__RA_STRICT_ORDER_GUARD_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // pick candidates without trusting _isBase from snapshots
+  function pickBase(c, objs){
+    // 1) fingerprint
+    let base = objs.find(o => o && (o.type==='image'||o._element) && o._raBaseSig === 'BASE_V1');
+    // 2) token-marked
+    if (!base) base = objs.find(o => o && (o.type==='image'||o._element) && o._tokenContract);
+    // 3) largest image
+    if (!base){
+      const imgs = objs.filter(o => o && (o.type==='image'||o._element));
+      base = imgs.sort((a,b)=>{
+        const aw=(a.getScaledWidth?a.getScaledWidth(): (a.width||0)*(a.scaleX||1));
+        const ah=(a.getScaledHeight? a.getScaledHeight(): (a.height||0)*(a.scaleY||1));
+        const bw=(b.getScaledWidth?b.getScaledWidth(): (b.width||0)*(b.scaleX||1));
+        const bh=(b.getScaledHeight? b.getScaledHeight(): (b.height||0)*(b.scaleY||1));
+        return (bw*bh)-(aw*ah);
+      })[0] || null;
+    }
+    return base || null;
+  }
+
+  function pickBg(c, objs){
+    // prefer existing bg tag
+    let bg = objs.find(o => o && o._isBgRect) || null;
+    if (bg) return bg;
+    // else choose the rect closest to the canvas size
+    const cW = c.getWidth(), cH = c.getHeight();
+    const rects = objs.filter(o => o && o.type==='rect');
+    rects.forEach(o=>{
+      const w=(o.width||0)*(o.scaleX||1), h=(o.height||0)*(o.scaleY||1);
+      o.__bgScore = Math.abs(w - cW) + Math.abs(h - cH);
+    });
+    return rects.sort((a,b)=>(a.__bgScore||1e9)-(b.__bgScore||1e9))[0] || null;
+  }
+
+  function strictNormalize(){
+    const c = C(); if (!c) return;
+    const objs = c.getObjects ? c.getObjects() : [];
+    if (!objs.length) return;
+
+    // choose single bg/base fresh
+    const bg   = pickBg(c, objs);
+    const base = pickBase(c, objs);
+
+    // demote everyone first
+    objs.forEach(o=>{
+      if (!o) return;
+      o._isBgRect = (o===bg);
+      o._isBase   = (o===base);
+    });
+
+    // lock base properly
+    if (base){
+      base.selectable=false; base.evented=false; base.hasControls=false;
+      base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
+      try { base.setCoords(); } catch(_){}
+    }
+
+    // mark overlays (any image that is not bg/base/sys/label)
+    objs.forEach(o=>{
+      if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+      if (o.type==='image' || o._element) o._kind = o._kind || 'overlay';
+    });
+
+    // rebuild the stack deterministically: 0 bg, 1 base, 2.. overlays, top sys/label
+    const sys  = objs.filter(o => o && (o._raSys || o._raTokenId));
+    const over = objs.filter(o => o && !o._isBgRect && !o._isBase && !(o._raSys || o._raTokenId));
+    let idx = 0;
+    if (bg)   c.moveTo(bg,   idx++);
+    if (base) c.moveTo(base, idx++);
+    over.forEach(o => c.moveTo(o, idx++));
+    sys .forEach(o => c.moveTo(o, idx++));
+
+    // keep global pointers fresh for any legacy code
+    if (bg)   window.backgroundRect = bg;
+    if (base) window.baseObject     = base;
+
+    // keep label topmost
+    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
+    c.requestRenderAll && c.requestRenderAll();
+  }
+
+  // run after any history action and any object change
+  function schedule(times=3, delay=60){
+    let n=0; const tick=()=>{ strictNormalize(); if(++n<times) setTimeout(tick, delay); };
+    setTimeout(tick, 0);
+  }
+
+  // buttons (Undo / Redo / Restore Draft)
+  document.addEventListener('click', (e)=>{
+    const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+    if (!el) return;
+    const t = (el.textContent || el.value || '').toLowerCase().trim();
+    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
+      setTimeout(()=>schedule(), 30);
+    }
+  }, true);
+
+  // keyboard (Cmd/Ctrl+Z/Y)
+  document.addEventListener('keydown', (e)=>{
+    const k = e.key && e.key.toLowerCase();
+    if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')){
+      setTimeout(()=>schedule(), 30);
+    }
+  }, true);
+
+  // wrap loadFromJSON so every restore normalizes afterwards
+  (function wrapLoadFromJSON(){
+    const c = C(); if (!c || c.__raStrictOrderWrap) return;
+    c.__raStrictOrderWrap = true;
+    const orig = c.loadFromJSON.bind(c);
+    c.loadFromJSON = function(json, cb, reviver){
+      return orig(json, (...args)=>{
+        try { schedule(); } catch(_){}
+        if (typeof cb==='function') cb(...args);
+      }, reviver);
+    };
+  })();
+
+  // normalize after any add/modify/remove (post-undo settling)
+  (function wireChanges(){
+    const c = C(); if (!c || c.__raStrictOrderChanges) return;
+    c.__raStrictOrderChanges = true;
+    const kick = ()=> schedule(2,60);
+    c.on('object:added',    kick);
+    c.on('object:modified', kick);
+    c.on('object:removed',  kick);
+  })();
+})();
