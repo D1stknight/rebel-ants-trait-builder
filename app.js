@@ -668,60 +668,59 @@ safeAddListener("clearUpload","click", ()=>{
 
 // Token ID Styles → place/update the on-canvas label
 (function wireTokenIdButtons(){
+  // Use the Styles panel display first, then the left input(s), then last loaded token
   function readTokenInputValue(){
-    // Check both the left input and the styles panel display, plus common fallbacks
-    const candidates = [
-      "#tokenIdDisplay",              // styles panel often holds "#5"
-      "#tokenIdInput", "#tokenId", "#token",
+    const display = document.querySelector('#tokenIdDisplay');
+    const rawDisp = (display && (display.value ?? display.textContent) || '').trim();
+    const digitsDisp = (rawDisp.match(/\d+/) || [''])[0];
+
+    const fallbacks = [
+      '#tokenIdInput', '#tokenId', '#token',
       'input[name="tokenId"]', 'input[name="token"]',
       'input[placeholder*="Token"]', 'input[placeholder*="ID"]'
     ];
-    for (const sel of candidates){
+    let digitsFB = '';
+    for (const sel of fallbacks){
       const el = document.querySelector(sel);
       if (!el) continue;
-      const raw = (el.value ?? el.textContent ?? "").trim();
-      if (!raw) continue;
-      const digits = (raw.match(/\d+/) || [""])[0]; // accept "#5" or "5"
-      if (digits) return digits;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      const d = (raw.match(/\d+/) || [''])[0];
+      if (d){ digitsFB = d; break; }
     }
-    return "";
+
+    const mem = (window.__raTokenMemory || '').trim(); // set by the image loader
+
+    return digitsDisp || digitsFB || mem || '';
   }
 
-const handler = (e)=>{
-  // Ignore the *image loader* button; we only place the TEXT label here
-  const t = (e?.target?.textContent || e?.target?.value || "").toLowerCase();
-  if (/load\s+by\s+token/.test(t)) return;
+  const handler = (e)=>{
+    // Ignore the *image* loader button; we only place the TEXT label here
+    const t = (e?.target?.textContent || e?.target?.value || '').toLowerCase();
+    if (/load\s+by\s+token/.test(t)) return;
 
-  const idStr = readTokenInputValue();
-  if (!idStr) return;
+    const idStr = readTokenInputValue();
+    if (!idStr) return;
 
-  // CREATE / UPDATE the label
-  try { addOrUpdateTokenLabel(idStr); } catch(_) {}
-
-  // FORCE to very top (cannot be behind anything)
-  try {
-    const objs = canvas.getObjects() || [];
-    if (idLabel) {
-      canvas.bringToFront(idLabel);
-      canvas.moveTo(idLabel, objs.length - 1);
-    }
-  } catch(_) {}
-
-  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-  try { canvas.requestRenderAll(); } catch(_){}
-};
+    // CREATE / UPDATE label and force it on top
+    try { addOrUpdateTokenLabel(idStr); } catch(_){}
+    try {
+      const c = window.canvas, l = window.idLabel;
+      if (c && l){ const n = (c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1); }
+    } catch(_){}
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+    try { window.canvas && window.canvas.requestRenderAll && window.canvas.requestRenderAll(); } catch(_){}
+  };
 
   // Bind by common IDs (bind once)
-  ["loadTokenId","loadTokenID","tokenIdLoad","placeTokenId"].forEach(id=>{
-    safeAddListener(id, "click", handler);
+  ['loadTokenId','loadTokenID','tokenIdLoad','placeTokenId'].forEach(id=>{
+    safeAddListener(id, 'click', handler);
   });
 
-  // Fallback: match by visible button text in the panel
+  // Fallback: match by visible button text in the Styles card
   document.addEventListener('click', (e)=>{
     const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!btn) return;
-    const txt = (btn.textContent || btn.value || "").toLowerCase().trim();
-    if (!txt) return;
+    const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
     if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
       e.preventDefault();
       handler(e);
@@ -734,33 +733,33 @@ const handler = (e)=>{
   if (window.__RA_HISTORY_STABILIZER__) return;
   window.__RA_HISTORY_STABILIZER__ = true;
 
-  function tickFew(){
+  function stabilizeFew(){
     let tries = 0;
-    const step = ()=>{
+    const run = ()=>{
       try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
       try { window.canvas && window.canvas.requestRenderAll && window.canvas.requestRenderAll(); } catch(_){}
-      if (++tries < 5) setTimeout(step, 60);
+      if (++tries < 5) setTimeout(run, 60);
     };
-    setTimeout(step, 60);
+    setTimeout(run, 60);
   }
 
-  // 1) If your UI uses buttons, catch generic labels (works even if IDs changed)
+  // Buttons by visible text (works even if IDs changed)
   document.addEventListener('click', (e)=>{
     const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!el) return;
     const t = (el.textContent || el.value || '').toLowerCase().trim();
     if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
-      tickFew();
+      stabilizeFew();
     }
   }, true);
 
-  // 2) Also stabilize after JSON restores (your loadFromJSON wrapper sets window.__raLoadingJSON)
-  const mark = setInterval(()=>{
-    if (window.__raLoadingJSON) return; // we only post-stabilize after it finishes
-    // no-op; just keep the interval alive for future actions
-  }, 500);
+  // Keyboard undo: Cmd/Ctrl+Z (and Shift+Cmd/Ctrl+Z)
+  document.addEventListener('keydown', (e)=>{
+    const z = e.key.toLowerCase() === 'z';
+    if ((e.metaKey || e.ctrlKey) && z) stabilizeFew();
+  }, true);
 })();
-
+  
  /* ===== RA_JSON_RESTORE_GUARD ===== */
 (function RA_JSON_RESTORE_GUARD(){
   if (window.__RA_JSON_RESTORE_GUARD__) return;
@@ -799,11 +798,17 @@ const handler = (e)=>{
      - tokenIdInput      ← input where you type the token id
      - tokenStatus       ← small <span> to show status text (optional)
      - loadToken         ← the “Load Token ID” button
-*/
+
 safeAddListener("loadToken","click", async ()=>{
   const statusEl = $("tokenStatus");
   const tokenId  = (($("tokenIdInput")||{}).value || "").trim();
   if (!tokenId){ if(statusEl) statusEl.textContent = "Enter a token ID."; return; }
+
+// Remember last loaded token for the Styles button
+try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_){}
+
+// (no automatic label here — user adds it from “Token ID Styles”)
+
 
   // Find the contract for the currently selected collection
   function selectedContract(){
