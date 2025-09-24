@@ -2772,6 +2772,7 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
   function restore(jsonStr, label=''){
     if (!c || !jsonStr) return;
     MUTE++;
+    window.__RA_RESTORING__ = true;    
     try{
       const data = JSON.parse(jsonStr);
       c.loadFromJSON(data, () => {
@@ -2790,11 +2791,13 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
           c.requestRenderAll();
         } finally {
           MUTE--;
+          window.__RA_RESTORING__ = false;          
           refresh(label);
         }
       });
     } catch(_){
-      MUTE--; refresh(label);
+      MUTE--; window.__RA_RESTORING__ = false;      
+      refresh(label);
     }
   }
 
@@ -7598,23 +7601,43 @@ async function loadTokenFromCollection(tokenId, col){
 
 function killOldBase(c){
   const objs = (c.getObjects() || []).slice();
-  const cw = c.getWidth(), ch = c.getHeight();
+
+  // If the active object looks like a base, drop the selection first (prevents Fabric errors)
+  const active = c.getActiveObject && c.getActiveObject();
+  const isImageLike = o => o && (o.type === 'image' || o._element);
   const area = o => {
     const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0) * (o.scaleX||1));
     const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0) * (o.scaleY||1));
     return w * h;
   };
-  objs.forEach(o => {
-    if (!o) return;
-    if (o._isBgRect || o._raSys || o._raTokenId) return;           // never touch bg/sys/label
-    const isImageLike = (o.type === 'image' || o._element);
+
+  // Find all image-like objects that are NOT sys/label
+  const imgNonSys = objs.filter(o => isImageLike(o) && !o._raSys && !o._raTokenId);
+
+  if (active && imgNonSys.includes(active)) {
+    try { c.discardActiveObject(); } catch(_){}
+  }
+
+  if (!imgNonSys.length) return;
+
+  // Use "largest image" heuristic in case flags are missing
+  const maxA = Math.max.apply(null, imgNonSys.map(area));
+
+  imgNonSys.forEach(o => {
+    // Base candidates = flagged base OR fingerprinted OR token-marked
+    // OR large, non-overlay images (overlay groups set _kind='overlay')
     const looksLikeBase =
-      o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract ||
-      (isImageLike && o._kind !== 'overlay' && area(o) >= (cw * ch * 0.25)); // large non-overlay image
-    if (looksLikeBase){
+      o._isBase ||
+      o._raBaseSig === 'BASE_V1' ||
+      !!o._tokenContract ||
+      (o._kind !== 'overlay' && area(o) >= maxA * 0.75);
+
+    if (looksLikeBase) {
       try { c.remove(o); } catch(_){}
     }
   });
+
+  try { c.requestRenderAll(); } catch(_){}
 }
 
   function fitAndAddAsBase(img){
