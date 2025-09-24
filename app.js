@@ -523,61 +523,68 @@ function reorderOverlay(dir){
   canvas.requestRenderAll();
 }
 
+// === REPLACE addOrUpdateTokenLabel WITH THIS EDITABLE + UNDO-FRIENDLY VERSION ===
 function addOrUpdateTokenLabel(id){
-  const display = $("tokenIdDisplay");
-  if (display) display.value = "#" + id;
+  const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  if (!c || !window.fabric) return;
 
-  const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
-  const text = formatTokenId("#" + id, fmt);
-
-  const style = {
-    fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-    fontSize: parseInt((($("idSize")||{}).value)||"52",10),
-    fill: (($("idColor")||{}).value) || "#ffffff",
-    stroke: (($("idStrokeColor")||{}).value) || "transparent",
-    strokeWidth: parseInt((($("idStrokeWidth")||{}).value)||"0",10),
-  };
-
-  if (!idLabel) {
-    idLabel = new fabric.Text(text, {
-      left: canvas.getWidth()/2,
-      top:  40,
-      originX: "center",
-      originY: "top",
-      textAlign: "center",
-      editable: false,
-      strokeUniform: true,
-      paintFirst: "stroke",
-      objectCaching: false,
-      perPixelTargetFind: true,
-      selectable: false,      // non-interactive
-      evented: false,         // non-interactive
-      hasControls: false,     // non-interactive
-      ...style
-    });
-    idLabel._kind = 'tokenId';
-    idLabel._raTokenId = true;
-    idLabel._raSys     = true;
-    canvas.add(idLabel);
-  } else {
-    idLabel.set({ text, ...style });
-    idLabel._raTokenId = true;
-    idLabel._raSys     = true;
-  }
-
-  // Recompute bounds and FORCE to very top
-  idLabel.set({ width: undefined });
-  if (idLabel.initDimensions) idLabel.initDimensions();
-  idLabel.setCoords();
-
+  // Update the small display box if present
   try {
-    const objs = canvas.getObjects() || [];
-    canvas.bringToFront(idLabel);
-    canvas.moveTo(idLabel, objs.length - 1);
+    const display = document.getElementById('tokenIdDisplay') || document.getElementById('raTokenIdDisplay');
+    if (display) display.value = '#' + String(id).replace(/^#+/,'');
   } catch(_) {}
 
+  // Use your formatter if present; else plain "#123"
+  const fmtSel = document.getElementById('idFormat');
+  const shown = (typeof window.formatTokenId === 'function')
+    ? window.formatTokenId('#'+String(id), fmtSel)
+    : '#'+String(id).replace(/^#+/,'');
+
+  // Find existing label or create one
+  let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
+
+  if (!l){
+    // create once — EDITABLE by default
+    l = new fabric.Text(shown, {
+      originX:'center', originY:'top',
+      left: c.getWidth()/2, top: 32,
+      fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      fontSize: 48,
+      fill: '#ffffff',
+      stroke: '#000000',
+      strokeWidth: 2,
+      strokeUniform: true,
+      selectable: true,   // allow move/resize
+      evented:   true,
+      hasControls: true
+    });
+    l._raTokenId = true;
+    l._raSys     = true;
+    c.add(l);
+    try { c.setActiveObject(l); } catch(_){}
+  } else {
+    // update in-place (no remove/add → no blink)
+    const before = l.text;
+    l.set({ text: shown, selectable:true, evented:true, hasControls:true });
+    l.setCoords();
+    try { c.setActiveObject(l); } catch(_){}
+    // Tell Undo recorder the object changed so Undo actually reverts
+    if (before !== shown) {
+      try { c.fire('object:modified', { target: l }); } catch(_){}
+    }
+  }
+
+  // Keep the label on top without re-adding
+  try {
+    const objs = c.getObjects() || [];
+    c.bringToFront(l); c.moveTo(l, objs.length - 1);
+  } catch(_){}
+
+  // Let your layer enforcer tidy stack, then render
   try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-  canvas.requestRenderAll();
+  c.requestRenderAll();
+
+  window.idLabel = l; // remember it
 }
 
 function formatTokenId(displayVal, fmt){
