@@ -2951,10 +2951,24 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     // Take a baseline snapshot a moment after the app finishes initial setup
     defer(()=>{ push('Init'); }, 150);
 
-    // Fabric events — safe, view‑only recording
-    c.on('object:modified', ()=> schedulePush('Edit'));
-    c.on('object:added',    (e)=>{ const o=e?.target; if (o && o._isBgRect) return; schedulePush('Add'); });
-    c.on('object:removed',  ()=> schedulePush('Remove'));
+    // Fabric events — record only real user edits (skip bg/base/sys/label)
+c.on('object:modified', (e)=>{
+  const o = e && e.target; 
+  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+  schedulePush('Edit');
+});
+
+c.on('object:added', (e)=>{
+  const o = e && e.target;
+  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+  schedulePush('Add');
+});
+
+c.on('object:removed', (e)=>{
+  const o = e && e.target;
+  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+  schedulePush('Remove');
+});
 
     // Keyboard shortcuts (ignore when typing)
     document.addEventListener('keydown', (e)=>{
