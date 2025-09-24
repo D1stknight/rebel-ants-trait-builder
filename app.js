@@ -1029,22 +1029,28 @@ safeAddListener("clearOverlayGrid","click", ()=>{
   renderOverlayGrid();
 });
 
-/* -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D) -------- */
-document.addEventListener("keydown", (e)=>{
-  const tag = (e.target && e.target.tagName || "").toLowerCase();
-  if (e.target && (e.target.isContentEditable || tag==="input" || tag==="textarea" || tag==="select")) return;
+  // Delete selection — robust (no sys/base delete, avoid Fabric draw crash)
+  if (e.key === "Delete" || e.key === "Backspace") {
+    const c = window.canvas;
+    if (!c) return;
+    const o = c.getActiveObject && c.getActiveObject();
+    if (!o) return;
 
-  const o = canvas.getActiveObject();
-
-  // Delete selection
-  if (o && (e.key==="Delete" || e.key==="Backspace")){
-    if (!o._isBase && o!==backgroundRect){
-      try { if (o === idLabel) { idLabel = null; } } catch(_){}
-      try { canvas.discardActiveObject(); } catch(_){}
-      canvas.remove(o);
-      canvas.requestRenderAll();
+    // NEVER delete background, base, or system (footer/wm/label) from keyboard
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) {
+      e.preventDefault();
+      return;
     }
-    e.preventDefault(); return;
+
+    // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
+    try { c.discardActiveObject(); } catch(_) {}
+
+    // Remove and render
+    try { c.remove(o); } catch(_) {}
+    try { c.requestRenderAll(); } catch(_) {}
+
+    e.preventDefault();
+    return;
   }
 
   // Duplicate
