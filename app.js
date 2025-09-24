@@ -1,21 +1,3 @@
-/* ===== RA_ERROR_BANNER (TEMP) ===== */
-;(() => {
-  if (window.__RA_ERROR_BANNER__) return;
-  window.__RA_ERROR_BANNER__ = true;
-
-  function banner(msg){
-    try{
-      const el = document.createElement('div');
-      el.id = 'raErrorBanner';
-      el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:999999;background:#2b0b0e;color:#ffd2d6;padding:10px 12px;font:12px/1.4 -apple-system,Segoe UI,Roboto,Arial';
-      el.textContent = '[RA] ' + msg;
-      document.body ? document.body.appendChild(el) : document.addEventListener('DOMContentLoaded', ()=>document.body.appendChild(el), {once:true});
-    }catch(_){}
-  }
-  window.addEventListener('error', e => banner((e && e.message) ? e.message : 'Unknown JS error'), true);
-  window.addEventListener('unhandledrejection', e => banner('Promise rejection: ' + (e && e.reason && e.reason.message || e.reason || '')), true);
-})();
-
 (function(){
   // ===============================
   //  CONFIG
