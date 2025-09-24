@@ -8058,17 +8058,18 @@ function onClick(e){
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
+  // Retag bg/base and mark image-like overlays if _kind is missing
   function retag(c){
     const objs = c.getObjects ? c.getObjects() : [];
 
-    // Re-tag bg if needed
+    // bg: tag if lost
     const bg = objs.find(o => o && o._isBgRect) ||
                objs.find(o => o && o.type === 'rect' &&
                  Math.abs((o.width||0)*(o.scaleX||1) - c.getWidth())  < 2 &&
                  Math.abs((o.height||0)*(o.scaleY||1) - c.getHeight()) < 2);
     if (bg) bg._isBgRect = true;
 
-    // Find base by fingerprint -> token -> fallback
+    // base: prefer fingerprint → token-marked → fallback largest image
     let base = objs.find(o => o && o._raBaseSig === 'BASE_V1' && (o.type==='image'||o._element));
     if (!base) base = objs.find(o => o && o._tokenContract && (o.type==='image'||o._element));
     if (!base){
@@ -8096,6 +8097,7 @@ function onClick(e){
     });
   }
 
+  // Deterministic rebuild: 0=bg,1=base,2+=overlays, top=sys/labels
   function rebuild(c){
     const objs = c.getObjects ? c.getObjects() : [];
     const bg   = objs.find(o => o && o._isBgRect) || null;
@@ -8110,41 +8112,70 @@ function onClick(e){
     sys .forEach(o => c.moveTo(o, i++));
   }
 
-  function normalize(){
+  // Final polish: ensure Sys items / label are top, call enforcer if present
+  function polish(){
     const c = C(); if (!c) return;
-    retag(c);
-    rebuild(c);
-    try { c.requestRenderAll(); } catch(_) {}
+    try {
+      if (window.idLabel) { c.bringToFront(window.idLabel); }
+      if (window.raEnforceLayerOrder) window.raEnforceLayerOrder();
+      c.requestRenderAll && c.requestRenderAll();
+    } catch(_) {}
   }
 
-  function schedule(times=4, delay=60){
-    let n=0; const tick=()=>{ normalize(); if (++n<times) setTimeout(tick, delay); };
+  // One normalize pass
+  function normalizeOnce(){
+    const c = C(); if (!c) return;
+    try { retag(c); } catch(_) {}
+    try { rebuild(c); } catch(_) {}
+    polish();
+  }
+
+  // Run a few times as Fabric settles
+  function scheduleNormalize(times=4, delay=60){
+    let n=0; const tick=()=>{ normalizeOnce(); if (++n<times) setTimeout(tick, delay); };
     setTimeout(tick, 0);
   }
 
-  // Buttons (Undo/Redo/Restore)
+  // Buttons (Undo / Redo / Restore Draft)
   document.addEventListener('click', (e)=>{
     const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!el) return;
     const t = (el.textContent || el.value || '').toLowerCase().trim();
-    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) setTimeout(()=>schedule(), 30);
+    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
+      setTimeout(()=>scheduleNormalize(), 30);
+    }
   }, true);
 
-  // Keyboard
+  // Keyboard (Cmd/Ctrl+Z or Y)
   document.addEventListener('keydown', (e)=>{
     const k = e.key && e.key.toLowerCase();
-    if ((e.metaKey||e.ctrlKey) && (k==='z' || k==='y')) setTimeout(()=>schedule(), 30);
+    if ((e.metaKey||e.ctrlKey) && (k==='z' || k==='y')){
+      setTimeout(()=>scheduleNormalize(), 30);
+    }
   }, true);
 
-  // After adding a new overlay (post-restore), normalize once
-  const c0 = C();
-  if (c0 && !c0.__raNormalizeAdd){
-    c0.__raNormalizeAdd = true;
-    c0.on('object:added', (e)=>{
+  // Wrap loadFromJSON so every JSON restore normalizes afterwards
+  (function wrapLoadFromJSON(){
+    const c = C(); if (!c || c.__raUndoWrap) return;
+    c.__raUndoWrap = true;
+    const orig = c.loadFromJSON.bind(c);
+    c.loadFromJSON = function(json, cb, reviver){
+      return orig(json, (...args)=>{
+        try { scheduleNormalize(); } catch(_) {}
+        if (typeof cb === 'function') cb(...args);
+      }, reviver);
+    };
+  })();
+
+  // After an overlay is added post-restore, normalize once more
+  (function wireAdd()){
+    const c = C(); if (!c || c.__raNormalizeAdd) return;
+    c.__raNormalizeAdd = true;
+    c.on('object:added', (e)=>{
       const o=e && e.target; if (!o) return;
-      if (o.type==='image' || o._element) setTimeout(()=>schedule(2,60), 0);
+      if (o.type==='image' || o._element) setTimeout(()=>scheduleNormalize(2,60), 0);
     });
-  }
+  })();
 })();
 
 // ===== DEBUG: dump current stacking and tags (run in console: raDump()) =====
