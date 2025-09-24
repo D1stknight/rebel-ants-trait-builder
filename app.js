@@ -7889,10 +7889,10 @@ if (img){
   }
 })();
 
-/* ===== RA_TOKEN_ID_SAFE_BUTTON_V1 — add a dedicated, no-blink “Place Token ID Label” control ===== */
+/* ===== RA_TOKEN_ID_LABEL_EDIT_TOGGLE_V1 — place safely, then toggle edit/lock for styling ===== */
 ;(() => {
-  if (window.__RA_TOKEN_ID_SAFE_BUTTON_V1__) return;
-  window.__RA_TOKEN_ID_SAFE_BUTTON_V1__ = true;
+  if (window.__RA_TOKEN_ID_LABEL_EDIT_TOGGLE_V1__) return;
+  window.__RA_TOKEN_ID_LABEL_EDIT_TOGGLE_V1__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
@@ -7900,7 +7900,7 @@ if (img){
     const sels = [
       '#raTokenIdDisplay', '#tokenIdDisplay',
       '#tokenIdInput', '#tokenId', '#token',
-      'input[name="tokenId"]', 'input[name="token"]',
+      'input[name="tokenId"]','input[name="token"]',
       'input[placeholder*="Token"]'
     ];
     for (const sel of sels){
@@ -7913,7 +7913,17 @@ if (img){
     return '';
   }
 
-  function ensureLabel(c){
+  // Use existing formatter if present; else simple '#123'
+  function formatShown(n){
+    try {
+      const fmtSel = document.getElementById('idFormat');
+      if (typeof window.formatTokenId === 'function') return window.formatTokenId('#'+n, fmtSel);
+    } catch(_) {}
+    return '#'+String(n).replace(/^#+/,'');
+  }
+
+  function ensureLabel(){
+    const c = C(); if (!c) return null;
     let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
     if (!l && window.fabric){
       l = new fabric.Text('#', {
@@ -7925,66 +7935,137 @@ if (img){
         selectable:false, evented:false, hasControls:false
       });
       l._raTokenId = true; l._raSys = true;
-      c.add(l); // one-time add → a single history entry the first time only
+      c.add(l); c.requestRenderAll();
     }
     window.idLabel = l || window.idLabel;
     return l;
   }
 
-  function updateLabel(idStr){
-    const c = C(); if (!c || !idStr) return;
-    const l = ensureLabel(c); if (!l) return;
+  function placeLabelSafe(){
+    const c = C(); if (!c) return;
+    const v = readTokenIdValue(); if (!v) return;
+    const l = ensureLabel(); if (!l) return;
 
-    const shown = '#'+String(idStr).replace(/^#+/,'');
+    const shown = formatShown(v);
     if (l.text !== shown) l.set({ text: shown });
 
+    // keep non-interactive & topmost (no re-add → no blink)
     l.selectable=false; l.evented=false; l.hasControls=false;
-    try {
-      const objs = c.getObjects() || [];
-      c.bringToFront(l); c.moveTo(l, objs.length - 1);
-    } catch(_){}
+    try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
+    c.requestRenderAll();
   }
 
-  function tokenIdStylesCard(){
+  let EDIT_ON = false;
+  function setEdit(on){
+    const c = C(); const l = ensureLabel(); if (!c || !l) return;
+    EDIT_ON = !!on;
+
+    // Toggle interactivity only; never remove/add (no blink)
+    l.selectable = EDIT_ON;
+    l.evented    = EDIT_ON;
+    l.hasControls= EDIT_ON;
+    // When entering edit, make sure the label is active on top
+    if (EDIT_ON){
+      try { c.setActiveObject(l); } catch(_){}
+      try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
+      l.setCoords();
+    } else {
+      // lock back & keep it on top
+      l.selectable=false; l.evented=false; l.hasControls=false;
+      try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
+      l.setCoords();
+      // Let your enforcer tidy layers
+      try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+    }
+    c.requestRenderAll();
+    // UI hint
+    const t = document.getElementById('raTokEditToggle');
+    if (t) t.textContent = EDIT_ON ? 'Done Editing' : 'Edit Label';
+  }
+
+  // Live-style wiring: hook your existing controls to the label while EDIT_ON
+  function wireStyleControls(){
+    const c = C(); if (!c) return;
+    const ctl = {
+      fmt:   document.getElementById('idFormat'),
+      size:  document.getElementById('idSize'),
+      fill:  document.getElementById('idColor'),
+      strk:  document.getElementById('idStrokeColor'),
+      sw:    document.getElementById('idStrokeWidth'),
+    };
+    const apply = ()=>{
+      if (!EDIT_ON) return;
+      const l = ensureLabel(); if (!l) return;
+
+      // Text (reformat from token input/display)
+      const v = readTokenIdValue();
+      if (v) {
+        const shown = formatShown(v);
+        if (l.text !== shown) l.set({ text: shown });
+      }
+      // Style
+      if (ctl.size && ctl.size.value)  l.set('fontSize', parseInt(ctl.size.value||'48',10));
+      if (ctl.fill && ctl.fill.value)  l.set('fill',     ctl.fill.value);
+      if (ctl.strk && ctl.strk.value)  l.set('stroke',   ctl.strk.value);
+      if (ctl.sw   && ctl.sw.value)    l.set('strokeWidth', parseInt(ctl.sw.value||'0',10));
+
+      l.setCoords(); c.requestRenderAll();
+    };
+    ['change','input'].forEach(ev=>{
+      [ctl.fmt, ctl.size, ctl.fill, ctl.strk, ctl.sw].forEach(el=>{
+        if (!el || el.__raTokStyle) return;
+        el.__raTokStyle = true;
+        el.addEventListener(ev, apply);
+      });
+    });
+  }
+
+  // Add two small buttons into the Token ID Styles card
+  function card(){
     const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
     const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
     return h ? (h.closest('.card,section,div') || h.parentElement) : null;
   }
-
-  function injectButton(){
-    const card = tokenIdStylesCard() || document.body;
-    if (document.getElementById('raPlaceTokenIdSafe')) return;
-
-    // Insert our own safe button near the existing controls
-    const btn = document.createElement('button');
-    btn.id = 'raPlaceTokenIdSafe';
-    btn.className = 'btn small';
-    btn.textContent = 'Place Token ID Label (safe)';
-    btn.style.marginLeft = '8px';
-
-    // Try to drop it next to whatever shows the #123 display; else append to the card header area
-    const anchor =
-      card.querySelector('#raTokenIdDisplay, #tokenIdDisplay') ||
-      Array.from(card.querySelectorAll('button,input,select,label'))[0] ||
-      card;
-
-    anchor.parentNode ? anchor.parentNode.insertBefore(btn, anchor.nextSibling) : card.appendChild(btn);
-
-    btn.addEventListener('click', (e)=>{
-      e.preventDefault();
-      e.stopPropagation();     // do not let app’s delegated handlers fire
-      e.stopImmediatePropagation();
-      const idStr = readTokenIdValue();
-      updateLabel(idStr);
-    }, true);
+  function ensureButtons(){
+    const host = card() || document.body;
+    if (!document.getElementById('raTokPlaceSafe')){
+      const b = document.createElement('button');
+      b.id='raTokPlaceSafe'; b.className='btn small'; b.textContent='Place Label (safe)';
+      b.style.marginLeft='8px';
+      host.appendChild(b);
+      b.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); placeLabelSafe(); }, true);
+    }
+    if (!document.getElementById('raTokEditToggle')){
+      const t = document.createElement('button');
+      t.id='raTokEditToggle'; t.className='btn small'; t.textContent='Edit Label';
+      t.style.marginLeft='8px';
+      host.appendChild(t);
+      t.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); setEdit(!EDIT_ON); }, true);
+    }
   }
 
-  // Inject once DOM is ready
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', injectButton, { once:true });
-  } else {
-    injectButton();
+  // Keep label on top after Undo/Redo/Restore
+  function wireAfterHistory(){
+    const c = C(); if (!c || c.__raTokKeepTop) return;
+    c.__raTokKeepTop = true;
+    const keepTop = ()=>{
+      const l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId);
+      if (!l) return;
+      try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
+      c.requestRenderAll();
+    };
+    c.on('object:added', keepTop);
+    c.on('object:modified', keepTop);
+    c.on('object:removed', keepTop);
   }
+
+  // boot
+  function boot(){
+    if (!C()) return setTimeout(boot, 200);
+    ensureButtons();
+    wireStyleControls();
+    wireAfterHistory();
+  }
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); } else { boot(); }
 })();
