@@ -909,17 +909,23 @@ safeAddListener("duplicate","click", ()=>{
 });
 
 safeAddListener("delete","click", ()=>{
-  const o = canvas.getActiveObject();
-  if (!o || o===backgroundRect || o._isBase) return;
+  if (!window.canvas) return;
+  const c = window.canvas;
+  const o = c.getActiveObject && c.getActiveObject();
+  if (!o) return;
 
-  // If it’s the Token ID, clear the pointer so it won’t pop back
-  try { if (o === idLabel) { idLabel = null; } } catch(_){}
+  // Never delete background, base, or system items from this button
+  if (o._isBgRect || o._isBase || o._raSys) return;
 
-  // Drop the selection layer first (prevents the tall ghost strip)
-  try { canvas.discardActiveObject(); } catch(_){}
+  // If it’s the Token-ID label, clear the pointer so it won’t come back
+  try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
 
-  canvas.remove(o);
-  canvas.requestRenderAll();
+  // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
+  try { c.discardActiveObject(); } catch(_) {}
+
+  // Remove and render
+  try { c.remove(o); } catch(_) {}
+  try { c.requestRenderAll(); } catch(_) {}
 });
 
 safeAddListener("opacity","input", (e)=>{
