@@ -1148,15 +1148,18 @@ document.addEventListener("keydown", (e)=>{
   }
 });
 
-/* -------- SNAP + ALIGN UI -------- */
+/* -------- SNAP + ALIGN UI (fixed to use window.canvas safely) -------- */
 (function snapAlign(){
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
   // UI row (Center buttons + Snap toggle)
   const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
   const holder = header ? header.parentNode : document.body;
-  if (!$("raSnapRow")){
+
+  if (!document.getElementById("raSnapRow")){
     const row = document.createElement("div");
-    row.id="raSnapRow";
-    row.style.cssText="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
+    row.id = "raSnapRow";
+    row.style.cssText = "margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
     row.innerHTML = `
       <button class="btn small" id="raCenterH">Center H</button>
       <button class="btn small" id="raCenterV">Center V</button>
@@ -1165,42 +1168,54 @@ document.addEventListener("keydown", (e)=>{
       <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
     `;
     holder.appendChild(row);
-    $("raSnapToggle").onclick = ()=>{
+
+    // Button wiring uses a fresh canvas reference each click
+    document.getElementById("raSnapToggle").onclick = ()=>{
       window.__snapOn = !window.__snapOn;
-      $("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
+      document.getElementById("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
     };
     function center(which){
-      const o=canvas.getActiveObject(); if(!o) return;
-      if (which==="H" || which==="HV") o.left = canvas.getWidth()/2;
-      if (which==="V" || which==="HV") o.top  = canvas.getHeight()/2;
-      o.setCoords(); canvas.requestRenderAll();
+      const c = C(); if (!c) return;
+      const o = c.getActiveObject(); if(!o) return;
+      if (which==="H" || which==="HV") o.left = c.getWidth()/2;
+      if (which==="V" || which==="HV") o.top  = c.getHeight()/2;
+      o.setCoords(); c.requestRenderAll();
     }
-    $("raCenterH").onclick  = ()=>center("H");
-    $("raCenterV").onclick  = ()=>center("V");
-    $("raCenterHV").onclick = ()=>center("HV");
+    document.getElementById("raCenterH").onclick  = ()=>center("H");
+    document.getElementById("raCenterV").onclick  = ()=>center("V");
+    document.getElementById("raCenterHV").onclick = ()=>center("HV");
   }
 
   window.__snapOn = true;
-  if (!canvas.__snapWired){
-    function halfW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)) / 2; }
-    function halfH(o){ return (o.getScaledHeight?o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2; }
-    function clampSnap(o){
-      if (!window.__snapOn) return;
-      const tol = 8, cw=canvas.getWidth(), ch=canvas.getHeight();
-      const hw=halfW(o), hh=halfH(o);
-      // centers
-      if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
-      if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
-      // edges
-      if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
-      if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
-      if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
-      if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
-    }
-    canvas.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
-    canvas.on("mouse:up", ()=> canvas.requestRenderAll());
-    canvas.__snapWired = true;
+
+  // Fabric event wiring (only once per canvas instance)
+  const c = C();
+  if (!c) return; // canvas not ready yet — this IIFE is cheap and can re-run later if you call it
+  if (c.__snapWired) return;
+  c.__snapWired = true;
+
+  function halfW(o){
+    return (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) / 2;
   }
+  function halfH(o){
+    return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2;
+  }
+  function clampSnap(o){
+    if (!window.__snapOn) return;
+    const tol = 8, cw=c.getWidth(), ch=c.getHeight();
+    const hw=halfW(o), hh=halfH(o);
+    // centers
+    if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
+    if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
+    // edges
+    if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
+    if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
+    if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
+    if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
+  }
+
+  c.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
+  c.on("mouse:up", ()=> c.requestRenderAll());
 })();
 
 /* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
