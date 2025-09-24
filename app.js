@@ -8074,83 +8074,187 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_HISTORY_RESTORE_FINAL_v1 — mute sys commits + strict order + dedupe ===== */
-(() => {
-  if (window.__RA_HISTORY_RESTORE_FINAL__) return;
-  window.__RA_HISTORY_RESTORE_FINAL__ = true;
+/* ===== RA_HISTORY_RESTORE_FINAL_v2 — mute history while restoring; hide sys dupes; strict order ===== */
+;(() => {
+  if (window.__RA_HISTORY_RESTORE_FINAL_V2__) return;
+  window.__RA_HISTORY_RESTORE_FINAL_V2__ = true;
 
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  function isSys(o) {
-    return !!(o && (o._raSys || o._raWMCenter || o._raBrandFooter || o._raTokenId || o._isBgRect));
-  }
+  // Liberal detectors
+  const isBg   = o => !!(o && o._isBgRect);
+  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isId   = o => !!(o && o._raTokenId);
+  const isWM   = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
+                               (typeof o.name==='string' && /watermark|powered/i.test(o.name)) ||
+                               (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
+  const isFoot = o => !!(o && (o._raBrandFooter ||
+                               (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
+  const isSys  = o => !!(o && (o._raSys || isBg(o) || isBase(o) || isWM(o) || isFoot(o) || isId(o)));
+  const isUser = o => !!o && !isSys(o);
 
-  // Force canonical order: BG → BASE → overlays/text → footer → watermark
-  function enforceOrder(c) {
-    if (!c) return;
-    const objs = c.getObjects() || [];
-    const bg   = objs.filter(o => o._isBgRect);
-    const base = objs.filter(o => o._isBase);
-    const over = objs.filter(o => !isSys(o) && !o._isBase && !o._isBgRect);
-    const foot = objs.filter(o => o._raBrandFooter);
-    const wm   = objs.filter(o => o._raWMCenter);
+  const area = o => {
+    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
+    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
+    return w*h;
+  };
 
-    c._objects = [].concat(bg, base, over, foot, wm);
-    c.requestRenderAll();
-  }
-
-  // Deduplicate sys layers (footer, WM, token ID, etc.)
-  function dedupe(c) {
-    if (!c) return;
-    const seen = new Set();
-    (c.getObjects() || []).slice().forEach(o => {
-      if (isSys(o)) {
-        const sig = o.type + (o._raBrandFooter ? 'footer' :
-                              o._raWMCenter   ? 'wm'     :
-                              o._raTokenId    ? 'tokenId': 'sys');
-        if (seen.has(sig)) {
-          try { c.remove(o); } catch(_){}
-        } else {
-          seen.add(sig);
-        }
+  // Keep one, hide others (do NOT remove while restoring)
+  function keepOneHideRest(arr, chooser){
+    if (!arr.length) return null;
+    const keep = chooser(arr);
+    arr.forEach(o=>{
+      if (o !== keep){
+        o._raZombieSys = true;
+        o.visible = false; // hiding doesn’t push add/remove history
       }
     });
+    return keep;
   }
 
-  function normalize(c) {
+  function strictOrder(c){
     if (!c) return;
-    dedupe(c);
-    enforceOrder(c);
+    const objs = c.getObjects ? c.getObjects() : [];
+
+    // Deduplicate system classes
+    const bg   = keepOneHideRest(objs.filter(isBg),   arr => arr[0]) || null;
+    const base = keepOneHideRest(objs.filter(isBase), arr => {
+      let f = arr.find(o => o._raBaseSig === 'BASE_V1'); if (f) return f;
+      f = arr.find(o => o._tokenContract);              if (f) return f;
+      return arr.slice().sort((a,b)=>area(b)-area(a))[0];
+    }) || null;
+    const id   = keepOneHideRest(objs.filter(isId),   arr => arr[arr.length-1]) || null;
+    const wm   = keepOneHideRest(objs.filter(isWM),   arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]) || null;
+    const foot = keepOneHideRest(objs.filter(isFoot), arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]) || null;
+
+    // Lock base safely
+    if (base){
+      base._isBase = true;
+      base._raBaseSig = base._raBaseSig || 'BASE_V1';
+      base.selectable=false; base.evented=false; base.hasControls=false;
+      base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
+      try { base.setCoords(); } catch(_){}
+    }
+    if (bg) { bg._isBgRect = true; }
+
+    // Partition live, visible objects
+    const users = (c.getObjects()||[]).filter(o => isUser(o) && o.visible!==false);
+    const sysTop = [];
+    if (foot && foot.visible!==false) sysTop.push(foot);
+    if (wm   && wm.visible!==false)   sysTop.push(wm);
+    if (id   && id.visible!==false)   sysTop.push(id);
+
+    // Rebuild stack: 0 BG, 1 BASE, 2.. USERS, top SYS (footer, WM, ID)
+    let i=0;
+    if (bg)   c.moveTo(bg,   i++);
+    if (base) c.moveTo(base, i++);
+    users.forEach(o => c.moveTo(o, i++));
+    sysTop.forEach(o => c.moveTo(o, i++));
+
+    // Keep globals fresh
+    if (bg)   window.backgroundRect = bg;
+    if (base) window.baseObject     = base;
+
+    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
   }
 
-  function wire() {
-    const c = C(); if (!c) return setTimeout(wire, 200);
+  // Run a step with *history muted*
+  function runMuted(c, fn){
+    const hadMute = !!c._historyProcessing;
+    const prevFire = c.fire ? c.fire.bind(c) : null;
 
-    // Intercept restore/load so sys layers don’t spam history
-    const origLoad = c.loadFromJSON.bind(c);
-    c.loadFromJSON = function(json, cb, reviver) {
-      window.__raRestoring = true;
-      return origLoad(json, (...args) => {
-        try { normalize(c); } catch(_){}
-        window.__raRestoring = false;
-        if (cb) cb(...args);
-      }, reviver);
-    };
+    c._historyProcessing = true;      // common fabric-history guard
+    window.__RA_RESTORING__ = true;   // footer/WM ensure() guards
 
-    // Normalize after undo/redo or manual restore
-    ['history:undo','history:redo','history:restore'].forEach(ev=>{
-      c.on(ev, () => setTimeout(()=>normalize(c),0));
-    });
+    if (prevFire){
+      c.fire = function(evt, opts){
+        if (window.__RA_RESTORING__) {
+          if (/^(object:(added|removed|modified)|history:.*)$/i.test(evt)) return;
+        }
+        return prevFire(evt, opts);
+      };
+    }
 
-    // Safety: also normalize on render
-    c.on('after:render', () => {
-      if (!window.__raRestoring) normalize(c);
-    });
+    try { fn(); }
+    finally {
+      if (prevFire) c.fire = prevFire;
+      window.__RA_RESTORING__ = false;
+      if (!hadMute) c._historyProcessing = false;
+    }
   }
 
-  if (document.readyState==='loading') {
-    document.addEventListener('DOMContentLoaded', wire, {once:true});
-  } else {
-    wire();
+  // Wrap live canvas once (and re-wrap if window.canvas instance changes)
+  function wrapLiveCanvas(){
+    const c = getC(); if (!c || c.__raHistFinalWrapped) return;
+    c.__raHistFinalWrapped = true;
+
+    // 1) Wrap plugin save action if present (skip sys edits)
+    if (typeof c._historySaveAction === 'function' && !c.__raSaveActionWrapped){
+      const origSave = c._historySaveAction.bind(c);
+      c._historySaveAction = function(action, target, extra){
+        if (isSys(target)) return;  // don’t push sys to history
+        if (window.__RA_RESTORING__ || c._historyProcessing) return;
+        return origSave(action, target, extra);
+      };
+      c.__raSaveActionWrapped = true;
+    }
+
+    // 2) Wrap loadFromJSON to mute during restore and order strictly after
+    if (typeof c.loadFromJSON === 'function' && !c.__raLoadWrapped){
+      const origLoad = c.loadFromJSON.bind(c);
+      c.loadFromJSON = function(json, cb, reviver){
+        return runMuted(c, () => origLoad(json, (...args)=>{
+          // a few frames to settle, still muted
+          let n=0; const settle=()=>{ strictOrder(c); if (++n<3) setTimeout(settle, 60); };
+          settle();
+          if (typeof cb==='function') cb(...args);
+        }, reviver));
+      };
+      c.__raLoadWrapped = true;
+    }
+
+    // 3) Normalize after UI Undo/Redo/Restore events (non-mutating—just ordering)
+    const kickOrder = () => setTimeout(()=>{ if (!window.__RA_RESTORING__) strictOrder(c); }, 30);
+    c.on && c.on('history:undo',   kickOrder);
+    c.on && c.on('history:redo',   kickOrder);
+    c.on && c.on('history:restore',kickOrder);
+
+    // 4) Also normalize after user changes (but avoid history loops while restoring)
+    const kickChange = ()=> { if (!window.__RA_RESTORING__) strictOrder(c); };
+    c.on && c.on('object:added',    kickChange);
+    c.on && c.on('object:modified', kickChange);
+    c.on && c.on('object:removed',  kickChange);
   }
+
+  function watch(){
+    wrapLiveCanvas();
+    // re-wrap if the app swaps window.canvas
+    let last = getC();
+    setInterval(()=>{ const cur = getC(); if (cur && cur !== last){ wrapLiveCanvas(); last = cur; } }, 250);
+  }
+
+  // Also nudge via UI buttons & keyboard (extra belt and suspenders)
+  function wireUI(){
+    const bump = ()=> setTimeout(()=>{ const c=getC(); c && !window.__RA_RESTORING__ && strictOrder(c); }, 30);
+    document.addEventListener('click', (e)=>{
+      const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+      if (!el) return;
+      const t = (el.textContent || el.value || '').toLowerCase().trim();
+      if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) bump();
+    }, true);
+    document.addEventListener('keydown', (e)=>{
+      const k = e.key && e.key.toLowerCase();
+      if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')) bump();
+    }, true);
+  }
+
+  function boot(){
+    if (!getC()) { setTimeout(boot, 200); return; }
+    watch();
+    wireUI();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
 })();
