@@ -8071,39 +8071,31 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_HISTORY_OVERLAY_ONLY_V1 — make Undo/Redo restore only user layers ===== */
+/* ===== RA_HISTORY_SANITIZER_V1 — save/restore only user layers; keep base/bg/sys/ID stable ===== */
 ;(() => {
-  if (window.__RA_HISTORY_OVERLAY_ONLY_V1__) return;
-  window.__RA_HISTORY_OVERLAY_ONLY_V1__ = true;
+  if (window.__RA_HISTORY_SANITIZER_V1__) return;
+  window.__RA_HISTORY_SANITIZER_V1__ = true;
 
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Tag helpers
   const isBg   = o => !!(o && o._isBgRect);
-  const isBase = o => !!(o && o._isBase);
+  const isBase = o => !!(o && o._isBase) || !!(o && o._raBaseSig === 'BASE_V1') || !!(o && o._tokenContract);
   const isSys  = o => !!(o && (o._raSys || o._raBrandFooter || o._raWMCenter));
   const isId   = o => !!(o && o._raTokenId);
   const isUser = o => !!o && !isBg(o) && !isBase(o) && !isSys(o) && !isId(o);
 
-  // Keep references to current system layers so we can preserve them across restores
-  function snapshotSys(c){
-    const objs = c.getObjects ? c.getObjects() : [];
-    return {
-      bg   : objs.find(isBg) || null,
-      base : objs.find(isBase) || null,
-      sys  : objs.filter(o => isSys(o) && !isId(o)),
-      id   : objs.find(isId) || null
-    };
-  }
-
-  // Rebuild z-order deterministically
+  // Rebuild order deterministically
   function rebuildOrder(c){
     const objs = c.getObjects ? c.getObjects() : [];
     const bg   = objs.find(isBg)   || null;
     const base = objs.find(isBase) || null;
     const id   = objs.find(isId)   || null;
     const sys  = objs.filter(o => isSys(o) && !isId(o));
-    const over = objs.filter(o => isUser(o));
+    const over = objs.filter(isUser);
+
+    // Tag for any legacy code that reads these
+    objs.forEach(o => { if (!o) return; o._isBgRect = (o===bg); o._isBase = (o===base); });
 
     let i = 0;
     if (bg)   c.moveTo(bg,   i++);
@@ -8111,78 +8103,115 @@ window.raDump = () => {
     over.forEach(o => c.moveTo(o, i++));
     if (id)   c.moveTo(id,   i++);
     sys.forEach(o => c.moveTo(o, i++));
-    try { c.requestRenderAll(); } catch(_) {}
+    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
   }
 
-  // Wrap loadFromJSON so history restores only user layers
-  function installWrapper(){
-    const c = C(); if (!c || c.__raHistOverlayOnly) return;
-    c.__raHistOverlayOnly = true;
-
-    const orig = c.loadFromJSON.bind(c);
-    c.loadFromJSON = function(json, cb, reviver){
-      // Parse JSON (string or object)
-      let j;
-      try { j = (typeof json === 'string') ? JSON.parse(json) : (json || {}); }
-      catch(_){ j = json; }
-
-      // Guard: if this snapshot has objects, remove bg/base/sys/id so we don't destroy current sys layers
-      if (j && Array.isArray(j.objects)){
-        j = { ...j, objects: j.objects.filter(o=>{
-          // try to detect sys layers in the snapshot by their flags
-          const bg   = !!o._isBgRect;
-          const base = !!o._isBase || o._raBaseSig === 'BASE_V1' || !!o._tokenContract;
-          const sys  = !!(o._raSys || o._raBrandFooter || o._raWMCenter);
-          const id   = !!o._raTokenId;
-          return !(bg || base || sys || id); // keep only user layers
-        })};
-      }
-
-      // Preserve current system layers
-      const keep = snapshotSys(c);
-
-      // Perform the restore (this clears the canvas, then loads the filtered user layers)
-      return orig(j, (...args)=>{
-        try {
-          // Reinsert preserved sys layers if they aren't present yet
-          const objs = c.getObjects ? c.getObjects() : [];
-          const has = {
-            bg  : objs.some(isBg),
-            base: objs.some(isBase),
-            id  : objs.some(isId)
-          };
-
-          if (keep.bg && !has.bg)   c.add(keep.bg);
-          if (keep.base && !has.base){
-            // lock base properties again to be safe
-            keep.base._isBase = true;
-            keep.base._raBaseSig = keep.base._raBaseSig || 'BASE_V1';
-            keep.base.selectable=false; keep.base.evented=false; keep.base.hasControls=false;
-            keep.base.lockMovementX=keep.base.lockMovementY=keep.base.lockScalingX=keep.base.lockScalingY=keep.base.lockRotation=true;
-            c.add(keep.base);
-          }
-          if (keep.id && !has.id)   c.add(keep.id);
-          (keep.sys||[]).forEach(s=>{
-            if (!objs.includes(s)) c.add(s);
-          });
-
-          rebuildOrder(c); // put everything back where it belongs
-        } catch(_){}
-
-        if (typeof cb === 'function') cb(...args);
-      }, reviver);
+  // Take a live snapshot of current sys layers (so we can preserve them across history restores)
+  function snapshotSys(c){
+    const objs = c.getObjects ? c.getObjects() : [];
+    return {
+      bg   : objs.find(isBg)   || null,
+      base : objs.find(isBase) || null,
+      id   : objs.find(isId)   || null,
+      sys  : objs.filter(o => isSys(o) && !isId(o))
     };
+  }
 
-    // Also normalize after add/modify/remove (covers post-undo settle)
-    const kick = ()=> { try { rebuildOrder(c); } catch(_) {} };
+  // Filter a JSON snapshot to keep only user layers
+  function filterJSON(json){
+    if (!json || !Array.isArray(json.objects)) return json;
+    const out = { ...json };
+    out.objects = json.objects.filter(o => {
+      const _bg   = !!o._isBgRect;
+      const _base = !!o._isBase || o._raBaseSig === 'BASE_V1' || !!o._tokenContract;
+      const _sys  = !!(o._raSys || o._raBrandFooter || o._raWMCenter);
+      const _id   = !!o._raTokenId;
+      return !(_bg || _base || _sys || _id);
+    });
+    return out;
+  }
+
+  // Wrap the live canvas so history saves/loads user layers only
+  function wrapCanvas(c){
+    if (!c || c.__raHistSanitized) return;
+    c.__raHistSanitized = true;
+
+    // Wrap toJSON / toDatalessJSON (so your history saver records only user layers)
+    const origToJSON = c.toJSON ? c.toJSON.bind(c) : null;
+    if (origToJSON){
+      c.toJSON = function(...args){
+        const j = origToJSON(...args);
+        return filterJSON(j);
+      };
+    }
+    const origToDataless = c.toDatalessJSON ? c.toDatalessJSON.bind(c) : null;
+    if (origToDataless){
+      c.toDatalessJSON = function(...args){
+        const j = origToDataless(...args);
+        return filterJSON(j);
+      };
+    }
+
+    // Wrap loadFromJSON (so restores apply only user layers; sys layers preserved)
+    const origLoad = c.loadFromJSON ? c.loadFromJSON.bind(c) : null;
+    if (origLoad){
+      c.loadFromJSON = function(json, cb, reviver){
+        let j = json;
+        try { j = (typeof json==='string') ? JSON.parse(json) : (json||{}); } catch(_){}
+        j = filterJSON(j);
+
+        const keep = snapshotSys(c); // save current sys layers before clear+restore
+
+        return origLoad(j, (...args)=>{
+          try {
+            // Re-add preserved sys layers if absent
+            const objs = c.getObjects ? c.getObjects() : [];
+            const hasBg   = objs.some(isBg);
+            const hasBase = objs.some(isBase);
+            const hasId   = objs.some(isId);
+
+            if (keep.bg   && !hasBg)   c.add(keep.bg);
+            if (keep.base && !hasBase){
+              keep.base._isBase = true;
+              keep.base._raBaseSig = keep.base._raBaseSig || 'BASE_V1';
+              keep.base.selectable=false; keep.base.evented=false; keep.base.hasControls=false;
+              keep.base.lockMovementX=keep.base.lockMovementY=keep.base.lockScalingX=keep.base.lockScalingY=keep.base.lockRotation=true;
+              try { keep.base.setCoords(); } catch(_){}
+              c.add(keep.base);
+            }
+            if (keep.id   && !hasId)   c.add(keep.id);
+            (keep.sys||[]).forEach(s => { if (!objs.includes(s)) c.add(s); });
+
+            rebuildOrder(c);
+          } catch(_) {}
+
+          if (typeof cb === 'function') cb(...args);
+        }, reviver);
+      };
+    }
+
+    // Also keep order sane after any change (helps post-undo settle)
+    const kick = ()=> rebuildOrder(c);
     c.on('object:added',    kick);
     c.on('object:modified', kick);
     c.on('object:removed',  kick);
   }
 
-  // Run after Undo/Redo/Restore buttons and keyboard
+  // Watch for the current live canvas (your app may swap window.canvas)
+  function watchAndWrap(){
+    let last = null;
+    const tryWrap = ()=>{
+      const cur = getC();
+      if (cur && cur !== last){ wrapCanvas(cur); last = cur; }
+    };
+    tryWrap();
+    setInterval(tryWrap, 250);
+  }
+
+  // Also nudge order after UI Undo/Redo/Restore buttons & keyboard
   function wireUI(){
-    const bump = ()=> setTimeout(()=>{ try { rebuildOrder(C()); } catch(_) {} }, 30);
+    const bump = ()=> setTimeout(()=>{ const c=getC(); c && rebuildOrder(c); }, 30);
     document.addEventListener('click', (e)=>{
       const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
       if (!el) return;
@@ -8196,8 +8225,7 @@ window.raDump = () => {
   }
 
   function boot(){
-    if (!C()) { setTimeout(boot, 200); return; }
-    installWrapper();
+    watchAndWrap();
     wireUI();
   }
 
