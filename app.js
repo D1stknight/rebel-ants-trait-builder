@@ -7906,3 +7906,171 @@ function onClick(e){
     document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
   }
 })();
+
+/* ===== RA_TOKEN_ID_STYLE_WIRING_V2 — single label, style wiring, and undo-friendly ===== */
+;(() => {
+  if (window.__RA_TOKEN_ID_STYLE_WIRING_V2__) return;
+  window.__RA_TOKEN_ID_STYLE_WIRING_V2__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Find or create exactly ONE label
+  function ensureSingleLabel(){
+    const c = C(); if (!c || !window.fabric) return null;
+    let labels = (c.getObjects()||[]).filter(o => o && o._raTokenId);
+    let l = labels[0] || null;
+
+    // Remove extras if somehow there are multiple
+    if (labels.length > 1){
+      labels.slice(1).forEach(x => { try { c.remove(x); } catch(_){} });
+      c.requestRenderAll();
+    }
+
+    if (!l){
+      l = new fabric.Text('#', {
+        originX:'center', originY:'top',
+        left:c.getWidth()/2, top:32,
+        fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+        fontSize:48, fill:'#ffffff',
+        stroke:'#000000', strokeWidth:2, strokeUniform:true,
+        selectable:true, evented:true, hasControls:true
+      });
+      l._raTokenId = true; l._raSys = true;
+      c.add(l);
+    }
+
+    window.idLabel = l;
+    return l;
+  }
+
+  // Non-destructive update (no remove/add → no blink)
+  function setLabelTextFormatted(rawId){
+    const c = C(); if (!c) return;
+    const l = ensureSingleLabel(); if (!l) return;
+
+    // Use your formatter if present; else plain '#123'
+    const fmtSel = document.getElementById('idFormat');
+    const shown = (typeof window.formatTokenId === 'function')
+      ? window.formatTokenId('#'+String(rawId), fmtSel)
+      : '#'+String(rawId).replace(/^#+/,'');
+
+    const before = l.text;
+    if (before !== shown) {
+      l.set({ text: shown });
+      // Push a Fabric change so your Undo recorder grabs it
+      try { c.fire('object:modified', { target: l }); } catch(_) {}
+    }
+
+    // Keep editable and topmost (without re-adding)
+    l.selectable = true; l.evented = true; l.hasControls = true;
+    try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1); } catch(_) {}
+    l.setCoords();
+    c.requestRenderAll();
+  }
+
+  // Hook controls in Token ID Styles so they update the label in place
+  function wireStyleControls(){
+    const c = C(); if (!c) return;
+    const ctl = {
+      fmt:   document.getElementById('idFormat'),
+      size:  document.getElementById('idSize'),
+      fill:  document.getElementById('idColor'),
+      strk:  document.getElementById('idStrokeColor'),
+      sw:    document.getElementById('idStrokeWidth')
+    };
+
+    const apply = ()=>{
+      const l = ensureSingleLabel(); if (!l) return;
+
+      // Reformat text from whatever token field has a value
+      const sources = [
+        '#raTokenIdDisplay','#tokenIdDisplay','#tokenIdInput','#tokenId','#token',
+        'input[name="tokenId"]','input[name="token"]','input[placeholder*="Token"]'
+      ];
+      let idVal = '';
+      for (const sel of sources){
+        const el = document.querySelector(sel);
+        const raw = (el && (el.value ?? el.textContent) || '').trim();
+        const d = (raw.match(/\d+/) || [''])[0];
+        if (d){ idVal = d; break; }
+      }
+      if (idVal) setLabelTextFormatted(idVal);
+
+      // Style updates (non-destructive)
+      let changed = false;
+      if (ctl.size && ctl.size.value){
+        const v = parseInt(ctl.size.value,10); if (Number.isFinite(v) && v>0 && l.fontSize !== v){ l.set('fontSize', v); changed = true; }
+      }
+      if (ctl.fill && ctl.fill.value){
+        if (l.fill !== ctl.fill.value){ l.set('fill', ctl.fill.value); changed = true; }
+      }
+      if (ctl.strk && ctl.strk.value){
+        if (l.stroke !== ctl.strk.value){ l.set('stroke', ctl.strk.value); changed = true; }
+      }
+      if (ctl.sw && ctl.sw.value){
+        const w = parseInt(ctl.sw.value,10);
+        if (Number.isFinite(w) && l.strokeWidth !== w){ l.set('strokeWidth', w); changed = true; }
+      }
+
+      if (changed){
+        l.setCoords();
+        try { c.fire('object:modified', { target: l }); } catch(_) {}
+        c.requestRenderAll();
+      }
+    };
+
+    // Bind once
+    ['change','input'].forEach(ev=>{
+      [ctl.fmt, ctl.size, ctl.fill, ctl.strk, ctl.sw].forEach(el=>{
+        if (!el || el.__raTokStyle) return;
+        el.__raTokStyle = true;
+        el.addEventListener(ev, apply);
+      });
+    });
+  }
+
+  // Make sure "Delete Token ID" always removes the label
+  function wireDeleteButton(){
+    const del = document.getElementById('deleteTokenId') || Array.from(document.querySelectorAll('button'))
+      .find(b => /delete\s*token\s*id/i.test((b.textContent||'').trim()));
+    if (!del || del.__raTokDel) return;
+    del.__raTokDel = true;
+    del.addEventListener('click', (e)=>{
+      const c = C(); if (!c) return;
+      let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId);
+      if (!l) return;
+      try {
+        c.remove(l);
+        window.idLabel = null;
+        c.fire('object:modified', { target: l });
+        c.requestRenderAll();
+      } catch(_) {}
+      // Don’t block other handlers; let them run if they exist
+    }, true);
+  }
+
+  // Keep the label on top after transforms/undo/redo
+  function wireKeepOnTop(){
+    const c = C(); if (!c || c.__raTokKeepTop2) return;
+    c.__raTokKeepTop2 = true;
+    const keep = ()=>{
+      const l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId);
+      if (!l) return;
+      try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1);}catch(_){}
+      c.requestRenderAll();
+    };
+    c.on('object:added',    keep);
+    c.on('object:modified', keep);
+    c.on('object:removed',  keep);
+  }
+
+  function boot(){
+    if (!C()) return setTimeout(boot, 200);
+    ensureSingleLabel();     // de-dupe once if any were left behind
+    wireStyleControls();     // live wire Token ID Styles to the label
+    wireDeleteButton();      // make sure Delete Token ID works
+    wireKeepOnTop();         // keep label above after history/edits
+  }
+
+  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); } else { boot(); }
+})();
