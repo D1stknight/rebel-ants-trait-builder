@@ -946,16 +946,28 @@ safeAddListener("clearCanvas","click", ()=>{
 });
     ["change","input"].forEach(ev=>{
       safeAddListener("fontFamily", ev, ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', $("fontFamily").value); canvas.requestRenderAll(); }});
-      safeAddListener("fontSize", ev,   ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt($("fontSize").value||"48",10)); canvas.requestRenderAll(); }});
+      safeAddListener("fontSize", ev,   ()=>{   const o = canvas.getActiveObject();   if (o && o._kind === 'customText') {     o.set('fontSize', parseInt((($("fontSize")||{}).value)||"48",10));     canvas.requestRenderAll();   } });;
       safeAddListener("fontColor", ev,  ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fill', $("fontColor").value); canvas.requestRenderAll(); }});
       safeAddListener("strokeColor", ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('stroke', $("strokeColor").value); canvas.requestRenderAll(); }});
-      safeAddListener("strokeWidth", ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('strokeWidth', parseInt($("strokeWidth").value||"0",10)); canvas.requestRenderAll(); }});
-    });
+   safeAddListener("strokeWidth", ev, ()=>{
+  const o = canvas.getActiveObject();
+  if (o && o._kind === 'customText') {
+    o.set('strokeWidth', parseInt((($("strokeWidth")||{}).value)||"0",10));
+    canvas.requestRenderAll();
+  }
+});
     safeAddListener("delSelectedText","click", ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }});
     safeAddListener("delAllText","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='customText') canvas.remove(o); }); canvas.requestRenderAll(); });
 
     // -------- Selection tools
-    safeAddListener("duplicate","click", ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.clone(c=>{ c.set({ left:(o.left||0)+20, top:(o.top||0)+20 }); canvas.add(c).setActiveObject(c); canvas.requestRenderAll(); }); });
+    safeAddListener("duplicate","click", ()=>{
+  const o = canvas.getActiveObject(); if (!o) return;
+  o.clone(c=>{
+    c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
+    canvas.add(c).setActiveObject(c);
+    canvas.requestRenderAll();
+  });
+});
     safeAddListener("delete","click", ()=>{
   const o = canvas.getActiveObject();
   if (!o || o===backgroundRect || o._isBase) return;
@@ -970,12 +982,25 @@ safeAddListener("clearCanvas","click", ()=>{
   canvas.requestRenderAll();
 });
     safeAddListener("opacity","input", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value||"1")); canvas.requestRenderAll(); });
-    safeAddListener("blendMode","change", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.globalCompositeOperation = e.target.value==="normal" ? null : e.target.value; canvas.requestRenderAll(); });
+    safeAddListener("blendMode","change", (e)=>{
+  const o = canvas.getActiveObject(); if (!o) return;
+  o.globalCompositeOperation = (e.target.value === "normal") ? null : e.target.value;
+  canvas.requestRenderAll();
+});
     safeAddListener("bringFront","click", ()=> reorderOverlay('front'));
     safeAddListener("sendBack","click",  ()=> reorderOverlay('back'));
     safeAddListener("flipX","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipX'); canvas.requestRenderAll(); });
     safeAddListener("flipY","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipY'); canvas.requestRenderAll(); });
-    safeAddListener("lock","click",      ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.set({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true, lockScalingX:true, lockScalingY:true, lockRotation:true }); canvas.requestRenderAll(); });
+    safeAddListener("lock","click", ()=>{
+  const o = canvas.getActiveObject(); if (!o) return;
+  o.set({
+    selectable:false, evented:false, hasControls:false,
+    lockMovementX:true, lockMovementY:true,
+    lockScalingX:true, lockScalingY:true,
+    lockRotation:true
+  });
+  canvas.requestRenderAll();
+});
     // ---- FIXED: do not unlock backgroundRect or _isBase objects ----
 safeAddListener("unlockAll","click", ()=>{
   canvas.getObjects().forEach(o=>{
@@ -7356,8 +7381,14 @@ async function loadTokenFromCollection(tokenId, col){
             }, false);
             setTimeout(function(){
               if (!img.src) { document.body.insertAdjacentHTML('beforeend',
-                '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'); }
-            }, 2000);
+                setTimeout(function(){
+  if (!img.src) {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'
+    );
+  }
+}, 2000);
           })();
         <\/script>
       </body></html>`;
