@@ -7889,21 +7889,21 @@ if (img){
   }
 })();
 
-/* ===== RA_TOKEN_ID_HARD_OVERRIDE_V1 — single, non-destructive label update (no blink, 1 undo) ===== */
+/* ===== RA_TOKEN_ID_BUTTON_REPLACE_V1 — swap the button, stop hidden handlers, no-blink update ===== */
 ;(() => {
-  if (window.__RA_TOKEN_ID_HARD_OVERRIDE_V1__) return;
-  window.__RA_TOKEN_ID_HARD_OVERRIDE_V1__ = true;
+  if (window.__RA_TOKEN_ID_BUTTON_REPLACE_V1__) return;
+  window.__RA_TOKEN_ID_BUTTON_REPLACE_V1__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   function readTokenIdValue(){
-    const candidates = [
-      '#raTokenIdDisplay','#tokenIdDisplay',
-      '#tokenIdInput','#tokenId','#token',
+    const sels = [
+      '#raTokenIdDisplay', '#tokenIdDisplay',
+      '#tokenIdInput', '#tokenId', '#token',
       'input[name="tokenId"]','input[name="token"]',
       'input[placeholder*="Token"]'
     ];
-    for (const sel of candidates){
+    for (const sel of sels){
       const el = document.querySelector(sel);
       if (!el) continue;
       const raw = (el.value ?? el.textContent ?? '').trim();
@@ -7914,7 +7914,6 @@ if (img){
   }
 
   function ensureLabel(c){
-    // Prefer existing global / existing canvas label; only create once if missing
     let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
     if (!l && window.fabric){
       l = new fabric.Text('#', {
@@ -7926,57 +7925,71 @@ if (img){
         selectable:false, evented:false, hasControls:false
       });
       l._raTokenId = true; l._raSys = true;
-      c.add(l);                    // one-time add → one undo entry the first time only
+      c.add(l);                         // one-time add → one undo entry first time only
     }
     window.idLabel = l || window.idLabel;
     return l;
   }
 
-  function updateLabel(idStr){
+  function updateLabelNonDestructive(idStr){
     const c = C(); if (!c || !idStr) return false;
     const l = ensureLabel(c); if (!l) return false;
 
-    const text = '#'+String(idStr).replace(/^#+/,'');
-    // Pure property update — no remove/add → avoids blink + avoids extra undo tick
-    if (l.text !== text) l.set({ text });
+    const shown = '#'+String(idStr).replace(/^#+/,'');
+    if (l.text !== shown) l.set({ text: shown });
 
-    // Make sure it’s non-interactive and topmost (without re-adding)
-    l.selectable = false; l.evented = false; l.hasControls = false;
+    // Keep non-interactive and on top without re-adding
+    l.selectable=false; l.evented=false; l.hasControls=false;
     try {
       const objs = c.getObjects() || [];
       c.bringToFront(l); c.moveTo(l, objs.length - 1);
     } catch(_){}
-    // Gentle nudge only; no extra layer shuffles
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
     try { c.requestRenderAll(); } catch(_){}
     return true;
   }
 
-  // Strictly override the one button inside the Token ID Styles card
   function findTokenIdStylesCard(){
     const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
     const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
     return h ? (h.closest('.card,section,div') || h.parentElement) : null;
   }
 
-  function wireOnce(){
+  function swapButton(){
     const card = findTokenIdStylesCard();
-    if (!card) { setTimeout(wireOnce, 200); return; }
+    if (!card) { setTimeout(swapButton, 200); return; }
 
-    // Find the explicit “Load Token ID” button (ID or by visible text)
-    let btn = card.querySelector('#raLoadTokenIdBtn')
-            || card.querySelector('#loadTokenId')
-            || Array.from(card.querySelectorAll('button,input[type="button"],input[type="submit"],a'))
+    // Find the original button by id or visible text
+    let oldBtn = card.querySelector('#raLoadTokenIdBtn')
+             ||  card.querySelector('#loadTokenId')
+             ||  Array.from(card.querySelectorAll('button,input[type="button"],input[type="submit"],a'))
                  .find(b => /load\s*token\s*id/i.test((b.textContent || b.value || '').trim()));
-    if (!btn || btn.__raTokHard) return;
-    btn.__raTokHard = true;
 
-    // Capture-phase: stop the app's own handler so it can't remove/add anything
-    btn.addEventListener('click', (e)=>{
+    if (!oldBtn || oldBtn.__raTokReplaced) return;
+
+    // Create a fresh button with same look/position — remove all hidden listeners
+    const newBtn = oldBtn.cloneNode(true);
+    newBtn.__raTokReplaced = true;
+    // Normalize label (if your UI has a slightly different string it still looks the same)
+    const txt = (newBtn.textContent || newBtn.value || '').trim();
+    const want = 'Load Token ID';
+    if (!/load\s*token\s*id/i.test(txt)) {
+      // Keep the original if it’s custom; else set a clear label
+      if (newBtn.textContent) newBtn.textContent = want;
+      if (newBtn.value)       newBtn.value       = want;
+    }
+
+    // Replace in DOM (this drops all prior attached handlers on the old element)
+    oldBtn.parentNode.replaceChild(newBtn, oldBtn);
+
+    // Our handler — capture phase, and also stop bubbling; we own this click
+    newBtn.addEventListener('click', (e)=>{
       e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
       const idStr = readTokenIdValue();
-      updateLabel(idStr);  // single non-destructive update
+      updateLabelNonDestructive(idStr);
+      return false;
     }, true);
   }
 
-  wireOnce();
+  swapButton();
 })();
