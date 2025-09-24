@@ -8071,14 +8071,27 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_STRICT_ORDER_GUARD_V1 — single base/bg, full rebuild on any change/restore ===== */
+/* ===== RA_STRICT_ORDER_ONE_BASE_V2 — pick 1 real bg + 1 real base, rebuild by reference after history ===== */
 ;(() => {
-  if (window.__RA_STRICT_ORDER_GUARD_V1__) return;
-  window.__RA_STRICT_ORDER_GUARD_V1__ = true;
+  if (window.__RA_STRICT_ORDER_ONE_BASE_V2__) return;
+  window.__RA_STRICT_ORDER_ONE_BASE_V2__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // pick candidates without trusting _isBase from snapshots
+  // Choose exact ONE background (by tag or rect matching canvas size)
+  function pickBg(c, objs){
+    let bg = objs.find(o => o && o._isBgRect) || null;
+    if (bg) return bg;
+    const cW=c.getWidth(), cH=c.getHeight();
+    const rects = objs.filter(o => o && o.type==='rect');
+    rects.forEach(o=>{
+      const w=(o.width||0)*(o.scaleX||1), h=(o.height||0)*(o.scaleY||1);
+      o.__bgScore = Math.abs(w - cW) + Math.abs(h - cH);
+    });
+    return rects.sort((a,b)=>(a.__bgScore||1e9)-(b.__bgScore||1e9))[0] || null;
+  }
+
+  // Choose exact ONE base without trusting snapshot flags (_isBase)
   function pickBase(c, objs){
     // 1) fingerprint
     let base = objs.find(o => o && (o.type==='image'||o._element) && o._raBaseSig === 'BASE_V1');
@@ -8098,109 +8111,87 @@ window.raDump = () => {
     return base || null;
   }
 
-  function pickBg(c, objs){
-    // prefer existing bg tag
-    let bg = objs.find(o => o && o._isBgRect) || null;
-    if (bg) return bg;
-    // else choose the rect closest to the canvas size
-    const cW = c.getWidth(), cH = c.getHeight();
-    const rects = objs.filter(o => o && o.type==='rect');
-    rects.forEach(o=>{
-      const w=(o.width||0)*(o.scaleX||1), h=(o.height||0)*(o.scaleY||1);
-      o.__bgScore = Math.abs(w - cW) + Math.abs(h - cH);
-    });
-    return rects.sort((a,b)=>(a.__bgScore||1e9)-(b.__bgScore||1e9))[0] || null;
-  }
-
-  function strictNormalize(){
+  // Strict normalize: DO NOT trust any _isBase/_isBgRect from snapshot when ordering
+  function strictNormalizeOnce(){
     const c = C(); if (!c) return;
     const objs = c.getObjects ? c.getObjects() : [];
     if (!objs.length) return;
 
-    // choose single bg/base fresh
     const bg   = pickBg(c, objs);
     const base = pickBase(c, objs);
 
-    // demote everyone first
-    objs.forEach(o=>{
-      if (!o) return;
-      o._isBgRect = (o===bg);
-      o._isBase   = (o===base);
-    });
+    // Demote everyone first; then re-tag only the winners (for legacy code that reads these)
+    objs.forEach(o=>{ if (!o) return; o._isBgRect = (o===bg); o._isBase = (o===base); });
 
-    // lock base properly
+    // Lock the chosen base properly
     if (base){
       base.selectable=false; base.evented=false; base.hasControls=false;
       base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
-      try { base.setCoords(); } catch(_){}
+      try { base.setCoords(); } catch(_) {}
     }
 
-    // mark overlays (any image that is not bg/base/sys/label)
-    objs.forEach(o=>{
-      if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
-      if (o.type==='image' || o._element) o._kind = o._kind || 'overlay';
-    });
-
-    // rebuild the stack deterministically: 0 bg, 1 base, 2.. overlays, top sys/label
+    // Build the arrays by **reference**, not by flags
     const sys  = objs.filter(o => o && (o._raSys || o._raTokenId));
-    const over = objs.filter(o => o && !o._isBgRect && !o._isBase && !(o._raSys || o._raTokenId));
+    const over = objs.filter(o => o && o!==bg && o!==base && !(o._raSys || o._raTokenId));
+
+    // Rebuild z-order: 0=bg, 1=base, 2..=others, top=sys
     let idx = 0;
     if (bg)   c.moveTo(bg,   idx++);
     if (base) c.moveTo(base, idx++);
     over.forEach(o => c.moveTo(o, idx++));
     sys .forEach(o => c.moveTo(o, idx++));
 
-    // keep global pointers fresh for any legacy code
+    // Keep globals fresh for any legacy paths
     if (bg)   window.backgroundRect = bg;
     if (base) window.baseObject     = base;
 
-    // keep label topmost
+    // Keep label/watermark on top
     try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
-    c.requestRenderAll && c.requestRenderAll();
+    try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // run after any history action and any object change
-  function schedule(times=3, delay=60){
-    let n=0; const tick=()=>{ strictNormalize(); if(++n<times) setTimeout(tick, delay); };
+  // Run a few frames because Fabric restores settle across frames
+  function scheduleNormalize(times=3, delay=60){
+    let n=0; const tick=()=>{ strictNormalizeOnce(); if (++n<times) setTimeout(tick, delay); };
     setTimeout(tick, 0);
   }
 
-  // buttons (Undo / Redo / Restore Draft)
+  // Buttons (Undo / Redo / Restore Draft)
   document.addEventListener('click', (e)=>{
     const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!el) return;
     const t = (el.textContent || el.value || '').toLowerCase().trim();
     if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
-      setTimeout(()=>schedule(), 30);
+      setTimeout(()=>scheduleNormalize(), 30);
     }
   }, true);
 
-  // keyboard (Cmd/Ctrl+Z/Y)
+  // Keyboard (Cmd/Ctrl+Z or Y)
   document.addEventListener('keydown', (e)=>{
     const k = e.key && e.key.toLowerCase();
     if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')){
-      setTimeout(()=>schedule(), 30);
+      setTimeout(()=>scheduleNormalize(), 30);
     }
   }, true);
 
-  // wrap loadFromJSON so every restore normalizes afterwards
+  // Wrap loadFromJSON so every JSON restore normalizes afterwards
   (function wrapLoadFromJSON(){
-    const c = C(); if (!c || c.__raStrictOrderWrap) return;
-    c.__raStrictOrderWrap = true;
+    const c = C(); if (!c || c.__raStrictWrap) return;
+    c.__raStrictWrap = true;
     const orig = c.loadFromJSON.bind(c);
     c.loadFromJSON = function(json, cb, reviver){
       return orig(json, (...args)=>{
-        try { schedule(); } catch(_){}
-        if (typeof cb==='function') cb(...args);
+        try { scheduleNormalize(); } catch(_) {}
+        if (typeof cb === 'function') cb(...args);
       }, reviver);
     };
   })();
 
-  // normalize after any add/modify/remove (post-undo settling)
+  // Normalize after any add/modify/remove (helps post-undo settle)
   (function wireChanges(){
-    const c = C(); if (!c || c.__raStrictOrderChanges) return;
-    c.__raStrictOrderChanges = true;
-    const kick = ()=> schedule(2,60);
+    const c = C(); if (!c || c.__raStrictChanges) return;
+    c.__raStrictChanges = true;
+    const kick = ()=> scheduleNormalize(2,60);
     c.on('object:added',    kick);
     c.on('object:modified', kick);
     c.on('object:removed',  kick);
