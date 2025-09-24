@@ -47,23 +47,27 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
   let zoom=1;
 
   // ===============================
-  //  HELPERS
-  // ===============================
-  function $(id){ return document.getElementById(id); }
-  function safeAddListener(id, ev, fn){ const el=$(id); if (el) el.addEventListener(ev, fn); }
+//  HELPERS
+// ===============================
+function $(id){ return document.getElementById(id); }
+function safeAddListener(id, ev, fn){ const el = $(id); if (el) el.addEventListener(ev, fn); }
 
-  async function fileToDataURL(file){
+async function fileToDataURL(file){
   // Hard cap: 15 MB per image (tweak if you want)
   const MAX = 15 * 1024 * 1024;
   if (file && file.size > MAX){
     alert("That file is too large (max ~15 MB).");
     throw new Error("file-too-large");
   }
-  return await new Promise((res,rej)=>{
-    const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
+  return await new Promise((res, rej)=>{
+    const fr = new FileReader();
+    fr.onload = ()=>res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
   });
 }
-  async function fetchAsDataURL(url){
+
+async function fetchAsDataURL(url){
   // Safety: block disallowed schemes *again* (defense-in-depth)
   if (!isAllowedAssetURL(url)) throw new Error("Blocked URL scheme");
   const ac = new AbortController();
@@ -72,22 +76,28 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
     const r = await fetch(url, { mode:"cors", signal: ac.signal, cache:"no-store" });
     if(!r.ok) throw new Error("Fetch failed");
     const b = await r.blob();
-    return await new Promise((res,rej)=>{
-      const fr=new FileReader();
-      fr.onload=()=>res(fr.result);
-      fr.onerror=rej;
+    return await new Promise((res, rej)=>{
+      const fr = new FileReader();
+      fr.onload = ()=>res(fr.result);
+      fr.onerror = rej;
       fr.readAsDataURL(b);
     });
-  } finally { clearTimeout(t); }
-}
-  function normalize(u){
-    if(!u) return null;
-    if(u.startsWith("ipfs://")) return "https://cloudflare-ipfs.com/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
-    if(u.startsWith("ar://"))   return "https://arweave.net/"+u.replace("ar://","");
-    return u;
+  } finally {
+    clearTimeout(t);
   }
+}
 
-  /* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
+function normalize(u){
+  if (!u) return null;
+  if (u.startsWith("ipfs://"))
+    return "https://cloudflare-ipfs.com/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
+  if (u.startsWith("ar://"))
+    return "https://arweave.net/"+u.replace("ar://","");
+  return u;
+}
+
+
+/* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
 (function(){
   if (window.__RA_TOKEN_ID_DEBUG_AND_FORCE__) return;
   window.__RA_TOKEN_ID_DEBUG_AND_FORCE__ = true;
@@ -126,7 +136,6 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
       if (window.idLabel && window.canvas){
         const c = window.canvas;
         const objs = c.getObjects() || [];
-        // Non-interactive safety
         try { window.idLabel.selectable=false; window.idLabel.evented=false; window.idLabel.hasControls=false; } catch(_){}
         try { c.bringToFront(window.idLabel); c.moveTo(window.idLabel, objs.length-1); } catch(_){}
         try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
@@ -140,7 +149,6 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
     const card = findTokenIdCard();
     if (!card){ setTimeout(wire, 250); return; }
 
-    // Bind any button in this card whose text looks like "Load/Place/Show Token ID"
     Array.from(card.querySelectorAll('button, input[type="button"], input[type="submit"], a')).forEach(btn=>{
       if (btn.__raTokIdWired) return;
       const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
@@ -148,15 +156,13 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
 
       btn.__raTokIdWired = true;
       btn.addEventListener('click', (e)=>{
-        // Avoid hijacking the image loader button if it's in the same panel (defensive)
         const t = (e?.target?.textContent || e?.target?.value || '').toLowerCase();
         if (/load\s+by\s+token/.test(t)) return;
 
         const v = readTokenIdValue();
-        // DEBUG: flash footer because you reported a flash—log the actual value to console
         try { console.log('[TokenID] button click -> value:', v); } catch(_){}
-
         if (!v) return;
+
         e.preventDefault();
         e.stopPropagation();
         ensureLabelOnTop(v);
@@ -168,7 +174,7 @@ let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10"
   wire();
   const obs = new MutationObserver(()=>wire());
   obs.observe(document.body, { childList:true, subtree:true });
-})();
+})();   // <-- THIS is the missing part
 
   /* ===== RA_SAFE_CLEAR ===== */
 function raSafeClear(keepBg=true){
