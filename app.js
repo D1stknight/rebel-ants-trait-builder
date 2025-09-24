@@ -1029,11 +1029,17 @@ safeAddListener("clearOverlayGrid","click", ()=>{
   renderOverlayGrid();
 });
 
+ // -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
+document.addEventListener("keydown", (e)=>{
+  // ignore when typing in inputs/textareas/contenteditable
+  const tag = (e.target && e.target.tagName || "").toLowerCase();
+  if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
+
+  const c = window.canvas; if (!c) return;
+  const o = c.getActiveObject && c.getActiveObject();
+
   // Delete selection — robust (no sys/base delete, avoid Fabric draw crash)
   if (e.key === "Delete" || e.key === "Backspace") {
-    const c = window.canvas;
-    if (!c) return;
-    const o = c.getActiveObject && c.getActiveObject();
     if (!o) return;
 
     // NEVER delete background, base, or system (footer/wm/label) from keyboard
@@ -1053,30 +1059,35 @@ safeAddListener("clearOverlayGrid","click", ()=>{
     return;
   }
 
-  // Duplicate
-  if (o && ( (e.metaKey && e.key.toLowerCase()==="d") || (e.ctrlKey && e.key.toLowerCase()==="d") )){
+  // Duplicate (Cmd/Ctrl + D)
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+    if (!o) return;
     try {
-      o.clone(cl=>{
+      o.clone(cl => {
         cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 });
-        canvas.add(cl); canvas.setActiveObject(cl); canvas.requestRenderAll();
+        c.add(cl);
+        c.setActiveObject(cl);
+        c.requestRenderAll();
       });
-    } catch(_){}
-    e.preventDefault(); return;
+    } catch(_) {}
+    e.preventDefault();
+    return;
   }
 
-  // Nudge
+  // Nudge with arrows (Shift = 10px)
   const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
-  if (o && arrows.includes(e.key)){
+  if (o && arrows.includes(e.key)) {
     const step = e.shiftKey ? 10 : 1;
-    if (e.key==="ArrowLeft")  o.left -= step;
-    if (e.key==="ArrowRight") o.left += step;
-    if (e.key==="ArrowUp")    o.top  -= step;
-    if (e.key==="ArrowDown")  o.top  += step;
-    o.setCoords(); canvas.requestRenderAll();
+    if (e.key === "ArrowLeft")  o.left -= step;
+    if (e.key === "ArrowRight") o.left += step;
+    if (e.key === "ArrowUp")    o.top  -= step;
+    if (e.key === "ArrowDown")  o.top  += step;
+    o.setCoords();
+    c.requestRenderAll();
     e.preventDefault();
+    return;
   }
 });
-
 /* -------- SNAP + ALIGN UI (fixed to use window.canvas safely) -------- */
 (function snapAlign(){
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
