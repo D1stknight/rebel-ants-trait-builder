@@ -192,42 +192,6 @@ function raSafeClear(keepBg=true){
   }
 }
 
-  /* ===== RA_CLEAR_PATCH_DELAYED_GUARD — preserve base/sys only if NO JSON restore follows ===== */
-(function RA_CLEAR_PATCH_DELAYED_GUARD(){
-  if (window.__RA_CLEAR_PATCH_DELAYED_GUARD__) return;
-  window.__RA_CLEAR_PATCH_DELAYED_GUARD__ = true;
-
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-
-  function patch(c){
-    if (!c || c.__raClearPatched) return;
-    const _clear = c.clear.bind(c);
-
-    c.clear = function(){
-      // snapshot objects we’d like to preserve on manual clears
-      const keep = [];
-      (this.getObjects?.()||[]).forEach(o=>{
-        if (o && (o._isBase || o._raSys)) keep.push(o);
-      });
-
-      _clear(); // perform the real clear
-
-      // If a JSON restore (Undo/Redo/Restore Draft) is happening, skip re-add.
-      const me = this;
-      setTimeout(()=>{
-        if (window.__raLoadingJSON) return; // history is restoring; don’t fight it
-        try { keep.forEach(o=> me.add(o)); } catch(_){}
-        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-        try { me.requestRenderAll(); } catch(_){}
-      }, 80);
-    };
-
-    c.__raClearPatched = true;
-  }
-
-  (function wait(){ const c=C(); if (!c){ setTimeout(wait,120); return; } patch(c); })();
-})();
-
   // ——— Security helpers ———
 function isAllowedAssetURL(u){
   if (!u) return false;
@@ -267,58 +231,6 @@ function isAllowedAssetURL(u){
   function bringInterfaceToFront(){
     if (idLabel) canvas.bringToFront(idLabel);
   }
-
-/* ===== RA_LAYER_ORDER_ENFORCER — deterministic indices ===== */
-(function(){
-  if (window.__RA_LAYER_ORDER_ENFORCER__) return;
-  window.__RA_LAYER_ORDER_ENFORCER__ = true;
-
-  function getBase(c){
-    const objs = c.getObjects() || [];
-    return objs.find(o => o && o._isBase) || null;
-  }
-
-  window.raEnforceLayerOrder = function(){
-    const c = window.canvas; if (!c) return;
-    try{
-      const objs = c.getObjects() || [];
-
-      // 0) Make sure backgroundRect is locked and non-interactive
-      if (typeof backgroundRect !== 'undefined' && backgroundRect){
-        backgroundRect.selectable = false;
-        backgroundRect.evented = false;
-        backgroundRect.hasControls = false;
-      }
-
-      // 1) Background at index 0
-      if (backgroundRect){
-        const idx = objs.indexOf(backgroundRect);
-        if (idx !== 0) c.moveTo(backgroundRect, 0);
-      }
-
-      // 2) Base at index 1
-      const base = getBase(c);
-      if (base){
-        const target = backgroundRect ? 1 : 0;
-        const idx = objs.indexOf(base);
-        if (idx !== target) c.moveTo(base, target);
-      }
-
-    // 3) Overlays next (in their current relative order)
-// Consider anything that is NOT bg/base/system/label as an overlay (even if _kind is missing)
-let next = (backgroundRect ? 1 : 0) + (base ? 1 : 0);
-const isOverlay = o => o && !o._isBgRect && !o._isBase && !(o._raSys || o._raTokenId);
-objs.filter(isOverlay).forEach(o => { c.moveTo(o, next++); });
-
-      // 4) System/UI elements on top (token label, footers, UI)
-      objs.filter(o => o && (o._raSys || o._raTokenId)).forEach(o => {
-        c.moveTo(o, next++);
-      });
-
-      c.requestRenderAll();
-    }catch(_){}
-  };
-})();
 
 /* (tiny helper used below — keep label above other UI if present) */
 function bringInterfaceToFront(){
@@ -750,38 +662,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
       handler(e);
     }
-  }, true);
-})();
-  
-/* ===== RA_HISTORY_STABILIZER ===== */
-;(() => {
-  if (window.__RA_HISTORY_STABILIZER__) return;
-  window.__RA_HISTORY_STABILIZER__ = true;
-
-  function stabilizeFew(){
-    let tries = 0;
-    const run = ()=>{
-      try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-      try { window.canvas && window.canvas.requestRenderAll && window.canvas.requestRenderAll(); } catch(_){}
-      if (++tries < 5) setTimeout(run, 60);
-    };
-    setTimeout(run, 60);
-  }
-
-  // Buttons by visible text
-  document.addEventListener('click', (e)=>{
-    const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-    if (!el) return;
-    const t = (el.textContent || el.value || '').toLowerCase().trim();
-    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
-      stabilizeFew();
-    }
-  }, true);
-
-  // Keyboard: Cmd/Ctrl+Z (and Shift+Cmd/Ctrl+Z)
-  document.addEventListener('keydown', (e)=>{
-    const z = e.key && e.key.toLowerCase() === 'z';
-    if ((e.metaKey || e.ctrlKey) && z) stabilizeFew();
   }, true);
 })();
   
@@ -7516,43 +7396,6 @@ async function loadTokenFromCollection(tokenId, col){
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     openViewer();
   }, true);
-})();
-
-/* ===== RA_CLEAR_PATCH_DELAYED_GUARD — preserve base/sys only if NO JSON restore follows ===== */
-(function RA_CLEAR_PATCH_DELAYED_GUARD(){
-  if (window.__RA_CLEAR_PATCH_DELAYED_GUARD__) return;
-  window.__RA_CLEAR_PATCH_DELAYED_GUARD__ = true;
-
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-
-  function patch(c){
-    if (!c || c.__raClearPatched) return;
-    const _clear = c.clear.bind(c);
-
-    c.clear = function(){
-      // Snapshot keepers BEFORE clearing
-      const keep = [];
-      (this.getObjects?.()||[]).forEach(o=>{
-        if (o && (o._isBase || o._raSys)) keep.push(o);
-      });
-
-      // Perform the real clear
-      _clear();
-
-      // Defer re-add: if a JSON load kicks off immediately, we skip
-      const me = this;
-      setTimeout(()=> {
-        if (window.__raLoadingJSON) return; // JSON restore in progress → do not re-add
-        try { keep.forEach(o=> me.add(o)); } catch(_){}
-        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-        try { me.requestRenderAll(); } catch(_){}
-      }, 80);
-    };
-
-    c.__raClearPatched = true;
-  }
-
-  (function wait(){ const c=C(); if (!c){ setTimeout(wait,150); return; } patch(c); })();
 })();
 
 /* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
