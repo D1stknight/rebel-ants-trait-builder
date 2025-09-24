@@ -98,7 +98,6 @@ function normalize(u){
   return u;
 }
 
-
 /* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
 (function(){
   if (window.__RA_TOKEN_ID_DEBUG_AND_FORCE__) return;
@@ -599,22 +598,22 @@ function toRoman(num){
   for (const [sym,val] of map){ while(num >= val){ out += sym; num -= val; } }
   return out;
 }
- // ===============================
+// ===============================
 //  DOM READY
 // ===============================
 document.addEventListener("DOMContentLoaded", () => {
-  if(!window.fabric){
+  if (!window.fabric) {
     alert("fabric.js failed to load. Open via a local server or check internet.");
     return;
   }
 
   // Create Fabric canvas
   canvas = new fabric.Canvas("c", {
-    backgroundColor:"transparent",
-    preserveObjectStacking:true,
-    enableRetinaScaling:true,
-    selectionBorderColor:'#22d3ee',
-    selectionColor:'rgba(34,211,238,.08)'
+    backgroundColor: "transparent",
+    preserveObjectStacking: true,
+    enableRetinaScaling: true,
+    selectionBorderColor: '#22d3ee',
+    selectionColor: 'rgba(34,211,238,.08)'
   });
   window.canvas = canvas;
 
@@ -630,27 +629,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // >>> NEW: keep layers sane after *any* canvas change
   try {
-  canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-  canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-  canvas.on('object:removed',  () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-} catch(_) {}
+    canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+    canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+    canvas.on('object:removed',  () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+  } catch(_) {}
 
   // --- keep the rest of your existing boot code below this line ---
   // Permanents → embed to the grid
-  overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name:m.name, src:m.src, perm:true }));
+  overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name: m.name, src: m.src, perm: true }));
   renderOverlayGrid();
 
- // -------- Base image: local upload
-safeAddListener("baseUpload","change", async (e)=>{
-  const f = e.target.files && e.target.files[0];
-  if (!f) return;
-  const data = await fileToDataURL(f);
-  await loadBaseImage(data, false); // non-token => watermark
-});
-safeAddListener("clearUpload","click", ()=>{
-  const inp = $("baseUpload"); if (inp) inp.value = "";
-  clearBaseOnly();
-});
+  // -------- Base image: local upload
+  safeAddListener("baseUpload", "change", async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const data = await fileToDataURL(f);
+    await loadBaseImage(data, false); // non-token => watermark
+  });
+
+  safeAddListener("clearUpload", "click", () => {
+    const inp = $("baseUpload"); if (inp) inp.value = "";
+    clearBaseOnly();
+  });
+
+  // ... any other startup listeners, buttons, etc. ...
+
+});   // <-- closes DOMContentLoaded
 
 /* ===== RA_TOKEN_ID_WIRING — place/update on-canvas Token ID label ===== */
 ;(() => {
