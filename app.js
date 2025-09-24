@@ -7801,5 +7801,3 @@ return;
     document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
   }
 })();
-
-// RA_SYNC_MARKER_2
