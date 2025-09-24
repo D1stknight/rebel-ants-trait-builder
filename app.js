@@ -7889,15 +7889,32 @@ if (img){
   }
 })();
 
-/* ===== RA_TOKEN_ID_LABEL_SAFE_V3 — non-destructive label updater (no blink, 1 undo) ===== */
+/* ===== RA_TOKEN_ID_HARD_OVERRIDE_V1 — single, non-destructive label update (no blink, 1 undo) ===== */
 ;(() => {
-  if (window.__RA_TOKEN_ID_LABEL_SAFE_V3__) return;
-  window.__RA_TOKEN_ID_LABEL_SAFE_V3__ = true;
+  if (window.__RA_TOKEN_ID_HARD_OVERRIDE_V1__) return;
+  window.__RA_TOKEN_ID_HARD_OVERRIDE_V1__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
+  function readTokenIdValue(){
+    const candidates = [
+      '#raTokenIdDisplay','#tokenIdDisplay',
+      '#tokenIdInput','#tokenId','#token',
+      'input[name="tokenId"]','input[name="token"]',
+      'input[placeholder*="Token"]'
+    ];
+    for (const sel of candidates){
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      const d = (raw.match(/\d+/) || [''])[0];
+      if (d) return d;
+    }
+    return '';
+  }
+
   function ensureLabel(c){
-    // Reuse global if present, else find one on canvas, else create once
+    // Prefer existing global / existing canvas label; only create once if missing
     let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
     if (!l && window.fabric){
       l = new fabric.Text('#', {
@@ -7909,55 +7926,57 @@ if (img){
         selectable:false, evented:false, hasControls:false
       });
       l._raTokenId = true; l._raSys = true;
-      c.add(l);
+      c.add(l);                    // one-time add → one undo entry the first time only
     }
-    window.idLabel = l || window.idLabel; // remember for next time
+    window.idLabel = l || window.idLabel;
     return l;
   }
 
-  function setTokenIdLabel(id){
-    const c = C(); if (!c) return false;
-    const n = String(id ?? '').trim();
-    if (!n) return false;
+  function updateLabel(idStr){
+    const c = C(); if (!c || !idStr) return false;
+    const l = ensureLabel(c); if (!l) return false;
 
-    const l = ensureLabel(c);
-    if (!l) return false;
+    const text = '#'+String(idStr).replace(/^#+/,'');
+    // Pure property update — no remove/add → avoids blink + avoids extra undo tick
+    if (l.text !== text) l.set({ text });
 
-    // Update text only (no remove/re-add) → 1 history delta max
-    const shown = '#' + n.replace(/^#+/,'');
-    if (l.text !== shown) l.set({ text: shown });
-
-    // Reassert non-interactive + topmost
-    l.selectable=false; l.evented=false; l.hasControls=false;
+    // Make sure it’s non-interactive and topmost (without re-adding)
+    l.selectable = false; l.evented = false; l.hasControls = false;
     try {
       const objs = c.getObjects() || [];
       c.bringToFront(l); c.moveTo(l, objs.length - 1);
     } catch(_){}
-
-    // Let your layer enforcer keep it above overlays
-    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+    // Gentle nudge only; no extra layer shuffles
     try { c.requestRenderAll(); } catch(_){}
     return true;
   }
 
-  // Override both helpers to be non-destructive
-  window.addOrUpdateTokenLabel = function(id){ return setTokenIdLabel(id); };
-  window.upsertTokenLabel      = function(id){ return setTokenIdLabel(id); };
+  // Strictly override the one button inside the Token ID Styles card
+  function findTokenIdStylesCard(){
+    const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
+    const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
+    return h ? (h.closest('.card,section,div') || h.parentElement) : null;
+  }
 
-  // Optional: expose a manual nudge for debugging
-  window.raPlaceTokenIdLabelNow = () => {
-    // Try to read from common fields if caller doesn’t pass a value
-    const cand = [
-      '#raTokenIdDisplay','#tokenIdDisplay','#tokenIdInput','#tokenId','#token',
-      'input[name="tokenId"]','input[name="token"]','input[placeholder*="Token"]'
-    ];
-    let v = '';
-    for (const sel of cand){
-      const el = document.querySelector(sel);
-      const raw = (el && (el.value ?? el.textContent) || '').trim();
-      const d = (raw.match(/\d+/) || [''])[0];
-      if (d){ v = d; break; }
-    }
-    if (v) setTokenIdLabel(v);
-  };
+  function wireOnce(){
+    const card = findTokenIdStylesCard();
+    if (!card) { setTimeout(wireOnce, 200); return; }
+
+    // Find the explicit “Load Token ID” button (ID or by visible text)
+    let btn = card.querySelector('#raLoadTokenIdBtn')
+            || card.querySelector('#loadTokenId')
+            || Array.from(card.querySelectorAll('button,input[type="button"],input[type="submit"],a'))
+                 .find(b => /load\s*token\s*id/i.test((b.textContent || b.value || '').trim()));
+    if (!btn || btn.__raTokHard) return;
+    btn.__raTokHard = true;
+
+    // Capture-phase: stop the app's own handler so it can't remove/add anything
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      const idStr = readTokenIdValue();
+      updateLabel(idStr);  // single non-destructive update
+    }, true);
+  }
+
+  wireOnce();
 })();
