@@ -7765,6 +7765,7 @@ async function loadTokenFromCollection(tokenId, col){
 
     // lock as base
     img._isBase = true;
+    img._raBaseSig = 'BASE_V1';     // <-- paste THIS line here (fingerprint)    
     img.selectable=false; img.evented=false; img.hasControls=false;
     img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
 
@@ -8050,111 +8051,118 @@ function onClick(e){
   else { boot(); }
 })();
 
-/* ===== RA_UNDO_STRICT_ORDER_V3 — retag + rebuild full stack after Undo/Redo/Restore ===== */
+/* ===== RA_UNDO_STRICT_ORDER_FINAL — fingerprinted base + full-stack rebuild after history ===== */
 ;(() => {
-  if (window.__RA_UNDO_STRICT_ORDER_V3__) return;
-  window.__RA_UNDO_STRICT_ORDER_V3__ = true;
+  if (window.__RA_UNDO_STRICT_ORDER_FINAL__) return;
+  window.__RA_UNDO_STRICT_ORDER_FINAL__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   function retag(c){
     const objs = c.getObjects ? c.getObjects() : [];
 
-    // bg (try to find it if tag lost)
+    // Re-tag bg if needed
     const bg = objs.find(o => o && o._isBgRect) ||
                objs.find(o => o && o.type === 'rect' &&
                  Math.abs((o.width||0)*(o.scaleX||1) - c.getWidth())  < 2 &&
                  Math.abs((o.height||0)*(o.scaleY||1) - c.getHeight()) < 2);
     if (bg) bg._isBgRect = true;
 
-    // base (prefer token-marked image, else largest image)
-    let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+    // Find base by fingerprint -> token -> fallback
+    let base = objs.find(o => o && o._raBaseSig === 'BASE_V1' && (o.type==='image'||o._element));
+    if (!base) base = objs.find(o => o && o._tokenContract && (o.type==='image'||o._element));
     if (!base){
-      base = objs.find(o => o && (o._tokenContract) && (o.type==='image'||o._element)) || null;
-      if (!base){
-        const imgs = objs.filter(o => (o && (o.type==='image'||o._element)) && !o._isBgRect);
-        base = imgs.sort((a,b)=>{
-          const aw=(a.getScaledWidth?a.getScaledWidth(): (a.width||0)*(a.scaleX||1));
-          const ah=(a.getScaledHeight? a.getScaledHeight(): (a.height||0)*(a.scaleY||1));
-          const bw=(b.getScaledWidth?b.getScaledWidth(): (b.width||0)*(b.scaleX||1));
-          const bh=(b.getScaledHeight? b.getScaledHeight(): (b.height||0)*(b.scaleY||1));
-          return (bw*bh) - (aw*ah);
-        })[0] || null;
-      }
-      if (base){
-        base._isBase = true;
-        base.selectable=false; base.evented=false; base.hasControls=false;
-        base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
-        try { base.setCoords(); } catch(_) {}
-      }
+      const imgs = objs.filter(o => (o && (o.type==='image'||o._element)) && !o._isBgRect);
+      base = imgs.sort((a,b)=>{
+        const aw=(a.getScaledWidth?a.getScaledWidth(): (a.width||0)*(a.scaleX||1));
+        const ah=(a.getScaledHeight? a.getScaledHeight(): (a.height||0)*(a.scaleY||1));
+        const bw=(b.getScaledWidth?b.getScaledWidth(): (b.width||0)*(b.scaleX||1));
+        const bh=(b.getScaledHeight? b.getScaledHeight(): (b.height||0)*(b.scaleY||1));
+        return (bw*bh) - (aw*ah);
+      })[0] || null;
+    }
+    if (base){
+      base._isBase = true;
+      base._raBaseSig = base._raBaseSig || 'BASE_V1';
+      base.selectable=false; base.evented=false; base.hasControls=false;
+      base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
+      try { base.setCoords(); } catch(_) {}
     }
 
-    // tag overlays (images that are not bg/base/sys/label)
+    // Tag overlays (images that are not bg/base/sys/label)
     objs.forEach(o=>{
       if (!o || o._isBgRect || o._isBase || (o._raSys || o._raTokenId)) return;
       if (o.type === 'image' || o._element) o._kind = o._kind || 'overlay';
     });
-
-    return { bg, base };
   }
 
-  function rebuildOrder(c){
+  function rebuild(c){
     const objs = c.getObjects ? c.getObjects() : [];
-
     const bg   = objs.find(o => o && o._isBgRect) || null;
     const base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
     const sys  = objs.filter(o => o && (o._raSys || o._raTokenId));
     const over = objs.filter(o => o && !o._isBgRect && !o._isBase && !(o._raSys || o._raTokenId));
 
-    // Rebuild from bottom to top
-    let idx = 0;
-    if (bg)   c.moveTo(bg, idx++);
-    if (base) c.moveTo(base, idx++);
-    over.forEach(o => c.moveTo(o, idx++));
-    sys.forEach(o  => c.moveTo(o, idx++));
+    let i = 0;
+    if (bg)   c.moveTo(bg,   i++);
+    if (base) c.moveTo(base, i++);
+    over.forEach(o => c.moveTo(o, i++));
+    sys .forEach(o => c.moveTo(o, i++));
   }
 
-  function fixAfterHistory(){
+  function normalize(){
     const c = C(); if (!c) return;
-    try { retag(c); } catch(_) {}
-    try { rebuildOrder(c); } catch(_) {}
+    retag(c);
+    rebuild(c);
     try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Run a few times as Fabric settles
-  function scheduleFix(count=4, delay=60){
-    let i=0;
-    const step = ()=>{ fixAfterHistory(); if (++i < count) setTimeout(step, delay); };
-    setTimeout(step, 0);
+  function schedule(times=4, delay=60){
+    let n=0; const tick=()=>{ normalize(); if (++n<times) setTimeout(tick, delay); };
+    setTimeout(tick, 0);
   }
 
-  // Buttons (Undo / Redo / Restore Draft)
+  // Buttons (Undo/Redo/Restore)
   document.addEventListener('click', (e)=>{
     const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!el) return;
     const t = (el.textContent || el.value || '').toLowerCase().trim();
-    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
-      setTimeout(()=>scheduleFix(), 30);
-    }
+    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) setTimeout(()=>schedule(), 30);
   }, true);
 
-  // Keyboard undo/redo
+  // Keyboard
   document.addEventListener('keydown', (e)=>{
     const k = e.key && e.key.toLowerCase();
-    if ((e.metaKey||e.ctrlKey) && (k==='z' || k==='y')){
-      setTimeout(()=>scheduleFix(), 30);
-    }
+    if ((e.metaKey||e.ctrlKey) && (k==='z' || k==='y')) setTimeout(()=>schedule(), 30);
   }, true);
 
-  // Also fix when overlays are (re)added after a restore
+  // After adding a new overlay (post-restore), normalize once
   const c0 = C();
-  if (c0 && !c0.__raOverlayFrontAfterAdd){
-    c0.__raOverlayFrontAfterAdd = true;
+  if (c0 && !c0.__raNormalizeAdd){
+    c0.__raNormalizeAdd = true;
     c0.on('object:added', (e)=>{
-      const o = e && e.target; if (!o) return;
-      if (o._isBgRect || o._isBase || (o._raSys || o._raTokenId)) return;
-      // treat image-like as overlay and rebuild once
-      if (o.type==='image' || o._element){ setTimeout(()=>scheduleFix(2,60), 0); }
+      const o=e && e.target; if (!o) return;
+      if (o.type==='image' || o._element) setTimeout(()=>schedule(2,60), 0);
     });
   }
 })();
+
+// ===== DEBUG: dump current stacking and tags (run in console: raDump()) =====
+window.raDump = () => {
+  const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  if (!c) { console.log('No canvas'); return; }
+  (c.getObjects()||[]).forEach((o,i)=>{
+    const t = (o.type||'obj').padEnd(7);
+    console.log(
+      String(i).padStart(2,' '),
+      t,
+      (o._isBgRect ? '[BG]'   : '   '),
+      (o._isBase   ? '[BASE]' : '     '),
+      (o._raSys    ? '[SYS]'  : '    '),
+      (o._raTokenId? '[ID]'   : '   '),
+      (o._kind ? (`[${o._kind}]`).padEnd(10) : '          '),
+      (o._raBaseSig === 'BASE_V1' ? '(fingerprinted)' : ''),
+      (o._tokenContract ? '(token)' : '')
+    );
+  });
+};
