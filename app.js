@@ -6217,8 +6217,11 @@ tile.appendChild(cap);
 }
   // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
-    const c = C(); if (!c) return false;
-    let changed = false;
+  // Do not spawn or modify footer while a JSON restore is in progress
+  if (window.__RA_RESTORING__) return false;
+
+  const c = C(); if (!c) return false;
+  let changed = false;
 
     let footer = (c.getObjects?.() || []).find(o => o && o._raBrandFooter) || null;
     const show = shouldShow(c);
@@ -8071,121 +8074,141 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_HISTORY_HARD_NORMALIZE_V2 — dedupe sys layers + strict order after Undo/Redo/Restore ===== */
+/* ===== RA_RESTORE_FLAG_DEDUPE_V1 — block sys spawning during restore + dedupe SYS after ===== */
 ;(() => {
-  if (window.__RA_HISTORY_HARD_NORMALIZE_V2__) return;
-  window.__RA_HISTORY_HARD_NORMALIZE_V2__ = true;
+  if (window.__RA_RESTORE_FLAG_DEDUPE_V1__) return;
+  window.__RA_RESTORE_FLAG_DEDUPE_V1__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Identify types
+  // liberal SYS detectors
   const isBg   = o => !!(o && o._isBgRect);
   const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
   const isId   = o => !!(o && o._raTokenId);
-  // Be liberal about watermark/footer detection (different code paths use different flags)
-  const isWM   = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
-                               (typeof o.name==='string' && /watermark|powered/i.test(o.name))));
-  const isSys  = o => !!(o && (o._raSys || isWM(o) || isId(o) || o._raBrandFooter));
-
+  const isWmLike = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
+                                 (typeof o.name==='string' && /watermark|powered/i.test(o.name)) ||
+                                 (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
+  const isSys  = o => !!(o && (o._raSys || o._raBrandFooter || isWmLike(o) || isId(o)));
   const isUser = o => !!o && !isBg(o) && !isBase(o) && !isSys(o);
 
-  function area(o){
-    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1));
-    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1));
+  const area = o => {
+    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
+    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
     return w*h;
-  }
+  };
 
-  // Keep exactly one of a set; remove others
-  function keepOne(c, arr, chooser){
+  function pickOne(arr, chooser){
     if (!arr.length) return null;
     const keep = chooser(arr);
-    arr.forEach(o => { if (o !== keep) { try { c.remove(o); } catch(_) {} } });
-    return keep;
+    return { keep, drop: arr.filter(o=>o!==keep) };
   }
 
-  function dedupeSysAndOrder(){
+  // remove all but one for each SYS class, then rebuild stacking
+  function dedupeSysAndReorder(){
     const c = C(); if (!c) return;
     const objs = c.getObjects ? c.getObjects() : [];
 
-    // Dedupe BG
-    const bgs   = objs.filter(isBg);
-    const bg    = keepOne(c, bgs, arr => arr[0]) || null;
+    // BG: keep first
+    let bgRes   = pickOne(objs.filter(isBg),  arr => arr[0]);
+    let baseRes = pickOne(objs.filter(isBase),arr => {
+      let f = arr.find(o => o._raBaseSig === 'BASE_V1'); if (f) return f;
+      f = arr.find(o => o._tokenContract); if (f) return f;
+      return arr.slice().sort((a,b)=>area(b)-area(a))[0];
+    });
+    // Footer/WM: keep largest wm-like
+    let wmRes   = pickOne(objs.filter(isWmLike), arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]);
+    // Token ID: keep most recent
+    let idRes   = pickOne(objs.filter(isId), arr => arr[arr.length-1]);
 
-    // Dedupe Base: prefer fingerprint → token-marked → largest image
-    const bases = objs.filter(isBase);
-    const base  = keepOne(c, bases, arr => {
-      let f = arr.find(o => o._raBaseSig === 'BASE_V1');
-      if (f) return f;
-      f = arr.find(o => o._tokenContract);
-      if (f) return f;
-      return arr.slice().sort((a,b) => area(b) - area(a))[0];
-    }) || null;
+    // drop extras
+    [bgRes, baseRes, wmRes, idRes].forEach(res=>{
+      if (!res) return;
+      res.drop.forEach(o=>{ try{ C().remove(o); }catch(_){} });
+    });
 
-    // Dedupe watermark: keep the largest watermark-ish image
-    const wms   = objs.filter(isWM);
-    const wm    = keepOne(c, wms, arr => arr.slice().sort((a,b) => area(b)-area(a))[0]) || null;
+    const bg   = bgRes   && bgRes.keep   || null;
+    const base = baseRes && baseRes.keep || null;
+    const wm   = wmRes   && wmRes.keep   || null;
+    const id   = idRes   && idRes.keep   || null;
 
-    // Dedupe Token-ID label: keep the most recently added (highest index)
-    const ids   = objs.filter(isId);
-    const id    = keepOne(c, ids, arr => arr[arr.length-1]) || null;
-
-    // Lock base (again) to be safe
+    // lock base safely
     if (base){
       base._isBase = true;
       base._raBaseSig = base._raBaseSig || 'BASE_V1';
       base.selectable=false; base.evented=false; base.hasControls=false;
       base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
-      try { base.setCoords(); } catch(_) {}
+      try { base.setCoords(); } catch(_){}
     }
     if (bg) bg._isBgRect = true;
     if (wm) wm._raSys = true;
 
-    // Rebuild stack: 0 BG, 1 BASE, 2.. overlays, then ID, then WM/other SYS on top
+    // rebuild order: 0 bg, 1 base, 2.. users, then id, then wm/sys
     const users = (c.getObjects()||[]).filter(isUser);
-    let i = 0;
+    let i=0;
     if (bg)   c.moveTo(bg,   i++);
     if (base) c.moveTo(base, i++);
     users.forEach(o => c.moveTo(o, i++));
     if (id)   c.moveTo(id,   i++);
     if (wm)   c.moveTo(wm,   i++);
-    // Any other sys items (footer, etc.) above
-    (c.getObjects()||[]).filter(o => isSys(o) && !isId(o) && o !== wm).forEach(o => c.moveTo(o, i++));
+    (c.getObjects()||[]).filter(o => isSys(o) && o!==wm && !isId(o)).forEach(o => c.moveTo(o, i++));
 
-    // Keep globals fresh (for any legacy references)
-    if (bg)   window.backgroundRect = bg;
-    if (base) window.baseObject     = base;
-
-    // Bring token label topmost if present
-    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_) {}
-    try { c.requestRenderAll(); } catch(_) {}
+    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
   }
 
-  // Run a few frames to catch multi-frame restores
-  function schedule(times=3, delay=60){
-    let n=0; const step=()=>{ dedupeSysAndOrder(); if (++n<times) setTimeout(step, delay); };
-    setTimeout(step, 0);
-  }
+  // wrap the live canvas with a restore flag so sys code can skip spawning footers during restore
+  function wrapCanvas(){
+    const c = C(); if (!c || c.__raRestoreFlagWrapped) return;
+    c.__raRestoreFlagWrapped = true;
 
-  // Hook UI undo/redo/restore and keyboard
-  document.addEventListener('click', (e)=>{
-    const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-    if (!el) return;
-    const t = (el.textContent || el.value || '').toLowerCase().trim();
-    if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) setTimeout(()=>schedule(), 30);
-  }, true);
-  document.addEventListener('keydown', (e)=>{
-    const k = e.key && e.key.toLowerCase();
-    if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')) setTimeout(()=>schedule(), 30);
-  }, true);
+    const orig = c.loadFromJSON && c.loadFromJSON.bind(c);
+    if (orig){
+      c.loadFromJSON = function(json, cb, reviver){
+        window.__RA_RESTORING__ = true;
+        return orig(json, (...args)=>{
+          window.__RA_RESTORING__ = false;
+          // run a few frames to eliminate dupes that slipped in and rebuild order
+          let n=0; const settle=()=>{ dedupeSysAndReorder(); if (++n<3) setTimeout(settle, 60); };
+          settle();
+          if (typeof cb==='function') cb(...args);
+        }, reviver);
+      };
+    }
 
-  // Normalize after any add/modify/remove as a safety net
-  (function wireChanges(){
-    const c = C(); if (!c) { setTimeout(wireChanges, 200); return; }
-    if (c.__raHardNorm) return;
-    c.__raHardNorm = true;
-    const kick = ()=> schedule(2,60);
+    // Also keep order sane after any change (post-undo settle)
+    const kick = ()=> { let n=0; const t=()=>{ dedupeSysAndReorder(); if(++n<2) setTimeout(t,60); }; t(); };
     c.on('object:added',    kick);
     c.on('object:modified', kick);
     c.on('object:removed',  kick);
-  })();
+  }
+
+  function watch(){
+    wrapCanvas();
+    // in case your app swaps window.canvas, re-wrap the new instance
+    let last = C();
+    setInterval(()=>{ const cur=C(); if (cur && cur!==last){ wrapCanvas(); last=cur; } }, 250);
+  }
+
+  function wireUI(){
+    const bump = ()=> setTimeout(()=>dedupeSysAndReorder(), 30);
+    document.addEventListener('click', (e)=>{
+      const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+      if (!el) return;
+      const t = (el.textContent || el.value || '').toLowerCase().trim();
+      if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) bump();
+    }, true);
+    document.addEventListener('keydown', (e)=>{
+      const k = e.key && e.key.toLowerCase();
+      if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')) bump();
+    }, true);
+  }
+
+  function boot(){
+    if (!C()) { setTimeout(boot,200); return; }
+    watch();
+    wireUI();
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
 })();
