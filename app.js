@@ -807,7 +807,7 @@ document.addEventListener("DOMContentLoaded", () => {
   (function wait(){ const c=C(); if (!c) return setTimeout(wait,120); patch(c); })();
 })();
 
-/* -------- Base image: load by token (multi‑collection) --------
+/* -------- Base image: load by token (multi-collection) --------
    Reads the selected collection’s contract from your dropdown and
    loads the token’s image via Reservoir (works for Chumpz, Saints, Rebel, etc.)
    UI ids expected:
@@ -815,6 +815,7 @@ document.addEventListener("DOMContentLoaded", () => {
      - tokenIdInput      ← input where you type the token id
      - tokenStatus       ← small <span> to show status text (optional)
      - loadToken         ← the “Load Token ID” button
+*/
 
 safeAddListener("loadToken","click", async ()=>{
   const statusEl = $("tokenStatus");
