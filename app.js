@@ -8074,172 +8074,118 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_HISTORY_RESTORE_FINAL_v3 — normalize without pushing history; strict order; hide sys dupes ===== */
+/* ===== RA_RESTORE_HARD_MUTE_V4 — fully mute object events during JSON restore; stable undo ===== */
 ;(() => {
-  if (window.__RA_HISTORY_RESTORE_FINAL_V3__) return;
-  window.__RA_HISTORY_RESTORE_FINAL_V3__ = true;
+  if (window.__RA_RESTORE_HARD_MUTE_V4__) return;
+  window.__RA_RESTORE_HARD_MUTE_V4__ = true;
 
-  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  function boot() {
+    const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+    if (!c || !window.fabric) { setTimeout(boot, 150); return; }
 
-  // Liberal detectors for system layers
-  const isBg   = o => !!(o && o._isBgRect);
-  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
-  const isId   = o => !!(o && o._raTokenId);
-  const isWM   = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
-                               (typeof o.name==='string' && /watermark|powered/i.test(o.name)) ||
-                               (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
-  const isFoot = o => !!(o && (o._raBrandFooter ||
-                               (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
-  const isSys  = o => !!(o && (isBg(o) || isBase(o) || isWM(o) || isFoot(o) || isId(o)));
-  const isUser = o => !!o && !isSys(o);
+    // 1) Wrap Fabric's loadFromJSON globally so ANY restore bumps a depth guard.
+    if (!fabric.Canvas.__raPatchedLoadJSON) {
+      const origLoad = fabric.Canvas.prototype.loadFromJSON;
+      fabric.Canvas.prototype.loadFromJSON = function (json, cb, reviver) {
+        window.__RA_RESTORE_DEPTH = (window.__RA_RESTORE_DEPTH || 0) + 1;
 
-  const area = o => {
-    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
-    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
-    return w*h;
-  };
+        const done = (...args) => {
+          // Make sure nothing remains selected and a full render occurs,
+          // but still *inside* our guard so no history/events are generated.
+          try { this.discardActiveObject(); } catch (_) {}
+          try { this.requestRenderAll(); } catch (_) {}
 
-  // Keep one, hide the rest (do NOT remove — avoid history churn)
-  function keepOneHideRest(arr, chooser){
-    if (!arr.length) return null;
-    const keep = chooser(arr);
-    arr.forEach(o=>{
-      if (o !== keep){
-        o._raZombieSys = true;
-        o.visible = false;   // hide duplicate sys during/after restore
-      }
-    });
-    return keep;
-  }
+          // Drop one level of guard *after* the UI tick.
+          setTimeout(() => {
+            window.__RA_RESTORE_DEPTH = Math.max(0, (window.__RA_RESTORE_DEPTH || 1) - 1);
+          }, 0);
 
-  function strictOrder(c){
-    if (!c) return;
-    const objs = c.getObjects ? c.getObjects() : [];
+          cb && cb.apply(this, args);
+        };
 
-    // Dedupe system classes
-    const bg   = keepOneHideRest(objs.filter(isBg),   arr => arr[0]) || null;
-    const base = keepOneHideRest(objs.filter(isBase), arr => {
-      let f = arr.find(o => o._raBaseSig === 'BASE_V1'); if (f) return f;
-      f = arr.find(o => o._tokenContract);              if (f) return f;
-      return arr.slice().sort((a,b)=>area(b)-area(a))[0];
-    }) || null;
-    const foot = keepOneHideRest(objs.filter(isFoot), arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]) || null;
-    const wm   = keepOneHideRest(objs.filter(isWM),   arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]) || null;
-    const id   = keepOneHideRest(objs.filter(isId),   arr => arr[arr.length-1]) || null;
-
-    // Lock base safely
-    if (base){
-      base._isBase = true;
-      base._raBaseSig = base._raBaseSig || 'BASE_V1';
-      base.selectable=false; base.evented=false; base.hasControls=false;
-      base.lockMovementX=base.lockMovementY=base.lockScalingX=base.lockScalingY=base.lockRotation=true;
-      try { base.setCoords(); } catch(_){}
-    }
-    if (bg) bg._isBgRect = true;
-
-    // Rebuild stack (visible only): 0 BG, 1 BASE, 2.. USERS, then footer, WM, ID
-    const users = (c.getObjects()||[]).filter(o => isUser(o) && o.visible!==false);
-
-    let i=0;
-    if (bg)   c.moveTo(bg,   i++);
-    if (base) c.moveTo(base, i++);
-    users.forEach(o => c.moveTo(o, i++));
-    [foot, wm, id].forEach(o => { if (o && o.visible!==false) c.moveTo(o, i++); });
-
-    // Keep globals fresh
-    if (bg)   window.backgroundRect = bg;
-    if (base) window.baseObject     = base;
-
-    try { if (window.idLabel) c.bringToFront(window.idLabel); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  // Run a function while history is muted (so our normalization doesn't push new entries)
-  function runMuted(c, fn, {asRestore=false} = {}){
-    const hadMute = !!c._historyProcessing;
-    const prevFire = c.fire ? c.fire.bind(c) : null;
-
-    c._historyProcessing = true;            // common fabric-history guard
-    if (asRestore) window.__RA_RESTORING__ = true;  // let footer/WM guards know
-
-    if (prevFire){
-      c.fire = function(evt, opts){
-        if (c._historyProcessing) {
-          if (/^(object:(added|removed|modified)|history:.*)$/i.test(evt)) return;
+        try {
+          return origLoad.call(this, json, done, reviver);
+        } catch (e) {
+          window.__RA_RESTORE_DEPTH = Math.max(0, (window.__RA_RESTORE_DEPTH || 1) - 1);
+          throw e;
         }
-        return prevFire(evt, opts);
       };
+      fabric.Canvas.__raPatchedLoadJSON = true;
     }
 
-    try { fn(); }
-    finally {
-      if (prevFire) c.fire = prevFire;
-      if (!hadMute) c._historyProcessing = false;
-      if (asRestore) window.__RA_RESTORING__ = false;
-    }
-  }
-
-  function normalizeMuted(c, {asRestore=false} = {}){
-    runMuted(c, () => strictOrder(c), {asRestore});
-  }
-
-  // Wrap the live canvas; re-wrap if window.canvas swaps
-  function wrapLive(){
-    const c = getC(); if (!c || c.__raHistFinalV3) return;
-    c.__raHistFinalV3 = true;
-
-    // Wrap loadFromJSON: mute history during restore and normalize a few frames
-    if (typeof c.loadFromJSON === 'function'){
-      const orig = c.loadFromJSON.bind(c);
-      c.loadFromJSON = function(json, cb, reviver){
-        return runMuted(c, () => orig(json, (...args)=>{
-          let n=0; const settle=()=>{ normalizeMuted(c, {asRestore:true}); if (++n<3) setTimeout(settle, 60); };
-          settle();
-          if (typeof cb==='function') cb(...args);
-        }, reviver), {asRestore:true});
+    // 2) Mute Fabric object events while a restore is in progress.
+    if (!c.__raMuteFire) {
+      const origFire = c.fire.bind(c);
+      c.fire = function (type, options) {
+        // Silence the noisy history/sys listeners *only* during restore.
+        if ((window.__RA_RESTORE_DEPTH | 0) > 0 && /^object:(added|modified|removed)$/.test(type)) {
+          return this;
+        }
+        return origFire(type, options);
       };
+      c.__raMuteFire = true;
     }
 
-    // Normalize after plugin history events (non-mutating)
-    const kickOrder = ()=> setTimeout(()=> normalizeMuted(c), 30);
-    c.on && c.on('history:undo',    kickOrder);
-    c.on && c.on('history:redo',    kickOrder);
-    c.on && c.on('history:restore', kickOrder);
+    // 3) Ensure UI-level undo/redo wrappers also raise the guard.
+    const wrap = (name) => {
+      const fn = window[name];
+      if (typeof fn !== 'function' || fn.__raWrapped) return;
+      const wrapped = function () {
+        window.__RA_RESTORE_DEPTH = (window.__RA_RESTORE_DEPTH || 0) + 1;
+        try { return fn.apply(this, arguments); }
+        finally {
+          // Let Fabric finish its async rebuild first.
+          setTimeout(() => {
+            window.__RA_RESTORE_DEPTH = Math.max(0, (window.__RA_RESTORE_DEPTH || 1) - 1);
+          }, 0);
+        }
+      };
+      wrapped.__raWrapped = true;
+      window[name] = wrapped;
+    };
+    wrap('undo'); wrap('redo'); wrap('restoreDraft');
 
-    // Normalize after user changes (mute so it doesn't push to history)
-    const kickChange = ()=> normalizeMuted(c);
-    c.on && c.on('object:added',    kickChange);
-    c.on && c.on('object:modified', kickChange);
-    c.on && c.on('object:removed',  kickChange);
+    // 4) After restores complete, normalize the stack to the canonical order.
+    //    We do this while the guard is raised so it *doesn't* generate history.
+    function normalizeOrderOnce() {
+      if ((window.__RA_RESTORE_DEPTH | 0) !== 0) return;
+      const c = window.canvas; if (!c) return;
+
+      const objs = (c.getObjects && c.getObjects()) || [];
+      if (!objs.length) return;
+
+      const bg   = objs.filter(o => o && o._isBgRect);
+      const base = objs.filter(o => o && o._isBase);
+      const mid  = objs.filter(o => o && !o._isBgRect && !o._isBase && !o._raSys);
+      const sys  = objs.filter(o => o && o._raSys);
+
+      // Temporarily raise the guard while we reorder to avoid new history.
+      const prevDepth = window.__RA_RESTORE_DEPTH || 0;
+      window.__RA_RESTORE_DEPTH = 1;
+      try {
+        c.clear();
+        [...bg, ...base, ...mid, ...sys].forEach(o => c.add(o));
+        try { c.discardActiveObject(); } catch (_) {}
+        try { c.requestRenderAll(); } catch (_) {}
+      } finally {
+        window.__RA_RESTORE_DEPTH = prevDepth;
+      }
+    }
+
+    // Trigger normalization on the next render after a restore finishes.
+    if (!c.__raNormalizeAfterRestore) {
+      // The after:render hook is a light, reliable place to run once per frame.
+      c.on && c.on('after:render', () => {
+        // If a restore just ended, this runs with depth==0 and normalizes.
+        normalizeOrderOnce();
+      });
+      c.__raNormalizeAfterRestore = true;
+    }
   }
 
-  function watch(){
-    wrapLive();
-    let last = getC();
-    setInterval(()=>{ const cur=getC(); if (cur && cur!==last){ wrapLive(); last=cur; } }, 250);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
   }
-
-  // Also nudge via UI buttons & keyboard (belt & suspenders)
-  function wireUI(){
-    const bump = ()=> setTimeout(()=>{ const c=getC(); c && normalizeMuted(c); }, 30);
-    document.addEventListener('click', (e)=>{
-      const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
-      if (!el) return;
-      const t = (el.textContent || el.value || '').toLowerCase().trim();
-      if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)) bump();
-    }, true);
-    document.addEventListener('keydown', (e)=>{
-      const k = e.key && e.key.toLowerCase();
-      if ((e.metaKey||e.ctrlKey) && (k==='z'||k==='y')) bump();
-    }, true);
-  }
-
-  function boot(){
-    if (!getC()) { setTimeout(boot, 200); return; }
-    watch();
-    wireUI();
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
-  else boot();
 })();
