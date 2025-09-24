@@ -7596,10 +7596,26 @@ async function loadTokenFromCollection(tokenId, col){
   ].filter(Boolean).map(normalizeUrl);
 }
 
-
-  function killOldBase(c){
-    (c.getObjects() || []).slice().forEach(o => { if (o && o._isBase) c.remove(o); });
-  }
+function killOldBase(c){
+  const objs = (c.getObjects() || []).slice();
+  const cw = c.getWidth(), ch = c.getHeight();
+  const area = o => {
+    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0) * (o.scaleX||1));
+    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0) * (o.scaleY||1));
+    return w * h;
+  };
+  objs.forEach(o => {
+    if (!o) return;
+    if (o._isBgRect || o._raSys || o._raTokenId) return;           // never touch bg/sys/label
+    const isImageLike = (o.type === 'image' || o._element);
+    const looksLikeBase =
+      o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract ||
+      (isImageLike && o._kind !== 'overlay' && area(o) >= (cw * ch * 0.25)); // large non-overlay image
+    if (looksLikeBase){
+      try { c.remove(o); } catch(_){}
+    }
+  });
+}
 
   function fitAndAddAsBase(img){
     const c = getCanvas(); if (!c) return false;
