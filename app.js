@@ -7889,10 +7889,10 @@ if (img){
   }
 })();
 
-/* ===== RA_TOKEN_ID_BUTTON_REPLACE_V1 — swap the button, stop hidden handlers, no-blink update ===== */
+/* ===== RA_TOKEN_ID_SAFE_BUTTON_V1 — add a dedicated, no-blink “Place Token ID Label” control ===== */
 ;(() => {
-  if (window.__RA_TOKEN_ID_BUTTON_REPLACE_V1__) return;
-  window.__RA_TOKEN_ID_BUTTON_REPLACE_V1__ = true;
+  if (window.__RA_TOKEN_ID_SAFE_BUTTON_V1__) return;
+  window.__RA_TOKEN_ID_SAFE_BUTTON_V1__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
@@ -7900,7 +7900,7 @@ if (img){
     const sels = [
       '#raTokenIdDisplay', '#tokenIdDisplay',
       '#tokenIdInput', '#tokenId', '#token',
-      'input[name="tokenId"]','input[name="token"]',
+      'input[name="tokenId"]', 'input[name="token"]',
       'input[placeholder*="Token"]'
     ];
     for (const sel of sels){
@@ -7925,20 +7925,19 @@ if (img){
         selectable:false, evented:false, hasControls:false
       });
       l._raTokenId = true; l._raSys = true;
-      c.add(l);                         // one-time add → one undo entry first time only
+      c.add(l); // one-time add → a single history entry the first time only
     }
     window.idLabel = l || window.idLabel;
     return l;
   }
 
-  function updateLabelNonDestructive(idStr){
-    const c = C(); if (!c || !idStr) return false;
-    const l = ensureLabel(c); if (!l) return false;
+  function updateLabel(idStr){
+    const c = C(); if (!c || !idStr) return;
+    const l = ensureLabel(c); if (!l) return;
 
     const shown = '#'+String(idStr).replace(/^#+/,'');
     if (l.text !== shown) l.set({ text: shown });
 
-    // Keep non-interactive and on top without re-adding
     l.selectable=false; l.evented=false; l.hasControls=false;
     try {
       const objs = c.getObjects() || [];
@@ -7946,50 +7945,46 @@ if (img){
     } catch(_){}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
     try { c.requestRenderAll(); } catch(_){}
-    return true;
   }
 
-  function findTokenIdStylesCard(){
+  function tokenIdStylesCard(){
     const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
     const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
     return h ? (h.closest('.card,section,div') || h.parentElement) : null;
   }
 
-  function swapButton(){
-    const card = findTokenIdStylesCard();
-    if (!card) { setTimeout(swapButton, 200); return; }
+  function injectButton(){
+    const card = tokenIdStylesCard() || document.body;
+    if (document.getElementById('raPlaceTokenIdSafe')) return;
 
-    // Find the original button by id or visible text
-    let oldBtn = card.querySelector('#raLoadTokenIdBtn')
-             ||  card.querySelector('#loadTokenId')
-             ||  Array.from(card.querySelectorAll('button,input[type="button"],input[type="submit"],a'))
-                 .find(b => /load\s*token\s*id/i.test((b.textContent || b.value || '').trim()));
+    // Insert our own safe button near the existing controls
+    const btn = document.createElement('button');
+    btn.id = 'raPlaceTokenIdSafe';
+    btn.className = 'btn small';
+    btn.textContent = 'Place Token ID Label (safe)';
+    btn.style.marginLeft = '8px';
 
-    if (!oldBtn || oldBtn.__raTokReplaced) return;
+    // Try to drop it next to whatever shows the #123 display; else append to the card header area
+    const anchor =
+      card.querySelector('#raTokenIdDisplay, #tokenIdDisplay') ||
+      Array.from(card.querySelectorAll('button,input,select,label'))[0] ||
+      card;
 
-    // Create a fresh button with same look/position — remove all hidden listeners
-    const newBtn = oldBtn.cloneNode(true);
-    newBtn.__raTokReplaced = true;
-    // Normalize label (if your UI has a slightly different string it still looks the same)
-    const txt = (newBtn.textContent || newBtn.value || '').trim();
-    const want = 'Load Token ID';
-    if (!/load\s*token\s*id/i.test(txt)) {
-      // Keep the original if it’s custom; else set a clear label
-      if (newBtn.textContent) newBtn.textContent = want;
-      if (newBtn.value)       newBtn.value       = want;
-    }
+    anchor.parentNode ? anchor.parentNode.insertBefore(btn, anchor.nextSibling) : card.appendChild(btn);
 
-    // Replace in DOM (this drops all prior attached handlers on the old element)
-    oldBtn.parentNode.replaceChild(newBtn, oldBtn);
-
-    // Our handler — capture phase, and also stop bubbling; we own this click
-    newBtn.addEventListener('click', (e)=>{
-      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      e.stopPropagation();     // do not let app’s delegated handlers fire
+      e.stopImmediatePropagation();
       const idStr = readTokenIdValue();
-      updateLabelNonDestructive(idStr);
-      return false;
+      updateLabel(idStr);
     }, true);
   }
 
-  swapButton();
+  // Inject once DOM is ready
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', injectButton, { once:true });
+  } else {
+    injectButton();
+  }
 })();
