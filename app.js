@@ -19,8 +19,6 @@ if (!window.__APECHAIN_RPC) {
 const __wmQS = new URLSearchParams(location.search).get('wm');
 let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
 
-
-
   (function checkWatermark(){
     const test = new Image();
     test.crossOrigin = "anonymous";
@@ -667,13 +665,18 @@ safeAddListener("clearUpload","click", ()=>{
 });
 
 // Token ID Styles → place/update the on-canvas label
-(function wireTokenIdButtons(){
-  // Use the Styles panel display first, then the left input(s), then last loaded token
+;(() => {
+  if (window.__RA_WIRE_TOKENID_BTN__) return;
+  window.__RA_WIRE_TOKENID_BTN__ = true;
+
+  // Use the Styles panel display first, then the left input(s), then the last loaded token (memory)
   function readTokenInputValue(){
+    // 1) Styles panel display (often shows "#123")
     const display = document.querySelector('#tokenIdDisplay');
     const rawDisp = (display && (display.value ?? display.textContent) || '').trim();
     const digitsDisp = (rawDisp.match(/\d+/) || [''])[0];
 
+    // 2) Other common inputs
     const fallbacks = [
       '#tokenIdInput', '#tokenId', '#token',
       'input[name="tokenId"]', 'input[name="token"]',
@@ -688,13 +691,14 @@ safeAddListener("clearUpload","click", ()=>{
       if (d){ digitsFB = d; break; }
     }
 
-    const mem = (window.__raTokenMemory || '').trim(); // set by the image loader
+    // 3) Last loaded token from the image loader (we set window.__raTokenMemory there)
+    const mem = (window.__raTokenMemory || '').trim();
 
     return digitsDisp || digitsFB || mem || '';
   }
 
   const handler = (e)=>{
-    // Ignore the *image* loader button; we only place the TEXT label here
+    // Ignore the *image loader* button; we only place the TEXT label here
     const t = (e?.target?.textContent || e?.target?.value || '').toLowerCase();
     if (/load\s+by\s+token/.test(t)) return;
 
@@ -713,10 +717,11 @@ safeAddListener("clearUpload","click", ()=>{
 
   // Bind by common IDs (bind once)
   ['loadTokenId','loadTokenID','tokenIdLoad','placeTokenId'].forEach(id=>{
-    safeAddListener(id, 'click', handler);
+    const el = document.getElementById(id);
+    if (el && !el.__raTokIdWired){ el.__raTokIdWired = true; el.addEventListener('click', handler, true); }
   });
 
-  // Fallback: match by visible button text in the Styles card
+  // Fallback: match by visible button text in the Token ID card
   document.addEventListener('click', (e)=>{
     const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!btn) return;
@@ -728,8 +733,8 @@ safeAddListener("clearUpload","click", ()=>{
   }, true);
 })();
 
-  /* ===== RA_HISTORY_STABILIZER ===== */
-(function(){
+/* ===== RA_HISTORY_STABILIZER ===== */
+;(() => {
   if (window.__RA_HISTORY_STABILIZER__) return;
   window.__RA_HISTORY_STABILIZER__ = true;
 
@@ -743,7 +748,7 @@ safeAddListener("clearUpload","click", ()=>{
     setTimeout(run, 60);
   }
 
-  // Buttons by visible text (works even if IDs changed)
+  // Buttons by visible text
   document.addEventListener('click', (e)=>{
     const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!el) return;
@@ -753,9 +758,9 @@ safeAddListener("clearUpload","click", ()=>{
     }
   }, true);
 
-  // Keyboard undo: Cmd/Ctrl+Z (and Shift+Cmd/Ctrl+Z)
+  // Keyboard: Cmd/Ctrl+Z (and Shift+Cmd/Ctrl+Z)
   document.addEventListener('keydown', (e)=>{
-    const z = e.key.toLowerCase() === 'z';
+    const z = e.key && e.key.toLowerCase() === 'z';
     if ((e.metaKey || e.ctrlKey) && z) stabilizeFew();
   }, true);
 })();
