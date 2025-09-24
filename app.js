@@ -304,11 +304,11 @@ function isAllowedAssetURL(u){
         if (idx !== target) c.moveTo(base, target);
       }
 
-      // 3) Overlays next (in their current relative order)
-      let next = (backgroundRect ? 1 : 0) + (base ? 1 : 0);
-      objs.filter(o => o && o._kind === 'overlay').forEach(o => {
-        c.moveTo(o, next++);
-      });
+    // 3) Overlays next (in their current relative order)
+// Consider anything that is NOT bg/base/system/label as an overlay (even if _kind is missing)
+let next = (backgroundRect ? 1 : 0) + (base ? 1 : 0);
+const isOverlay = o => o && !o._isBgRect && !o._isBase && !(o._raSys || o._raTokenId);
+objs.filter(isOverlay).forEach(o => { c.moveTo(o, next++); });
 
       // 4) System/UI elements on top (token label, footers, UI)
       objs.filter(o => o && (o._raSys || o._raTokenId)).forEach(o => {
@@ -8050,46 +8050,56 @@ function onClick(e){
   else { boot(); }
 })();
 
-/* ===== RA_UNDO_ORDER_FIX_V1 — keep base/overlays/label ordered after Undo/Redo/Restore ===== */
+/* ===== RA_UNDO_ORDER_FIX_V2 — retag + enforce after Undo/Redo/Restore ===== */
 ;(() => {
-  if (window.__RA_UNDO_ORDER_FIX_V1__) return;
-  window.__RA_UNDO_ORDER_FIX_V1__ = true;
+  if (window.__RA_UNDO_ORDER_FIX_V2__) return;
+  window.__RA_UNDO_ORDER_FIX_V2__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // If _isBase got lost in restore, retag the most-likely base (prefers token-marked; else largest image)
-  function reTagBaseIfMissing(){
+  function retagAfterRestore(){
     const c = C(); if (!c) return;
     const objs = c.getObjects ? c.getObjects() : [];
-    const hasBase = objs.some(o => o && o._isBase && !o._isBgRect);
-    if (hasBase) return;
 
-    // Prefer something with a token marker; else largest image
-    let cand = objs.find(o => o && o._tokenContract && (o.type === 'image' || o._element));
-    if (!cand){
-      const imgs = objs.filter(o => (o && (o.type === 'image' || o._element)) && !o._isBgRect);
-      cand = imgs.sort((a,b)=>{
-        const aw = (a.getScaledWidth ? a.getScaledWidth() : (a.width||0)*(a.scaleX||1));
-        const ah = (a.getScaledHeight? a.getScaledHeight: (a.height||0)*(a.scaleY||1));
-        const bw = (b.getScaledWidth ? b.getScaledWidth() : (b.width||0)*(b.scaleX||1));
-        const bh = (b.getScaledHeight? b.getScaledHeight: (b.height||0)*(b.scaleY||1));
-        return (bw*bh) - (aw*ah);
-      })[0];
+    // Ensure bg rect is tagged
+    const bg = objs.find(o => o && o._isBgRect) ||
+               objs.find(o => o && o.type==='rect' && Math.abs((o.width||0)*(o.scaleX||1) - c.getWidth()) < 2 &&
+                               Math.abs((o.height||0)*(o.scaleY||1) - c.getHeight()) < 2);
+    if (bg) bg._isBgRect = true;
+
+    // If no base, pick the best candidate (token-marked image, else largest image)
+    const hasBase = objs.some(o => o && o._isBase && !o._isBgRect);
+    if (!hasBase) {
+      let cand = objs.find(o => (o && o._tokenContract && (o.type==='image'||o._element)));
+      if (!cand) {
+        const imgs = objs.filter(o => (o && (o.type==='image'||o._element)) && !o._isBgRect);
+        cand = imgs.sort((a,b)=>{
+          const aw=(a.getScaledWidth?a.getScaledWidth(): (a.width||0)*(a.scaleX||1));
+          const ah=(a.getScaledHeight?a.getScaledHeight(): (a.height||0)*(a.scaleY||1));
+          const bw=(b.getScaledWidth?b.getScaledWidth(): (b.width||0)*(b.scaleX||1));
+          const bh=(b.getScaledHeight?b.getScaledHeight(): (b.height||0)*(b.scaleY||1));
+          return (bw*bh)-(aw*ah);
+        })[0];
+      }
+      if (cand){
+        cand._isBase = true;
+        cand.selectable=false; cand.evented=false; cand.hasControls=false;
+        cand.lockMovementX=cand.lockMovementY=cand.lockScalingX=cand.lockScalingY=cand.lockRotation=true;
+        try { cand.setCoords(); } catch(_) {}
+      }
     }
-    if (cand){
-      cand._isBase = true;
-      // lock like a base should be
-      cand.selectable=false; cand.evented=false; cand.hasControls=false;
-      cand.lockMovementX=cand.lockMovementY=cand.lockScalingX=cand.lockScalingY=cand.lockRotation=true;
-      try { cand.setCoords(); } catch(_) {}
-    }
+
+    // Any image that is not bg/base/system/label → treat as overlay (helps after JSON restore)
+    objs.forEach(o=>{
+      if (!o || o._isBgRect || o._isBase || (o._raSys || o._raTokenId)) return;
+      if (o.type==='image' || o._element) o._kind = o._kind || 'overlay';
+    });
   }
 
-  // Run the order fix a few times as history settles
   function fixOrderFew(times=4, delay=60){
-    let i = 0;
-    const step = () => {
-      try { reTagBaseIfMissing(); } catch(_) {}
+    let i=0;
+    const step = ()=>{
+      try { retagAfterRestore(); } catch(_) {}
       try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
       try { const c=C(); c && c.requestRenderAll && c.requestRenderAll(); } catch(_) {}
       if (++i < times) setTimeout(step, delay);
@@ -8097,23 +8107,22 @@ function onClick(e){
     setTimeout(step, 0);
   }
 
-  // Hook common Undo/Redo/Restore UI (buttons by text) and keyboard (Cmd/Ctrl+Z)
+  // Buttons by text (Undo/Redo/Restore Draft)
   document.addEventListener('click', (e)=>{
     const el = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
     if (!el) return;
     const t = (el.textContent || el.value || '').toLowerCase().trim();
     if (/^(undo|redo|restore\s*draft|reload\s*draft|load\s*draft)$/.test(t)){
-      setTimeout(()=>fixOrderFew(), 50);
+      setTimeout(()=>fixOrderFew(), 30);
     }
   }, true);
 
+  // Keyboard undo/redo
   document.addEventListener('keydown', (e)=>{
-    const z = e.key && e.key.toLowerCase() === 'z';
-    if ((e.metaKey || e.ctrlKey) && z){
-      setTimeout(()=>fixOrderFew(), 50);
+    const z = e.key && e.key.toLowerCase()==='z';
+    const y = e.key && e.key.toLowerCase()==='y';
+    if ((e.metaKey || e.ctrlKey) && (z || y)){
+      setTimeout(()=>fixOrderFew(), 30);
     }
   }, true);
-
-  // Safety: if loadFromJSON finishes (your RA_JSON_RESTORE_GUARD already calls once), we double down
-  // (No extra wrapper needed here; the post-delay loop smooths out multi-frame settle.)
 })();
