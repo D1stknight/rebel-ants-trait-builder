@@ -996,16 +996,36 @@ safeAddListener("lock","click", ()=>{
 
 // ---- FIXED: do not unlock backgroundRect or _isBase objects ----
 safeAddListener("unlockAll","click", ()=>{
-  canvas.getObjects().forEach(o=>{
-    if (o === backgroundRect || o._isBase) return; // keep these locked
+  const c = window.canvas; if (!c) return;
+  const objs = c.getObjects() || [];
+
+  // Keep background RECT locked & at index 0 (prevents "ghost box")
+  const bg = objs.find(o => o && o._isBgRect);
+  if (bg) {
+    bg.selectable = false; bg.evented = false; bg.hasControls = false;
+    bg.lockMovementX = bg.lockMovementY = bg.lockScalingX = bg.lockScalingY = bg.lockRotation = true;
+    try { c.moveTo(bg, 0); } catch(_) {}
+  }
+
+  // If background was selected, drop selection to avoid Fabric control glitches
+  const active = c.getActiveObject && c.getActiveObject();
+  if (active && active._isBgRect) {
+    try { c.discardActiveObject(); } catch(_) {}
+  }
+
+  // Unlock only user layers (never bg, base, or any system: footer/WM/label)
+  objs.forEach(o => {
+    if (!o) return;
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
     o.set({
-      selectable:true, evented:true, hasControls:true,
-      lockMovementX:false, lockMovementY:false,
-      lockScalingX:false, lockScalingY:false,
-      lockRotation:false
+      selectable: true, evented: true, hasControls: true,
+      lockMovementX: false, lockMovementY: false,
+      lockScalingX:  false, lockScalingY:  false,
+      lockRotation:  false
     });
   });
-  canvas.requestRenderAll();
+
+  c.requestRenderAll();
 });
 
 safeAddListener("clearAllOverlays","click", ()=>{
