@@ -8051,112 +8051,125 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_SHIM_V1 — quarantine + dedupe watermark/footer without touching undo ===== */
+/* ===== RA_WM_FOOTER_TOP_SHIM_V2 — footer/watermark quarantine + dedupe + top-order (undo-safe) ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_SHIM_V1__) return;
-  window.__RA_WM_FOOTER_SHIM_V1__ = true;
+  if (window.__RA_WM_FOOTER_TOP_SHIM_V2__) return;
+  window.__RA_WM_FOOTER_TOP_SHIM_V2__ = true;
 
   const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Liberal detectors (cover your current tags/names)
-  const isBg    = o => !!(o && o._isBgRect);
-  const isBase  = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
-  const isID    = o => !!(o && o._raTokenId);
-  const isFoot  = o => !!(o && (o._raBrandFooter ||
-                     (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM    = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
-                     (typeof o.name === 'string' && /watermark/i.test(o.name))));
+  // Rebel contract(s) — lowercased
+  const REBEL_CONTRACTS = new Set([
+    '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'
+  ]);
 
-  // Mark footer/WM as system & exclude from export (Undo won’t serialize them)
-  function quarantine(o){
-    if (!o) return;
-    o._raSys = true;
-    // Keep token ID undoable, but footer/WM excluded:
-    if (!isID(o)) o.excludeFromExport = true;
-    // Footer/WM should not be interactive through normal editing
-    if (isFoot(o) || isWM(o)) {
-      o.selectable = false; o.evented = false; o.hasControls = false;
-    }
-  }
+  // Lightweight type detectors
+  const isBg   = o => !!(o && o._isBgRect);
+  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isID   = o => !!(o && o._raTokenId);
+  const isFooter = o => !!(o && (o._raBrandFooter ||
+                       (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isWM  = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
+                       (typeof o.name === 'string' && /watermark/i.test(o.name))));
+  const isSys = o => !!(o && (isFooter(o) || isWM(o) || isID(o)));
 
   const area = o => {
-    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1));
-    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1));
+    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
+    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
     return w*h;
   };
 
-  // Keep one, hide the rest (no remove → no history churn)
+  // Pick ONE and mark the rest invisible (no remove → no history churn)
   function keepOneHideRest(arr, chooser){
     if (!arr.length) return null;
     const keep = chooser(arr);
-    arr.forEach(o => {
+    arr.forEach(o=>{
       quarantine(o);
-      if (o !== keep) o.visible = false; // just hide duplicates
+      if (o !== keep) o.visible = false;
     });
     return keep;
   }
 
-  function sanitizeSys(){
+  // Mark footer/WM as system, exclude from export so Undo never serializes them
+  function quarantine(o){
+    if (!o) return;
+    o._raSys = true;
+    if (!isID(o)) o.excludeFromExport = true;
+    if (isFooter(o) || isWM(o)) {
+      o.selectable=false; o.evented=false; o.hasControls=false;
+    }
+  }
+
+  function currentBaseMeta(c){
+    const objs = c.getObjects ? c.getObjects() : [];
+    const base = objs.find(isBase);
+    return base ? {
+      contract: String(base._tokenContract||'').toLowerCase(),
+      chain   : String(base._tokenChain||'').toLowerCase(),
+      name    : base._tokenName || ''
+    } : {contract:'', chain:'', name:''};
+  }
+
+  function sanitize(){
     const c = getC(); if (!c) return;
     const objs = c.getObjects ? c.getObjects() : [];
 
-    // Quarantine all candidates first
-    objs.forEach(o => { if (isFoot(o) || isWM(o)) quarantine(o); });
+    // Mark any footer/WM we find as system & excluded
+    objs.forEach(o => { if (isFooter(o) || isWM(o)) quarantine(o); });
 
-    // Deduplicate footer and watermark
-    const foot = keepOneHideRest(objs.filter(isFoot), arr =>
-      arr.slice().sort((a,b)=>area(b)-area(a))[0]
+    // Dedupe to exactly one footer & one watermark
+    const foot = keepOneHideRest(objs.filter(isFooter),
+      arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]
     );
-    const wm = keepOneHideRest(objs.filter(isWM), arr =>
-      arr.slice().sort((a,b)=>area(b)-area(a))[0]
+    const wm = keepOneHideRest(objs.filter(isWM),
+      arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]
     );
 
-    // Rebuild order: BG → BASE → users → footer → WM → (Token ID stays on top if present)
-    const bg   = objs.find(isBg)   || null;
-    const base = objs.find(isBase) || null;
-    const users = objs.filter(o => !(isBg(o) || isBase(o) || isFoot(o) || isWM(o) || isID(o)));
-    let i = 0;
-    if (bg)   c.moveTo(bg,   i++);
-    if (base) c.moveTo(base, i++);
-    users.forEach(o => c.moveTo(o, i++));
-    if (foot && foot.visible !== false) c.moveTo(foot, i++);
-    if (wm   && wm.visible   !== false) c.moveTo(wm,   i++);
-    // Token ID label (if present) above all
-    const id = objs.find(isID) || null;
-    if (id && id.visible !== false) c.moveTo(id, i++);
+    // Gating: Rebel -> footer hidden, Friends -> footer shown
+    const meta = currentBaseMeta(c);
+    const isRebel = meta.contract && REBEL_CONTRACTS.has(meta.contract);
+    if (foot) {
+      foot.visible = !isRebel;   // NEVER show footer on Rebel
+      quarantine(foot);
+    }
+    if (wm) quarantine(wm);
 
-    try { c.requestRenderAll(); } catch(_) {}
+    // Keep order top-most without disturbing undo stack:
+    // Bring footer then WM to front (if visible), then Token ID label on absolute top
+    try {
+      if (foot && foot.visible !== false) c.bringToFront(foot);
+      if (wm   && wm.visible   !== false) c.bringToFront(wm);
+      const id = objs.find(isID);
+      if (id && id.visible !== false) c.bringToFront(id);
+    } catch(_){}
+
+    try { c.requestRenderAll(); } catch(_){}
   }
 
   // Run a few frames after changes/restores to catch multi-frame settles
   function schedule(times=2, delay=60){
-    let n=0; const step=()=>{ sanitizeSys(); if (++n<times) setTimeout(step, delay); };
+    let n=0; const step=()=>{ sanitize(); if (++n<times) setTimeout(step, delay); };
     setTimeout(step, 0);
   }
 
-  // Wire to typical churn points (non-invasive)
   function wire(){
-    const c = getC(); if (!c) { setTimeout(wire, 150); return; }
-    if (c.__raWmFooterShim) return;
-    c.__raWmFooterShim = true;
+    const c = getC(); if (!c) { setTimeout(wire, 120); return; }
+    if (c.__raWmFooterTopShim) return; c.__raWmFooterTopShim = true;
 
-    // When objects change, sanitize and keep sys on top (won’t enter undo because excludeFromExport=true)
+    // React to object churn (adding overlays, moving text, undo restores)
     c.on('object:added',    ()=> schedule());
     c.on('object:modified', ()=> schedule());
     c.on('object:removed',  ()=> schedule());
 
-    // Respect your admin/wallet events
-    document.addEventListener('ra-wm-recalc',    ()=> schedule());
-    document.addEventListener('ra-holder-update',()=> schedule());
+    // Respect your admin/wallet signals (your core blocks fire these)
+    document.addEventListener('ra-wm-recalc',        ()=> schedule());
+    document.addEventListener('ra-holder-update',    ()=> schedule());
     document.addEventListener('ra-collection-change',()=> schedule());
 
-    // One pass on boot as well
+    // First pass on boot
     schedule(2,60);
   }
 
-  if (document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', wire, {once:true});
-  } else {
-    wire();
-  }
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, {once:true});
+  else wire();
 })();
