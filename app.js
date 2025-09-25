@@ -8082,7 +8082,7 @@ window.raDump = () => {
 
   const isFooter = o => !!(o && (o._raBrandFooter ||
                         (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM     = o => !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
+  const isWM     = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
@@ -8136,10 +8136,10 @@ window.raDump = () => {
     if (wm) quarantine(wm);
 
 // Seat WM just above BASE (keeps "faint" look), not at the very top
-if (wm && wm.visible !== false) {
+if (wm && wm.visible !== false && base) {
   const baseZ = all.indexOf(base);
   try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch (_){}
-}   
+}
 
     try {
       // WM top, then footer (if visible), then ID absolutely top
