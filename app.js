@@ -8275,37 +8275,136 @@ window.raDump = () => {
     }
   }
 
-  // Resnapshot watermark whenever its look could change
-  function wire() {
-    const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmSnapshotOverlayShim) return; c.__raWmSnapshotOverlayShim = true;
+  /* ===== RA_WM_SNAPSHOT_OVERLAY_SHIM_v2 — snapshot object WM to overlayImage; rescale on resize; faint default ===== */
+;(() => {
+  if (window.__RA_WM_SNAPSHOT_OVERLAY_SHIM_V2__) return;
+  window.__RA_WM_SNAPSHOT_OVERLAY_SHIM_V2__ = true;
 
-    // First pass: if a WM exists, snapshot it
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Identify your watermark objects
+  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
+
+  // Admin controls (optional). Opacity 0..1. Size as width % of canvas 0..1
+  const getAdminOpacity   = () => (typeof window.__RA_WM_ADMIN_OPACITY === 'number' ? window.__RA_WM_ADMIN_OPACITY : 0.12); // faint default
+  const getAdminTargetPct = () => (typeof window.__RA_WM_TARGET_PCT    === 'number' ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT)) : null);
+
+  let snapping = false;
+
+  // Create overlay image from the current WM object (without capturing an existing overlay)
+  function snapshotWMToOverlay(reason='') {
+    const c = C(); if (!c || snapping) return;
+    const objs = c.getObjects?.() || [];
+    const wm = objs.find(isWM);
+    if (!wm) return;
+
+    snapping = true;
+
+    // Take note of current overlay and clear it so it cannot be included in the snapshot
+    const prevOverlay = c.overlayImage || null;
+    if (prevOverlay) c.setOverlayImage(null); // clear immediately
+
+    // Save current visibilities & background
+    const vis = objs.map(o => o.visible);
+    const oldBg = c.backgroundColor;
+
+    try {
+      // Show only WM, transparent background
+      objs.forEach(o => { o.visible = isWM(o); });
+      c.backgroundColor = 'rgba(0,0,0,0)';
+      c.requestRenderAll();
+
+      // Snapshot full canvas (watermark only)
+      const dataUrl = c.toDataURL({ format: 'png' });
+
+      // Restore visibilities & background
+      objs.forEach((o, i) => { o.visible = vis[i]; });
+      c.backgroundColor = oldBg;
+      c.requestRenderAll();
+
+      // Install overlay from snapshot
+      fabric.Image.fromURL(dataUrl, img => {
+        try {
+          img.set({
+            originX:'left', originY:'top',
+            left:0, top:0,
+            selectable:false, evented:false,
+            objectCaching:false,
+            opacity:getAdminOpacity()
+          });
+          c.setOverlayImage(img, () => c.requestRenderAll());
+          // Hide object-based WMs to prevent any future double-draw
+          (c.getObjects?.()||[]).forEach(o=>{
+            if (isWM(o)){
+              o._raSys = true; o.excludeFromExport = true;
+              o.visible = false; o.selectable = false; o.evented = false; o.hasControls = false;
+            }
+          });
+          c.requestRenderAll();
+        } catch(_) {}
+      }, { crossOrigin:'anonymous' });
+
+    } catch(_) {
+      // On error, restore everything including previous overlay
+      objs.forEach((o, i) => { o.visible = vis[i]; });
+      c.backgroundColor = oldBg;
+      if (prevOverlay) c.setOverlayImage(prevOverlay);
+      c.requestRenderAll();
+    } finally {
+      snapping = false;
+    }
+  }
+
+  // Rescale existing overlay to the canvas; do NOT snapshot here
+  function rescaleOverlayWM(){
+    const c = C(); if (!c) return;
+    const ov = c.overlayImage;
+    if (!ov) return;
+    try {
+      const cw = c.getWidth();
+      const pct = getAdminTargetPct() ?? (window.__RA_WM_TARGET_PCT || 0.28);
+      window.__RA_WM_TARGET_PCT = Math.max(0.05, Math.min(1, pct));
+      const natW = ov.width || 1;
+      const scale = (cw * window.__RA_WM_TARGET_PCT) / Math.max(1, natW);
+      ov.scaleX = scale; ov.scaleY = scale;
+      ov.left = 0; ov.top = 0; // overlay covers full canvas
+      ov.opacity = getAdminOpacity();
+      ov.setCoords();
+      c.requestRenderAll();
+    } catch(_) {}
+  }
+
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmSnapshotOverlayShimV2) return; c.__raWmSnapshotOverlayShimV2 = true;
+
+    // First pass: if a WM object exists, snapshot once
     setTimeout(() => snapshotWMToOverlay('boot'), 60);
 
-    // Collection/base change → snapshot after change settles
+    // Admin changes: if size/opacity changed, just rescale/refresh overlay
+    document.addEventListener('ra-wm-recalc', () => {
+      if (!c.overlayImage) { snapshotWMToOverlay('admin'); return; }
+      rescaleOverlayWM();
+    });
+
+    // Collection/base change: WM appearance may change -> resnapshot once
     document.addEventListener('ra-collection-change', () => setTimeout(() => snapshotWMToOverlay('collection'), 60));
 
-    // Admin changes (opacity/size) → resnapshot
-    document.addEventListener('ra-wm-recalc', () => setTimeout(() => snapshotWMToOverlay('admin'), 30));
+    // If a WM object appears later (lazy), snapshot once
+    c.on?.('object:added', (e)=>{ if (e && e.target && isWM(e.target)) setTimeout(()=>snapshotWMToOverlay('wm-added'), 30); });
 
-    // When the user resizes the canvas (700/900/1024/1200), resnapshot to a new canvas-sized overlay
+    // Canvas element resize: do NOT snapshot; just rescale existing overlay
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmSnapResizeObs) {
-        c.__raWmSnapResizeObs = true;
-        new ResizeObserver(() => setTimeout(() => snapshotWMToOverlay('resize'), 30)).observe(el);
+      if (el && !c.__raWmSnapResizeObsV2) {
+        c.__raWmSnapResizeObsV2 = true;
+        new ResizeObserver(() => rescaleOverlayWM()).observe(el);
       }
-    } catch(_) {}
-
-    // If a WM object appears later (e.g., lazy insert), snapshot once
-    c.on?.('object:added', (e) => {
-      if (e && e.target && isWM(e.target)) setTimeout(() => snapshotWMToOverlay('wm-added'), 30);
-    });
+    } catch(_){}
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once: true });
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
   } else {
     wire();
   }
