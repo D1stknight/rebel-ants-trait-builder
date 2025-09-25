@@ -100,10 +100,15 @@ function normalize(u){
   return u;
 }
 
-/* === Non-token ring watermark helper (faint; auto-hide for holders) === */
+/* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
 ;(() => {
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Strict watermark detector (only objects we tag as WM)
   const isWM = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
+  // Base detector (covers image base or grouped base)
+  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isBg   = o => !!(o && o._isBgRect);
 
   function isHolder() {
     const s = (window.RA_HOLDER_STATE || {});
@@ -126,7 +131,26 @@ function normalize(u){
   function faintOpacity() {
     return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
       ? window.__RA_WM_ADMIN_OPACITY
-      : 0.12; // faint default
+      : 0.18; // faint default (bump if you want it slightly more visible)
+  }
+
+  // Seat watermark just above base (keeps "faint" look), or just above bg if base isn't present yet
+  function seatAboveBase(wm) {
+    const c = C(); if (!c || !wm) return;
+    try {
+      const all  = c.getObjects() || [];
+      const base = all.find(isBase);
+      const bgIx = all.findIndex(isBg);
+
+      let targetZ = Math.min(all.length - 1, (bgIx >= 0 ? bgIx : -1) + 1); // just above bg by default
+      if (base) {
+        const baseZ = all.indexOf(base);
+        targetZ = Math.min(all.length - 1, baseZ + 1);
+      }
+
+      const curZ = all.indexOf(wm);
+      if (curZ !== targetZ) c.moveTo(wm, targetZ);
+    } catch (_) {}
   }
 
   // Create/show ring watermark unless holder; otherwise hide it.
@@ -145,6 +169,7 @@ function normalize(u){
     if (wm) {
       wm.visible = true;
       scaleRingToCanvas(wm);
+      seatAboveBase(wm);
       try { c.requestRenderAll(); } catch(_) {}
       return;
     }
@@ -165,6 +190,10 @@ function normalize(u){
 
       scaleRingToCanvas(img);
       c.add(img);
+
+      // Seat above base right away so it isn't hidden
+      seatAboveBase(img);
+
       try { c.requestRenderAll(); } catch(_) {}
     }, { crossOrigin: 'anonymous' });
   };
@@ -174,7 +203,7 @@ function normalize(u){
     try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
-  // Keep ring sized on canvas resizes
+  // Keep ring sized/positioned on canvas resizes
   try {
     const c = C();
     const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
@@ -182,7 +211,11 @@ function normalize(u){
       c.__raNonTokenRingResizeObs = true;
       new ResizeObserver(() => {
         const wm = (c.getObjects?.()||[]).find(isWM);
-        if (wm) { scaleRingToCanvas(wm); try { c.requestRenderAll(); } catch(_) {} }
+        if (wm) {
+          scaleRingToCanvas(wm);
+          seatAboveBase(wm);
+          try { c.requestRenderAll(); } catch(_) {}
+        }
       }).observe(el);
     }
   } catch(_) {}
