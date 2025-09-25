@@ -8051,3 +8051,112 @@ window.raDump = () => {
   });
 };
 
+/* ===== RA_WM_FOOTER_SHIM_V1 — quarantine + dedupe watermark/footer without touching undo ===== */
+;(() => {
+  if (window.__RA_WM_FOOTER_SHIM_V1__) return;
+  window.__RA_WM_FOOTER_SHIM_V1__ = true;
+
+  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Liberal detectors (cover your current tags/names)
+  const isBg    = o => !!(o && o._isBgRect);
+  const isBase  = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isID    = o => !!(o && o._raTokenId);
+  const isFoot  = o => !!(o && (o._raBrandFooter ||
+                     (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isWM    = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
+                     (typeof o.name === 'string' && /watermark/i.test(o.name))));
+
+  // Mark footer/WM as system & exclude from export (Undo won’t serialize them)
+  function quarantine(o){
+    if (!o) return;
+    o._raSys = true;
+    // Keep token ID undoable, but footer/WM excluded:
+    if (!isID(o)) o.excludeFromExport = true;
+    // Footer/WM should not be interactive through normal editing
+    if (isFoot(o) || isWM(o)) {
+      o.selectable = false; o.evented = false; o.hasControls = false;
+    }
+  }
+
+  const area = o => {
+    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1));
+    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1));
+    return w*h;
+  };
+
+  // Keep one, hide the rest (no remove → no history churn)
+  function keepOneHideRest(arr, chooser){
+    if (!arr.length) return null;
+    const keep = chooser(arr);
+    arr.forEach(o => {
+      quarantine(o);
+      if (o !== keep) o.visible = false; // just hide duplicates
+    });
+    return keep;
+  }
+
+  function sanitizeSys(){
+    const c = getC(); if (!c) return;
+    const objs = c.getObjects ? c.getObjects() : [];
+
+    // Quarantine all candidates first
+    objs.forEach(o => { if (isFoot(o) || isWM(o)) quarantine(o); });
+
+    // Deduplicate footer and watermark
+    const foot = keepOneHideRest(objs.filter(isFoot), arr =>
+      arr.slice().sort((a,b)=>area(b)-area(a))[0]
+    );
+    const wm = keepOneHideRest(objs.filter(isWM), arr =>
+      arr.slice().sort((a,b)=>area(b)-area(a))[0]
+    );
+
+    // Rebuild order: BG → BASE → users → footer → WM → (Token ID stays on top if present)
+    const bg   = objs.find(isBg)   || null;
+    const base = objs.find(isBase) || null;
+    const users = objs.filter(o => !(isBg(o) || isBase(o) || isFoot(o) || isWM(o) || isID(o)));
+    let i = 0;
+    if (bg)   c.moveTo(bg,   i++);
+    if (base) c.moveTo(base, i++);
+    users.forEach(o => c.moveTo(o, i++));
+    if (foot && foot.visible !== false) c.moveTo(foot, i++);
+    if (wm   && wm.visible   !== false) c.moveTo(wm,   i++);
+    // Token ID label (if present) above all
+    const id = objs.find(isID) || null;
+    if (id && id.visible !== false) c.moveTo(id, i++);
+
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  // Run a few frames after changes/restores to catch multi-frame settles
+  function schedule(times=2, delay=60){
+    let n=0; const step=()=>{ sanitizeSys(); if (++n<times) setTimeout(step, delay); };
+    setTimeout(step, 0);
+  }
+
+  // Wire to typical churn points (non-invasive)
+  function wire(){
+    const c = getC(); if (!c) { setTimeout(wire, 150); return; }
+    if (c.__raWmFooterShim) return;
+    c.__raWmFooterShim = true;
+
+    // When objects change, sanitize and keep sys on top (won’t enter undo because excludeFromExport=true)
+    c.on('object:added',    ()=> schedule());
+    c.on('object:modified', ()=> schedule());
+    c.on('object:removed',  ()=> schedule());
+
+    // Respect your admin/wallet events
+    document.addEventListener('ra-wm-recalc',    ()=> schedule());
+    document.addEventListener('ra-holder-update',()=> schedule());
+    document.addEventListener('ra-collection-change',()=> schedule());
+
+    // One pass on boot as well
+    schedule(2,60);
+  }
+
+  if (document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', wire, {once:true});
+  } else {
+    wire();
+  }
+})();
