@@ -8135,9 +8135,14 @@ window.raDump = () => {
     const wm = all.find(isWM);
     if (wm) quarantine(wm);
 
+// Seat WM just above BASE (keeps "faint" look), not at the very top
+if (wm && wm.visible !== false && base) {
+  const baseZ = all.indexOf(base);
+  try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch (_){}
+}   
+
     try {
       // WM top, then footer (if visible), then ID absolutely top
-      if (wm   && wm.visible   !== false) c.bringToFront(wm);
       if (foot && foot.visible !== false) c.bringToFront(foot);
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
