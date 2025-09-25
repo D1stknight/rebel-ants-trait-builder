@@ -100,6 +100,94 @@ function normalize(u){
   return u;
 }
 
+/* === Non-token ring watermark helper (faint; auto-hide for holders) === */
+;(() => {
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const isWM = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
+
+  function isHolder() {
+    const s = (window.RA_HOLDER_STATE || {});
+    return !!(s.hasRebel || s.hasFriend);
+  }
+
+  function scaleRingToCanvas(wm) {
+    const c = C(); if (!c || !wm) return;
+    const cw = c.getWidth();
+    const natW = wm.width || 1;
+    const pct  = (typeof window.__RA_WM_TARGET_PCT === 'number')
+      ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT))
+      : 0.28; // default width = 28% of canvas
+    const sc = (cw * pct) / Math.max(1, natW);
+    wm.scaleX = sc; wm.scaleY = sc;
+    wm.left = cw / 2; wm.top = c.getHeight() / 2;
+    wm.setCoords();
+  }
+
+  function faintOpacity() {
+    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
+      ? window.__RA_WM_ADMIN_OPACITY
+      : 0.12; // faint default
+  }
+
+  // Create/show ring watermark unless holder; otherwise hide it.
+  window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
+    const c = C(); if (!c) return;
+
+    // If wallet is holder, hide any ring watermark and bail (footer stays)
+    if (isHolder()) {
+      (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) o.visible = false; });
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
+    }
+
+    // Find existing ring
+    let wm = (c.getObjects?.()||[]).find(isWM);
+    if (wm) {
+      wm.visible = true;
+      scaleRingToCanvas(wm);
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
+    }
+
+    // Create new ring from WM_SRC
+    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+    fabric.Image.fromURL(src, img => {
+      if (!img) return;
+      img.set({
+        originX: 'center', originY: 'center',
+        selectable: false, evented: false, hasControls: false,
+        objectCaching: false, opacity: faintOpacity()
+      });
+      // Tag so v7 recognizes it as “the watermark”
+      img._raWMCenter = true;
+      img._isWatermark = true;
+      img._raSys = true; img.excludeFromExport = true;
+
+      scaleRingToCanvas(img);
+      c.add(img);
+      try { c.requestRenderAll(); } catch(_) {}
+    }, { crossOrigin: 'anonymous' });
+  };
+
+  // React to wallet status (show/hide ring)
+  document.addEventListener('ra-holder-update', () => {
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  });
+
+  // Keep ring sized on canvas resizes
+  try {
+    const c = C();
+    const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
+    if (el && !c.__raNonTokenRingResizeObs) {
+      c.__raNonTokenRingResizeObs = true;
+      new ResizeObserver(() => {
+        const wm = (c.getObjects?.()||[]).find(isWM);
+        if (wm) { scaleRingToCanvas(wm); try { c.requestRenderAll(); } catch(_) {} }
+      }).observe(el);
+    }
+  } catch(_) {}
+})();
+
 /* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
 (function(){
   if (window.__RA_TOKEN_ID_DEBUG_AND_FORCE__) return;
@@ -321,8 +409,9 @@ async function makeStampedGroup(img, bw, bh, wmWidthRatio){
 
 async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
+
   const img = await fabricFromURL(dataUrl);
-  img.set({ originX:"center", originY:"center" });
+  img.set({ originX: "center", originY: "center" });
 
   // fit to canvas (no upscaling)
   const cw = canvas.getWidth(), ch = canvas.getHeight();
@@ -333,26 +422,34 @@ async function loadBaseImage(dataUrl, isToken){
 
   let obj;
   if (isToken) {
-    // Token = RA (real asset) => NO watermarks
+    // Token = RA (real asset) => NO ring watermark (footer only)
     img._isBase = true;
     lockBaseObject(img);
-    img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+    img.set({ left: cw / 2, top: ch / 2 }); img.setCoords();
     obj = img;
+
+    canvas.add(obj);
+    baseGroup = obj;
+    bringInterfaceToFront();
+    canvas.requestRenderAll();
+
   } else {
-    // Non-token => add corner stamps
+    // Non-token (uploads) => base group (e.g., with corner stamps)
     const group = await makeStampedGroup(img, bw, bh, 0.15);
     group._isBase = true;
     lockBaseObject(group);
-    group.set({ left:cw/2, top:ch/2 }); group.setCoords();
+    group.set({ left: cw / 2, top: ch / 2 }); group.setCoords();
     obj = group;
+
+    canvas.add(obj);
+    baseGroup = obj;
+    bringInterfaceToFront();
+    canvas.requestRenderAll();
+
+    // Add faint ring WM for uploads (unless wallet holder)
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch (_) {}
   }
-
-  canvas.add(obj);
-  baseGroup = obj;
-  bringInterfaceToFront();
-  canvas.requestRenderAll();
 }
-
 // Add overlay (with small corner stamps unless permanent)
 async function addOverlayToCanvas(src, isPermanent){
   const img = await fabricFromURL(src);
