@@ -8072,150 +8072,204 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v10 — object-WM stable (no “thick” resize frame) + footer no-flash on Rebel ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v11 — WM top, deduped; scale changes only on resize/admin; footer no-flash on Rebel ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V10__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V10__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V11__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V11__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Rebel contract (lowercase)
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
-  const isFooter = o => !!(o && (o._raBrandFooter ||
-                        (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
   const isWM     = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
   const isID     = o => !!(o && o._raTokenId);
 
-  // Short grace after undo/redo restore to prevent footer flash
+  // Treat a short window after undo/redo restore as "still restoring" (prevents footer flash)
   let lastRestoreSeen = 0;
   const restoring = () => {
     if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
     return (Date.now() - lastRestoreSeen) < 400;
   };
 
-  const allObjs = () => {
-    const c = C(); return c ? (c.getObjects?.() || []) : [];
-  };
+  const allObjs = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
 
-  // Admin opacity (baseline). Change this value in your Admin code and dispatch 'ra-wm-recalc'
-  function wmOpacity() {
-    const v = window.__RA_WM_ADMIN_OPACITY;
-    if (typeof v === 'number' && v >= 0 && v <= 1) return v;
-    return 0.22; // default baseline
+  // Admin-controlled values (opacity and width % of canvas)
+  const getAdminOpacity = () =>
+    (typeof window.__RA_WM_ADMIN_OPACITY === 'number' ? window.__RA_WM_ADMIN_OPACITY : 0.22);
+  const getAdminTargetPct = () =>
+    (typeof window.__RA_WM_TARGET_PCT === 'number' ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT)) : null);
+
+  // Lock BG & keep at z=0
+  function lockBg(){
+    const c=C(); if (!c) return;
+    const bg = allObjs().find(isBg);
+    if (bg){
+      bg.selectable=false; bg.evented=false; bg.hasControls=false;
+      try { c.moveTo(bg, 0); } catch(_){}
+    }
   }
 
-  // Force WM render state so resize frames look identical
-  function normalizeWM(o) {
-    if (!o) return;
-    o._raSys = true;
-    o.excludeFromExport = true;          // keep out of undo JSON
-    o.selectable = false; o.evented = false; o.hasControls = false;
-    o.lockMovementX = o.lockMovementY = o.lockScalingX = o.lockScalingY = o.lockRotation = true;
-
-    // Critical bits for identical appearance each frame:
-    o.objectCaching = false;             // avoid cache artifacts between frames
-    o.globalCompositeOperation = null;   // draw in normal blend mode
-    o.opacity = wmOpacity();             // enforce baseline every draw
-  }
-
-  // Hide footer (and keep non-interactive)
-  function gateFooter() {
-    const c = C(); if (!c) return;
-    const cc = String((allObjs().find(isBase)?._tokenContract) || '').toLowerCase();
-    (allObjs()).forEach(o => {
+  // Gate footer: hide during restore + on Rebel; non-interactive always
+  function gateFooter(){
+    const c=C(); if (!c) return;
+    const base = allObjs().find(isBase);
+    const cc = String(base?._tokenContract||'').toLowerCase();
+    allObjs().forEach(o=>{
       if (!isFooter(o)) return;
       o._raSys = true; o.excludeFromExport = true;
       o.selectable=false; o.evented=false; o.hasControls=false;
-      // Hide during restore & on Rebel; visible for friends
       o.visible = !restoring() && (!!cc && cc !== REBEL_CONTRACT);
     });
   }
 
-  // Keep BG locked & index 0 (prevents “ghost box”)
-  function lockBg() {
-    const c = C(); if (!c) return;
-    const bg = allObjs().find(isBg);
-    if (bg) {
-      bg.selectable=false; bg.evented=false; bg.hasControls=false;
-      try { c.moveTo(bg, 0); } catch(_) {}
-    }
+  // Keep one WM object (largest), mark as sys, and return it
+  function getOneWM(){
+    const c=C(); if (!c) return null;
+    const wms = allObjs().filter(isWM);
+    if (!wms.length) return null;
+
+    // Choose the largest as the canonical one
+    const area = o => {
+      const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
+      const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
+      return w*h;
+    };
+    const keep = wms.slice().sort((a,b)=>area(b)-area(a))[0];
+    wms.forEach(o=>{
+      o._raSys = true; o.excludeFromExport = true;
+      o.selectable=false; o.evented=false; o.hasControls=false;
+      if (o !== keep) o.visible = false;
+    });
+    return keep;
   }
 
-  // Hard re-assert order and WM render state immediately
-  function assertNow() {
-    const c = C(); if (!c) return;
-    lockBg();
-    gateFooter();
+  // Apply admin opacity; do NOT change scale here
+  function applyWmVisuals(wm){
+    if (!wm) return;
+    wm.opacity = getAdminOpacity();
+    wm.objectCaching = false;
+    wm.globalCompositeOperation = null;
+  }
 
-    const objs = allObjs();
-    const wm = objs.find(isWM) || null;
-    const foot = objs.find(isFooter) || null;
-    const id = objs.find(isID) || null;
-
-    if (wm) normalizeWM(wm);
-
+  // Bring WM top (then footer if visible), ID absolute top
+  function bringTop(wm){
+    const c=C(); if (!c) return;
+    const foot = allObjs().find(isFooter);
+    const id = allObjs().find(isID);
     try {
-      // Always keep WM top (consistent look), then footer if visible, then ID absolutely top
       if (wm   && wm.visible   !== false) c.bringToFront(wm);
       if (foot && foot.visible !== false) c.bringToFront(foot);
       if (id   && id.visible   !== false) c.bringToFront(id);
     } catch(_){}
-
-    try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Run a short settle loop after resize to cover Fabric rescale burst
-  function settle(n=2) {  // run assertNow over next N frames
-    let i=0; const tick = () => { assertNow(); if (++i<n) setTimeout(tick, 30); };
-    tick();
+  // Re-scale WM only when:
+  //  * canvas size changes, OR
+  //  * Admin sets window.__RA_WM_TARGET_PCT (and dispatches 'ra-wm-recalc'),
+  //  * OR when a new base/collection is loaded (reset).
+  function recalibrateWmScaleIfNeeded(wm, force=false){
+    const c=C(); if (!c || !wm) return;
+
+    // Admin size takes precedence if provided
+    const adminPct = getAdminTargetPct();
+    if (adminPct !== null) {
+      wm._raWmTargetPct = adminPct;
+    } else {
+      // If we don't have a stored pct and not forcing, learn it once from current state
+      if (!wm._raWmTargetPct && !force) {
+        const cw=c.getWidth();
+        const curW = wm.getScaledWidth ? wm.getScaledWidth() : (wm.width||0)*(wm.scaleX||1);
+        wm._raWmTargetPct = Math.max(0.05, Math.min(1, curW/Math.max(1,cw)));
+      }
+    }
+
+    // Only recalibrate on resize/force/admin changes
+    if (force || adminPct !== null) {
+      const cw = c.getWidth();
+      const natW = wm.width || 1; // if image, this is intrinsic width
+      const pct = wm._raWmTargetPct || 0.28;
+      const scale = (cw * pct) / Math.max(1,natW);
+      if (!Number.isNaN(scale) && scale > 0) {
+        wm.scaleX = scale;
+        wm.scaleY = scale;
+        wm.setCoords();
+      }
+    }
   }
 
-  function wire() {
-    const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmFooterFixShimV10) return; c.__raWmFooterFixShimV10 = true;
+  // Hard assert: lock BG, gate footer, dedupe WM, apply visuals, keep top
+  function assertNow({recalibrate=false}={}){
+    const c=C(); if (!c) return;
+    lockBg();
+    gateFooter();
+    const wm = getOneWM();
+    if (wm){
+      applyWmVisuals(wm);
+      if (recalibrate) recalibrateWmScaleIfNeeded(wm, true);
+      bringTop(wm);
+    }
+    try { c.requestRenderAll(); } catch(_){}
+  }
 
-    // Hide footer BEFORE a restoring frame draws → no flash; enforce WM immediately
+  function wire(){
+    const c=C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmFooterFixShimV11) return; c.__raWmFooterFixShimV11 = true;
+
+    // Hide footer BEFORE restoring frames draw; don't scale WM here (no resize)
     c.on?.('before:render', () => {
       if (!restoring()) return;
-      const objs = allObjs();
-      const foot = objs.find(isFooter);
+      const foot = allObjs().find(isFooter);
       if (foot && foot.visible !== false) foot.visible = false;
-      const wm = objs.find(isWM);
-      if (wm) normalizeWM(wm);
-      // Keep WM top in the same frame
-      try { if (wm && wm.visible !== false) c.bringToFront(wm); } catch(_){}
     });
 
-    // Immediate enforcement on all churn points + after each draw
-    c.on?.('after:render',    assertNow);
-    c.on?.('object:added',    assertNow);
-    c.on?.('object:modified', assertNow);
-    c.on?.('object:removed',  assertNow);
-    c.on?.('selection:created', assertNow);
-    c.on?.('selection:updated', assertNow);
-    c.on?.('mouse:up', assertNow);
+    // On normal churn, do NOT recalibrate scale—just keep WM top & apply visuals
+    const justAssert = () => assertNow({recalibrate:false});
+    c.on?.('after:render',    justAssert);
+    c.on?.('object:added',    justAssert);
+    c.on?.('object:modified', justAssert);
+    c.on?.('object:removed',  justAssert);
+    c.on?.('selection:created', justAssert);
+    c.on?.('selection:updated', justAssert);
+    c.on?.('mouse:up', justAssert);
 
-    // React to admin/wallet signals
-    ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, () => { assertNow(); }));
+    // Admin triggers: apply new opacity immediately; if Admin changed size pct, recalibrate once
+    document.addEventListener('ra-wm-recalc', () => {
+      const wm = getOneWM();
+      if (!wm) return;
+      const hadPct = !!wm._raWmTargetPct;
+      // If admin provided a new percent, store and force calibrate
+      if (getAdminTargetPct() !== null) wm._raWmTargetPct = getAdminTargetPct();
+      applyWmVisuals(wm);
+      recalibrateWmScaleIfNeeded(wm, getAdminTargetPct() !== null);
+      bringTop(wm);
+      try { C()?.requestRenderAll(); } catch(_){}
+    });
 
-    // Re-assert across canvas element resize (700/900/1024/1200) with a short settle
+    // Collection/base change: drop stored pct and recalibrate once (next assert)
+    document.addEventListener('ra-collection-change', () => {
+      const wm = getOneWM();
+      if (wm) wm._raWmTargetPct = undefined;  // relearn on next recalibrate
+      assertNow({recalibrate:true});
+    });
+
+    // Canvas element resize → recalibrate size (and only then)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmResizeObs) {
         c.__raWmResizeObs = true;
-        new ResizeObserver(() => { settle(3); }).observe(el);
+        new ResizeObserver(() => { assertNow({recalibrate:true}); }).observe(el);
       }
     } catch(_){}
 
-    // First pass
-    assertNow();
+    // First pass (no recalibration; we haven't resized yet)
+    assertNow({recalibrate:false});
   }
 
-  if (document.readyState === 'loading') {
+  if (document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded', wire, { once:true });
   } else {
     wire();
