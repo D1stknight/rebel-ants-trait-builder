@@ -8194,16 +8194,15 @@ window.raDump = () => {
   }
 })();
 
-/* ===== RA_WM_DEDUPE_SHIM_v2 — keep a single WM; preserve original z-index (no top forcing) ===== */
+/* ===== RA_WM_MINI_SHIM_vA — single WM; faint after resize (just above base); no scale/opacity changes ===== */
 ;(() => {
-  if (window.__RA_WM_DEDUPE_SHIM_V2__) return;
-  window.__RA_WM_DEDUPE_SHIM_V2__ = true;
+  if (window.__RA_WM_MINI_SHIM_vA__) return;
+  window.__RA_WM_MINI_SHIM_vA__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Match the same tags you use for watermark + helpers
-  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
-  const isBg = o => !!(o && o._isBgRect);
+  // Tags consistent with your code
+  const isWM   = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
   const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
 
   const area = o => {
@@ -8212,61 +8211,69 @@ window.raDump = () => {
     return w*h;
   };
 
-  function preserveZ() {
+  // Keep exactly one WM visible; mark as system; do NOT move or rescale
+  function dedupeOnly() {
     const c = C(); if (!c) return;
     const objs = c.getObjects?.() || [];
     const wms = objs.filter(isWM);
     if (!wms.length) return;
 
-    // Choose keeper (largest by drawn area) and hide the rest (no remove => no history churn)
     const keep = wms.slice().sort((a,b)=>area(b)-area(a))[0];
-    wms.forEach(o=>{
-      o._raSys = true;                 // system layer → skip undo JSON
-      o.excludeFromExport = true;
+    wms.forEach(o => {
+      o._raSys = true;
+      o.excludeFromExport = true;       // keep out of undo snapshots
       o.selectable=false; o.evented=false; o.hasControls=false;
-      if (o !== keep) o.visible = false;
+      if (o !== keep) o.visible = false; // hide extras only
     });
 
-    // If we haven't recorded a "home" z-index yet, store the keeper's current z
-    const zIdx = (objs || []).indexOf(keep);
-    if (keep._raWmHomeZ == null && zIdx >= 0) keep._raWmHomeZ = zIdx;
+    try { c.requestRenderAll(); } catch(_) {}
+    return keep;
+  }
 
-    // If a home z-index exists, restore it
-    if (Number.isFinite(keep._raWmHomeZ)) {
-      try { c.moveTo(keep, Math.max(0, Math.min(keep._raWmHomeZ, objs.length-1))); } catch(_) {}
-    } else {
-      // Otherwise, place just above the base (keeps faint look) without forcing top
-      const base = objs.find(isBase);
-      if (base) {
-        const baseZ = objs.indexOf(base);
-        try { c.moveTo(keep, Math.min(objs.length-1, baseZ + 1)); } catch(_) {}
-      }
-    }
+  // After a resize, seat WM just above base (keeps the faint look)
+  function seatWmAboveBase() {
+    const c = C(); if (!c) return;
+    const objs = c.getObjects?.() || [];
+    const wm   = objs.find(isWM);
+    const base = objs.find(isBase);
+    if (!wm || !base) return;
 
+    const baseZ = objs.indexOf(base);
+    const targetZ = Math.min(objs.length - 1, baseZ + 1);
+    try { c.moveTo(wm, targetZ); } catch(_) {}
     try { c.requestRenderAll(); } catch(_) {}
   }
 
+  let lastResizeAt = 0;
+  const RESIZE_WINDOW_MS = 350; // small window after resize to override any top-forcing
+
   function wire() {
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmDedupeShimV2) return; c.__raWmDedupeShimV2 = true;
+    if (c.__raWmMiniShimVA) return; c.__raWmMiniShimVA = true;
 
-    // Initial run (covers first load)
-    setTimeout(preserveZ, 60);
+    // Initial pass (covers first load)
+    setTimeout(dedupeOnly, 60);
 
-    // Do not change scale/opacity; only dedupe + keep at original z on churn
-    c.on?.('object:added',    preserveZ);
-    c.on?.('object:removed',  preserveZ);
-    c.on?.('object:modified', preserveZ);
-    c.on?.('selection:created', preserveZ);
-    c.on?.('selection:updated', preserveZ);
-    c.on?.('after:render',    preserveZ);
+    // On normal churn, only dedupe (do not move → v7 continues to handle overlays/order)
+    c.on?.('object:added',    dedupeOnly);
+    c.on?.('object:removed',  dedupeOnly);
+    c.on?.('object:modified', dedupeOnly);
+    c.on?.('selection:created', dedupeOnly);
+    c.on?.('selection:updated', dedupeOnly);
+    c.on?.('after:render',    () => {
+      dedupeOnly();
+      if (lastResizeAt && (Date.now() - lastResizeAt) <= RESIZE_WINDOW_MS) {
+        // For a brief window after resize, seat WM under overlays (just above base)
+        seatWmAboveBase();
+      }
+    });
 
-    // On canvas element resize (700/900/1024/1200), dedupe and restore to the same z
+    // Canvas element resize: mark the window so we re-seat WM faintly for a moment
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmDedupeResizeObsV2) {
-        c.__raWmDedupeResizeObsV2 = true;
-        new ResizeObserver(() => preserveZ()).observe(el);
+      if (el && !c.__raWmMiniShimResizeObs) {
+        c.__raWmMiniShimResizeObs = true;
+        new ResizeObserver(() => { lastResizeAt = Date.now(); }).observe(el);
       }
     } catch(_) {}
   }
