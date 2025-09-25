@@ -8072,201 +8072,119 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v11 — WM top, deduped; scale changes only on resize/admin; footer no-flash on Rebel ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM immediate top on all edits; footer no-flash on Rebel ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V11__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V11__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V7__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V7__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Rebel contract (lowercase)
+  // Rebel contract(s) — lowercase
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM     = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
+  const isFooter = o => !!(o && (o._raBrandFooter ||
+                        (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isWM     = o => !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
   const isBg     = o => !!(o && o._isBgRect);
-  const isBase   = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
 
-  // Treat a short window after undo/redo restore as "still restoring" (prevents footer flash)
+  // Treat the short window after restore as "still restoring" to prevent footer flash
   let lastRestoreSeen = 0;
   const restoring = () => {
     if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
     return (Date.now() - lastRestoreSeen) < 400;
   };
 
-  const allObjs = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
-
-  // Admin-controlled values (opacity and width % of canvas)
-  const getAdminOpacity = () =>
-    (typeof window.__RA_WM_ADMIN_OPACITY === 'number' ? window.__RA_WM_ADMIN_OPACITY : 0.22);
-  const getAdminTargetPct = () =>
-    (typeof window.__RA_WM_TARGET_PCT === 'number' ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT)) : null);
-
-  // Lock BG & keep at z=0
-  function lockBg(){
-    const c=C(); if (!c) return;
-    const bg = allObjs().find(isBg);
-    if (bg){
-      bg.selectable=false; bg.evented=false; bg.hasControls=false;
-      try { c.moveTo(bg, 0); } catch(_){}
+  function quarantine(o){
+    if (!o) return;
+    o._raSys = true;
+    if (!isID(o)) o.excludeFromExport = true; // keep sys out of undo snapshots
+    if (isFooter(o) || isWM(o)) {
+      o.selectable=false; o.evented=false; o.hasControls=false;
+      o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
     }
   }
 
-  // Gate footer: hide during restore + on Rebel; non-interactive always
-  function gateFooter(){
-    const c=C(); if (!c) return;
-    const base = allObjs().find(isBase);
-    const cc = String(base?._tokenContract||'').toLowerCase();
-    allObjs().forEach(o=>{
-      if (!isFooter(o)) return;
-      o._raSys = true; o.excludeFromExport = true;
-      o.selectable=false; o.evented=false; o.hasControls=false;
-      o.visible = !restoring() && (!!cc && cc !== REBEL_CONTRACT);
-    });
-  }
+  function objs(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
+  function baseObj(){ return objs().find(isBase) || null; }
 
-  // Keep one WM object (largest), mark as sys, and return it
-  function getOneWM(){
-    const c=C(); if (!c) return null;
-    const wms = allObjs().filter(isWM);
-    if (!wms.length) return null;
+  // IMMEDIATE z-order enforcement: runs synchronously on key events
+  function assertTopNow(){
+    const c = C(); if (!c) return;
+    const all = objs();
 
-    // Choose the largest as the canonical one
-    const area = o => {
-      const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
-      const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
-      return w*h;
-    };
-    const keep = wms.slice().sort((a,b)=>area(b)-area(a))[0];
-    wms.forEach(o=>{
-      o._raSys = true; o.excludeFromExport = true;
-      o.selectable=false; o.evented=false; o.hasControls=false;
-      if (o !== keep) o.visible = false;
-    });
-    return keep;
-  }
+    // Lock BG and keep at index 0
+    const bg = all.find(isBg);
+    if (bg) {
+      bg.selectable=false; bg.evented=false; bg.hasControls=false;
+      try { c.moveTo(bg, 0); } catch(_) {}
+    }
 
-  // Apply admin opacity; do NOT change scale here
-  function applyWmVisuals(wm){
-    if (!wm) return;
-    wm.opacity = getAdminOpacity();
-    wm.objectCaching = false;
-    wm.globalCompositeOperation = null;
-  }
+    // Footer gating (hide while restoring and on Rebel)
+    const foot = all.find(isFooter);
+    const base = baseObj();
+    const cc = String(base?._tokenContract || '').toLowerCase();
 
-  // Bring WM top (then footer if visible), ID absolute top
-  function bringTop(wm){
-    const c=C(); if (!c) return;
-    const foot = allObjs().find(isFooter);
-    const id = allObjs().find(isID);
+    if (foot){
+      quarantine(foot);
+      if (restoring() || (cc && cc === REBEL_CONTRACT)) {
+        foot.visible = false;
+      }
+    }
+
+    // Watermark always-on-top (under ID), immediately
+    const wm = all.find(isWM);
+    if (wm) quarantine(wm);
+
     try {
+      // WM top, then footer (if visible), then ID absolutely top
       if (wm   && wm.visible   !== false) c.bringToFront(wm);
       if (foot && foot.visible !== false) c.bringToFront(foot);
-      if (id   && id.visible   !== false) c.bringToFront(id);
+      const id = all.find(isID);
+      if (id && id.visible !== false) c.bringToFront(id);
     } catch(_){}
   }
 
-  // Re-scale WM only when:
-  //  * canvas size changes, OR
-  //  * Admin sets window.__RA_WM_TARGET_PCT (and dispatches 'ra-wm-recalc'),
-  //  * OR when a new base/collection is loaded (reset).
-  function recalibrateWmScaleIfNeeded(wm, force=false){
-    const c=C(); if (!c || !wm) return;
-
-    // Admin size takes precedence if provided
-    const adminPct = getAdminTargetPct();
-    if (adminPct !== null) {
-      wm._raWmTargetPct = adminPct;
-    } else {
-      // If we don't have a stored pct and not forcing, learn it once from current state
-      if (!wm._raWmTargetPct && !force) {
-        const cw=c.getWidth();
-        const curW = wm.getScaledWidth ? wm.getScaledWidth() : (wm.width||0)*(wm.scaleX||1);
-        wm._raWmTargetPct = Math.max(0.05, Math.min(1, curW/Math.max(1,cw)));
-      }
-    }
-
-    // Only recalibrate on resize/force/admin changes
-    if (force || adminPct !== null) {
-      const cw = c.getWidth();
-      const natW = wm.width || 1; // if image, this is intrinsic width
-      const pct = wm._raWmTargetPct || 0.28;
-      const scale = (cw * pct) / Math.max(1,natW);
-      if (!Number.isNaN(scale) && scale > 0) {
-        wm.scaleX = scale;
-        wm.scaleY = scale;
-        wm.setCoords();
-      }
-    }
-  }
-
-  // Hard assert: lock BG, gate footer, dedupe WM, apply visuals, keep top
-  function assertNow({recalibrate=false}={}){
-    const c=C(); if (!c) return;
-    lockBg();
-    gateFooter();
-    const wm = getOneWM();
-    if (wm){
-      applyWmVisuals(wm);
-      if (recalibrate) recalibrateWmScaleIfNeeded(wm, true);
-      bringTop(wm);
-    }
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
   function wire(){
-    const c=C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmFooterFixShimV11) return; c.__raWmFooterFixShimV11 = true;
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmFooterFixShimV7) return; c.__raWmFooterFixShimV7 = true;
 
-    // Hide footer BEFORE restoring frames draw; don't scale WM here (no resize)
+    // Hide footer BEFORE a restoring frame draws → no flash
     c.on?.('before:render', () => {
       if (!restoring()) return;
-      const foot = allObjs().find(isFooter);
-      if (foot && foot.visible !== false) foot.visible = false;
+      const all = objs();
+      all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
+      // Also assert WM order before draw to prevent a one-frame cover
+      assertTopNow();
     });
 
-    // On normal churn, do NOT recalibrate scale—just keep WM top & apply visuals
-    const justAssert = () => assertNow({recalibrate:false});
-    c.on?.('after:render',    justAssert);
-    c.on?.('object:added',    justAssert);
-    c.on?.('object:modified', justAssert);
-    c.on?.('object:removed',  justAssert);
-    c.on?.('selection:created', justAssert);
-    c.on?.('selection:updated', justAssert);
-    c.on?.('mouse:up', justAssert);
+    // Re-assert WM/foot order immediately after each draw too (covers resize/scale)
+    c.on?.('after:render', () => { assertTopNow(); });
 
-    // Admin triggers: apply new opacity immediately; if Admin changed size pct, recalibrate once
-    document.addEventListener('ra-wm-recalc', () => {
-      const wm = getOneWM();
-      if (!wm) return;
-      const hadPct = !!wm._raWmTargetPct;
-      // If admin provided a new percent, store and force calibrate
-      if (getAdminTargetPct() !== null) wm._raWmTargetPct = getAdminTargetPct();
-      applyWmVisuals(wm);
-      recalibrateWmScaleIfNeeded(wm, getAdminTargetPct() !== null);
-      bringTop(wm);
-      try { C()?.requestRenderAll(); } catch(_){}
-    });
+    // IMMEDIATE re-assert on all user churn
+    c.on?.('object:added',    assertTopNow);
+    c.on?.('object:modified', assertTopNow);
+    c.on?.('object:removed',  assertTopNow);
+    c.on?.('selection:created', assertTopNow);
+    c.on?.('selection:updated', assertTopNow);
+    c.on?.('mouse:up', assertTopNow);
 
-    // Collection/base change: drop stored pct and recalibrate once (next assert)
-    document.addEventListener('ra-collection-change', () => {
-      const wm = getOneWM();
-      if (wm) wm._raWmTargetPct = undefined;  // relearn on next recalibrate
-      assertNow({recalibrate:true});
-    });
+    // React to admin/wallet signals instantly
+    ['ra-wm-recalc','ra-holder-update','ra-collection-change']
+      .forEach(ev => document.addEventListener(ev, assertTopNow));
 
-    // Canvas element resize → recalibrate size (and only then)
+    // Also react to canvas element resize (covers 900/1024/1200 changes)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmResizeObs) {
         c.__raWmResizeObs = true;
-        new ResizeObserver(() => { assertNow({recalibrate:true}); }).observe(el);
+        new ResizeObserver(() => { assertTopNow(); }).observe(el);
       }
     } catch(_){}
 
-    // First pass (no recalibration; we haven't resized yet)
-    assertNow({recalibrate:false});
+    // First pass
+    assertTopNow();
   }
 
   if (document.readyState==='loading'){
