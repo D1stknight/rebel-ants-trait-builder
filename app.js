@@ -258,6 +258,7 @@ function setCanvasSize(size){
   });
   canvas.setViewportTransform([1,0,0,1,0,0]);
   canvas.requestRenderAll();
+  try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
 }
 
 function setZoom(v){
