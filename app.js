@@ -8072,182 +8072,147 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_OVERLAY_SHIM_v1 — watermark via overlayImage (consistent through resize/undo) + footer gate ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v10 — object-WM stable (no “thick” resize frame) + footer no-flash on Rebel ===== */
 ;(() => {
-  if (window.__RA_WM_OVERLAY_SHIM_V1__) return;
-  window.__RA_WM_OVERLAY_SHIM_V1__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V10__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V10__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Rebel contract (lowercase)
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
-  // Detectors
-  const isBg   = o => !!(o && o._isBgRect);
-  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWMObj  = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
+  const isFooter = o => !!(o && (o._raBrandFooter ||
+                        (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isWM     = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
+  const isBg     = o => !!(o && o._isBgRect);
+  const isBase   = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isID     = o => !!(o && o._raTokenId);
 
-  // Where to read opacity from (Admin may set this)
-  function getAdminOpacity(fallback){
+  // Short grace after undo/redo restore to prevent footer flash
+  let lastRestoreSeen = 0;
+  const restoring = () => {
+    if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
+    return (Date.now() - lastRestoreSeen) < 400;
+  };
+
+  const allObjs = () => {
+    const c = C(); return c ? (c.getObjects?.() || []) : [];
+  };
+
+  // Admin opacity (baseline). Change this value in your Admin code and dispatch 'ra-wm-recalc'
+  function wmOpacity() {
     const v = window.__RA_WM_ADMIN_OPACITY;
     if (typeof v === 'number' && v >= 0 && v <= 1) return v;
-    return (typeof fallback === 'number' ? fallback : 0.22);
+    return 0.22; // default baseline
   }
 
-  // Watermark image source: prefer WM_SRC if defined, else try an existing WM object, else default
-  function getWmSrc(){
-    if (typeof window.WM_SRC === 'string' && window.WM_SRC) return window.WM_SRC;
-    const c = C(); if (c){
-      const wm = (c.getObjects?.()||[]).find(isWMObj);
-      const el = wm && (wm._element || wm._originalElement);
-      if (el && el.src) return el.src;
-    }
-    // Fallback to your assets path
-    return '/assets/watermark.png';
+  // Force WM render state so resize frames look identical
+  function normalizeWM(o) {
+    if (!o) return;
+    o._raSys = true;
+    o.excludeFromExport = true;          // keep out of undo JSON
+    o.selectable = false; o.evented = false; o.hasControls = false;
+    o.lockMovementX = o.lockMovementY = o.lockScalingX = o.lockScalingY = o.lockRotation = true;
+
+    // Critical bits for identical appearance each frame:
+    o.objectCaching = false;             // avoid cache artifacts between frames
+    o.globalCompositeOperation = null;   // draw in normal blend mode
+    o.opacity = wmOpacity();             // enforce baseline every draw
   }
 
-  // Remove/Hide object-based watermarks so we don't double-render (no history churn)
-  function hideObjectWatermarks(){
+  // Hide footer (and keep non-interactive)
+  function gateFooter() {
     const c = C(); if (!c) return;
-    (c.getObjects?.()||[]).forEach(o=>{
-      if (isWMObj(o)){
-        o._raSys = true;
-        o.excludeFromExport = true;
-        o.visible = false;
-        o.selectable = false; o.evented = false; o.hasControls = false;
-      }
-    });
-  }
-
-  // Read base metadata (for Rebel gate)
-  function currentBaseContract(){
-    const c = C(); if (!c) return '';
-    const base = (c.getObjects?.()||[]).find(isBase) || null;
-    return String(base?._tokenContract || '').toLowerCase();
-  }
-
-  // Keep footer hidden for Rebel (and non-interactive in general)
-  function gateFooter(){
-    const c = C(); if (!c) return;
-    const cc = currentBaseContract();
-    (c.getObjects?.()||[]).forEach(o=>{
+    const cc = String((allObjs().find(isBase)?._tokenContract) || '').toLowerCase();
+    (allObjs()).forEach(o => {
       if (!isFooter(o)) return;
       o._raSys = true; o.excludeFromExport = true;
       o.selectable=false; o.evented=false; o.hasControls=false;
-      // Hide footer on Rebel; visible for friends
-      o.visible = !!cc && cc !== REBEL_CONTRACT;
+      // Hide during restore & on Rebel; visible for friends
+      o.visible = !restoring() && (!!cc && cc !== REBEL_CONTRACT);
     });
   }
 
-  // Keep background locked and at index 0 (prevents "ghost box")
-  function lockBackground(){
+  // Keep BG locked & index 0 (prevents “ghost box”)
+  function lockBg() {
     const c = C(); if (!c) return;
-    const bg = (c.getObjects?.()||[]).find(isBg);
-    if (bg){
+    const bg = allObjs().find(isBg);
+    if (bg) {
       bg.selectable=false; bg.evented=false; bg.hasControls=false;
-      try { c.moveTo(bg, 0); } catch(_){}
+      try { c.moveTo(bg, 0); } catch(_) {}
     }
   }
 
-  // Compute and set overlay watermark image centered and scaled to a width % of canvas
-  function setOverlayWatermark(src, targetPct){
+  // Hard re-assert order and WM render state immediately
+  function assertNow() {
     const c = C(); if (!c) return;
-    targetPct = Math.max(0.05, Math.min(1, targetPct || window.__RA_WM_TARGET_PCT || 0.28));
-    window.__RA_WM_TARGET_PCT = targetPct; // store for later resizes
-
-    fabric.Image.fromURL(src, (img)=>{
-      try {
-        img.set({
-          originX:'center', originY:'center',
-          crossOrigin:'anonymous',
-          selectable:false, evented:false
-        });
-        const cw = c.getWidth(), ch = c.getHeight();
-        const natW = img.width || 1;
-        const scale = (cw * targetPct) / natW;
-        img.scaleX = scale; img.scaleY = scale;
-        img.left = cw/2; img.top = ch/2;
-
-        img.opacity = getAdminOpacity(img.opacity);
-
-        c.setOverlayImage(img, ()=> c.requestRenderAll());
-      } catch(_) {}
-    }, { crossOrigin:'anonymous' });
-  }
-
-  // Show/hide overlay WM for Rebel/friends
-  function updateOverlayWM(){
-    const c = C(); if (!c) return;
-    const src = getWmSrc();
-    const cc = currentBaseContract();
-
-    // Hide footer appropriately
+    lockBg();
     gateFooter();
-    // Hide object-based WM renderers
-    hideObjectWatermarks();
 
-    if (!cc) {
-      // Base unknown (e.g., mid-restore) → hide overlay WM to avoid flashes
-      c.setOverlayImage(null, ()=> c.requestRenderAll());
-      return;
-    }
+    const objs = allObjs();
+    const wm = objs.find(isWM) || null;
+    const foot = objs.find(isFooter) || null;
+    const id = objs.find(isID) || null;
 
-    // Always show watermark as overlay; Admin/wallet can still gate via opacity or events
-    // (If you ever want to disable WM entirely, set __RA_WM_ADMIN_OPACITY = 0 and dispatch 'ra-wm-recalc')
-    if (src) {
-      setOverlayWatermark(src, window.__RA_WM_TARGET_PCT || 0.28);
-    }
-  }
+    if (wm) normalizeWM(wm);
 
-  // Re-scale overlay WM on resize + apply latest opacity
-  function rescaleOverlayWM(){
-    const c = C(); if (!c) return;
-    const ov = c.overlayImage;
-    if (!ov) return;
     try {
-      const cw = c.getWidth(), ch = c.getHeight();
-      const natW = ov.width || 1;
-      const targetPct = Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT || 0.28));
-      const scale = (cw * targetPct) / natW;
-      ov.scaleX = scale; ov.scaleY = scale;
-      ov.left = cw/2; ov.top = ch/2;
-      ov.opacity = getAdminOpacity(ov.opacity);
-      ov.setCoords();
-      c.requestRenderAll();
-    } catch(_) {}
+      // Always keep WM top (consistent look), then footer if visible, then ID absolutely top
+      if (wm   && wm.visible   !== false) c.bringToFront(wm);
+      if (foot && foot.visible !== false) c.bringToFront(foot);
+      if (id   && id.visible   !== false) c.bringToFront(id);
+    } catch(_){}
+
+    try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Wire-up
-  function wire(){
+  // Run a short settle loop after resize to cover Fabric rescale burst
+  function settle(n=2) {  // run assertNow over next N frames
+    let i=0; const tick = () => { assertNow(); if (++i<n) setTimeout(tick, 30); };
+    tick();
+  }
+
+  function wire() {
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmOverlayShimV1) return; c.__raWmOverlayShimV1 = true;
+    if (c.__raWmFooterFixShimV10) return; c.__raWmFooterFixShimV10 = true;
 
-    // Keep BG locked
-    c.on?.('object:added', lockBackground);
-    c.on?.('object:modified', lockBackground);
-    c.on?.('object:removed', lockBackground);
+    // Hide footer BEFORE a restoring frame draws → no flash; enforce WM immediately
+    c.on?.('before:render', () => {
+      if (!restoring()) return;
+      const objs = allObjs();
+      const foot = objs.find(isFooter);
+      if (foot && foot.visible !== false) foot.visible = false;
+      const wm = objs.find(isWM);
+      if (wm) normalizeWM(wm);
+      // Keep WM top in the same frame
+      try { if (wm && wm.visible !== false) c.bringToFront(wm); } catch(_){}
+    });
 
-    // Recompute overlay WM on admin/wallet signals
+    // Immediate enforcement on all churn points + after each draw
+    c.on?.('after:render',    assertNow);
+    c.on?.('object:added',    assertNow);
+    c.on?.('object:modified', assertNow);
+    c.on?.('object:removed',  assertNow);
+    c.on?.('selection:created', assertNow);
+    c.on?.('selection:updated', assertNow);
+    c.on?.('mouse:up', assertNow);
+
+    // React to admin/wallet signals
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, updateOverlayWM));
+      .forEach(ev => document.addEventListener(ev, () => { assertNow(); }));
 
-    // Rescale overlay WM on every render (cheap) + after any object churn
-    c.on?.('after:render', rescaleOverlayWM);
-    c.on?.('object:added', rescaleOverlayWM);
-    c.on?.('object:modified', rescaleOverlayWM);
-
-    // React to canvas element resizes (700 / 900 / 1024 / 1200)
+    // Re-assert across canvas element resize (700/900/1024/1200) with a short settle
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmResizeObs) {
         c.__raWmResizeObs = true;
-        new ResizeObserver(() => { rescaleOverlayWM(); }).observe(el);
+        new ResizeObserver(() => { settle(3); }).observe(el);
       }
     } catch(_){}
 
-    // First pass: create overlay WM now
-    updateOverlayWM();
+    // First pass
+    assertNow();
   }
 
   if (document.readyState === 'loading') {
