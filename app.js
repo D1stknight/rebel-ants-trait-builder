@@ -1,4 +1,4 @@
- /* ===============================
+/* ===============================
    CONFIG
    =============================== */
 ;(() => {
@@ -25,7 +25,10 @@
     test.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback
     test.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now();
   })();
-})(); // ← single IIFE close
+
+  // 🔴 Export WM_SRC so the rest of the app (stamps, loaders) can use it
+  window.WM_SRC = WM_SRC;
+})(); // end CONFIG
 
   // ===============================
   //  FABRIC DEFAULTS
