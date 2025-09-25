@@ -8051,120 +8051,133 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_TOP_SHIM_V3 — footer default hidden until base known; watermark/foot dedupe/top ===== */
-;(() => {
-  if (window.__RA_WM_FOOTER_TOP_SHIM_V3__) return;
-  window.__RA_WM_FOOTER_TOP_SHIM_V3__ = true;
+/* ===== RA_WM_FOOTER_FIX_SHIM_v3 — no‑history footer flash fix + stable WM layer ===== */
+(() => {
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V3__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V3__ = true;
 
-  const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  // Canonical Rebel contract (lowercase)
+  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
-  // Rebel contract(s) — lowercased
-  const REBEL_CONTRACTS = new Set([
-    '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'
-  ]);
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  const isBg   = o => !!(o && o._isBgRect);
-  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
-  const isID   = o => !!(o && o._raTokenId);
-  const isFooter = o => !!(o && (o._raBrandFooter ||
-                       (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM  = o => !!(o && (o._raWMCenter || o._isWatermark || o.raWM || o.raPos ||
-                       (typeof o.name === 'string' && /watermark/i.test(o.name))));
-  const isSys = o => !!(o && (isFooter(o) || isWM(o) || isID(o)));
+  const isFooter = o => !!(o && o._raBrandFooter);
+  const isWM = o =>
+    !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
+  const isBg = o => !!(o && o._isBgRect);
+  const isBase = o => !!(o && o._isBase);
 
-  const area = o => {
-    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
-    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
-    return w*h;
-  };
+  function objs() { const c = C(); return c ? (c.getObjects?.() || []) : []; }
+  function bgObj() { return objs().find(isBg) || null; }
+  function baseObj() { return objs().find(isBase) || null; }
 
-  function quarantine(o){
-    if (!o) return;
-    o._raSys = true;
-    if (!isID(o)) o.excludeFromExport = true; // keep sys out of undo snapshots
-    if (isFooter(o) || isWM(o)) {
-      o.selectable=false; o.evented=false; o.hasControls=false;
-    }
+  // Treat the short window after restore as "still restoring" to avoid footer flicker
+  let lastRestoreSeen = 0;
+  function restoring() {
+    if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
+    return (Date.now() - lastRestoreSeen) < 220; // small grace to cover the next frame
   }
 
-  function keepOneHideRest(arr, chooser){
-    if (!arr.length) return null;
-    const keep = chooser(arr);
-    arr.forEach(o => {
-      quarantine(o);
-      if (o !== keep) o.visible = false; // hide extras, no remove → no history churn
+  function enforce() {
+    const c = C(); if (!c) return;
+
+    const all = objs();
+    const bg = bgObj();
+    const base = baseObj();
+
+    // 0) Background should never be interactive (prevents "ghost box" after Unlock All)
+    if (bg) {
+      bg.selectable = false; bg.evented = false; bg.hasControls = false;
+      try { c.moveTo(bg, 0); } catch (_) {}
+    }
+
+    // 1) Footer: hide during restore; hide if Rebel; keep locked; topmost when visible
+    for (const o of all) {
+      if (!isFooter(o)) continue;
+
+      // During restore window: force hidden to remove flash
+      if (restoring()) {
+        if (o.visible !== false) o.visible = false;
+      } else {
+        // After restore: if base says Rebel, keep footer hidden
+        const cc = String(base?._tokenContract || '').toLowerCase();
+        if (cc && cc === REBEL_CONTRACT) {
+          if (o.visible !== false) o.visible = false;
+        }
+      }
+
+      // Footers are UI-only → keep non-interactive
+      o.selectable = false; o.evented = false; o.hasControls = false;
+      o.lockMovementX = o.lockMovementY = o.lockScalingX = o.lockScalingY = o.lockRotation = true;
+    }
+
+    // If not restoring, and a footer is visible, keep it topmost (brand watermark text)
+    if (!restoring()) {
+      const ft = all.filter(isFooter);
+      ft.forEach(f => {
+        if (f.visible !== false) {
+          try { c.bringToFront(f); } catch (_) {}
+        }
+      });
+    }
+
+    // 2) Watermarks: keep them just above the base, below user overlays/text
+    const wms = all.filter(isWM);
+    if (wms.length) {
+      // Always locked/non-interactive
+      wms.forEach(w => {
+        w.selectable = false; w.evented = false; w.hasControls = false;
+        w.lockMovementX = w.lockMovementY = w.lockScalingX = w.lockScalingY = w.lockRotation = true;
+      });
+
+      const oi = (o) => all.indexOf(o);
+      const baseIdx = base ? oi(base) : (bg ? 0 : -1);
+      let target = (baseIdx >= 0 ? baseIdx + 1 : (bg ? 1 : 0));
+
+      wms.forEach(w => { try { c.moveTo(w, target++); } catch (_) {} });
+    }
+
+    try { c.requestRenderAll(); } catch (_) {}
+  }
+
+  // Throttle enforcement
+  let pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => { pending = false; enforce(); }, 30);
+  }
+
+  function wire() {
+    const c = C(); if (!c) return setTimeout(wire, 120);
+
+    // Canvas churn
+    c.on?.('object:added', schedule);
+    c.on?.('object:removed', schedule);
+    c.on?.('object:modified', schedule);
+    // Re-run quickly as restore frames render
+    c.on?.('after:render', () => { if (restoring()) schedule(); });
+    c.on?.('mouse:up', schedule);
+
+    // App-level triggers that impact footer/WM decisions
+    ['ra-wm-recalc', 'ra-holder-update', 'ra-collection-change'].forEach(ev => {
+      document.addEventListener(ev, schedule);
     });
-    return keep;
+
+    // Poll the restore flag briefly; keeps footer hidden across the whole window
+    const iv = setInterval(() => {
+      // If the canvas goes away, stop polling
+      if (!C()) { clearInterval(iv); return; }
+      if (restoring()) schedule();
+    }, 120);
+
+    // First pass
+    schedule();
   }
 
-  function currentBaseMeta(c){
-    const objs = c.getObjects ? c.getObjects() : [];
-    const base = objs.find(isBase);
-    return base ? {
-      contract: String(base._tokenContract||'').toLowerCase(),
-      chain   : String(base._tokenChain||'').toLowerCase(),
-      name    : base._tokenName || ''
-    } : {contract:'', chain:'', name:''};
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once: true });
+  } else {
+    wire();
   }
-
-  function sanitize(){
-    const c = getC(); if (!c) return;
-    const objs = c.getObjects ? c.getObjects() : [];
-
-    // Mark all footers/WM as system & excluded
-    objs.forEach(o => { if (isFooter(o) || isWM(o)) quarantine(o); });
-
-    // Dedupe to exactly one footer & one watermark
-    const foot = keepOneHideRest(objs.filter(isFooter),
-      arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]
-    );
-    const wm = keepOneHideRest(objs.filter(isWM),
-      arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]
-    );
-
-    // Footer gating
-    const meta = currentBaseMeta(c);
-    const hasContract = !!meta.contract;
-    const isRebel = hasContract && REBEL_CONTRACTS.has(meta.contract);
-
-    if (foot) {
-      // default hidden until we know the base contract
-      foot.visible = hasContract ? !isRebel : false;
-      quarantine(foot);
-    }
-    if (wm) quarantine(wm);
-
-    // Order: keep sys on top, but let ID be absolute top if present
-    try {
-      if (foot && foot.visible !== false) c.bringToFront(foot);
-      if (wm   && wm.visible   !== false) c.bringToFront(wm);
-      const id = objs.find(isID);
-      if (id && id.visible !== false) c.bringToFront(id);
-    } catch(_){}
-
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  function schedule(times=2, delay=60){
-    let n=0; const step=()=>{ sanitize(); if (++n<times) setTimeout(step, delay); };
-    setTimeout(step, 0);
-  }
-
-  function wire(){
-    const c = getC(); if (!c) { setTimeout(wire, 120); return; }
-    if (c.__raWmFooterTopShimV3) return; c.__raWmFooterTopShimV3 = true;
-
-    c.on('object:added',    ()=> schedule());
-    c.on('object:modified', ()=> schedule());
-    c.on('object:removed',  ()=> schedule());
-
-    document.addEventListener('ra-wm-recalc',        ()=> schedule());
-    document.addEventListener('ra-holder-update',    ()=> schedule());
-    document.addEventListener('ra-collection-change',()=> schedule());
-
-    schedule(2,60);
-  }
-
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, {once:true});
-  else wire();
 })();
