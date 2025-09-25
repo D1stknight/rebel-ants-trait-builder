@@ -8072,7 +8072,7 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM just above base on all edits; footer no-flash on Rebel ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM immediate top on all edits; footer no-flash on Rebel ===== */
 ;(() => {
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7__) return;
   window.__RA_WM_FOOTER_FIX_SHIM_V7__ = true;
@@ -8133,20 +8133,14 @@ window.raDump = () => {
       }
     }
 
-    // Watermark: quarantine then seat JUST ABOVE BASE (faint), not at the top
+    // Watermark always-on-top (under ID), immediately
     const wm = all.find(isWM);
-    if (wm) {
-      quarantine(wm);
-      if (base && wm.visible !== false) {
-        const baseZ = all.indexOf(base);
-        try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
-      }
-    }
+    if (wm) quarantine(wm);
 
     try {
-      // Footer above WM if visible (friends)
+      // WM top, then footer (if visible), then ID absolutely top
+      if (wm   && wm.visible   !== false) c.bringToFront(wm);
       if (foot && foot.visible !== false) c.bringToFront(foot);
-      // Token-ID label absolutely top
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
     } catch(_){}
@@ -8161,11 +8155,11 @@ window.raDump = () => {
       if (!restoring()) return;
       const all = objs();
       all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
-      // Also assert order before draw (WM will be re-seated above base here too)
+      // Also assert WM order before draw to prevent a one-frame cover
       assertTopNow();
     });
 
-    // Re-assert order immediately after each draw (covers resize/scale)
+    // Re-assert WM/foot order immediately after each draw too (covers resize/scale)
     c.on?.('after:render', () => { assertTopNow(); });
 
     // IMMEDIATE re-assert on all user churn
