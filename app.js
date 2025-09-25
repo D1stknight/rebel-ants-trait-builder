@@ -8193,3 +8193,120 @@ window.raDump = () => {
     wire();
   }
 })();
+
+/* ===== RA_WM_SNAPSHOT_OVERLAY_SHIM_v1 — snapshot object WM to overlayImage; resnapshot on resize/admin/collection ===== */
+;(() => {
+  if (window.__RA_WM_SNAPSHOT_OVERLAY_SHIM_V1__) return;
+  window.__RA_WM_SNAPSHOT_OVERLAY_SHIM_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Identify your watermark objects (use same tags as your code/shim v7)
+  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
+
+  // Guard: avoid overlapping snapshots
+  let snapping = false;
+
+  // Snapshot the watermark alone into an overlay image the size of the canvas
+  function snapshotWMToOverlay(reason = '') {
+    const c = C(); if (!c || snapping) return;
+    const objs = c.getObjects?.() || [];
+
+    // Find at least one watermark object
+    const wm = objs.find(isWM);
+    if (!wm) return;
+
+    snapping = true;
+
+    // Save visible flags and background
+    const vis = objs.map(o => o.visible);
+    const oldBg = c.backgroundColor;
+    const hadBgRect = !!objs.find(o => o._isBgRect && o.visible);
+
+    try {
+      // Hide everything except WM; make background fully transparent
+      objs.forEach(o => { o.visible = isWM(o); });
+      c.backgroundColor = 'rgba(0,0,0,0)';
+      // Render watermark-only frame
+      c.requestRenderAll();
+
+      // Snapshot full canvas (watermark only)
+      const dataUrl = c.toDataURL({ format: 'png' });
+
+      // Restore all visibilities & background immediately
+      objs.forEach((o, i) => { o.visible = vis[i]; });
+      c.backgroundColor = oldBg;
+      c.requestRenderAll();
+
+      // Install overlay image from snapshot (full-canvas transparent PNG)
+      fabric.Image.fromURL(dataUrl, img => {
+        try {
+          img.set({
+            originX: 'left', originY: 'top',
+            left: 0, top: 0,
+            selectable: false, evented: false,
+            objectCaching: false
+          });
+          // Keep admin opacity if defined
+          if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') {
+            img.opacity = window.__RA_WM_ADMIN_OPACITY;
+          }
+
+          c.setOverlayImage(img, () => c.requestRenderAll());
+
+          // Finally, hide object-based WMs to avoid any double-draw
+          (c.getObjects?.() || []).forEach(o => {
+            if (isWM(o)) {
+              o._raSys = true; o.excludeFromExport = true;
+              o.visible = false; o.selectable = false; o.evented = false; o.hasControls = false;
+            }
+          });
+          c.requestRenderAll();
+        } catch (_) { /* noop */ }
+      }, { crossOrigin: 'anonymous' });
+
+    } catch(_) {
+      // Restore on error
+      objs.forEach((o, i) => { o.visible = vis[i]; });
+      c.backgroundColor = oldBg;
+      c.requestRenderAll();
+    } finally {
+      snapping = false;
+    }
+  }
+
+  // Resnapshot watermark whenever its look could change
+  function wire() {
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmSnapshotOverlayShim) return; c.__raWmSnapshotOverlayShim = true;
+
+    // First pass: if a WM exists, snapshot it
+    setTimeout(() => snapshotWMToOverlay('boot'), 60);
+
+    // Collection/base change → snapshot after change settles
+    document.addEventListener('ra-collection-change', () => setTimeout(() => snapshotWMToOverlay('collection'), 60));
+
+    // Admin changes (opacity/size) → resnapshot
+    document.addEventListener('ra-wm-recalc', () => setTimeout(() => snapshotWMToOverlay('admin'), 30));
+
+    // When the user resizes the canvas (700/900/1024/1200), resnapshot to a new canvas-sized overlay
+    try {
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmSnapResizeObs) {
+        c.__raWmSnapResizeObs = true;
+        new ResizeObserver(() => setTimeout(() => snapshotWMToOverlay('resize'), 30)).observe(el);
+      }
+    } catch(_) {}
+
+    // If a WM object appears later (e.g., lazy insert), snapshot once
+    c.on?.('object:added', (e) => {
+      if (e && e.target && isWM(e.target)) setTimeout(() => snapshotWMToOverlay('wm-added'), 30);
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once: true });
+  } else {
+    wire();
+  }
+})();
