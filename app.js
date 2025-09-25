@@ -8072,10 +8072,10 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v6 — WM truly top; footer no-flash on Rebel ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM immediate top on all edits; footer no-flash on Rebel ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V6__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V6__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V7__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V7__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
@@ -8084,17 +8084,17 @@ window.raDump = () => {
 
   const isFooter = o => !!(o && (o._raBrandFooter ||
                         (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM  = o => !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
-  const isBg  = o => !!(o && o._isBgRect);
-  const isBase= o => !!(o && o._isBase);
-  const isID  = o => !!(o && o._raTokenId);
+  const isWM     = o => !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
+  const isBg     = o => !!(o && o._isBgRect);
+  const isBase   = o => !!(o && o._isBase);
+  const isID     = o => !!(o && o._raTokenId);
 
-  // tiny restore grace so we treat immediate post-undo frames as restoring
+  // Treat the short window after restore as "still restoring" to prevent footer flash
   let lastRestoreSeen = 0;
-  function restoring() {
+  const restoring = () => {
     if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
     return (Date.now() - lastRestoreSeen) < 400;
-  }
+  };
 
   function quarantine(o){
     if (!o) return;
@@ -8109,91 +8109,82 @@ window.raDump = () => {
   function objs(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
   function baseObj(){ return objs().find(isBase) || null; }
 
-  // Bring in the correct top order every time we draw
-  function assertTopOrder() {
+  // IMMEDIATE z-order enforcement: runs synchronously on key events
+  function assertTopNow(){
     const c = C(); if (!c) return;
     const all = objs();
 
-    // Keep BG locked & at index 0 (prevents ghost box)
+    // Lock BG and keep at index 0
     const bg = all.find(isBg);
-    if (bg){
+    if (bg) {
       bg.selectable=false; bg.evented=false; bg.hasControls=false;
       try { c.moveTo(bg, 0); } catch(_) {}
     }
 
-    // Footer gating
+    // Footer gating (hide while restoring and on Rebel)
     const foot = all.find(isFooter);
     const base = baseObj();
     const cc = String(base?._tokenContract || '').toLowerCase();
 
     if (foot){
       quarantine(foot);
-      // Hide during restore (no flash) and on Rebel
       if (restoring() || (cc && cc === REBEL_CONTRACT)) {
         foot.visible = false;
       }
     }
 
-    // Watermark: quarantine + enforce truly top (under ID)
+    // Watermark always-on-top (under ID), immediately
     const wm = all.find(isWM);
     if (wm) quarantine(wm);
 
     try {
-      // Bring WM to the very top (consistent look)
-      if (wm && wm.visible !== false) c.bringToFront(wm);
-
-      // If footer is visible (friends), place it just above WM
+      // WM top, then footer (if visible), then ID absolutely top
+      if (wm   && wm.visible   !== false) c.bringToFront(wm);
       if (foot && foot.visible !== false) c.bringToFront(foot);
-
-      // Token-ID label absolutely top if present
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
     } catch(_){}
   }
 
-  // Throttled sanitize after churn
-  let pending=false;
-  function schedule(){ if (pending) return; pending=true; setTimeout(()=>{ pending=false; sanitize(); }, 30); }
-
-  // Light sanitize: mark sys, lock bg, then assert order
-  function sanitize(){
-    const c = C(); if (!c) return;
-    objs().forEach(o => { if (isFooter(o) || isWM(o)) quarantine(o); });
-    assertTopOrder();
-    try { c.requestRenderAll(); } catch(_) {}
-  }
-
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmFooterFixShimV6) return; c.__raWmFooterFixShimV6 = true;
+    if (c.__raWmFooterFixShimV7) return; c.__raWmFooterFixShimV7 = true;
 
-    // Hide footer BEFORE drawing a restoring frame so it never flashes
+    // Hide footer BEFORE a restoring frame draws → no flash
     c.on?.('before:render', () => {
       if (!restoring()) return;
       const all = objs();
       all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
-      // Reassert WM top before draw too (prevents a one-frame cover)
-      assertTopOrder();
+      // Also assert WM order before draw to prevent a one-frame cover
+      assertTopNow();
     });
 
-    // After drawing / any churn, reassert top order
-    c.on?.('after:render', () => { if (restoring()) schedule(); else assertTopOrder(); });
-    c.on?.('object:added',    schedule);
-    c.on?.('object:modified', schedule);
-    c.on?.('object:removed',  schedule);
+    // Re-assert WM/foot order immediately after each draw too (covers resize/scale)
+    c.on?.('after:render', () => { assertTopNow(); });
 
-    // Respect admin/wallet signals
+    // IMMEDIATE re-assert on all user churn
+    c.on?.('object:added',    assertTopNow);
+    c.on?.('object:modified', assertTopNow);
+    c.on?.('object:removed',  assertTopNow);
+    c.on?.('selection:created', assertTopNow);
+    c.on?.('selection:updated', assertTopNow);
+    c.on?.('mouse:up', assertTopNow);
+
+    // React to admin/wallet signals instantly
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, schedule));
+      .forEach(ev => document.addEventListener(ev, assertTopNow));
 
-    // Poll briefly during restore window
-    const iv = setInterval(() => {
-      if (!C()) { clearInterval(iv); return; }
-      if (restoring()) schedule();
-    }, 120);
+    // Also react to canvas element resize (covers 900/1024/1200 changes)
+    try {
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmResizeObs) {
+        c.__raWmResizeObs = true;
+        new ResizeObserver(() => { assertTopNow(); }).observe(el);
+      }
+    } catch(_){}
 
     // First pass
-    schedule();
+    assertTopNow();
   }
 
   if (document.readyState==='loading'){
