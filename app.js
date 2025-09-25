@@ -8072,107 +8072,116 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v8 — WM recalibration on resize + always top; footer no-flash on Rebel ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v9 — WM dedupe-before-draw + recalibrate on resize; footer no-flash on Rebel ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V8__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V8__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V9__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V9__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Rebel contract — lowercase
+  // Rebel contract (lowercase)
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
-  const isFooter = o => !!(o && (o._raBrandFooter ||
-                        (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
   const isWM     = o => !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
 
-  // Treat a short window after restore as "still restoring" to prevent footer flash
+  // short grace after undo/redo restores to prevent footer flash
   let lastRestoreSeen = 0;
   const restoring = () => {
     if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
     return (Date.now() - lastRestoreSeen) < 400;
   };
 
-  function objs(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
-  function baseObj(){ return objs().find(isBase) || null; }
+  const allObjs = () => {
+    const c = C(); return c ? (c.getObjects?.() || []) : [];
+  };
+
+  const area = o => {
+    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1));
+    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1));
+    return w*h;
+  };
 
   function quarantine(o){
     if (!o) return;
     o._raSys = true;
-    if (!isID(o)) o.excludeFromExport = true;
-    if (isFooter(o) || isWM(o)) {
-      o.selectable=false; o.evented=false; o.hasControls=false;
-      o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
-      // WM is an image: avoid cache artifacts when recalibrating
-      if (isWM(o)) o.objectCaching = false;
-    }
+    if (!isID(o)) o.excludeFromExport = true; // keep sys out of undo snapshots
+    o.selectable=false; o.evented=false; o.hasControls=false;
+    o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+    if (isWM(o)) o.objectCaching = false;
   }
 
-  // Learn and enforce a stable watermark width percentage vs canvas
-  function recalibrateWM() {
-    const c = C(); if (!c) return;
-    const all = objs();
-    const wm = all.find(isWM); if (!wm) return;
+  // Keep exactly ONE watermark: pick largest (most likely the real one), hide others
+  function dedupeWM(objs){
+    const wms = objs.filter(isWM);
+    if (!wms.length) return null;
+    wms.forEach(quarantine);
+    const keep = wms.slice().sort((a,b)=>area(b)-area(a))[0];
+    wms.forEach(o => { if (o !== keep && o.visible !== false) o.visible = false; });
+    return keep;
+  }
 
+  // Recalibrate WM to stable width % of canvas
+  function recalibrateWM(wm){
+    const c = C(); if (!c || !wm) return;
     const cw = c.getWidth();
     const natW = (wm._element && wm._element.naturalWidth) || wm.width || 1;
     const curW = wm.getScaledWidth ? wm.getScaledWidth() : (wm.width||0)*(wm.scaleX||1);
 
-    // Learn the target percentage once (or if missing)
-    if (!wm._raWmTargetPct) {
+    if (!wm._raWmTargetPct){
       const pct = Math.max(0.05, Math.min(1, curW / Math.max(1, cw)));
       wm._raWmTargetPct = pct;
     }
-
-    // Recompute scale so wm width = target % of canvas width
     const targetW = Math.max(1, cw * wm._raWmTargetPct);
     const scale = targetW / Math.max(1, natW);
-    if (!Number.isNaN(scale) && scale > 0) {
+    if (!Number.isNaN(scale) && scale > 0){
       wm.scaleX = scale;
       wm.scaleY = scale;
       wm.setCoords();
     }
   }
 
-  // IMMEDIATE z-order enforcement (+ footer gating) and WM recalibration
-  function assertNow(){
+  // Footer rule: hide during restore & on Rebel
+  function gateFooter(objs){
     const c = C(); if (!c) return;
-    const all = objs();
+    const base = objs.find(isBase) || null;
+    const cc = String(base?._tokenContract || '').toLowerCase();
+    const foot = objs.find(isFooter) || null;
+    if (!foot) return null;
+    quarantine(foot);
+    if (restoring() || (cc && cc === REBEL_CONTRACT)){
+      foot.visible = false;
+    }
+    return foot;
+  }
 
-    // Lock BG & keep at 0 (prevents ghost box)
-    const bg = all.find(isBg);
+  // Assert order synchronously (prevents one-frame “thick” WM)
+  function assertTopNow(){
+    const c = C(); if (!c) return;
+    const objs = allObjs();
+
+    // Lock BG at index 0 (avoid ghost box after Unlock All)
+    const bg = objs.find(isBg);
     if (bg){
       bg.selectable=false; bg.evented=false; bg.hasControls=false;
-      try { c.moveTo(bg, 0); } catch(_) {}
+      try { c.moveTo(bg, 0); } catch(_){}
     }
 
-    // Footer gating: hide during restore and on Rebel
-    const foot = all.find(isFooter);
-    const base = baseObj();
-    const cc = String(base?._tokenContract || '').toLowerCase();
+    // Dedupe WM immediately and recalibrate size
+    const wm = dedupeWM(objs);
+    if (wm) recalibrateWM(wm);
 
-    if (foot){
-      // quarantined sys
-      foot._raSys = true; foot.excludeFromExport = true;
-      foot.selectable=false; foot.evented=false; foot.hasControls=false;
-      if (restoring() || (cc && cc === REBEL_CONTRACT)) foot.visible = false;
-    }
-
-    // Recalibrate WM to stable width % and quarantine
-    const wm = all.find(isWM);
-    if (wm){
-      quarantine(wm);
-      recalibrateWM(); // keep size consistent after resize
-    }
+    // Gate footer (hide on Rebel / during restore)
+    const foot = gateFooter(objs);
 
     try {
-      // WM top, then (if visible) footer, then ID absolute top
-      if (wm   && wm.visible !== false) c.bringToFront(wm);
+      // Bring WM truly top (consistent look), then visible footer (friends), then ID absolute top
+      if (wm   && wm.visible   !== false) c.bringToFront(wm);
       if (foot && foot.visible !== false) c.bringToFront(foot);
-      const id = all.find(isID);
+      const id = objs.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
     } catch(_){}
 
@@ -8181,40 +8190,42 @@ window.raDump = () => {
 
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmFooterFixShimV8) return; c.__raWmFooterFixShimV8 = true;
+    if (c.__raWmFooterFixShimV9) return; c.__raWmFooterFixShimV9 = true;
 
-    // No-flash footer during restore, WM/foot order before draw
+    // Hide footer BEFORE a restoring frame draws → no flash; dedupe WM before draw too
     c.on?.('before:render', () => {
       if (!restoring()) return;
-      const all = objs();
-      all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
-      assertNow();
+      const objs = allObjs();
+      const foot = objs.find(isFooter);
+      if (foot && foot.visible !== false) foot.visible = false;
+      dedupeWM(objs); // make sure only one WM exists in this frame
+      assertTopNow(); // and enforce top order immediately
     });
 
-    // IMMEDIATE enforcement on all churn points + recalibration after renders
-    c.on?.('after:render',    assertNow);
-    c.on?.('object:added',    assertNow);
-    c.on?.('object:modified', assertNow);
-    c.on?.('object:removed',  assertNow);
-    c.on?.('selection:created', assertNow);
-    c.on?.('selection:updated', assertNow);
-    c.on?.('mouse:up', assertNow);
+    // Immediate enforcement on all churn points + after each draw
+    c.on?.('after:render',    assertTopNow);
+    c.on?.('object:added',    assertTopNow);
+    c.on?.('object:modified', assertTopNow);
+    c.on?.('object:removed',  assertTopNow);
+    c.on?.('selection:created', assertTopNow);
+    c.on?.('selection:updated', assertTopNow);
+    c.on?.('mouse:up', assertTopNow);
 
-    // React to admin/wallet signals
+    // React to admin/wallet signals immediately
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, assertNow));
+      .forEach(ev => document.addEventListener(ev, assertTopNow));
 
-    // Also react to canvas element resize (covers 900/1024/1200)
+    // Enforce on canvas element resize (covers 900/1024/1200)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmResizeObs) {
         c.__raWmResizeObs = true;
-        new ResizeObserver(() => { assertNow(); }).observe(el);
+        new ResizeObserver(() => { assertTopNow(); }).observe(el);
       }
     } catch(_){}
 
     // First pass
-    assertNow();
+    assertTopNow();
   }
 
   if (document.readyState==='loading'){
