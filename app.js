@@ -1,15 +1,23 @@
-(function(){
-  // ===============================
-  //  CONFIG
-  // ===============================
-  const CONTRACT  = "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+/* ===============================
+   CONFIG
+   =============================== */
+;(() => {
+  // Prefer ?contract=… or window._RA_CONTRACT, else default to Rebel Ants
+  const CONTRACT =
+    new URLSearchParams(location.search).get('contract')
+    || (window._RA_CONTRACT && String(window._RA_CONTRACT))
+    || "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+
   const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
-  // ---- Watermark (single source, easy to change) ----
-  // Edit the string below to the EXACT watermark image you want.
-  // You can also override at runtime with ?wm=https://.../your.png
-  let WM_SRC = new URLSearchParams(location.search).get('wm')
-            || "/assets/watermark.png?v=wm10"; // <--- CHANGE THIS PATH IF NEEDED
+  // ---- ApeChain RPC default (only if not provided elsewhere)
+  if (!window.__APECHAIN_RPC) {
+    window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
+  }
+
+  // ---- Watermark...
+  const __wmQS = new URLSearchParams(location.search).get('wm');
+  let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
 
   (function checkWatermark(){
     const test = new Image();
@@ -17,6 +25,10 @@
     test.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback
     test.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now();
   })();
+
+  // 🔴 Export WM_SRC so the rest of the app (stamps, loaders) can use it
+  window.WM_SRC = WM_SRC;
+})(); // end CONFIG
 
   // ===============================
   //  FABRIC DEFAULTS
@@ -39,30 +51,427 @@
   let zoom=1;
 
   // ===============================
-  //  HELPERS
-  // ===============================
-  function $(id){ return document.getElementById(id); }
-  function safeAddListener(id, ev, fn){ const el=$(id); if (el) el.addEventListener(ev, fn); }
+//  HELPERS
+// ===============================
+function $(id){ return document.getElementById(id); }
+function safeAddListener(id, ev, fn){ const el = $(id); if (el) el.addEventListener(ev, fn); }
 
-  async function fileToDataURL(file){
-    return await new Promise((res,rej)=>{
-      const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file);
-    });
+async function fileToDataURL(file){
+  // Hard cap: 15 MB per image (tweak if you want)
+  const MAX = 15 * 1024 * 1024;
+  if (file && file.size > MAX){
+    alert("That file is too large (max ~15 MB).");
+    throw new Error("file-too-large");
   }
-  async function fetchAsDataURL(url){
-    const r=await fetch(url,{mode:"cors"});
+  return await new Promise((res, rej)=>{
+    const fr = new FileReader();
+    fr.onload = ()=>res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
+  });
+}
+
+async function fetchAsDataURL(url){
+  // Safety: block disallowed schemes *again* (defense-in-depth)
+  if (!isAllowedAssetURL(url)) throw new Error("Blocked URL scheme");
+  const ac = new AbortController();
+  const t = setTimeout(()=>ac.abort(), 12000); // 12s timeout
+  try{
+    const r = await fetch(url, { mode:"cors", signal: ac.signal, cache:"no-store" });
     if(!r.ok) throw new Error("Fetch failed");
-    const b=await r.blob();
-    return await new Promise((res)=>{
-      const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b);
+    const b = await r.blob();
+    return await new Promise((res, rej)=>{
+      const fr = new FileReader();
+      fr.onload = ()=>res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(b);
+    });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function normalize(u){
+  if (!u) return null;
+  if (u.startsWith("ipfs://"))
+    return "https://cloudflare-ipfs.com/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
+  if (u.startsWith("ar://"))
+    return "https://arweave.net/"+u.replace("ar://","");
+  return u;
+}
+
+/* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
+;(() => {
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Strict detectors
+  const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
+  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isBg   = o => !!(o && o._isBgRect);
+
+  function isHolder() {
+    const s = (window.RA_HOLDER_STATE || {});
+    return !!(s.hasRebel || s.hasFriend);
+  }
+
+  // Faintness (admin can override by setting window.__RA_WM_ADMIN_OPACITY)
+  function faintOpacity() {
+    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
+      ? window.__RA_WM_ADMIN_OPACITY
+      : 0.18; // default faint
+  }
+
+  // Target size (% of canvas width) — admin can override with window.__RA_WM_TARGET_PCT
+  function targetPct() {
+    const pct = (typeof window.__RA_WM_TARGET_PCT === 'number')
+      ? window.__RA_WM_TARGET_PCT
+      : 0.28; // default 28% of canvas width
+    return Math.max(0.05, Math.min(1, pct));
+  }
+
+  function scaleRingToCanvas(wm) {
+    const c = C(); if (!c || !wm) return;
+    const cw = c.getWidth();
+    const natW = wm.width || 1;
+    const sc = (cw * targetPct()) / Math.max(1, natW);
+    wm.scaleX = sc; wm.scaleY = sc;
+    wm.left = cw / 2; wm.top = c.getHeight() / 2;
+    wm.setCoords();
+  }
+
+  // Seat WM just above BASE (keeps faint look); if base not present, seat above BG
+  function seatAboveBase(wm) {
+    const c = C(); if (!c || !wm) return;
+    try {
+      const all  = c.getObjects() || [];
+      const base = all.find(isBase);
+      const bgIx = all.findIndex(isBg);
+      let targetZ = Math.min(all.length - 1, (bgIx >= 0 ? bgIx : -1) + 1);
+      if (base) {
+        const baseZ = all.indexOf(base);
+        targetZ = Math.min(all.length - 1, baseZ + 1);
+      }
+      const curZ = all.indexOf(wm);
+      if (curZ !== targetZ) c.moveTo(wm, targetZ);
+    } catch (_) {}
+  }
+
+  // Create/show ring watermark unless holder; otherwise hide it.
+  window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
+    const c = C(); if (!c) return;
+
+    // Holder: hide ring, keep footer
+    if (isHolder()) {
+      (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) o.visible = false; });
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
+    }
+
+    // If ring exists → ensure visible, clamp faintness, scale + seat, render
+    let wm = (c.getObjects?.()||[]).find(isWM);
+    if (wm) {
+      wm.visible = true;
+      wm.opacity = faintOpacity();
+      scaleRingToCanvas(wm);
+      seatAboveBase(wm);
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
+    }
+
+    // Create new ring from WM_SRC (must be exported from CONFIG)
+    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+    fabric.Image.fromURL(src, img => {
+      if (!img) return;
+      img.set({
+        originX: 'center', originY: 'center',
+        selectable: false, evented: false, hasControls: false,
+        objectCaching: false, opacity: faintOpacity()
+      });
+      // Tag so v7 recognizes it as watermark
+      img._raWMCenter = true;
+      img._isWatermark = true;
+      img._raSys = true; img.excludeFromExport = true;
+
+      // Size & position
+      scaleRingToCanvas(img);
+      c.add(img);
+
+      // Seat immediately so it isn’t hidden under the base
+      seatAboveBase(img);
+
+      // Double-tap re-seat after other listeners (rare race protection)
+      requestAnimationFrame(() => { seatAboveBase(img); try { c.requestRenderAll(); } catch(_) {} });
+
+      try { c.requestRenderAll(); } catch(_) {}
+    }, { crossOrigin: 'anonymous' });
+  };
+
+  // React to wallet status (show/hide ring)
+  document.addEventListener('ra-holder-update', () => {
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  });
+
+  // Keep ring sized/positioned on canvas resizes
+  try {
+    const c = C();
+    const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
+    if (el && !c.__raNonTokenRingResizeObs) {
+      c.__raNonTokenRingResizeObs = true;
+      new ResizeObserver(() => {
+        const wm = (c.getObjects?.()||[]).find(isWM);
+        if (wm) {
+          wm.opacity = faintOpacity();
+          scaleRingToCanvas(wm);
+          seatAboveBase(wm);
+          try { c.requestRenderAll(); } catch(_) {}
+        }
+      }).observe(el);
+    }
+  } catch(_) {}
+})();
+/* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
+;(() => {
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Strict watermark detector (only objects we tag as WM)
+  const isWM = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
+  // Base detector (covers image base or grouped base)
+  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isBg   = o => !!(o && o._isBgRect);
+
+  function isHolder() {
+    const s = (window.RA_HOLDER_STATE || {});
+    return !!(s.hasRebel || s.hasFriend);
+  }
+
+  function scaleRingToCanvas(wm) {
+    const c = C(); if (!c || !wm) return;
+    const cw = c.getWidth();
+    const natW = wm.width || 1;
+    const pct  = (typeof window.__RA_WM_TARGET_PCT === 'number')
+      ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT))
+      : 0.28; // default width = 28% of canvas
+    const sc = (cw * pct) / Math.max(1, natW);
+    wm.scaleX = sc; wm.scaleY = sc;
+    wm.left = cw / 2; wm.top = c.getHeight() / 2;
+    wm.setCoords();
+  }
+
+  function faintOpacity() {
+    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
+      ? window.__RA_WM_ADMIN_OPACITY
+      : 0.18; // faint default (bump if you want it slightly more visible)
+  }
+
+  // Seat watermark just above base (keeps "faint" look), or just above bg if base isn't present yet
+  function seatAboveBase(wm) {
+    const c = C(); if (!c || !wm) return;
+    try {
+      const all  = c.getObjects() || [];
+      const base = all.find(isBase);
+      const bgIx = all.findIndex(isBg);
+
+      let targetZ = Math.min(all.length - 1, (bgIx >= 0 ? bgIx : -1) + 1); // just above bg by default
+      if (base) {
+        const baseZ = all.indexOf(base);
+        targetZ = Math.min(all.length - 1, baseZ + 1);
+      }
+
+      const curZ = all.indexOf(wm);
+      if (curZ !== targetZ) c.moveTo(wm, targetZ);
+    } catch (_) {}
+  }
+
+  // Create/show ring watermark unless holder; otherwise hide it.
+  window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
+    const c = C(); if (!c) return;
+
+    // If wallet is holder, hide any ring watermark and bail (footer stays)
+    if (isHolder()) {
+      (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) o.visible = false; });
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
+    }
+
+    // Find existing ring
+    let wm = (c.getObjects?.()||[]).find(isWM);
+    if (wm) {
+      wm.visible = true;
+      scaleRingToCanvas(wm);
+      seatAboveBase(wm);
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
+    }
+
+    // Create new ring from WM_SRC
+    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+    fabric.Image.fromURL(src, img => {
+      if (!img) return;
+      img.set({
+        originX: 'center', originY: 'center',
+        selectable: false, evented: false, hasControls: false,
+        objectCaching: false, opacity: faintOpacity()
+      });
+      // Tag so v7 recognizes it as “the watermark”
+      img._raWMCenter = true;
+      img._isWatermark = true;
+      img._raSys = true; img.excludeFromExport = true;
+
+      scaleRingToCanvas(img);
+      c.add(img);
+
+      // Seat above base right away so it isn't hidden
+      seatAboveBase(img);
+
+      try { c.requestRenderAll(); } catch(_) {}
+    }, { crossOrigin: 'anonymous' });
+  };
+
+  // React to wallet status (show/hide ring)
+  document.addEventListener('ra-holder-update', () => {
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  });
+
+  // Keep ring sized/positioned on canvas resizes
+  try {
+    const c = C();
+    const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
+    if (el && !c.__raNonTokenRingResizeObs) {
+      c.__raNonTokenRingResizeObs = true;
+      new ResizeObserver(() => {
+        const wm = (c.getObjects?.()||[]).find(isWM);
+        if (wm) {
+          scaleRingToCanvas(wm);
+          seatAboveBase(wm);
+          try { c.requestRenderAll(); } catch(_) {}
+        }
+      }).observe(el);
+    }
+  } catch(_) {}
+})();
+
+/* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
+(function(){
+  if (window.__RA_TOKEN_ID_DEBUG_AND_FORCE__) return;
+  window.__RA_TOKEN_ID_DEBUG_AND_FORCE__ = true;
+
+  // Find the styles panel "Token ID" card by heading text
+  function findTokenIdCard(){
+    const hs = Array.from(document.querySelectorAll('h2,h3,h4,h5'));
+    const h  = hs.find(n => /token\s*id/i.test((n.textContent||'').trim()));
+    return h ? (h.closest('.card, .panel, section, form, div') || h.parentElement) : null;
+  }
+
+  // Read value from the common places (includes #tokenIdDisplay which often shows "#123")
+  function readTokenIdValue(){
+    const candidates = [
+      '#tokenIdDisplay',
+      '#tokenIdInput', '#tokenId', '#token',
+      'input[name="tokenId"]', 'input[name="token"]',
+      'input[placeholder*="Token"]', 'input[placeholder*="ID"]'
+    ];
+    for (const sel of candidates){
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      if (!raw) continue;
+      const digits = (raw.match(/\d+/) || [''])[0]; // accept "#15" or "15"
+      if (digits) return digits;
+    }
+    return '';
+  }
+
+  // Ensure label exists, is non-interactive, and sits at the very top
+  function ensureLabelOnTop(idStr){
+    try {
+      if (!window.addOrUpdateTokenLabel) return false;
+      window.addOrUpdateTokenLabel(String(idStr));
+      if (window.idLabel && window.canvas){
+        const c = window.canvas;
+        const objs = c.getObjects() || [];
+        try { window.idLabel.selectable=false; window.idLabel.evented=false; window.idLabel.hasControls=false; } catch(_){}
+        try { c.bringToFront(window.idLabel); c.moveTo(window.idLabel, objs.length-1); } catch(_){}
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { c.requestRenderAll(); } catch(_){}
+      }
+      return true;
+    } catch(_) { return false; }
+  }
+
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
+  function wire(){
+    const card = findTokenIdCard();
+    if (!card){ setTimeout(wire, 250); return; }
+
+    Array.from(card.querySelectorAll('button, input[type="button"], input[type="submit"], a')).forEach(btn=>{
+      if (btn.__raTokIdWired) return;
+      const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
+      if (!/^(load|place|show)\s*token\s*id$/.test(txt)) return;
+
+      btn.__raTokIdWired = true;
+      btn.addEventListener('click', (e)=>{
+        const t = (e?.target?.textContent || e?.target?.value || '').toLowerCase();
+        if (/load\s+by\s+token/.test(t)) return;
+
+        const v = readTokenIdValue();
+        try { console.log('[TokenID] button click -> value:', v); } catch(_){}
+        if (!v) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        ensureLabelOnTop(v);
+      }, true);
     });
   }
-  function normalize(u){
-    if(!u) return null;
-    if(u.startsWith("ipfs://")) return "https://cloudflare-ipfs.com/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
-    if(u.startsWith("ar://"))   return "https://arweave.net/"+u.replace("ar://","");
-    return u;
+
+  // Run now and again after small DOM changes
+  wire();
+  const obs = new MutationObserver(()=>wire());
+  obs.observe(document.body, { childList:true, subtree:true });
+})();   // <-- THIS is the missing part
+
+  /* ===== RA_SAFE_CLEAR ===== */
+function raSafeClear(keepBg=true){
+  const c = window.canvas; if (!c) return;
+  // if your UI wants a true reset, pass keepBg=false
+  if (keepBg && typeof backgroundRect !== 'undefined' && backgroundRect){
+    // remove everything except backgroundRect
+    c.getObjects().slice().forEach(o=>{ if(o!==backgroundRect) c.remove(o); });
+    c.requestRenderAll();
+  } else {
+    // do a real clear (history ops will immediately load JSON)
+    try { c.clear(); } catch(_){}
   }
+}
+
+  // ——— Security helpers ———
+function isAllowedAssetURL(u){
+  if (!u) return false;
+  // Hard-block dangerous schemes up front
+  if (/^\s*(javascript:|data:|blob:)/i.test(String(u))) return false;
+  try{
+    const url = new URL(u, location.origin);
+    // Allow: same-origin relative URLs, http(s)
+    return url.protocol === 'http:' || url.protocol === 'https:' || !/^[a-z][a-z0-9+\-.]*:/i.test(u);
+  }catch(_){
+    // If URL() fails, treat as a relative path (allowed) unless it *looks* like a scheme
+    return !/^[a-z][a-z0-9+\-.]*:/i.test(String(u));
+  }
+}
+  
   async function fetchImageByTokenId(contract, tokenId){
     const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
     const r = await fetch(u,{headers:{'accept':'application/json'}, cache:'no-store'});
@@ -88,354 +497,611 @@
     if (idLabel) canvas.bringToFront(idLabel);
   }
 
-  function initBackgroundRect(fill){
-    backgroundRect = new fabric.Rect({
-      left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(),
-      fill:fill, selectable:false, evented:false, hasControls:false
-    });
-    backgroundRect._isBgRect = true;
-    canvas.add(backgroundRect);
-    canvas.sendToBack(backgroundRect);
-  }
+/* (tiny helper used below — keep label above other UI if present) */
+function bringInterfaceToFront(){
+  try { if (typeof idLabel !== 'undefined' && idLabel) canvas.bringToFront(idLabel); } catch(_){}
+}
 
-  function setCanvasSize(size){
-    const prevW=canvas.getWidth()||size, prevH=canvas.getHeight()||size;
-    const sx=size/prevW, sy=size/prevH;
-    canvas.setWidth(size); canvas.setHeight(size);
-    if(backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
-    canvas.getObjects().forEach(o=>{
-      if (o===backgroundRect) return;
-      o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
-    });
-    canvas.setViewportTransform([1,0,0,1,0,0]);
-    canvas.requestRenderAll();
-  }
+function initBackgroundRect(fill){
+  backgroundRect = new fabric.Rect({
+    left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(),
+    fill:fill, selectable:false, evented:false, hasControls:false
+  });
+  backgroundRect._isBgRect = true;
+  canvas.add(backgroundRect);
+  canvas.sendToBack(backgroundRect);
+}
 
-  function setZoom(v){
-    zoom=Math.max(0.25,Math.min(6,v));
-    canvas.setZoom(zoom);
-    const zv=$("zoomVal"); if(zv) zv.textContent=Math.round(zoom*100)+"%";
-    canvas.requestRenderAll();
-  }
+function setCanvasSize(size){
+  const prevW = canvas.getWidth() || size, prevH = canvas.getHeight() || size;
+  const sx = size / prevW, sy = size / prevH;
+  canvas.setWidth(size); canvas.setHeight(size);
+  if (backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
+  canvas.getObjects().forEach(o=>{
+    if (o === backgroundRect) return;
+    o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
+  });
+  canvas.setViewportTransform([1,0,0,1,0,0]);
+  canvas.requestRenderAll();
+  try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
+}
 
-  function lockBaseObject(o){
-    if (!o) return;
-    o._isBase = true;
-    o.selectable = false;
-    o.evented = false;
-    o.hasControls = false;
-    o.lockMovementX = o.lockMovementY = true;
-    try { canvas.sendToBack(o); } catch(_){}
-  }
+function setZoom(v){
+  zoom = Math.max(0.25, Math.min(6, v));
+  canvas.setZoom(zoom);
+  const zv = $("zoomVal"); if (zv) zv.textContent = Math.round(zoom*100) + "%";
+  canvas.requestRenderAll();
+}
 
-  function clearBaseOnly(){
-    canvas.getObjects().slice().forEach(o=>{ if(o._isBase) canvas.remove(o); });
-    baseGroup=null; canvas.requestRenderAll();
-  }
+function lockBaseObject(o){
+  if (!o) return;
+  o._isBase = true;
+  o.selectable = false;
+  o.evented = false;
+  o.hasControls = false;
+  o.lockMovementX = o.lockMovementY = true;
+  try { canvas.sendToBack(o); } catch(_){}
+}
 
-  // Place two corner stamps into a center-origin group
-  async function makeStampedGroup(img, bw, bh, wmWidthRatio){
-    const wmTL = await fabricFromURL(WM_SRC);
-    const wmBR = await fabricFromURL(WM_SRC);
-    const wmTargetW = Math.max(16, bw * wmWidthRatio);
-    const margin    = Math.max(6,  bw * 0.02);
+function clearBaseOnly(){
+  canvas.getObjects().slice().forEach(o=>{ if (o._isBase) canvas.remove(o); });
+  baseGroup = null; canvas.requestRenderAll();
+}
 
-    const scaleTL = wmTargetW / wmTL.width;
-    const scaleBR = wmTargetW / wmBR.width;
-    wmTL.scale(scaleTL); wmBR.scale(scaleBR);
+// Place two corner stamps into a center-origin group
+async function makeStampedGroup(img, bw, bh, wmWidthRatio){
+  const wmTL = await fabricFromURL(WM_SRC);
+  const wmBR = await fabricFromURL(WM_SRC);
+  const wmTargetW = Math.max(16, bw * wmWidthRatio);
+  const margin    = Math.max(6,  bw * 0.02);
 
-    Object.assign(wmTL, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:"TL" });
-    Object.assign(wmBR, { selectable:false, evented:false, _isWatermark:true, raWM:true, raPos:"BR" });
+  const scaleTL = wmTargetW / wmTL.width;
+  const scaleBR = wmTargetW / wmBR.width;
+  wmTL.scale(scaleTL); wmBR.scale(scaleBR);
 
-    wmTL.set({
-      originX:"center", originY:"center",
-      left: -bw/2 + margin + wmTL.width*scaleTL/2,
-      top:  -bh/2 + margin + wmTL.height*scaleTL/2
-    });
-    wmBR.set({
-      originX:"center", originY:"center",
-      left:  bw/2 - margin - wmBR.width*scaleBR/2,
-      top:   bh/2 - margin - wmBR.height*scaleBR/2
-    });
+  Object.assign(wmTL, {
+    selectable:false, evented:false, hasControls:false,
+    _isWatermark:true, raWM:true, raPos:"TL"
+  });
+  Object.assign(wmBR, {
+    selectable:false, evented:false, hasControls:false,
+    _isWatermark:true, raWM:true, raPos:"BR"
+  });
 
-    const group = new fabric.Group([img, wmTL, wmBR], { originX:"center", originY:"center" });
-    return group;
-  }
+  wmTL.set({
+    originX:"center", originY:"center",
+    left: -bw/2 + margin + wmTL.width*scaleTL/2,
+    top:  -bh/2 + margin + wmTL.height*scaleTL/2
+  });
+  wmBR.set({
+    originX:"center", originY:"center",
+    left:  bw/2 - margin - wmBR.width*scaleBR/2,
+    top:   bh/2 - margin - wmBR.height*scaleBR/2
+  });
 
-  async function loadBaseImage(dataUrl, isToken){
-    clearBaseOnly();
-    const img = await fabricFromURL(dataUrl);
-    img.set({ originX:"center", originY:"center" });
+  const group = new fabric.Group([img, wmTL, wmBR], { originX:"center", originY:"center" });
+  return group;
+}
 
-    // fit to canvas (no upscaling)
-    const cw=canvas.getWidth(), ch=canvas.getHeight();
-    const sc=Math.min(cw/img.width, ch/img.height, 1);
-    img.scale(sc);
+async function loadBaseImage(dataUrl, isToken){
+  clearBaseOnly();
 
-    const bw = img.width*sc, bh = img.height*sc;
+  const img = await fabricFromURL(dataUrl);
+  img.set({ originX:"center", originY:"center" });
 
-    let obj;
-    if (isToken) {
-      // Token = RA (real asset) => NO watermarks
-      img._isBase = true;
-      lockBaseObject(img);
-      img.set({ left:cw/2, top:ch/2 }); img.setCoords();
-      obj = img;
-    } else {
-      // Non-token => add corner stamps
-      const group = await makeStampedGroup(img, bw, bh, 0.15);
-      group._isBase = true;
-      lockBaseObject(group);
-      group.set({ left:cw/2, top:ch/2 }); group.setCoords();
-      obj = group;
-    }
+  // fit to canvas (no upscaling)
+  const cw = canvas.getWidth(), ch = canvas.getHeight();
+  const sc = Math.min(cw / img.width, ch / img.height, 1);
+  img.scale(sc);
+
+  const bw = img.width * sc, bh = img.height * sc;
+
+  let obj;
+  if (isToken) {
+    // NEW: hide any non-token ring immediately (prevents flicker on token loads)
+    try {
+      const os = canvas.getObjects() || [];
+      os.forEach(o => { if (o && (o._raWMCenter === true || o._isWatermark === true)) o.visible = false; });
+    } catch (_) {}
+
+    // Token = RA (real asset) => NO ring watermark
+    img._isBase = true;
+    lockBaseObject(img);
+    img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+    obj = img;
 
     canvas.add(obj);
     baseGroup = obj;
     bringInterfaceToFront();
     canvas.requestRenderAll();
-  }
 
-  // Add overlay (with small corner stamps unless permanent)
-  async function addOverlayToCanvas(src, isPermanent){
-    const img = await fabricFromURL(src);
-    img.set({ originX:"center", originY:"center" });
-
-    // initial scale ~ 60% of canvas' smaller side
-    const cw=canvas.getWidth(), ch=canvas.getHeight();
-    const maxDim = Math.min(cw, ch) * 0.60;
-    const iw = img.width||maxDim, ih = img.height||maxDim;
-    const sc = Math.min(1, maxDim / Math.max(iw, ih));
-    if (isFinite(sc) && sc>0) img.scale(sc);
-
-    let obj;
-    if (isPermanent) {
-      img._kind = "overlay";
-      obj = img;
-    } else {
-      const group = await makeStampedGroup(img, (img.width||maxDim)*sc, (img.height||maxDim)*sc, 0.08);
-      group._kind = "overlay";
-      obj = group;
-    }
+  } else {
+    // Non-token => add corner stamps
+    const group = await makeStampedGroup(img, bw, bh, 0.15);
+    group._isBase = true;
+    lockBaseObject(group);
+    group.set({ left:cw/2, top:ch/2 }); group.setCoords();
+    obj = group;
 
     canvas.add(obj);
-    obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
-    canvas.setActiveObject(obj);
+    baseGroup = obj;
     bringInterfaceToFront();
     canvas.requestRenderAll();
-    return obj;
-  }
 
-  function renderOverlayGrid(){
-    const grid = $("overlayGrid"); if (!grid) return;
-    grid.innerHTML="";
-    overlayList.forEach((item, idx)=>{
-      const tile=document.createElement("div");
-      tile.className = "tile" + (item.perm ? " perm" : "");
-      tile.style.cursor = "pointer";
-
-      const img=document.createElement("img");
-      img.src=item.src; img.alt=item.name||""; img.title=item.name||(item.perm?"":"");
-      img.style.maxWidth="100%"; img.style.display="block";
-      img.addEventListener("click", async ()=>{ await addOverlayToCanvas(item.src, item.perm); });
-
-      tile.appendChild(img);
-
-      const cap=document.createElement("div");
-      cap.style.fontSize="11px"; cap.style.color="#9ca3af"; cap.style.marginTop="4px";
-      cap.textContent=item.name||"overlay";
-      tile.appendChild(cap);
-
-      if (!item.perm){
-        const x=document.createElement("div");
-        x.textContent="×"; x.title="Remove";
-        x.style.cssText="position:absolute;top:4px;right:6px;cursor:pointer;color:#bbb";
-        x.addEventListener("click",(e)=>{ e.stopPropagation(); overlayList.splice(idx,1); renderOverlayGrid(); });
-        tile.style.position="relative";
-        tile.appendChild(x);
-      }
-      grid.appendChild(tile);
+    // NEW: ensure ring watermark shows and seats above base (call twice)
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+    requestAnimationFrame(() => {
+      try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
     });
   }
-
-  function reorderOverlay(dir){
-    const o=canvas.getActiveObject(); if(!o || o._kind!=="overlay") return;
-    const objs=canvas.getObjects();
-    const overlays = objs.filter(x=>x._kind==="overlay");
-    if(overlays.length<=1) return;
-
-    const overlayIndices = overlays.map(x=>objs.indexOf(x)).sort((a,b)=>a-b);
-    const topIdx    = overlayIndices[overlayIndices.length-1];
-    const bottomIdx = overlayIndices[0];
-
-    if (dir==="front"){
-      canvas.moveTo(o, topIdx+1);
-    } else if (dir==="back"){
-      canvas.moveTo(o, bottomIdx);
-      const baseIdx = objs.findIndex(x=>x._isBase);
-      const idx = objs.indexOf(o);
-      if (baseIdx>=0 && idx<=baseIdx){ canvas.moveTo(o, baseIdx+1); }
-    }
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-  }
-
-  function addOrUpdateTokenLabel(id){
-    const display = $("tokenIdDisplay");
-    if (display) display.value = "#"+id;
-
-    const fmtSel = $("idFormat"); const fmt = fmtSel ? fmtSel.value : "plain";
-    const text = formatTokenId("#"+id, fmt);
-
-    const style = {
-  fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-  fontSize: parseInt(($("idSize")||{}).value||"52",10),
-  fill: ($("idColor")||{}).value || "#ffffff",
-  stroke: ($("idStrokeColor")||{}).value || "transparent",
-  strokeWidth: parseInt(($("idStrokeWidth")||{}).value||"0",10),
-};
-
-if (!idLabel) {
-  // Use single-line Text (tight bounds), no forced width
-  idLabel = new fabric.Text(text, {
-    left: canvas.getWidth()/2,
-    top: 40,
-    originX: "center",
-    originY: "top",
-    textAlign: "center",
-    editable: false,               // stays non-editable
-    strokeUniform: true,
-    paintFirst: "stroke",
-    objectCaching: false,
-    perPixelTargetFind: true,
-    ...style
-  });
-  idLabel._kind = 'tokenId';
-  canvas.add(idLabel);
-} else {
-  idLabel.set({ text, ...style });
 }
 
-// Force Fabric to recompute tight bounds
-idLabel.set({ width: undefined });
-idLabel.initDimensions && idLabel.initDimensions();
-idLabel.setCoords();
+// Add overlay (with small corner stamps unless permanent)
+async function addOverlayToCanvas(src, isPermanent){
+  const img = await fabricFromURL(src);
+  img.set({ originX:"center", originY:"center" });
 
-bringInterfaceToFront();
-canvas.requestRenderAll();
+  // initial scale ~ 60% of canvas' smaller side
+  const cw = canvas.getWidth(), ch = canvas.getHeight();
+  const maxDim = Math.min(cw, ch) * 0.60;
+  const iw = img.width || maxDim, ih = img.height || maxDim;
+  const sc = Math.min(1, maxDim / Math.max(iw, ih));
+  if (isFinite(sc) && sc > 0) img.scale(sc);
+
+  let obj;
+  if (isPermanent) {
+    img._kind = "overlay";
+    obj = img;
+  } else {
+    const group = await makeStampedGroup(img, (img.width||maxDim)*sc, (img.height||maxDim)*sc, 0.08);
+    group._kind = "overlay";
+    obj = group;
   }
 
-  function formatTokenId(displayVal, fmt){
-    let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
-    if(Number.isNaN(num)) return String(displayVal);
-    switch(fmt){
-      case "roman":  return toRoman(num);
-      case "hex":    return "0x"+num.toString(16).toUpperCase();
-      case "binary": return "0b"+num.toString(2);
-      case "leading":return "#"+String(num).padStart(4,'0');
-      default:       return "#"+num;
+  canvas.add(obj);
+  obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
+  canvas.setActiveObject(obj);
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+  return obj;
+}
+
+function renderOverlayGrid(){
+  const grid = $("overlayGrid"); if (!grid) return;
+  grid.innerHTML = "";
+  overlayList.forEach((item, idx)=>{
+    const tile = document.createElement("div");
+    tile.className = "tile" + (item.perm ? " perm" : "");
+    tile.style.cursor = "pointer";
+
+    const img = document.createElement("img");
+    img.src = item.src; img.alt = item.name || ""; img.title = item.name || (item.perm ? "" : "");
+    img.style.maxWidth = "100%"; img.style.display = "block";
+    img.addEventListener("click", async ()=>{ await addOverlayToCanvas(item.src, item.perm); });
+
+    tile.appendChild(img);
+
+    const cap = document.createElement("div");
+    cap.style.fontSize = "11px"; cap.style.color = "#9ca3af"; cap.style.marginTop = "4px";
+    cap.textContent = item.name || "overlay";
+    tile.appendChild(cap);
+
+    if (!item.perm){
+      const x = document.createElement("div");
+      x.textContent = "×"; x.title = "Remove";
+      x.style.cssText = "position:absolute;top:4px;right:6px;cursor:pointer;color:#bbb";
+      x.addEventListener("click",(e)=>{ e.stopPropagation(); overlayList.splice(idx,1); renderOverlayGrid(); });
+      tile.style.position = "relative";
+      tile.appendChild(x);
+    }
+    grid.appendChild(tile);
+  });
+}
+
+function reorderOverlay(dir){
+  const o = canvas.getActiveObject(); if (!o || o._kind !== "overlay") return;
+  const objs = canvas.getObjects();
+  const overlays = objs.filter(x=>x._kind === "overlay");
+  if (overlays.length <= 1) return;
+
+  const overlayIndices = overlays.map(x=>objs.indexOf(x)).sort((a,b)=>a-b);
+  const topIdx    = overlayIndices[overlayIndices.length-1];
+  const bottomIdx = overlayIndices[0];
+
+  if (dir === "front"){
+    canvas.moveTo(o, topIdx + 1);
+  } else if (dir === "back"){
+    canvas.moveTo(o, bottomIdx);
+    const baseIdx = objs.findIndex(x=>x._isBase);
+    const idx = objs.indexOf(o);
+    if (baseIdx >= 0 && idx <= baseIdx){ canvas.moveTo(o, baseIdx + 1); }
+  }
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
+}
+
+// === REPLACE addOrUpdateTokenLabel WITH THIS EDITABLE + UNDO-FRIENDLY VERSION ===
+function addOrUpdateTokenLabel(id){
+  const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  if (!c || !window.fabric) return;
+
+  // Update the small display box if present
+  try {
+    const display = document.getElementById('tokenIdDisplay') || document.getElementById('raTokenIdDisplay');
+    if (display) display.value = '#' + String(id).replace(/^#+/,'');
+  } catch(_) {}
+
+  // Use your formatter if present; else plain "#123"
+  const fmtSel = document.getElementById('idFormat');
+  const shown = (typeof window.formatTokenId === 'function')
+    ? window.formatTokenId('#'+String(id), fmtSel)
+    : '#'+String(id).replace(/^#+/,'');
+
+  // Find existing label or create one
+  let l = window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
+
+  if (!l){
+    // create once — EDITABLE by default
+    l = new fabric.Text(shown, {
+      originX:'center', originY:'top',
+      left: c.getWidth()/2, top: 32,
+      fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      fontSize: 48,
+      fill: '#ffffff',
+      stroke: '#000000',
+      strokeWidth: 2,
+      strokeUniform: true,
+      selectable: true,   // allow move/resize
+      evented:   true,
+      hasControls: true
+    });
+    l._raTokenId = true;
+    l._raSys     = true;
+    c.add(l);
+    try { c.setActiveObject(l); } catch(_){}
+  } else {
+    // update in-place (no remove/add → no blink)
+    const before = l.text;
+    l.set({ text: shown, selectable:true, evented:true, hasControls:true });
+    l.setCoords();
+    try { c.setActiveObject(l); } catch(_){}
+    // Tell Undo recorder the object changed so Undo actually reverts
+    if (before !== shown) {
+      try { c.fire('object:modified', { target: l }); } catch(_){}
     }
   }
-  function toRoman(num){
-    if (num<=0) return String(num);
-    const map=[['M',1000],['CM',900],['D',500],['CD',400],['C',100],['XC',90],['L',50],['XL',40],['X',10],['IX',9],['V',5],['IV',4],['I',1]];
-    let out=''; for(const [sym,val] of map){ while(num>=val){ out+=sym; num-=val; } } return out;
+
+  // Keep the label on top without re-adding
+  try {
+    const objs = c.getObjects() || [];
+    c.bringToFront(l); c.moveTo(l, objs.length - 1);
+  } catch(_){}
+
+  // Let your layer enforcer tidy stack, then render
+  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+  c.requestRenderAll();
+
+  window.idLabel = l; // remember it
+}
+
+function formatTokenId(displayVal, fmt){
+  let num = parseInt(String(displayVal).replace(/[^0-9]/g,''),10);
+  if (Number.isNaN(num)) return String(displayVal);
+  switch(fmt){
+    case "roman":  return toRoman(num);
+    case "hex":    return "0x"+num.toString(16).toUpperCase();
+    case "binary": return "0b"+num.toString(2);
+    case "leading":return "#"+String(num).padStart(4,'0');
+    default:       return "#"+num;
+  }
+}
+
+function toRoman(num){
+  if (num <= 0) return String(num);
+  const map = [['M',1000],['CM',900],['D',500],['CD',400],['C',100],['XC',90],['L',50],['XL',40],['X',10],['IX',9],['V',5],['IV',4],['I',1]];
+  let out = '';
+  for (const [sym,val] of map){ while(num >= val){ out += sym; num -= val; } }
+  return out;
+}
+// ===============================
+//  DOM READY
+// ===============================
+document.addEventListener("DOMContentLoaded", () => {
+  if (!window.fabric) {
+    alert("fabric.js failed to load. Open via a local server or check internet.");
+    return;
   }
 
-  // ===============================
-  //  DOM READY
-  // ===============================
-  document.addEventListener("DOMContentLoaded", () => {
-    if(!window.fabric){ alert("fabric.js failed to load. Open via a local server or check internet."); return; }
+  // Create Fabric canvas
+  canvas = new fabric.Canvas("c", {
+    backgroundColor: "transparent",
+    preserveObjectStacking: true,
+    enableRetinaScaling: true,
+    selectionBorderColor: '#22d3ee',
+    selectionColor: 'rgba(34,211,238,.08)'
+  });
+  window.canvas = canvas;
 
-    // Create Fabric canvas
-    canvas=new fabric.Canvas("c", {
-      backgroundColor:"transparent",
-      preserveObjectStacking:true,
-      enableRetinaScaling:true,
-      selectionBorderColor:'#22d3ee',
-      selectionColor:'rgba(34,211,238,.08)'
-    });
-    window.canvas = canvas;
+  // Background and initial size
+  initBackgroundRect("#0d0e13");
+  const sizeEl = $("canvasSize");
+  if (sizeEl) sizeEl.value = "700";
+  setCanvasSize(parseInt(sizeEl ? sizeEl.value : "700", 10));
+  setZoom(1);
 
-    // Background and initial size
-    initBackgroundRect("#0d0e13");
-    const sizeEl = $("canvasSize");
-    if (sizeEl) sizeEl.value = "700";
-    setCanvasSize(parseInt(sizeEl?sizeEl.value:"700",10));
-    setZoom(1);
+  // >>> NEW: run once right after initial layout
+  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
 
-    // Permanents → embed to the grid
-    overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name:m.name, src:m.src, perm:true }));
-    renderOverlayGrid();
+  // >>> NEW: keep layers sane after *any* canvas change
+  try {
+    canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+    canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+    canvas.on('object:removed',  () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+  } catch(_) {}
 
-    // -------- Base image: local upload
-    safeAddListener("baseUpload","change", async (e)=>{
-      const f=e.target.files && e.target.files[0];
-      if (!f) return;
-      const data = await fileToDataURL(f);
-      await loadBaseImage(data, false); // non‑token => watermark
-    });
-    safeAddListener("clearUpload","click", ()=>{
-      const inp=$("baseUpload"); if (inp) inp.value="";
-      clearBaseOnly();
-    });
+  // --- keep the rest of your existing boot code below this line ---
+  // Permanents → embed to the grid
+  overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name: m.name, src: m.src, perm: true }));
+  renderOverlayGrid();
 
-    // -------- Base image: paste URL
-    safeAddListener("loadUrl","click", async ()=>{
-      const url = ($("baseUrl") && $("baseUrl").value || "").trim();
-      if (!url) return;
-      const data = await fetchAsDataURL(url);
-      await loadBaseImage(data, false);
-    });
+  // -------- Base image: local upload
+  safeAddListener("baseUpload", "change", async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const data = await fileToDataURL(f);
+    await loadBaseImage(data, false); // non-token => watermark
+  });
 
-    // -------- Base image: load by token ID (Reservoir)
-    safeAddListener("loadToken","click", async ()=>{
-      const id = ($("tokenIdInput") && $("tokenIdInput").value || "").trim();
-      const status = $("tokenStatus");
-      if (!id){ if(status) status.textContent="Enter a token ID."; return; }
+  safeAddListener("clearUpload", "click", () => {
+    const inp = $("baseUpload"); if (inp) inp.value = "";
+    clearBaseOnly();
+  });
 
-      if(status) status.textContent="Fetching token…";
-      try{
-        const imgUrl = await fetchImageByTokenId(CONTRACT, id);
-        if (!imgUrl){ if(status) status.textContent="No image URL found."; return; }
-        if(status) status.textContent="Downloading image…";
-        const data = await fetchAsDataURL(imgUrl);
-        await loadBaseImage(data, true);   // token ⇒ NO watermark
-        addOrUpdateTokenLabel(id);
-        if(status) status.textContent="Loaded 👍";
-      }catch(_){
-        if(status) status.textContent="Failed to load token image.";
+  // ... any other startup listeners, buttons, etc. ...
+
+});   // <-- closes DOMContentLoaded
+
+/* ===== RA_TOKEN_ID_WIRING — place/update on-canvas Token ID label ===== */
+;(() => {
+  if (window.__RA_WIRE_TOKENID_BTN__) return;
+  window.__RA_WIRE_TOKENID_BTN__ = true;
+
+  // Scope to the Token ID Styles card (reduces false positives)
+  function findTokenIdCard(){
+    const hs = Array.from(document.querySelectorAll('h2,h3,h4,h5'));
+    const h  = hs.find(n => /token\s*id/i.test((n.textContent||'').trim()));
+    return h ? (h.closest('.card, .panel, section, form, div') || h.parentElement) : document.body;
+  }
+
+  // Prefer the styles panel display, then other inputs, then last loaded token memory
+  function readTokenInputValue(){
+    // 1) Styles panel display (often shows "#123")
+    const display = document.querySelector('#tokenIdDisplay');
+    const rawDisp = (display && (display.value ?? display.textContent) || '').trim();
+    const digitsDisp = (rawDisp.match(/\d+/) || [''])[0];
+
+    // 2) Other common inputs
+    const fallbacks = [
+      '#tokenIdInput', '#tokenId', '#token',
+      'input[name="tokenId"]', 'input[name="token"]',
+      'input[placeholder*="Token"]', 'input[placeholder*="ID"]'
+    ];
+    let digitsFB = '';
+    for (const sel of fallbacks){
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      const d = (raw.match(/\d+/) || [''])[0];
+      if (d){ digitsFB = d; break; }
+    }
+
+    // 3) Last loaded token remembered by the image loader
+    const mem = (window.__raTokenMemory || '').trim();
+
+    return digitsDisp || digitsFB || mem || '';
+  }
+
+  function placeLabelOnTop(idStr){
+    try {
+      if (typeof window.addOrUpdateTokenLabel !== 'function') return;
+      window.addOrUpdateTokenLabel(String(idStr));
+      const c = window.canvas, l = window.idLabel;
+      if (c && l){
+        // ensure it sits at the very top
+        const n = (c.getObjects()||[]).length;
+        try { c.bringToFront(l); c.moveTo(l, n-1); } catch(_){}
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { c.requestRenderAll(); } catch(_){}
       }
-    });
+    } catch(_){}
+  }
 
-    // -------- Canvas controls
-    safeAddListener("zoomIn","click",  ()=> setZoom(zoom*1.1));
-    safeAddListener("zoomOut","click", ()=> setZoom(zoom/1.1));
-    safeAddListener("zoomReset","click", ()=>{
-      setZoom(1);
-      canvas.setViewportTransform([1,0,0,1,0,0]);
-    });
-    safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
-    safeAddListener("clearBase","click", clearBaseOnly);
-    safeAddListener("clearCanvas","click", ()=>{
-      const keep=[backgroundRect];
-      canvas.getObjects().slice().forEach(o=>{ if(!keep.includes(o)) canvas.remove(o); });
-      idLabel=null; baseGroup=null; canvas.requestRenderAll();
-    });
+  const handler = (e)=>{
+    // Ignore the *image* loader button; we only place the TEXT label here
+    const t = (e?.target?.textContent || e?.target?.value || '').toLowerCase();
+    if (/load\s+by\s+token/.test(t)) return;
 
-    // -------- Token ID style live controls (if present)
-    ["change","input"].forEach(ev=>{
-      safeAddListener("idFormat", ev, ()=>{ if(idLabel){ idLabel.text = formatTokenId(($("tokenIdDisplay")||{}).value||"", $("idFormat").value); canvas.requestRenderAll(); }});
-      safeAddListener("idSize", ev, ()=>{ if(idLabel){ idLabel.set('fontSize', parseInt(($("idSize")||{}).value||"52",10)); canvas.requestRenderAll(); }});
-      safeAddListener("idColor", ev, ()=>{ if(idLabel){ idLabel.set('fill', ($("idColor")||{}).value||"#fff"); canvas.requestRenderAll(); }});
-      safeAddListener("idStrokeColor", ev, ()=>{ if(idLabel){ idLabel.set('stroke', ($("idStrokeColor")||{}).value||"transparent"); canvas.requestRenderAll(); }});
-      safeAddListener("idStrokeWidth", ev, ()=>{ if(idLabel){ idLabel.set('strokeWidth', parseInt(($("idStrokeWidth")||{}).value||"0",10)); canvas.requestRenderAll(); }});
-    });
-    safeAddListener("deleteTokenId","click", ()=>{ if(idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }});
+    const idStr = readTokenInputValue();
+    if (!idStr) return;
 
-    // -------- Custom text (optional UI)
-   safeAddListener("addCustomText","click", ()=>{
+    e.preventDefault?.();
+    e.stopPropagation?.();
+    placeLabelOnTop(idStr);
+  };
+
+  // 1) Bind by common button IDs (if they exist)
+  ['loadTokenId','loadTokenID','tokenIdLoad','placeTokenId'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el && !el.__raTokIdWired){
+      el.__raTokIdWired = true;
+      el.addEventListener('click', handler, true);
+    }
+  });
+
+  // 2) Fallback: bind by visible text inside the Token ID Styles card
+  const scope = findTokenIdCard();
+  scope.addEventListener('click', (e)=>{
+    const btn = e.target && e.target.closest && e.target.closest('button, a, input[type="button"], input[type="submit"]');
+    if (!btn || !scope.contains(btn)) return;
+    const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
+    if (/^(load\s*token\s*id|place\s*token\s*id|show\s*token\s*id)$/.test(txt)){
+      handler(e);
+    }
+  }, true);
+})();
+  
+ /* ===== RA_JSON_RESTORE_GUARD ===== */
+(function RA_JSON_RESTORE_GUARD(){
+  if (window.__RA_JSON_RESTORE_GUARD__) return;
+  window.__RA_JSON_RESTORE_GUARD__ = true;
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function patch(c){
+    if (!c || c.__raPatchedLoadJSON) return;
+    const orig = c.loadFromJSON.bind(c);
+
+    c.loadFromJSON = function(json, cb, reviver){
+      const next = (typeof cb === 'function') ? cb : function(){};
+      window.__raLoadingJSON = true;
+      const done = ()=>{
+        window.__raLoadingJSON = false;
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+        try { c.requestRenderAll(); } catch(_){}
+        next();
+      };
+      try { return orig(json, done, reviver); }
+      catch(e){ window.__raLoadingJSON = false; throw e; }
+    };
+
+    c.__raPatchedLoadJSON = true;
+  }
+
+  (function wait(){ const c=C(); if (!c) return setTimeout(wait,120); patch(c); })();
+})();
+
+/* -------- Base image: load by token (multi-collection) --------
+   Reads the selected collection’s contract from your dropdown and
+   loads the token’s image via Reservoir (works for Chumpz, Saints, Rebel, etc.)
+   UI ids expected:
+     - collectionSelect  (or collectionKey)  ← your collection dropdown
+     - tokenIdInput      ← input where you type the token id
+     - tokenStatus       ← small <span> to show status text (optional)
+     - loadToken         ← the “Load Token ID” button
+*/
+safeAddListener("loadToken","click", async ()=>{
+  const statusEl = $("tokenStatus");
+  const tokenId  = (($("tokenIdInput")||{}).value || "").trim();
+  if (!tokenId){ if (statusEl) statusEl.textContent = "Enter a token ID."; return; }
+
+  // Remember last loaded token for the Styles button
+  try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_){}
+
+  // Find the contract for the currently selected collection
+  function selectedContract(){
+    const sel = $("collectionSelect") || $("collectionKey") || document.querySelector("[data-ra-collection-select]");
+    const opt = sel?.selectedOptions?.[0];
+    const fromData = opt?.dataset?.contract || opt?.getAttribute?.("data-contract");
+    const val = (fromData || sel?.value || "").trim();
+
+    // If the value already looks like an address, use it
+    if (/^0x[a-fA-F0-9]{40}$/.test(val)) return val;
+
+    // Otherwise try a global list if you have one (RA_COLLECTIONS, etc.)
+    const list = (window.RA_COLLECTIONS && Array.isArray(window.RA_COLLECTIONS)) ? window.RA_COLLECTIONS : [];
+    const hit  = list.find(x => x.key===val || x.slug===val || x.name===val);
+    if (hit && (hit.address || hit.contract)) return (hit.address || hit.contract);
+
+    // Safe fallback: your Rebel Ants contract
+    return (typeof CONTRACT === "string" && CONTRACT) ? CONTRACT : "0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221";
+  }
+
+  const contract = selectedContract();
+
+  if (statusEl) statusEl.textContent = "Fetching token…";
+  try{
+    // Uses your existing helper (already in your file)
+    const imgUrl = await fetchImageByTokenId(contract, tokenId);
+    if (!imgUrl){ if (statusEl) statusEl.textContent = "No image URL found."; return; }
+
+    if (statusEl) statusEl.textContent = "Downloading image…";
+    const data = await fetchAsDataURL(imgUrl);
+
+    // Mark as token image (no watermarks) and load
+    await loadBaseImage(data, true);
+
+    // Tag the base object with the contract so watermark/branding logic can read it
+    try{
+      const objs = canvas.getObjects() || [];
+      const base = objs.find(o => o._isBase && !o._isBgRect);
+      if (base) base._tokenContract = contract;
+    }catch(_){}
+
+    if (statusEl) statusEl.textContent = "Loaded 👍";
+
+    // Let any watermark/brand-footer listeners re-evaluate
+    try { document.dispatchEvent(new Event("ra-wm-recalc")); } catch(_){}
+    try { canvas.requestRenderAll(); } catch(_){}
+  }catch(_){
+    if (statusEl) statusEl.textContent = "Failed to load token.";
+  }
+});
+
+/* -------- Canvas controls -------- */
+safeAddListener("zoomIn","click",  ()=> setZoom(zoom*1.1));
+safeAddListener("zoomOut","click", ()=> setZoom(zoom/1.1));
+safeAddListener("zoomReset","click", ()=>{
+  setZoom(1);
+  canvas.setViewportTransform([1,0,0,1,0,0]);
+});
+safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
+safeAddListener("clearBase","click", clearBaseOnly);
+safeAddListener("clearCanvas","click", ()=>{
+  raSafeClear(true);          // keep backgroundRect, clear everything else
+  idLabel = null; baseGroup = null;
+  // After UI clears, re-enforce order on idle so Undo/Restore isn't racing our redraw
+  setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 60);
+});
+
+/* -------- Token ID style live controls (if present) -------- */
+["change","input"].forEach(ev=>{
+  safeAddListener("idFormat", ev, ()=>{
+    if (idLabel){
+      idLabel.text = formatTokenId((($("tokenIdDisplay")||{}).value)||"", (($("idFormat")||{}).value)||"plain");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idSize", ev, ()=>{
+    if (idLabel){
+      idLabel.set('fontSize', parseInt((($("idSize")||{}).value)||"52",10));
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idColor", ev, ()=>{
+    if (idLabel){
+      idLabel.set('fill', (($("idColor")||{}).value)||"#fff");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idStrokeColor", ev, ()=>{
+    if (idLabel){
+      idLabel.set('stroke', (($("idStrokeColor")||{}).value)||"transparent");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("idStrokeWidth", ev, ()=>{
+    if (idLabel){
+      idLabel.set('strokeWidth', parseInt((($("idStrokeWidth")||{}).value)||"0",10));
+      canvas.requestRenderAll();
+    }
+  });
+});
+safeAddListener("deleteTokenId","click", ()=>{
+  if (idLabel){ canvas.remove(idLabel); idLabel=null; canvas.requestRenderAll(); }
+});
+
+/* -------- Custom text (optional UI) -------- */
+safeAddListener("addCustomText","click", ()=>{
   const val = (($("customText")||{}).value||"").trim(); if (!val) return;
 
   // Use IText (editable single-line) → tight bounds, no forced width
@@ -445,11 +1111,11 @@ canvas.requestRenderAll();
     originX: "center",
     originY: "center",
     textAlign: "left",
-    fontFamily: ($("fontFamily")||{}).value || "Arial, sans-serif",
-    fontSize: parseInt(($("fontSize")||{}).value||"48",10),
-    fill: ($("fontColor")||{}).value || "#ffffff",
-    stroke: ($("strokeColor")||{}).value || "transparent",
-    strokeWidth: parseInt(($("strokeWidth")||{}).value||"0",10),
+    fontFamily: (($("fontFamily")||{}).value) || "Arial, sans-serif",
+    fontSize: parseInt((($("fontSize")||{}).value)||"48",10),
+    fill: (($("fontColor")||{}).value) || "#ffffff",
+    stroke: (($("strokeColor")||{}).value) || "transparent",
+    strokeWidth: parseInt((($("strokeWidth")||{}).value)||"0",10),
     strokeUniform: true,
     paintFirst: "stroke",
     objectCaching: false,
@@ -459,7 +1125,7 @@ canvas.requestRenderAll();
 
   // Tighten bounds (ensure no cached wide box)
   txt.set({ width: undefined });
-  txt.initDimensions && txt.initDimensions();
+  if (txt.initDimensions) txt.initDimensions();
   txt.setCoords();
 
   txt._kind = 'customText';
@@ -468,567 +1134,548 @@ canvas.requestRenderAll();
   bringInterfaceToFront();
   canvas.requestRenderAll();
 });
-    ["change","input"].forEach(ev=>{
-      safeAddListener("fontFamily", ev, ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontFamily', $("fontFamily").value); canvas.requestRenderAll(); }});
-      safeAddListener("fontSize", ev,   ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fontSize', parseInt($("fontSize").value||"48",10)); canvas.requestRenderAll(); }});
-      safeAddListener("fontColor", ev,  ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('fill', $("fontColor").value); canvas.requestRenderAll(); }});
-      safeAddListener("strokeColor", ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('stroke', $("strokeColor").value); canvas.requestRenderAll(); }});
-      safeAddListener("strokeWidth", ev,()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ o.set('strokeWidth', parseInt($("strokeWidth").value||"0",10)); canvas.requestRenderAll(); }});
-    });
-    safeAddListener("delSelectedText","click", ()=>{ const o=canvas.getActiveObject(); if(o&&o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }});
-    safeAddListener("delAllText","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='customText') canvas.remove(o); }); canvas.requestRenderAll(); });
 
-    // -------- Selection tools
-    safeAddListener("duplicate","click", ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.clone(c=>{ c.set({ left:(o.left||0)+20, top:(o.top||0)+20 }); canvas.add(c).setActiveObject(c); canvas.requestRenderAll(); }); });
-    safeAddListener("delete","click", ()=>{
-  const o = canvas.getActiveObject();
-  if (!o || o===backgroundRect || o._isBase) return;
+["change","input"].forEach(ev=>{
+  safeAddListener("fontFamily", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind==='customText'){
+      o.set('fontFamily', (($("fontFamily")||{}).value)||o.fontFamily||"Arial, sans-serif");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("fontSize", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind === 'customText') {
+      o.set('fontSize', parseInt((($("fontSize")||{}).value)||"48",10));
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("fontColor", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind==='customText'){
+      o.set('fill', (($("fontColor")||{}).value)||o.fill||"#ffffff");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("strokeColor", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind==='customText'){
+      o.set('stroke', (($("strokeColor")||{}).value)||o.stroke||"transparent");
+      canvas.requestRenderAll();
+    }
+  });
+  safeAddListener("strokeWidth", ev, ()=>{
+    const o = canvas.getActiveObject();
+    if (o && o._kind === 'customText') {
+      o.set('strokeWidth', parseInt((($("strokeWidth")||{}).value)||"0",10));
+      canvas.requestRenderAll();
+    }
+  });
+});
 
-  // If it’s the Token ID, clear the pointer so it won’t pop back
-  try { if (o === idLabel) { idLabel = null; } } catch(_) {}
+safeAddListener("delSelectedText","click", ()=>{
+  const o=canvas.getActiveObject();
+  if (o && o._kind==='customText'){ canvas.remove(o); canvas.requestRenderAll(); }
+});
 
-  // Drop the selection layer first (prevents the tall ghost strip)
-  try { canvas.discardActiveObject(); } catch(_) {}
-
-  canvas.remove(o);
+safeAddListener("delAllText","click", ()=>{
+  canvas.getObjects().slice().forEach(o=>{ if (o._kind==='customText') canvas.remove(o); });
   canvas.requestRenderAll();
 });
-    safeAddListener("opacity","input", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.set('opacity', parseFloat(e.target.value||"1")); canvas.requestRenderAll(); });
-    safeAddListener("blendMode","change", (e)=>{ const o=canvas.getActiveObject(); if(!o) return; o.globalCompositeOperation = e.target.value==="normal" ? null : e.target.value; canvas.requestRenderAll(); });
-    safeAddListener("bringFront","click", ()=> reorderOverlay('front'));
-    safeAddListener("sendBack","click",  ()=> reorderOverlay('back'));
-    safeAddListener("flipX","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipX'); canvas.requestRenderAll(); });
-    safeAddListener("flipY","click",     ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.toggle && o.toggle('flipY'); canvas.requestRenderAll(); });
-    safeAddListener("lock","click",      ()=>{ const o=canvas.getActiveObject(); if(!o) return; o.set({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true, lockScalingX:true, lockScalingY:true, lockRotation:true }); canvas.requestRenderAll(); });
-    safeAddListener("unlockAll","click", ()=>{ canvas.getObjects().forEach(o=>{ if(!o._isBase){ o.set({ selectable:true, evented:true, hasControls:true, lockMovementX:false, lockMovementY:false, lockScalingX:false, lockScalingY:false, lockRotation:false }); }}); canvas.requestRenderAll(); });
-    safeAddListener("clearAllOverlays","click", ()=>{ canvas.getObjects().slice().forEach(o=>{ if(o._kind==='overlay') canvas.remove(o); }); canvas.requestRenderAll(); });
 
-    // -------- Overlays panel & uploads
-    safeAddListener("overlayUpload","change", async (e)=>{
-      const files=Array.from(e.target.files||[]);
-      for(const f of files){
-        const data=await fileToDataURL(f);
-        overlayList.unshift({name:f.name, src:data, perm:false});
-        await addOverlayToCanvas(data,false);
-      }
-      renderOverlayGrid(); e.target.value="";
-    });
-    safeAddListener("clearOverlayGrid","click", ()=>{
-      overlayList = overlayList.filter(o=>o.perm); renderOverlayGrid();
-    });
-
-    // -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
-    document.addEventListener("keydown", (e)=>{
-      const tag = (e.target && e.target.tagName || "").toLowerCase();
-      if (e.target && (e.target.isContentEditable || tag==="input" || tag==="textarea" || tag==="select")) return;
-
-      const o = canvas.getActiveObject();
-
-      // Delete selection
-     if (o && (e.key==="Delete" || e.key==="Backspace")){
-  if (!o._isBase && o!==backgroundRect){
-    // If it’s the Token ID, clear the pointer so it won’t pop back
-    try { if (o === idLabel) { idLabel = null; } } catch(_) {}
-
-    // Drop the selection layer first (prevents the tall ghost strip)
-    try { canvas.discardActiveObject(); } catch(_) {}
-
-    canvas.remove(o);
+/* -------- Selection tools -------- */
+safeAddListener("duplicate","click", ()=>{
+  const o = canvas.getActiveObject(); if (!o) return;
+  o.clone(c=>{
+    c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
+    canvas.add(c).setActiveObject(c);
     canvas.requestRenderAll();
+  });
+});
+
+safeAddListener("delete","click", ()=>{
+  if (!window.canvas) return;
+  const c = window.canvas;
+  const o = c.getActiveObject && c.getActiveObject();
+  if (!o) return;
+
+  // Never delete background, base, or system items from this button
+  if (o._isBgRect || o._isBase || o._raSys) return;
+
+  // If it’s the Token-ID label, clear the pointer so it won’t come back
+  try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
+
+  // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
+  try { c.discardActiveObject(); } catch(_) {}
+
+  // Remove and render
+  try { c.remove(o); } catch(_) {}
+  try { c.requestRenderAll(); } catch(_) {}
+});
+
+// -------- Keyboard Delete/Backspace (same rules as Selection → Delete)
+document.addEventListener('keydown', (e)=>{
+  // ignore when typing in inputs/textareas or contenteditable
+  const tag = (e.target && e.target.tagName || '').toLowerCase();
+  if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
+
+  const isDeleteKey = (e.key === 'Delete') || (e.key === 'Backspace');
+  if (!isDeleteKey) return;
+
+  const c = window.canvas;
+  if (!c) return;
+  const o = c.getActiveObject && c.getActiveObject();
+  if (!o) return;
+
+  // Never delete background, base, or system items from keyboard
+  if (o._isBgRect || o._isBase || o._raSys) { e.preventDefault(); return; }
+
+  // If it’s the Token-ID label, clear the pointer so it won’t come back
+  try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
+
+  // Drop selection first to avoid Fabric drawControls/getRetinaScaling crash
+  try { c.discardActiveObject(); } catch(_) {}
+
+  // Remove and render
+  try { c.remove(o); } catch(_) {}
+  try { c.requestRenderAll(); } catch(_) {}
+
+  e.preventDefault();  // consume the key so browser doesn’t do anything else
+}, true);
+
+safeAddListener("opacity","input", (e)=>{
+  const o=canvas.getActiveObject(); if(!o) return;
+  o.set('opacity', parseFloat(e.target.value||"1"));
+  canvas.requestRenderAll();
+});
+
+safeAddListener("blendMode","change", (e)=>{
+  const o = canvas.getActiveObject(); if (!o) return;
+  o.globalCompositeOperation = (e.target.value === "normal") ? null : e.target.value;
+  canvas.requestRenderAll();
+});
+
+safeAddListener("bringFront","click", ()=> reorderOverlay('front'));
+safeAddListener("sendBack","click",  ()=> reorderOverlay('back'));
+
+safeAddListener("flipX","click", ()=>{
+  const o=canvas.getActiveObject(); if(!o) return;
+  o.toggle && o.toggle('flipX'); canvas.requestRenderAll();
+});
+
+safeAddListener("flipY","click", ()=>{
+  const o=canvas.getActiveObject(); if(!o) return;
+  o.toggle && o.toggle('flipY'); canvas.requestRenderAll();
+});
+
+safeAddListener("lock","click", ()=>{
+  const o = canvas.getActiveObject(); if (!o) return;
+  o.set({
+    selectable:false, evented:false, hasControls:false,
+    lockMovementX:true, lockMovementY:true,
+    lockScalingX:true, lockScalingY:true,
+    lockRotation:true
+  });
+  canvas.requestRenderAll();
+});
+
+// ---- FIXED: do not unlock backgroundRect or _isBase objects ----
+safeAddListener("unlockAll","click", ()=>{
+  const c = window.canvas; if (!c) return;
+  const objs = c.getObjects() || [];
+
+  // Keep background RECT locked & at index 0 (prevents "ghost box")
+  const bg = objs.find(o => o && o._isBgRect);
+  if (bg) {
+    bg.selectable = false; bg.evented = false; bg.hasControls = false;
+    bg.lockMovementX = bg.lockMovementY = bg.lockScalingX = bg.lockScalingY = bg.lockRotation = true;
+    try { c.moveTo(bg, 0); } catch(_) {}
   }
-  e.preventDefault(); return;
-}
-      // Duplicate
-      if (o && ( (e.metaKey && e.key.toLowerCase()==="d") || (e.ctrlKey && e.key.toLowerCase()==="d") )){
-        try { o.clone(cl=>{ cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 }); canvas.add(cl); canvas.setActiveObject(cl); canvas.requestRenderAll(); }); } catch(_){}
-        e.preventDefault(); return;
-      }
-      // Nudge
-      const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
-      if (o && arrows.includes(e.key)){
-        const step = e.shiftKey ? 10 : 1;
-        if (e.key==="ArrowLeft")  o.left -= step;
-        if (e.key==="ArrowRight") o.left += step;
-        if (e.key==="ArrowUp")    o.top  -= step;
-        if (e.key==="ArrowDown")  o.top  += step;
-        o.setCoords(); canvas.requestRenderAll();
-        e.preventDefault();
-      }
+
+  // If background was selected, drop selection to avoid Fabric control glitches
+  const active = c.getActiveObject && c.getActiveObject();
+  if (active && active._isBgRect) {
+    try { c.discardActiveObject(); } catch(_) {}
+  }
+
+  // Unlock only user layers (never bg, base, or any system: footer/WM/label)
+  objs.forEach(o => {
+    if (!o) return;
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+    o.set({
+      selectable: true, evented: true, hasControls: true,
+      lockMovementX: false, lockMovementY: false,
+      lockScalingX:  false, lockScalingY:  false,
+      lockRotation:  false
     });
-
-    // -------- SNAP + ALIGN UI
-    (function snapAlign(){
-      // UI row (Center buttons + Snap toggle)
-      const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
-      const holder = header ? header.parentNode : document.body;
-      if (!$("raSnapRow")){
-        const row = document.createElement("div");
-        row.id="raSnapRow";
-        row.style.cssText="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
-        row.innerHTML = `
-          <button class="btn small" id="raCenterH">Center H</button>
-          <button class="btn small" id="raCenterV">Center V</button>
-          <button class="btn small" id="raCenterHV">Center HV</button>
-          <button class="btn small" id="raSnapToggle">Snap: On</button>
-          <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
-        `;
-        holder.appendChild(row);
-        $("raSnapToggle").onclick = ()=>{
-          window.__snapOn = !window.__snapOn;
-          $("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
-        };
-        function center(which){
-          const o=canvas.getActiveObject(); if(!o) return;
-          if (which==="H" || which==="HV") o.left = canvas.getWidth()/2;
-          if (which==="V" || which==="HV") o.top  = canvas.getHeight()/2;
-          o.setCoords(); canvas.requestRenderAll();
-        }
-        $("raCenterH").onclick  = ()=>center("H");
-        $("raCenterV").onclick  = ()=>center("V");
-        $("raCenterHV").onclick = ()=>center("HV");
-      }
-
-      window.__snapOn = true;
-      if (!canvas.__snapWired){
-        function halfW(o){ return (o.getScaledWidth? o.getScaledWidth(): (o.width||0)*(o.scaleX||1)) / 2; }
-        function halfH(o){ return (o.getScaledHeight?o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2; }
-        function clampSnap(o){
-          if (!window.__snapOn) return;
-          const tol = 8, cw=canvas.getWidth(), ch=canvas.getHeight();
-          const hw=halfW(o), hh=halfH(o);
-          // centers
-          if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
-          if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
-          // edges
-          if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
-          if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
-          if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
-          if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
-        }
-        canvas.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
-        canvas.on("mouse:up", ()=> canvas.requestRenderAll());
-        canvas.__snapWired = true;
-      }
-    })();
-
-    // -------- ADMIN PORTAL (toggle with ?admin=1)
-    (function adminDock(){
-      const isAdmin = /\badmin=1\b/i.test(location.search);
-      if (!isAdmin) { renderPublishedShelf(); return; }
-
-      if ($("raAdminDock2")) { renderPublishedShelf(); return; }
-
-      function fileToDataURL2(file){
-        return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
-      }
-      function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
-      function setShelf(arr){ try{ (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(arr||[])); }catch(_){} }
-      function setMsg(t){ const el=$("ra2Msg"); if (el) el.textContent=t||''; }
-
-      const dock = document.createElement('div');
-      dock.id = 'raAdminDock2';
-      dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
-      dock.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
-          <strong>Admin Overlays</strong>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <button id="ra2Export"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
-            <button id="ra2Hide"    style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
-          </div>
-        </div>
-        <div id="ra2Body" style="padding:10px 12px;">
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-            <button id="ra2Add"   style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
-            <button id="ra2Clear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
-            <div id="ra2Msg" style="opacity:.75;min-height:18px"></div>
-          </div>
-          <div id="ra2Grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
-          <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add items to the shelf below for everyone.</div>
-        </div>
-      `;
-      document.body.appendChild(dock);
-
-      $("ra2Hide").onclick = ()=>{
-        const b=$("ra2Body"); const btn=$("ra2Hide");
-        const h = b.style.display==='none'; b.style.display=h?'block':'none'; btn.textContent=h?'Hide':'Show';
-      };
-      $("ra2Export").onclick = ()=>{
-        const blob = new Blob([JSON.stringify({version:1,items:getShelf()})], {type:'application/json'});
-        const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='overlays.json'; document.body.appendChild(a); a.click();
-        setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
-      };
-      $("ra2Add").onclick = ()=>{
-        const inp=document.createElement('input');
-        inp.type='file'; inp.accept='image/png'; inp.multiple=true; inp.style.display='none';
-        inp.onchange = async (e)=>{
-          const files = Array.from(e.target.files||[]);
-          files.forEach(async f=>{
-            const dataURL = await fileToDataURL2(f);
-            addTile({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' '), dataURL });
-          });
-          inp.remove();
-        };
-        document.body.appendChild(inp); inp.click();
-      };
-      $("ra2Clear").onclick = ()=>{
-        const g=$("ra2Grid"); if (g) g.innerHTML='';
-        setMsg('Cleared');
-        setTimeout(()=>setMsg(''), 800);
-      };
-
-      function addTile(item){
-        const grid=$("ra2Grid"); if (!grid) return;
-        const tile=document.createElement("div");
-        tile.style.cssText='position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;';
-        tile.innerHTML = `
-          <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-            <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-          </div>
-          <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
-          <div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">
-            <button data-act="publish" class="raTinyBtn2">Publish</button>
-            <button data-act="add"      class="raTinyBtn2">Add</button>
-            <button data-act="del"      class="raTinyBtn2" title="Remove">×</button>
-          </div>
-        `;
-        tile.querySelectorAll('.raTinyBtn2').forEach(b=>{
-          b.style.cssText='background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:3px 8px;cursor:pointer;font-size:12px;';
-        });
-        tile.addEventListener("click", (ev)=>{
-          const btn=ev.target.closest("button"); if(!btn) return;
-          const act=btn.getAttribute("data-act");
-          if (act==="del"){ tile.remove(); return; }
-          if (act==="publish"){
-            const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
-            setMsg(`Published: ${item.name}`); setTimeout(()=>setMsg(''), 800);
-          }
-          if (act==="add"){ addOverlayToCanvas(item.dataURL,false); setMsg(`Added: ${item.name}`); setTimeout(()=>setMsg(''), 800); }
-        });
-        grid.appendChild(tile);
-      }
-
-      renderPublishedShelf();
-    })();
-
-    // Render Published shelf (visible for everyone)
-    function renderPublishedShelf(){
-      function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
-      function ensureShelf(){
-        if ($("ra2Shelf")) return true;
-        const h3 = Array.from(document.querySelectorAll('h3')).find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
-        const card = h3 ? h3.parentNode : null; if (!card) return false;
-        const wrap = document.createElement('div'); wrap.id='ra2Shelf'; wrap.style.marginTop='8px';
-        wrap.innerHTML = `
-          <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
-          <div id="ra2ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
-        `;
-        card.appendChild(wrap); return true;
-      }
-      function addToCanvas(src){ addOverlayToCanvas(src,false); }
-      function draw(){
-        if (!ensureShelf()) { setTimeout(draw,300); return; }
-        const grid=$("ra2ShelfGrid"); if (!grid) return;
-        grid.innerHTML='';
-        getShelf().forEach(item=>{
-          const tile=document.createElement('div');
-          tile.style.cssText='position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-          tile.innerHTML = `
-            <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-              <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-            </div>
-            <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
-          `;
-          tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
-          grid.appendChild(tile);
-        });
-      }
-      draw();
-    }
   });
 
-  // ===============================
-  //  EXPORT (optional UI IDs: exportPng / openNewTab)
-  // ===============================
-  document.addEventListener("DOMContentLoaded", ()=>{
-    safeAddListener("exportPng",   "click", ()=> doExport(false));
-    safeAddListener("openNewTab",  "click", ()=> doExport(true));
-  });
-  function doExport(openTab){
-    if (!window.canvas) return;
-    const mult=parseInt(($("exportMultiplier")||{}).value||"2",10);
-    let dataURL;
-    try{
-      dataURL=canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
-    }catch(_){ alert("Export blocked (CORS). Use images with CORS headers or same-origin."); return; }
-    const prev = $("exportPreview"); if (prev) prev.src = dataURL;
-    const a=document.createElement("a"); a.href=dataURL; a.download="rebel-ant-overlay.png";
-    const manual=$("manualLink"); if (manual){ manual.href=dataURL; manual.textContent="Open last export (manual save)"; }
+  c.requestRenderAll();
+});
 
-    if(openTab){
-      fetch(dataURL).then(r=>r.blob()).then(blob=>{
-        const url=URL.createObjectURL(blob);
-        const w=window.open(url,"_blank","noopener");
-        if(!w){ window.location.href=url; }
-      });
-    }else{
-      document.body.appendChild(a); a.click(); a.remove();
-    }
+safeAddListener("clearAllOverlays","click", ()=>{
+  canvas.getObjects().slice().forEach(o=>{ if (o._kind==='overlay') canvas.remove(o); });
+  canvas.requestRenderAll();
+});
+
+/* -------- Overlays panel & uploads -------- */
+safeAddListener("overlayUpload","change", async (e)=>{
+  const files=Array.from(e.target.files||[]);
+  for(const f of files){
+    const data=await fileToDataURL(f);
+    overlayList.unshift({name:f.name, src:data, perm:false});
+    await addOverlayToCanvas(data,false);
   }
-})();
+  renderOverlayGrid(); e.target.value="";
+});
 
-/* =========================
-   RA_CANVAS_RESIZE_SYNC_ONLY_V8
-   - Scales ALL content when canvas size changes (700/900/1024/1200 or size input)
-   - Re-centers everything and resets pan/zoom
-   - Does not touch Admin/Published overlays at all
-   ========================= */
-(function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
-  // Safe handle to the Fabric canvas
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+safeAddListener("clearOverlayGrid","click", ()=>{
+  overlayList = overlayList.filter(o=>o.perm);
+  renderOverlayGrid();
+});
 
-  // Main resizer: scale+recenter all objects to a new (square) size
-  function resizeCanvasAndScale(newSize){
-    const c = C(); if (!c) return;
-    newSize = parseInt(newSize, 10);
-    if (!newSize || !isFinite(newSize)) return;
+ // -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
+document.addEventListener("keydown", (e)=>{
+  // ignore when typing in inputs/textareas/contenteditable
+  const tag = (e.target && e.target.tagName || "").toLowerCase();
+  if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
 
-    const oldW = c.getWidth(), oldH = c.getHeight();
-    if (!oldW || !oldH) return;
+  const c = window.canvas; if (!c) return;
+  const o = c.getActiveObject && c.getActiveObject();
 
-    // No change? just normalize zoom/pan
-    if (oldW === newSize && oldH === newSize){
-      try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
-      try { c.requestRenderAll(); } catch(_) {}
+  // Delete selection — robust (no sys/base delete, avoid Fabric draw crash)
+  if (e.key === "Delete" || e.key === "Backspace") {
+    if (!o) return;
+
+    // NEVER delete background, base, or system (footer/wm/label) from keyboard
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) {
+      e.preventDefault();
       return;
     }
 
-    const s = newSize / oldW;                 // uniform scale (square canvas)
-    const oldCenter = new fabric.Point(oldW/2, oldH/2);
-    const newCenter = new fabric.Point(newSize/2, newSize/2);
+    // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
+    try { c.discardActiveObject(); } catch(_) {}
 
-    // Snapshot objects (exclude nothing here — base, overlays, text all follow)
-    const objs = (c.getObjects() || []).slice();
-    const info = objs.map(o => ({
-      o,
-      ctr: (typeof o.getCenterPoint === 'function') ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0),
-      sx: o.scaleX || 1,
-      sy: o.scaleY || 1
-    }));
-
-    // Resize canvas
-    c.setWidth(newSize);
-    c.setHeight(newSize);
-
-    // If your code exposes a backgroundRect globally, update it too (safe no-op otherwise)
-    const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
-    if (bgRect) {
-      try {
-        bgRect.set({ width: newSize, height: newSize, left: 0, top: 0 });
-        c.sendToBack(bgRect);
-      } catch(_) {}
-    }
-
-    // Scale & reposition everything relative to the canvas center
-    info.forEach(({o, ctr, sx, sy}) => {
-      // keep backgroundRect updated above; here we still scale if someone wants it scaled too
-      try {
-        const vx = ctr.x - oldCenter.x;
-        const vy = ctr.y - oldCenter.y;
-        const nx = newCenter.x + vx * s;
-        const ny = newCenter.y + vy * s;
-
-        o.set({ scaleX: sx * s, scaleY: sy * s });
-        if (typeof o.setPositionByOrigin === 'function') {
-          o.setPositionByOrigin(new fabric.Point(nx, ny), 'center', 'center');
-        } else {
-          o.left = nx; o.top = ny;
-        }
-        o.setCoords();
-      } catch(_) {}
-    });
-
-    // Reset viewport pan/zoom so it never looks like “zoom only”
-    try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
-    const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
-
+    // Remove and render
+    try { c.remove(o); } catch(_) {}
     try { c.requestRenderAll(); } catch(_) {}
+
+    e.preventDefault();
+    return;
   }
 
-  // Expose/override for any existing callers
-  window.raResizeCanvasAndScale = resizeCanvasAndScale;
-  window.setCanvasSize = resizeCanvasAndScale;
+  // Duplicate (Cmd/Ctrl + D)
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+    if (!o) return;
+    try {
+      o.clone(cl => {
+        cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 });
+        c.add(cl);
+        c.setActiveObject(cl);
+        c.requestRenderAll();
+      });
+    } catch(_) {}
+    e.preventDefault();
+    return;
+  }
 
-  // Wire the size input (left panel)
-  function wireSizeInput(){
-    const el = document.getElementById('canvasSize');
-    if (el && !el.__raBound) {
-      el.__raBound = true;
-      el.addEventListener('change', (e)=> resizeCanvasAndScale(parseInt(e.target.value, 10)));
+  // Nudge with arrows (Shift = 10px)
+  const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
+  if (o && arrows.includes(e.key)) {
+    const step = e.shiftKey ? 10 : 1;
+    if (e.key === "ArrowLeft")  o.left -= step;
+    if (e.key === "ArrowRight") o.left += step;
+    if (e.key === "ArrowUp")    o.top  -= step;
+    if (e.key === "ArrowDown")  o.top  += step;
+    o.setCoords();
+    c.requestRenderAll();
+    e.preventDefault();
+    return;
+  }
+});
+/* -------- SNAP + ALIGN UI (fixed to use window.canvas safely) -------- */
+(function snapAlign(){
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // UI row (Center buttons + Snap toggle)
+  const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
+  const holder = header ? header.parentNode : document.body;
+
+  if (!document.getElementById("raSnapRow")){
+    const row = document.createElement("div");
+    row.id = "raSnapRow";
+    row.style.cssText = "margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
+    row.innerHTML = `
+      <button class="btn small" id="raCenterH">Center H</button>
+      <button class="btn small" id="raCenterV">Center V</button>
+      <button class="btn small" id="raCenterHV">Center HV</button>
+      <button class="btn small" id="raSnapToggle">Snap: On</button>
+      <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
+    `;
+    holder.appendChild(row);
+
+    // Button wiring uses a fresh canvas reference each click
+    document.getElementById("raSnapToggle").onclick = ()=>{
+      window.__snapOn = !window.__snapOn;
+      document.getElementById("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
+    };
+    function center(which){
+      const c = C(); if (!c) return;
+      const o = c.getActiveObject(); if(!o) return;
+      if (which==="H" || which==="HV") o.left = c.getWidth()/2;
+      if (which==="V" || which==="HV") o.top  = c.getHeight()/2;
+      o.setCoords(); c.requestRenderAll();
     }
+    document.getElementById("raCenterH").onclick  = ()=>center("H");
+    document.getElementById("raCenterV").onclick  = ()=>center("V");
+    document.getElementById("raCenterHV").onclick = ()=>center("HV");
   }
 
-  // Intercept the quick size buttons (700 / 900 / 1024 / 1200)
-  function wireQuickButtons(){
-    if (document.__raSizeCaptureOnly) return;
-    document.__raSizeCaptureOnly = true;
-    document.addEventListener('click', function(ev){
-      const btn = ev.target && ev.target.closest && ev.target.closest('button');
-      if (!btn) return;
-      const t = (btn.textContent||'').trim();
-      if (/^(700|900|1024|1200)$/i.test(t)) {
-        ev.preventDefault(); ev.stopImmediatePropagation(); ev.stopPropagation();
-        resizeCanvasAndScale(parseInt(t, 10));
-      }
-    }, true);
+  window.__snapOn = true;
+
+  // Fabric event wiring (only once per canvas instance)
+  const c = C();
+  if (!c) return; // canvas not ready yet — this IIFE is cheap and can re-run later if you call it
+  if (c.__snapWired) return;
+  c.__snapWired = true;
+
+  function halfW(o){
+    return (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) / 2;
+  }
+  function halfH(o){
+    return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2;
+  }
+  function clampSnap(o){
+    if (!window.__snapOn) return;
+    const tol = 8, cw=c.getWidth(), ch=c.getHeight();
+    const hw=halfW(o), hh=halfH(o);
+    // centers
+    if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
+    if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
+    // edges
+    if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
+    if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
+    if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
+    if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
   }
 
-  // Boot
-  function boot(){ wireSizeInput(); wireQuickButtons(); }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  c.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
+  c.on("mouse:up", ()=> c.requestRenderAll());
 })();
 
-/* ==========================================================
-   RA_FIXED_CENTER_CANVAS_V1
-   Keeps the canvas card centered in the viewport on scroll.
-   - No layout jump (uses a ghost placeholder).
-   - Stays horizontally aligned with its column.
-   - Recomputes on resize and when canvas size changes.
-   Paste at the very bottom of app.js.
-   ========================================================== */
-(function RA_FIXED_CENTER_CANVAS_V1(){
-  function byId(id){ return document.getElementById(id); }
-  function getCanvasCard(){
-    const c = byId('c');                           // <canvas id="c">
-    if (!c) return null;
-    // Find the visual card that holds the canvas
-    return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
+/* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
+(function adminDock(){
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+  if (!isAdmin) { renderPublishedShelf(); return; }
+
+  if ($("raAdminDock2")) { renderPublishedShelf(); return; }
+
+  function fileToDataURL2(file){
+    return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
   }
+  function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+  function setShelf(arr){ try{ (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(arr||[])); }catch(_){} }
+  function setMsg(t){ const el=$("ra2Msg"); if (el) el.textContent=t||''; }
 
-  function install(){
-    const card = getCanvasCard();
-    if (!card) { setTimeout(install, 200); return; }
-    if (card.__raFixedCenter) return;              // don’t double‑install
-    card.__raFixedCenter = true;
+  const dock = document.createElement('div');
+  dock.id = 'raAdminDock2';
+  dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
+  dock.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
+      <strong>Admin Overlays</strong>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="ra2Export"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
+        <button id="ra2Hide"    style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+      </div>
+    </div>
+    <div id="ra2Body" style="padding:10px 12px;">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <button id="ra2Add"   style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
+        <button id="ra2Clear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
+        <div id="ra2Msg" style="opacity:.75;min-height:18px"></div>
+      </div>
+      <div id="ra2Grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
+      <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add items to the shelf below for everyone.</div>
+    </div>
+  `;
+  document.body.appendChild(dock);
 
-    // 1) Make a ghost to hold space so the layout doesn’t collapse
-    const ghost = document.createElement('div');
-    ghost.id = 'raCanvasGhost';
-    ghost.style.width = card.offsetWidth + 'px';
-    ghost.style.height = card.offsetHeight + 'px';
-    ghost.style.visibility = 'hidden';
-    ghost.style.pointerEvents = 'none';
-    card.parentNode.insertBefore(ghost, card);
+  $("ra2Hide").onclick = ()=>{
+    const b=$("ra2Body"); const btn=$("ra2Hide");
+    const h = b.style.display==='none'; b.style.display=h?'block':'none'; btn.textContent=h?'Hide':'Show';
+  };
+  $("ra2Export").onclick = ()=>{
+    const blob = new Blob([JSON.stringify({version:1,items:getShelf()})], {type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='overlays.json'; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 200);
+  };
+  $("ra2Add").onclick = ()=>{
+    const inp=document.createElement('input');
+    inp.type='file'; inp.accept='image/png'; inp.multiple=true; inp.style.display='none';
+    inp.onchange = async (e)=>{
+      const files = Array.from(e.target.files||[]);
+      files.forEach(async f=>{
+        const dataURL = await fileToDataURL2(f);
+        addTile({ name: f.name.replace(/\.png$/i,'').replace(/[_-]+/g,' '), dataURL });
+      });
+      inp.remove();
+    };
+    document.body.appendChild(inp); inp.click();
+  };
+  $("ra2Clear").onclick = ()=>{
+    const g=$("ra2Grid"); if (g) g.innerHTML='';
+    setMsg('Cleared');
+    setTimeout(()=>setMsg(''), 800);
+  };
 
-    // 2) Fix the real card to the viewport (we’ll align it to the ghost)
-    Object.assign(card.style, {
-      position: 'fixed',
-      zIndex: 4,
-      margin: 0,
-      left: '0px',
-      top:  '0px',
-      right:'auto',
-      transform: 'none'
+  function addTile(item){
+    const grid=$("ra2Grid"); if (!grid) return;
+    const tile=document.createElement("div");
+    tile.style.cssText='position:relative;border:1px solid #2a2a2e;border-radius:8px;background:#15161c;padding:6px;text-align:center;';
+    tile.innerHTML = `
+      <div style="height:80px;display:flex;align-items:center;justify-content:center;">
+        <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
+      </div>
+      <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name||''}</div>
+      <div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">
+        <button data-act="publish" class="raTinyBtn2">Publish</button>
+        <button data-act="add"      class="raTinyBtn2">Add</button>
+        <button data-act="del"      class="raTinyBtn2" title="Remove">×</button>
+      </div>
+    `;
+    tile.querySelectorAll('.raTinyBtn2').forEach(b=>{
+      b.style.cssText='background:#2a2a2e;border:0;border-radius:6px;color:#ddd;padding:3px 8px;cursor:pointer;font-size:12px;';
     });
-
-    // 3) Function to position the fixed card so it:
-    //    - shares the ghost’s left/width (stays in its column)
-    //    - is vertically centered in the viewport
-    function place(){
-      const rect = ghost.getBoundingClientRect();
-      // keep horizontal alignment with the column
-      card.style.width = rect.width + 'px';
-      card.style.left  = rect.left + 'px';
-
-      // vertical center; clamp if card is taller than viewport
-      const h   = card.offsetHeight || rect.height;
-      const top = Math.max(12, Math.round((window.innerHeight - h) / 2));
-      card.style.top = top + 'px';
-    }
-
-    // 4) Recalculate whenever things change
-    window.addEventListener('scroll', place, { passive: true });
-    window.addEventListener('resize', place);
-    try { new ResizeObserver(place).observe(card); } catch(_) {}
-    try { new ResizeObserver(place).observe(ghost); } catch(_) {}
-    document.addEventListener('ra:canvas-ready', place);
-
-    // First placement
-    place();
+    tile.addEventListener("click", (ev)=>{
+      const btn=ev.target.closest("button"); if(!btn) return;
+      const act=btn.getAttribute("data-act");
+      if (act==="del"){ tile.remove(); return; }
+      if (act==="publish"){
+        const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
+        setMsg(`Published: ${item.name}`); setTimeout(()=>setMsg(''), 800);
+      }
+      if (act==="add"){ addOverlayToCanvas(item.dataURL,false); setMsg(`Added: ${item.name}`); setTimeout(()=>setMsg(''), 800); }
+    });
+    grid.appendChild(tile);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', install);
-  } else {
-    install();
-  }
+  renderPublishedShelf();
 })();
 
-/* ==========================================================
-   RA_OPEN_NEW_TAB_VIEWER_V1
-   - Opens export in a NEW TAB
-   - Fits image to the browser window (no more giant render)
-   - Click image to toggle: Fit ↔ Actual size (100%)
-   Paste at the very bottom of app.js (replace any prior open-new-tab patch).
-   ========================================================== */
-(function RA_OPEN_NEW_TAB_VIEWER_V1(){
-  // Find Fabric canvas safely
-  function findCanvas(){
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
-      for (const k of ['fabric','__fabric','__canvas','fabricCanvas','_fabricCanvas']){
-        const v = el[k]; if (v && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
-      }
-    }
+/* -------- Render Published shelf (visible for everyone) -------- */
+function renderPublishedShelf(){
+  function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+  function ensureShelf(){
+    if ($("ra2Shelf")) return true;
+    const h3 = Array.from(document.querySelectorAll('h3')).find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+    const card = h3 ? h3.parentNode : null; if (!card) return false;
+    const wrap = document.createElement('div'); wrap.id='ra2Shelf'; wrap.style.marginTop='8px';
+    wrap.innerHTML = `
+      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+      <div id="ra2ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+    `;
+    card.appendChild(wrap); return true;
+  }
+  function addToCanvas(src){ addOverlayToCanvas(src,false); }
+  function draw(){
+    if (!ensureShelf()) { setTimeout(draw,300); return; }
+    const grid=$("ra2ShelfGrid"); if (!grid) return;
+    grid.innerHTML='';
+    getShelf().forEach(item=>{
+      const tile = document.createElement('div');
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+
+      const frame = document.createElement('div');
+      frame.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
+      const img = document.createElement('img');
+      img.src = item.dataURL;
+      img.alt = item.name || '';
+      img.style.cssText = 'max-width:100%;max-height:80px;';
+      frame.appendChild(img);
+
+      const cap = document.createElement('div');
+      cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      cap.textContent = item.name || '';
+
+      tile.appendChild(frame);
+      tile.appendChild(cap);
+      tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
+      grid.appendChild(tile);
+    });
+  }
+  draw();
+}
+
+ // ===============================
+//  EXPORT (optional UI IDs: exportPng / openNewTab)
+//  — self-contained: includes the New Tab viewer (fit ↔ actual size)
+// ===============================
+document.addEventListener("DOMContentLoaded", ()=>{
+  // Make sure the UI button can’t submit a surrounding <form>
+  const openBtn = $("openNewTab");
+  if (openBtn && openBtn.tagName === "BUTTON") openBtn.setAttribute("type","button");
+
+  // Regular PNG download
+  safeAddListener("exportPng","click",()=> doExport(false));
+
+  // New-tab viewer (prevents Chrome navigating the current tab)
+  safeAddListener("openNewTab", "click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Open the viewer
+    raOpenNewTabViewer();
+  });
+
+  // High-quality PNG export used by both paths
+  function doExport(openTab){
+    if (!window.canvas) return;
+    const rawMult = parseInt((($("exportMultiplier")||{}).value) || "2", 10);
+    const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
+    let dataURL;
     try{
-      for (const k in window){
-        const v = window[k];
-        if (v && typeof v.toDataURL === 'function' && v.upperCanvasEl) { window.canvas = v; return v; }
-      }
-    }catch(_){}
-    return null;
-  }
-
-  // Read export multiplier (HQ ×2 etc.)
-  function getMultiplier(){
-    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
-    if (el){
-      const v = parseInt((el.value||el.textContent||'').replace(/\D+/g,''),10);
-      if (v && v >= 1 && v <= 8) return v;
+      dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
+    }catch(_){
+      alert("Export blocked (CORS). Use images with CORS headers or same-origin.");
+      return;
     }
-    // fallback default
-    return 2;
-  }
+    const prev = $("exportPreview"); if (prev) prev.src = dataURL;
 
-  // Pick the "Open in New Tab" control by label
-  function isOpenNewTabEl(node){
-    const el = node && node.closest && node.closest('button,a');
-    if (!el) return null;
-    const t = (el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
-    return (/^open in new tab$/.test(t) || /open.*new.*tab/.test(t)) ? el : null;
-  }
+    // Manual “save last export” link (if present in UI)
+    const manual = $("manualLink");
+    if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
 
-  // Prevent native link from navigating current tab
-  function neutralizeLinkHref(){
-    const el = Array.from(document.querySelectorAll('a,button'))
-      .find(n => /open\s*in\s*new\s*tab/i.test((n.textContent||'')));
-    if (el && el.tagName === 'A'){
-      if (!el.dataset.raSavedHref) el.dataset.raSavedHref = el.getAttribute('href') || '';
-      el.setAttribute('href','javascript:void(0)');
-      el.removeAttribute('target');
-      el.setAttribute('rel','noopener');
+    if (openTab) {
+      fetch(dataURL).then(r => r.blob()).then(blob => {
+        const url = URL.createObjectURL(blob);
+        const w = window.open(url, "_blank", "noopener");
+        if (!w) {
+          // Popup blocked → trigger a download instead of navigating away
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "rebel-ant-overlay.png";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+        }
+      });
+    } else {
+      const a = document.createElement("a");
+      a.href = dataURL; a.download = "rebel-ant-overlay.png";
+      document.body.appendChild(a); a.click(); a.remove();
     }
   }
 
-  // New‑tab viewer that fits the image to the viewport
-  function openNewTabViewer(){
-    const c = findCanvas();
-    if (!c){ alert('Canvas not ready'); return; }
+  // ---- Inline, popup-safe viewer that fits to the browser tab ----
+  // Exposed globally so other code can reuse: window.raOpenNewTabViewer()
+  window.raOpenNewTabViewer = function raOpenNewTabViewer(){
+    if (!window.canvas){ alert("Canvas not ready"); return; }
 
-    // Open the tab synchronously (popup‑safe)
-    const win = window.open('', '_blank');
-    if (!win){ alert('Popup blocked. Allow popups for this site.'); return; }
-    win.document.title = 'Export';
+    // Open a blank tab synchronously (avoids popup blockers)
+    const win = window.open("", "_blank", "noopener");
+    if (!win){ alert("Popup blocked. Allow popups for this site."); return; }
+
+    // Minimal head+styles
+    win.document.title = "Export";
     win.document.head.innerHTML = `
       <meta charset="utf-8">
       <title>Export</title>
@@ -1056,54 +1703,198 @@ canvas.requestRenderAll();
       <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
     `;
 
+    // Read export multiplier from UI (1..8), default 2
+    const multEl = document.getElementById("exportMultiplier") || document.getElementById("exportQuality");
+    let mult = 2;
+    if (multEl){
+      const v = parseInt((multEl.value||multEl.textContent||"").replace(/\D+/g,""),10);
+      if (v && v>=1 && v<=8) mult = v;
+    }
+
     try{
-      const mult = getMultiplier();
-      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
-      const img = win.document.getElementById('raImg');
+      const dataUrl = canvas.toDataURL({ format:"png", multiplier: mult, enableRetinaScaling:true });
+      const img = win.document.getElementById("raImg");
       img.src = dataUrl;
 
       // Fit ↔ Actual size toggle
       let fit = true;
       function applyFit(){
         if (fit){
-          img.style.maxWidth  = 'calc(100vw - 32px)';
-          img.style.maxHeight = 'calc(100vh - 32px)';
-          img.style.width = 'auto';
-          img.style.height = 'auto';
+          img.style.maxWidth  = "calc(100vw - 32px)";
+          img.style.maxHeight = "calc(100vh - 32px)";
+          img.style.width = "auto";
+          img.style.height = "auto";
         } else {
-          img.style.maxWidth  = 'none';
-          img.style.maxHeight = 'none';
-          img.style.width = 'auto';  // natural size
-          img.style.height = 'auto';
+          img.style.maxWidth  = "none";
+          img.style.maxHeight = "none";
+          img.style.width = "auto";  // natural size
+          img.style.height = "auto";
         }
       }
-      img.addEventListener('click', ()=>{ fit = !fit; applyFit(); });
+      img.addEventListener("click", ()=>{ fit = !fit; applyFit(); });
       applyFit();
     }catch(e){
-      win.document.body.innerHTML = '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Try a different image or use a CORS‑enabled host.</div>';
+      win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">' +
+        'Export failed (CORS/security). Try a different image or use a CORS-enabled host.' +
+        '</div>';
+    }
+  };
+});  // <-- closes DOMContentLoaded
+
+/* =========================
+   RA_CANVAS_RESIZE_SYNC_ONLY_V8
+   ========================= */
+(function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function resizeCanvasAndScale(newSize){
+    const c = C(); if (!c) return;
+    newSize = parseInt(newSize, 10);
+if (!isFinite(newSize)) return;
+newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
+
+    const oldW = c.getWidth(), oldH = c.getHeight();
+    if (!oldW || !oldH) return;
+
+    if (oldW === newSize && oldH === newSize){
+      try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
+      try { c.requestRenderAll(); } catch(_) {}
+      return;
+    }
+
+    const s = newSize / oldW;
+    const oldCenter = new fabric.Point(oldW/2, oldH/2);
+    const newCenter = new fabric.Point(newSize/2, newSize/2);
+
+    const objs = (c.getObjects() || []).slice();
+    const info = objs.map(o => ({
+      o,
+      ctr: (typeof o.getCenterPoint === 'function') ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0),
+      sx: o.scaleX || 1,
+      sy: o.scaleY || 1
+    }));
+
+    c.setWidth(newSize);
+    c.setHeight(newSize);
+
+    const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
+    if (bgRect) {
+      try {
+        bgRect.set({ width: newSize, height: newSize, left: 0, top: 0 });
+        c.sendToBack(bgRect);
+      } catch(_) {}
+    }
+
+    info.forEach(({o, ctr, sx, sy}) => {
+      try {
+        const vx = ctr.x - oldCenter.x;
+        const vy = ctr.y - oldCenter.y;
+        const nx = newCenter.x + vx * s;
+        const ny = newCenter.y + vy * s;
+
+        o.set({ scaleX: sx * s, scaleY: sy * s });
+        if (typeof o.setPositionByOrigin === 'function') {
+          o.setPositionByOrigin(new fabric.Point(nx, ny), 'center', 'center');
+        } else {
+          o.left = nx; o.top = ny;
+        }
+        o.setCoords();
+      } catch(_) {}
+    });
+
+    try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
+    const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  window.raResizeCanvasAndScale = resizeCanvasAndScale;
+  window.setCanvasSize = resizeCanvasAndScale;
+
+  function wireSizeInput(){
+    const el = document.getElementById('canvasSize');
+    if (el && !el.__raBound) {
+      el.__raBound = true;
+      el.addEventListener('change', (e)=> resizeCanvasAndScale(parseInt(e.target.value, 10)));
     }
   }
 
-  // Capture click → always open in new tab viewer
-  let lastAt = 0;
-  function onClickCapture(e){
-    const el = isOpenNewTabEl(e.target);
-    if (!el) return;
-    const now = Date.now();
-    if (now - lastAt < 400){ e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation(); return false; }
-    lastAt = now;
-
-    e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
-    openNewTabViewer();
-    return false;
+  function wireQuickButtons(){
+    if (document.__raSizeCaptureOnly) return;
+    document.__raSizeCaptureOnly = true;
+    document.addEventListener('click', function(ev){
+      const btn = ev.target && ev.target.closest && ev.target.closest('button');
+      if (!btn) return;
+      const t = (btn.textContent||'').trim();
+      if (/^(700|900|1024|1200)$/i.test(t)) {
+        ev.preventDefault(); ev.stopImmediatePropagation(); ev.stopPropagation();
+        resizeCanvasAndScale(parseInt(t, 10));
+      }
+    }, true);
   }
 
-  function wire(){ neutralizeLinkHref(); }
+  function boot(){ wireSizeInput(); wireQuickButtons(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
 
-  wire();
-  document.addEventListener('click', onClickCapture, true);
-  new MutationObserver(wire).observe(document.body, { childList:true, subtree:true });
-  document.addEventListener('ra:canvas-ready', () => { findCanvas(); });
+/* ==========================================================
+   RA_FIXED_CENTER_CANVAS_V1
+   ========================================================== */
+(function RA_FIXED_CENTER_CANVAS_V1(){
+  function byId(id){ return document.getElementById(id); }
+  function getCanvasCard(){
+    const c = byId('c');
+    if (!c) return null;
+    return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
+  }
+
+  function install(){
+    const card = getCanvasCard();
+    if (!card) { setTimeout(install, 200); return; }
+    if (card.__raFixedCenter) return;
+    card.__raFixedCenter = true;
+
+    const ghost = document.createElement('div');
+    ghost.id = 'raCanvasGhost';
+    ghost.style.width = card.offsetWidth + 'px';
+    ghost.style.height = card.offsetHeight + 'px';
+    ghost.style.visibility = 'hidden';
+    ghost.style.pointerEvents = 'none';
+    card.parentNode.insertBefore(ghost, card);
+
+    Object.assign(card.style, {
+      position: 'fixed',
+      zIndex: 4,
+      margin: 0,
+      left: '0px',
+      top:  '0px',
+      right:'auto',
+      transform: 'none'
+    });
+
+    function place(){
+      const rect = ghost.getBoundingClientRect();
+      card.style.width = rect.width + 'px';
+      card.style.left  = rect.left + 'px';
+
+      const h   = card.offsetHeight || rect.height;
+      const top = Math.max(12, Math.round((window.innerHeight - h) / 2));
+      card.style.top = top + 'px';
+    }
+
+    window.addEventListener('scroll', place, { passive: true });
+    window.addEventListener('resize', place);
+    try { new ResizeObserver(place).observe(card); } catch(_) {}
+    try { new ResizeObserver(place).observe(ghost); } catch(_) {}
+    document.addEventListener('ra:canvas-ready', place);
+    place();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', install);
+  } else {
+    install();
+  }
 })();
 
 /* =========================================
@@ -1541,78 +2332,6 @@ canvas.requestRenderAll();
     document.addEventListener('DOMContentLoaded', injectButton, { once:true });
   } else {
     injectButton();
-  }
-})();
-
-/* ================= RA_FONT_PICKER_CLEAN_V1 =================
-   Shows friendly names in the font dropdown while keeping
-   correct CSS font stacks as the actual values.
-   Works for #fontFamily (Custom Text). If you also have an
-   #idFontFamily picker for the token ID, it will apply there too.
-   ========================================================== */
-(function RA_FONT_PICKER_CLEAN_V1(){
-  const FONTS = [
-    { name: 'Impact',            stack: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
-    { name: 'Arial Black',       stack: "'Arial Black', Gadget, sans-serif" },
-    { name: 'Arial',             stack: "Arial, Helvetica, sans-serif" },
-    { name: 'Helvetica Neue',    stack: "'Helvetica Neue', Helvetica, Arial, sans-serif" },
-    { name: 'Verdana',           stack: "Verdana, Geneva, sans-serif" },
-    { name: 'Tahoma',            stack: "Tahoma, Geneva, sans-serif" },
-    { name: 'Trebuchet MS',      stack: "'Trebuchet MS', Helvetica, sans-serif" },
-    { name: 'Georgia',           stack: "Georgia, 'Times New Roman', serif" },
-    { name: 'Times New Roman',   stack: "'Times New Roman', Times, serif" },
-    { name: 'Palatino',          stack: "Palatino, 'Palatino Linotype', serif" },
-    { name: 'Garamond',          stack: "Garamond, Baskerville, 'Baskerville Old Face', 'Times New Roman', serif" },
-    { name: 'Optima',            stack: "Optima, Segoe, 'Segoe UI', Candara, Calibri, Arial, sans-serif" },
-    { name: 'Century Gothic',    stack: "'Century Gothic', AppleGothic, sans-serif" },
-    { name: 'Gill Sans',         stack: "'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" },
-    { name: 'Avenir',            stack: "Avenir, 'Avenir Next', 'Segoe UI', sans-serif" },
-    { name: 'Copperplate',       stack: "Copperplate, 'Copperplate Gothic Light', fantasy" },
-    { name: 'Papyrus',           stack: "Papyrus, fantasy" },
-    { name: 'Brush Script MT',   stack: "'Brush Script MT', cursive" },
-    { name: 'Lucida Sans',       stack: "'Lucida Sans Unicode','Lucida Grande', sans-serif" },
-    { name: 'Lucida Console',    stack: "'Lucida Console', Monaco, monospace" },
-    { name: 'Consolas',          stack: "Consolas, 'Lucida Console', Monaco, monospace" },
-    { name: 'Courier',           stack: "Courier, 'Courier New', monospace" },
-    { name: 'Menlo',             stack: "Menlo, Monaco, Consolas, 'Courier New', monospace" },
-    { name: 'System UI',         stack: "system-ui, -apple-system, 'Segoe UI', Roboto, Arial" }
-  ];
-
-  function applyToPicker(el){
-    if (!el) return;
-
-    // keep current value if it matches one of our stacks
-    const current = (el.value || '').trim();
-    const keep = FONTS.some(f => f.stack === current) ? current : null;
-
-    // only repopulate if it's a <select> (so we keep existing listeners)
-    if (el.tagName.toLowerCase() === 'select'){
-      el.innerHTML = '';
-      FONTS.forEach(f => {
-        const opt = document.createElement('option');
-        opt.value = f.stack;          // what fabric uses
-        opt.textContent = f.name;     // what user sees
-        el.appendChild(opt);
-      });
-      el.value = keep || FONTS[0].stack;
-
-      // fire a change so the canvas updates if needed
-      try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_) {}
-    } else {
-      // if it’s an <input>, just ensure it has a sane default stack
-      if (!keep) el.value = FONTS[0].stack;
-    }
-  }
-
-  function run(){
-    applyToPicker(document.getElementById('fontFamily'));   // Custom Text font
-    applyToPicker(document.getElementById('idFontFamily')); // (optional) Token ID font, if present
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', run, { once:true });
-  } else {
-    run();
   }
 })();
 
@@ -2362,7 +3081,6 @@ canvas.requestRenderAll();
     removeTempFabricWM
   });
 })();
-
 /* ==========================================================
    RA_UNDO_REDO_SAFE_MINI_V1
    • Super‑safe: never restores anything unless you click Undo/Redo.
@@ -2409,35 +3127,39 @@ canvas.requestRenderAll();
     return JSON.stringify(j);
   }
 
-  function restore(jsonStr, label=''){
-    if (!c || !jsonStr) return;
-    MUTE++;
-    try{
-      const data = JSON.parse(jsonStr);
-      c.loadFromJSON(data, () => {
-        try{
-          if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
-          if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
+ function restore(jsonStr, label=''){
+  if (!c || !jsonStr) return;
+  MUTE++;
+  window.__RA_RESTORING__ = true;             // ← set the guard
 
-          // keep base/bg not selectable
-          c.getObjects().forEach(o=>{
-            if (o._isBase){
-              o.selectable=false; o.evented=false; o.hasControls=false;
-              o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
-            }
-          });
+  try{
+    const data = JSON.parse(jsonStr);
+    c.loadFromJSON(data, () => {
+      try{
+        if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
+        if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
 
-          c.requestRenderAll();
-        } finally {
-          MUTE--;
-          refresh(label);
-        }
-      });
-    } catch(_){
-      MUTE--; refresh(label);
-    }
+        // keep base/bg not selectable
+        c.getObjects().forEach(o=>{
+          if (o._isBase){
+            o.selectable=false; o.evented=false; o.hasControls=false;
+            o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+          }
+        });
+
+        c.requestRenderAll();
+      } finally {
+        MUTE--;
+        window.__RA_RESTORING__ = false;      // ← clear after restore settles
+        refresh(label);
+      }
+    });
+  } catch(_){
+    MUTE--;
+    window.__RA_RESTORING__ = false;          // ← also clear on error
+    refresh(label);
   }
-
+}
   function push(label=''){
     const s = serialize(); if (!s) return;
     // if we undid into the middle, drop the tail
@@ -2527,6 +3249,20 @@ canvas.requestRenderAll();
   let burstTimer = null;
   function schedulePush(label){ if (isMuted()) return; if (burstTimer) return; burstTimer = setTimeout(()=>{ burstTimer=null; push(label); }, 40); }
 
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
   function wire(){
     c = C(); if (!c) return defer(wire, 120);
     ensureUI();
@@ -2534,10 +3270,24 @@ canvas.requestRenderAll();
     // Take a baseline snapshot a moment after the app finishes initial setup
     defer(()=>{ push('Init'); }, 150);
 
-    // Fabric events — safe, view‑only recording
-    c.on('object:modified', ()=> schedulePush('Edit'));
-    c.on('object:added',    (e)=>{ const o=e?.target; if (o && o._isBgRect) return; schedulePush('Add'); });
-    c.on('object:removed',  ()=> schedulePush('Remove'));
+    // Fabric events — record only real user edits (skip bg/base/sys/label)
+c.on('object:modified', (e)=>{
+  const o = e && e.target; 
+  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+  schedulePush('Edit');
+});
+
+c.on('object:added', (e)=>{
+  const o = e && e.target;
+  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+  schedulePush('Add');
+});
+
+c.on('object:removed', (e)=>{
+  const o = e && e.target;
+  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
+  schedulePush('Remove');
+});
 
     // Keyboard shortcuts (ignore when typing)
     document.addEventListener('keydown', (e)=>{
@@ -2566,17 +3316,21 @@ canvas.requestRenderAll();
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V3
-   • Presets for: Everything (viewport), Base only, Overlays only.
-   • Overlay presets now work even if "Everything" is selected (we auto-scope).
-   • Bigger, clearer overlay motions; normalized slide distances (work on any size).
-   • Added a chooseable Easing (Quad/Sine/Cubic/Back/Expo/Linear).
-   • Preview safe: state restored; undo/redo not spammed.
-   • Desktop/mobile layout untouched.
+   RA_ANIMATE_PREVIEW_VIDEO_V4
+   • Presets for: Everything (viewport), Base only, Overlays only, Text only.
+   • Overlay presets still auto-scope when "Everything" is selected.
+   • Broader, safer target detection (text/overlay/base).
+   • Recording: robust MIME selection (VP9→VP8→WebM→MP4 if supported),
+     captureStream FPS, auto download link, and safe fallbacks.
+   • Preview-safe: state restored; undo/redo not spammed; no layout changes.
    ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V3__) return; window.__RA_ANIM_V3__ = true;
+  if (window.__RA_ANIM_V4__) return; window.__RA_ANIM_V4__ = true;
 
+  const VERSION = '4.0.0';
+  const FPS = 30;
+
+  // ---------- Shortcuts ----------
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -2594,17 +3348,18 @@ canvas.requestRenderAll();
   };
 
   // ---------- Presets ----------
-  // kind:'viewport' => whole scene via viewport (Everything).
-  // kind:'overlays' => only overlays/text/token label (works even if What: Everything is selected).
+  // kind:'viewport' => whole scene via camera (Everything).
+  // kind:'overlays' => overlay items (stickers, shapes, images that are not base/text).
+  // kind:'text'     => text/token ID only.
   // kind:'base'     => base image only.
   // Viewport params: z (zoom), x/y (normalized pan: -0.1..+0.1).
-  // Overlay/Base params: s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized to W/H).
+  // Object params (overlays/base/text): s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized W/H).
   const PRESETS = [
     // — Viewport / Everything —
-    {id:'kb_in_ur',  name:'Ken Burns — in ↗',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
-    {id:'kb_in_ul',  name:'Ken Burns — in ↖',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y:-0.06}},
-    {id:'kb_in_dr',  name:'Ken Burns — in ↘',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y: 0.06}},
-    {id:'kb_in_dl',  name:'Ken Burns — in ↙',   kind:'viewport', ease:'ioSine',  from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x: 0.06,y: 0.06}},
+    {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:+0.06}},
+    {id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
+    {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
+    {id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:-0.06}},
     {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
     {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
     {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
@@ -2614,18 +3369,18 @@ canvas.requestRenderAll();
     {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
 
     // — Overlays only —
-    {id:'ov_pop',     name:'Overlays pop (scale)',           kind:'overlays', ease:'ioBack', from:{s:0.90},            to:{s:1.00}},
-    {id:'ov_slide_up',name:'Overlays slide up',              kind:'overlays', ease:'ioSine', from:{dyN:0.14},          to:{dyN:0.00}},
-    {id:'ov_slide_dn',name:'Overlays slide down',            kind:'overlays', ease:'ioSine', from:{dyN:-0.14},         to:{dyN:0.00}},
-    {id:'ov_slide_l', name:'Overlays slide in ←',            kind:'overlays', ease:'ioSine', from:{dxN:-0.18},         to:{dxN:0.00}},
-    {id:'ov_slide_r', name:'Overlays slide in →',            kind:'overlays', ease:'ioSine', from:{dxN: 0.18},         to:{dxN:0.00}},
-    {id:'ov_fade',    name:'Overlays fade in',               kind:'overlays', ease:'ioCubic',from:{alpha:0.00},        to:{alpha:1.00}},
-    {id:'ov_wiggle',  name:'Overlays tiny rotate',           kind:'overlays', ease:'ioSine', from:{rot:-5},            to:{rot:0}},
-    {id:'ov_pop_big', name:'Overlays big pop (stronger)',    kind:'overlays', ease:'ioBack', from:{s:0.85},            to:{s:1.00}},
+    {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},     to:{s:1.00}},
+    {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},   to:{dyN:0.00}},
+    {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14},  to:{dyN:0.00}},
+    {id:'ov_slide_l',  name:'Overlays/Text slide in ←',         kind:'overlays', ease:'ioSine', from:{dxN:-0.18},  to:{dxN:0.00}},
+    {id:'ov_slide_r',  name:'Overlays/Text slide in →',         kind:'overlays', ease:'ioSine', from:{dxN: 0.18},  to:{dxN:0.00}},
+    {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00}, to:{alpha:1.00}},
+    {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},     to:{rot:0}},
+    {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},     to:{s:1.00}},
 
-    // — Base only (optional fun) —
-    {id:'base_nudge', name:'Base nudge (gentle zoom in)',     kind:'base',     ease:'ioSine', from:{s:1.00},          to:{s:1.06}},
-    {id:'base_slide', name:'Base slide right a bit',          kind:'base',     ease:'ioQuad', from:{dxN:-0.06},       to:{dxN:0.00}}
+    // — Base only —
+    {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},     to:{s:1.06}},
+    {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06},  to:{dxN:0.00}}
   ];
 
   // ---------- UI dock ----------
@@ -2640,12 +3395,14 @@ canvas.requestRenderAll();
     dock.innerHTML = `
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <strong>Animate</strong>
+        <span style="opacity:.55;font-size:12px">v${VERSION}</span>
         <label style="display:flex;gap:6px;align-items:center">
           What:
           <select id="raAnimScope">
-            <option value="all">Everything</option>
+            <option value="all">Everything (camera)</option>
             <option value="base">Base only</option>
             <option value="overlays">Overlays only</option>
+            <option value="text">Text only</option>
           </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
@@ -2664,13 +3421,14 @@ canvas.requestRenderAll();
           </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
-          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" style="width:60px">s
+          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" step="0.1" style="width:60px">s
         </label>
         <button id="raAnimPreview" class="btn small">Preview</button>
         <button id="raAnimExport"  class="btn small">Export video</button>
         <span id="raAnimMsg" style="font-size:12px;opacity:.75;"></span>
       </div>
       <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+      <div id="raAnimDL" style="margin-top:6px"></div>
     `;
     host.appendChild(dock);
 
@@ -2699,24 +3457,41 @@ canvas.requestRenderAll();
   }
 
   function msg(t){
-    const m = $('#raAnimMsg');
-    if (!m) return;
+    const m = $('#raAnimMsg'); if (!m) return;
     m.textContent = t||'';
-    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2000);
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2200);
   }
 
   // ---------- Helpers ----------
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const lerp=(a,b,t)=>a+(b-a)*t;
 
-  function findBaseObjs(c){ return (c.getObjects()||[]).filter(o => o._isBase && !o._isBgRect); }
-  function findOverlayObjs(c){
-    // overlays + custom text + tokenId label; exclude base/background
-    return (c.getObjects()||[]).filter(o => !o._isBgRect && !o._isBase && (o._kind==='overlay' || o._kind==='customText' || o._kind==='tokenId'));
+  const isBg    = o => !!o._isBgRect;
+  const isBase  = o => !!(o._isBase && !o._isBgRect);
+  const isText  = o => {
+    const k = (o._kind||'').toLowerCase();
+    const t = (o.type||'').toLowerCase();
+    return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
+  };
+  const isOverlay = o => {
+    if (isBg(o) || isBase(o) || isText(o)) return false;
+    const k = (o._kind||'').toLowerCase();
+    // Treat any non-base/non-text drawable as overlay by default.
+    return k==='overlay' || k==='sticker' || k==='icon' || true;
+  };
+
+  function pickTargets(c, scope){
+    const objs = (c.getObjects?.()||[]).filter(o => !isBg(o));
+    if (scope==='text')     return objs.filter(isText);
+    if (scope==='overlays') return objs.filter(isOverlay);
+    if (scope==='base')     return objs.filter(isBase);
+    return []; // 'all' uses viewport animation only
   }
 
   // ---------- Core ----------
   let running=false;
+  let lastURL=null;
+
   async function run(record){
     const c=C(); if(!c){ alert('Canvas not ready'); return; }
     if (running) return;
@@ -2730,62 +3505,72 @@ canvas.requestRenderAll();
 
     const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
     const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
-    let   scope   = scopeEl?.value || 'all';
+    const scope   = scopeEl?.value || 'all';
 
-    // Auto-scope overlays if user picked an overlay preset
-    if (preset.kind==='overlays') scope = 'overlays';
+    const W=c.getWidth?.()||0, H=c.getHeight?.()||0, cx=W/2, cy=H/2;
 
-    const baseObjs    = findBaseObjs(c);
-    const overlayObjs = findOverlayObjs(c);
+    // Decide mode/targets strictly via the UI scope + pickTargets()
+    const viewportOnly = (preset.kind==='viewport' && scope==='all');
+    const targets = viewportOnly ? [] : pickTargets(c, scope);
 
-    if (scope==='base' && baseObjs.length===0){ msg('Load an image first'); return; }
-    if (scope==='overlays' && overlayObjs.length===0){ msg('Add an overlay or text first'); return; }
+    // Guard rails for empty selections
+    if (!viewportOnly && targets.length===0){
+      if (scope==='base'){      msg('Load an image first'); return; }
+      if (scope==='overlays'){  msg('Add an overlay first'); return; }
+      if (scope==='text'){      msg('Add custom text or token ID first'); return; }
+    }
 
     running=true; msg(record?'Recording…':'Playing…');
 
     // Save state
     const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-    const active = c.getActiveObject(); c.discardActiveObject(); c.requestRenderAll();
+    const active = c.getActiveObject?.(); c.discardActiveObject?.(); c.requestRenderAll?.();
 
-    // Snapshots
+    // Snapshots for object animations
     const snap = new Map();
-    const store = o => snap.set(o, { left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:o.angle, opacity:o.opacity });
+    const store = o => snap.set(o, {
+      left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY,
+      angle:o.angle, opacity:(o.opacity==null?1:o.opacity)
+    });
+    targets.forEach(store);
 
-    const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
+    // Clean previous URL if any
+    if (lastURL){ try{ URL.revokeObjectURL(lastURL); }catch(_){ } lastURL=null; }
+    $('#raAnimDL')?.replaceChildren?.();
 
-    let targets = [];
-    if (preset.kind==='viewport' && scope==='all'){
-      targets = []; // viewport only
-    } else if (scope==='base'){
-      baseObjs.forEach(store); targets = baseObjs.slice();
-    } else if (scope==='overlays'){
-      overlayObjs.forEach(store); targets = overlayObjs.slice();
-    }
-
-    // Recording (optional)
+    // Optional recording
     let rec, chunks=[];
+    const vidEl = $('#raAnimOut');
     if (record){
       try{
-        const stream = (c.lowerCanvasEl || c.upperCanvasEl).captureStream(30);
-        rec = new MediaRecorder(stream, { mimeType:'video/webm;codecs=vp9' });
-        rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
-        rec.start();
+        const el = (c.lowerCanvasEl || c.upperCanvasEl);
+        const stream = el?.captureStream ? el.captureStream(FPS) : null;
+        const type = pickMimeType();
+        if (stream && typeof MediaRecorder!=='undefined'){
+          const opts = type ? { mimeType:type } : undefined;
+          rec = new MediaRecorder(stream, opts);
+          rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
+          rec.start();
+        } else {
+          msg('Recording not supported in this browser');
+        }
       }catch(_){ msg('Recording not supported'); }
     }
 
     const t0 = performance.now(); let rafId=0;
 
     function applyViewport(z,xN,yN){
+      // Center-aware transform: translation keeps origin stable while panning by normalized canvas units
       const e = (1 - z) * cx + xN * W;
       const f = (1 - z) * cy + yN * H;
-      c.setViewportTransform([z,0,0,z, e, f]);
+      c.setViewportTransform?.([z,0,0,z, e, f]);
     }
 
     function step(now){
       const raw = clamp((now - t0)/dur, 0, 1);
       const t   = ease(raw);
 
-      if (preset.kind==='viewport' && scope==='all'){
+      if (viewportOnly){
         const z  = lerp(preset.from.z, preset.to.z, t);
         const xn = lerp(preset.from.x, preset.to.x, t);
         const yn = lerp(preset.from.y, preset.to.y, t);
@@ -2815,41 +3600,83 @@ canvas.requestRenderAll();
           o.top    = o0.top  + dpy;
           if (hasRot)   o.angle   = o0.angle + rot;
           if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
-          o.setCoords();
+          o.setCoords?.();
         });
       }
 
-      c.requestRenderAll();
+      c.requestRenderAll?.();
       if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
     }
 
     function finish(){
       cancelAnimationFrame(rafId);
+
       if (rec){
         try{
           rec.onstop = ()=>{
-            const blob = new Blob(chunks, {type:'video/webm'});
+            const type = rec.mimeType || 'video/webm';
+            const blob = new Blob(chunks, {type});
             const url  = URL.createObjectURL(blob);
-            const vid  = $('#raAnimOut'); if (vid){ vid.style.display='block'; vid.src=url; vid.play().catch(()=>{}); }
-            msg('Done. Use the video menu to download.');
+            lastURL = url;
+
+            // Video element
+            if (vidEl){
+              vidEl.style.display='block';
+              vidEl.src = url;
+              vidEl.play?.().catch(()=>{});
+            }
+
+            // Download link
+            const dl = $('#raAnimDL');
+            if (dl){
+              dl.innerHTML = '';
+              const a = document.createElement('a');
+              a.textContent = 'Download animation';
+              a.href = url;
+              a.download = `animation_${Date.now()}.${extFromMime(type)}`;
+              a.className = 'btn small';
+              dl.appendChild(a);
+            }
+
+            msg('Done. Preview above or use “Download animation”.');
           };
           rec.stop();
-        }catch(_){}
+        }catch(_){ /* ignore */ }
       } else {
         msg('Done');
       }
-      try { c.setViewportTransform(vt0); } catch(_){}
+
+      // Restore state
+      try { c.setViewportTransform?.(vt0); } catch(_){}
       targets.forEach(o=>{
         const s = snap.get(o); if(!s) return;
         o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
-        o.setCoords();
+        o.setCoords?.();
       });
-      if (active) try{ c.setActiveObject(active); }catch(_){}
-      c.requestRenderAll();
+      if (active) try{ c.setActiveObject?.(active); }catch(_){}
+      c.requestRenderAll?.();
       running=false;
     }
 
     requestAnimationFrame(step);
+  }
+
+  // ---------- Utilities ----------
+  function pickMimeType(){
+    const pref = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4' // may be unsupported in many browsers for MediaRecorder
+    ];
+    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
+    for (const t of pref){ if (MediaRecorder.isTypeSupported(t)) return t; }
+    return '';
+  }
+  function extFromMime(t){
+    if (!t) return 'webm';
+    if (t.includes('mp4')) return 'mp4';
+    return 'webm';
   }
 
   // Build UI now/when ready
@@ -2971,9 +3798,10 @@ canvas.requestRenderAll();
   } catch(_){} };
 
   // ---------- load watermark image (same precedence you’ve used) ----------
-  const queryWM = new URLSearchParams(location.search).get('wm');
-  const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
-
+const wmParam = new URLSearchParams(location.search).get('wm') || '';
+// Allow absolute http(s) URLs or same‑origin absolute paths (block data:, javascript:, etc.)
+const queryWM = (/^https?:\/\//i.test(wmParam) || wmParam.startsWith('/')) ? wmParam : null;
+const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
   async function fetchAsDataURL(u){
     const r = await fetch(u, { cache:'no-store', mode:'cors' });
     if (!r.ok) throw new Error('x');
@@ -3221,6 +4049,20 @@ const shouldShow =
     (c.getObjects() || []).forEach(centerIfMoved);
   }
 
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
   function wire(){
     const c = C(); if (!c) { setTimeout(wire, 120); return; }
 
@@ -3306,16 +4148,23 @@ const shouldShow =
     wrap.innerHTML = '';
     items.forEach((item, idx) => {
       const tile = document.createElement('div');
-      tile.style.cssText =
-        'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
-      tile.innerHTML = `
-        <div style="height:80px;display:flex;align-items:center;justify-content:center;">
-          <img src="${item.dataURL}" alt="${item.name||''}" style="max-width:100%;max-height:80px;"/>
-        </div>
-        <div style="font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          ${item.name||''}
-        </div>
-      `;
+tile.style.cssText =
+  'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+
+const frame = document.createElement('div');
+frame.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
+const img = document.createElement('img');
+img.src = item.dataURL;
+img.alt = item.name || '';
+img.style.cssText = 'max-width:100%;max-height:80px;';
+frame.appendChild(img);
+
+const cap = document.createElement('div');
+cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+cap.textContent = item.name || '';
+
+tile.appendChild(frame);
+tile.appendChild(cap);
 
       // Click = add overlay (ignore if clicking the delete button)
       tile.addEventListener('click', (ev) => {
@@ -3781,9 +4630,25 @@ const shouldShow =
     clearTimer = setTimeout(clearTop, S.lingerMs);
   }
 
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
   function wire(){
-    const c=C(); if(!c || c.__raGuidesTopWired) return setTimeout(wire, 120);
-    c.__raGuidesTopWired = true;
+  const c = C();
+  if (!c) return setTimeout(wire, 120);
+  if (c.__raGuidesTopWired) return;
+  c.__raGuidesTopWired = true;
 
     // Remove any older overlay‑canvas guides layer if present
     const old = document.getElementById('raGuidesOverlay'); if (old) try{ old.remove(); }catch(_){}
@@ -3964,6 +4829,20 @@ const shouldShow =
       });
     }
   }
+
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
 
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
@@ -4190,6 +5069,20 @@ const shouldShow =
   })();
 
   // 3) Follow canvas changes: apply whenever something is added/modified
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
   function wire(){
     const c = C(); if (!c || c.__raWmFollow) { if (!c) setTimeout(wire, 150); return; }
     c.__raWmFollow = true;
@@ -4458,6 +5351,20 @@ const shouldShow =
     try { c.bringToFront(wm); } catch(_){}
     c.requestRenderAll();
   }
+
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
 
   function wire(){
     const c = C(); if (!c) { setTimeout(wire, 150); return; }
@@ -5603,87 +6510,145 @@ const shouldShow =
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_LIVE_MINI_v2 — auto footer for non‑Rebel tokens (live + export) ========== */
-(()=>{
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — history‑neutral; friend+manual only; black fill + white outline ========== */
+(() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
-  const STYLE = { fontFamily: "Inter, Arial, sans-serif", fontSize: 12, fill: "#cfcfcf", opacity: 0.88 };
+  const STYLE = {
+    fontFamily: 'Inter, Arial, sans-serif',
+    fontSize: 12,
+    fill: '#000000',            // black inside
+    stroke: '#ffffff',          // white outline
+    strokeWidth: 1.6,
+    strokeUniform: true,
+    opacity: 0.95
+  };
   const PAD = 10;
-
-  const toLower = s => (s||'').toLowerCase();
-  let rebelContract = (typeof CONTRACT==='string') ? toLower(CONTRACT) : '';
-if (!rebelContract && Array.isArray(window.RA_COLLECTIONS)) {
-  const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
-  if (r) rebelContract = toLower(r.address || r.contract);
-}
+  const toLower = s => (s || '').toLowerCase();
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-  function findBase(c){ return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null; }
 
-  function shouldShow(c){
-    const base = findBase(c);
-    if (!base) return false;
-    // Only friend tokens: needs the loader to set _tokenContract
-    const cc = toLower(base._tokenContract||'');
-    if (!cc) return false;                      // unknown → assume Rebel / no footer
-    return (rebelContract && cc !== rebelContract);
+  // Prefer a tagged base; otherwise use the last image on canvas (manual upload case)
+  function findBase(c){
+    const objs = c.getObjects?.() || [];
+    let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+    if (base) return base;
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o?._raBrandFooter);
+    return imgs.length ? imgs[imgs.length - 1] : null;
   }
 
-  function place(c, footer){
-    footer.set({
-      originX:'right', originY:'bottom',
-      left: c.getWidth() - PAD,
-      top:  c.getHeight() - PAD
-    });
-    footer.setCoords();
+  function rebelContract(){
+    if (typeof CONTRACT === 'string' && CONTRACT) return toLower(CONTRACT);
+    const list = Array.isArray(window.RA_COLLECTIONS) ? window.RA_COLLECTIONS : [];
+    const r = list.find(x => (x.tag === 'rebel') && (x.address || x.contract));
+    if (r) return toLower(r.address || r.contract);
+    // Safe default: Rebel Ants mainnet
+    return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
   }
 
+ function shouldShow(c){
+  const base = findBase(c);
+  if (!base) return true; // manual upload → show the footer
+
+  // SAFE: read the contract tag we put on the base image, lower‑cased
+  const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : '');
+
+  if (!cc) return true;  // no contract info → treat as manual, show the footer
+  return (cc !== rebelContract()); // show on friends; hide on Rebel Ants
+}
+  // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
-    const c = C(); if (!c) return;
+  // Do not spawn or modify footer while a JSON restore is in progress
+  if (window.__RA_RESTORING__) return false;
 
-    let footer = (c.getObjects()||[]).find(o => o && o._raBrandFooter);
+  const c = C(); if (!c) return false;
+  let changed = false;
+
+    let footer = (c.getObjects?.() || []).find(o => o && o._raBrandFooter) || null;
     const show = shouldShow(c);
 
     if (!show){
-      if (footer){ c.remove(footer); c.requestRenderAll(); }
-      return;
+      if (footer){
+        try { c.remove(footer); changed = true; } catch(_){}
+      }
+      if (changed) try { c.requestRenderAll(); } catch(_){}
+      return changed;
     }
 
     if (!footer){
       footer = new fabric.Textbox(FOOTER_TEXT, {
         ...STYLE,
         selectable:false, evented:false, hasControls:false,
-        _raBrandFooter:true, _raSys:true
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+        _raBrandFooter:true, _raSys:true,
+        excludeFromExport:true          // keep out of JSON/history
       });
       c.add(footer);
+      changed = true;
     } else {
+      // Reassert non‑interactive + exclude from export
+      footer.set({
+        selectable:false, evented:false, hasControls:false,
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+        excludeFromExport:true
+      });
+      // Style reapply is cheap; if identical it won’t dirty
       footer.set(STYLE);
     }
-    place(c, footer);
-    try { c.bringToFront(footer); } catch(_){}
-    try { window.bringInterfaceToFront && window.bringInterfaceToFront(); } catch(_){}
-    c.requestRenderAll();
+
+    // Position bottom‑right only if it actually moved
+    const wantLeft = c.getWidth() - PAD;
+    const wantTop  = c.getHeight() - PAD;
+    if (footer.originX !== 'right' || footer.originY !== 'bottom' ||
+        Math.round(footer.left) !== Math.round(wantLeft) ||
+        Math.round(footer.top)  !== Math.round(wantTop)) {
+      footer.set({ originX:'right', originY:'bottom', left:wantLeft, top:wantTop });
+      footer.setCoords();
+      changed = true;
+    }
+
+    // Keep truly topmost, but only if not already there
+    const objs = c.getObjects?.() || [];
+    if (objs[objs.length - 1] !== footer){
+      try { c.bringToFront(footer); changed = true; } catch(_){}
+    }
+
+    if (changed) try { c.requestRenderAll(); } catch(_){}
+    return changed;
   }
 
   function boot(){
     const c = C(); if (!c) return setTimeout(boot, 120);
     ensure();
 
-   if (!c.__raBrandFooterWired){
-  c.__raBrandFooterWired = true;
-  // Do NOT hook per-object Fabric events — they spam during curved text edits.
-  try {
-    const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-    new ResizeObserver(()=> requestAnimationFrame(ensure)).observe(el);
-  } catch(_){}
-}
+    // Refit on canvas resize
+    try {
+      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+      new ResizeObserver(() => { ensure(); }).observe(el);
+    } catch(_){}
 
-// Only respond to high-level app events (throttled)
-['ra-collection-change','ra-wm-recalc','ra-holder-update','ra-brand-footer']
-  .forEach(ev => document.addEventListener(ev, ()=> requestAnimationFrame(ensure)));
+    // Minimal, history‑friendly triggers:
+    c.on?.('object:added',   e => { if (!e?.target?._raBrandFooter) ensure(); });
+    c.on?.('object:removed', e => { if (!e?.target?._raBrandFooter) ensure(); });
+
+    // If something is brought to front, we’ll catch it next frame without spamming history
+    let rafScheduled = false;
+    c.on?.('after:render', () => {
+      if (rafScheduled) return;
+      rafScheduled = true;
+      requestAnimationFrame(() => { rafScheduled = false; ensure(); });
+    });
+
+    // App‑level events that can change what should show
+    ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
+      document.addEventListener(ev, () => { ensure(); });
+    });
   }
 
-  if (document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', boot, {once:true}); }
-  else { boot(); }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
 })();
 
 /* ========== RA_COLLECTIONS_RESET_v1 — single dropdown + clean CSS + multi-collection loader ========== */
@@ -6180,6 +7145,20 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   // --- wire everything
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
   function wire(){
     const card = findCard(); if (!card) return false;
 
@@ -6375,6 +7354,20 @@ async function loadTokenFromCollection(tokenId, col){
     hint._t = setTimeout(()=>{ hint.style.display = 'none'; }, 1800);
   }
 
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
   function wire(){
     const card = findCustomTextCard(); if (!card){ setTimeout(wire, 300); return; }
     const ctl  = findCurvedControl(card); if (!ctl){ setTimeout(wire, 300); return; }
@@ -6445,6 +7438,20 @@ async function loadTokenFromCollection(tokenId, col){
     try { box.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
     try { box.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
   }
+
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
 
   function wire(){
     const card = findCustomTextCard(); if (!card){ setTimeout(wire, 300); return; }
@@ -6740,5 +7747,1424 @@ async function loadTokenFromCollection(tokenId, col){
     document.addEventListener('DOMContentLoaded', boot, { once:true });
   } else {
     boot();
+  }
+})();
+
+/* ========== RA_WATERMARK_HARDLOCK_v1 — keep big watermark unmovable, even after "Unlock All" ========== */
+(() => {
+  function C(){ return window.canvas || null; }
+
+  // Identify the big watermark. We lock "system" overlays but leave base, footer and token-ID alone.
+  function isWM(o){
+    if (!o) return false;
+    if (o._raWM || o._raWatermark || o._isWatermark || o._wm) return true; // common flags
+    // Treat other system overlays as locked too, but allow footer / token-ID / base / bg
+    if (o._raSys && !o._raBrandFooter && !o._raTokenId && !o._isBase && !o._isBgRect) return true;
+    const n = (o.name||o.id||'').toString().toLowerCase();
+    if (n.includes('watermark') || n === 'wm') return true;
+    return false;
+  }
+
+  function hardLock(o){
+    if (!o) return;
+    o.set?.({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true });
+    o.selectable = false; o.evented = false; o.hasControls = false;
+    o.lockMovementX = true; o.lockMovementY = true;
+  }
+
+  function relockAll(){
+    const c=C(); if (!c) return;
+    (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) hardLock(o); });
+    try{ c.discardActiveObject(); c.requestRenderAll(); }catch(_){}
+  }
+
+  function hookUnlockAllButton(){
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const unlockBtn = buttons.find(b => /unlock\s*all/i.test((b.textContent||'').trim()));
+    if (!unlockBtn) return;
+    // After Unlock All fires, immediately re-lock the watermark
+    unlockBtn.addEventListener('click', ()=> setTimeout(relockAll,0), true);
+  }
+
+  function boot(){
+    const c=C(); if (!c){ setTimeout(boot,200); return; }
+    relockAll();                         // lock now
+    document.addEventListener('ra-wm-recalc', ()=> setTimeout(relockAll,0)); // lock after WM toggles
+    c.on?.('object:added', e => { const o=e?.target; if (isWM(o)) setTimeout(relockAll,0); }); // lock if reinserted
+    hookUnlockAllButton();
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+})();
+
+/* ==========================================================
+   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED)
+   - Hooks ONLY the button with id="openNewTab" (no text sniffing)
+   - Opens a clean viewer tab first, then sends a Blob URL (Safari-safe)
+   - Never navigates the original tab
+   - Paste at the VERY BOTTOM of app.js
+   ========================================================== */
+(function RA_OPEN_NEW_TAB_VIEWER_V2(){
+  if (window.__RA_OPEN_NEW_TAB_VIEWER_V2__) return;
+  window.__RA_OPEN_NEW_TAB_VIEWER_V2__ = true;
+
+  function getCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k in window){
+        try{
+          const v = window[k];
+          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
+        }catch(_){}
+      }
+    }
+    return null;
+  }
+
+  function getMultiplier(){
+    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
+    const raw = (el?.value || el?.textContent || '').trim();
+    const m = parseInt((raw.match(/([1-8])/)||[])[1] || '2', 10);
+    return Math.min(8, Math.max(1, m || 2));
+  }
+
+  function openViewer(){
+    const c = getCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
+
+    // Open the tab immediately (user gesture → popup-safe)
+    const win = window.open('about:blank','_blank');
+    if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
+
+    // Lightweight viewer shell
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
+            box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
+        .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+             color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+             background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
+      </style></head><body>
+        <div class="viewer"><img id="raImg" alt="export"></div>
+        <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+        <script>
+          (function(){
+            var img = document.getElementById('raImg'), fit = true;
+            function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
+                              else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
+            img.addEventListener('click', function(){ fit=!fit; apply(); });
+            apply();
+            window.addEventListener('message', function(ev){
+              if (ev && ev.data && ev.data.type==='ra-img') { img.src = ev.data.url; }
+            }, false);
+            setTimeout(function(){
+              if (!img.src) {
+                document.body.insertAdjacentHTML(
+                  'beforeend',
+                  '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'
+                );
+              }
+            }, 2000);
+          })();
+        <\/script>
+      </body></html>`;
+    win.document.open(); win.document.write(html); win.document.close();
+
+    // Produce the PNG and send a Blob URL to the viewer (more reliable than giant data: URLs)
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+      fetch(dataUrl).then(r=>r.blob()).then(blob=>{
+        const url = URL.createObjectURL(blob);
+        try { win.postMessage({ type:'ra-img', url }, '*'); } catch(_){}
+        const tid = setInterval(()=>{ if (win.closed){ URL.revokeObjectURL(url); clearInterval(tid); } }, 4000);
+      }).catch(()=>{
+        try{ win.document.body.innerHTML =
+          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
+      });
+    }catch(e){
+      try{ win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
+    }
+  }
+
+  // Capture ONLY the actual “Open in new tab” button (id="openNewTab")
+  document.addEventListener('click', function(e){
+    const btn = e.target && e.target.closest && e.target.closest('#openNewTab');
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    openViewer();
+  }, true);
+})();
+
+/* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
+(function(){
+  if (window.__RA_APE_RPC_FALLBACK__) return;
+  window.__RA_APE_RPC_FALLBACK__ = true;
+
+  // We set a safe default earlier in CONFIG. You can still override window.__APECHAIN_RPC at runtime if needed.
+
+  async function jsonRpc(url, body){
+    const r = await fetch(url, {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error('rpc http '+r.status);
+    const j = await r.json();
+    if (j.error) throw new Error('rpc error '+(j.error.message||''));
+    return j.result;
+  }
+
+  function ipfsToHttp(u){
+    if (!u) return u;
+    if (u.startsWith('ipfs://ipfs/')) return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(12);
+    if (u.startsWith('ipfs://'))      return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(7);
+    return u;
+  }
+
+  window.__fetchApechainImageURL = async function(contract, tokenId){
+    const rpc = window.__APECHAIN_RPC;  // now guaranteed to exist
+    if (!rpc) return null;
+
+    // tokenURI(uint256) = 0xc87b56dd
+    const idHex = '0x' + BigInt(String(tokenId).replace(/[^0-9]/g,'')||'0').toString(16);
+    const data  = '0xc87b56dd' + idHex.replace(/^0x/,'').padStart(64,'0');
+    const call  = { to: contract, data };
+
+    const res = await jsonRpc(rpc, { jsonrpc:'2.0', id:1, method:'eth_call', params:[call, 'latest'] });
+
+    // decode ABI string result
+    const hex = (res||'').replace(/^0x/,'');
+    if (hex.length < 128) return null;
+    const len = parseInt(hex.slice(64,128),16);
+    const dataHex = hex.slice(128, 128+len*2);
+    let uri = '';
+    for (let i=0;i<dataHex.length;i+=2) uri += String.fromCharCode(parseInt(dataHex.slice(i,i+2),16));
+
+    // fetch metadata → image
+    const metaUrl = ipfsToHttp(uri);
+    const mRes = await fetch(metaUrl, {cache:'no-store'});
+    if (!mRes.ok) return null;
+    const meta = await mRes.json().catch(()=>null);
+    return ipfsToHttp(meta && (meta.image || meta.image_url || meta.imageUrl));
+  };
+})();
+
+
+/* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
+;(() => {
+  'use strict';
+  if (window.__RA_TOKEN_LOADER_XCHAIN_V3__) return;
+  window.__RA_TOKEN_LOADER_XCHAIN_V3__ = true;
+
+  // ---------- small helpers ----------
+  const getCanvas = () =>
+    (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $ = (sel, r = document) => r.querySelector(sel);
+
+  // Known collections → {address, chain}
+  const KNOWN = {
+    // name (lowercase) : { address, chain }
+    'rebel ants':   { address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chain:'ethereum' },
+    'saints of la': { address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chain:'ethereum' },
+    'chumpz':       { address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chain:'apechain' }
+  };
+
+  // Quick map: contract → chain
+  const CONTRACT_FOR = {
+    '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221': 'ethereum',
+    '0xbed2470ded2519c13eaaf3bd970015ef404d3d20': 'ethereum',
+    '0xa9a1d086623475595a02991664742e4a1cbafcb8': 'apechain'
+  };
+
+  const normHex = s => (s || '').toLowerCase();
+  function slugFromChain(v){
+  const x = (v || '').toString().toLowerCase().trim();
+  if (x === '0x1'    || x === '1'    || x === 'eth' || x.includes('ether')) return 'ethereum';
+  if (x === '0x2105' || x.includes('base'))                                 return 'base';
+  if (x === '0x8173' || x.includes('ape'))                                  return 'apecoin';
+  return x || 'ethereum';
+}
+
+  function detectSelectionName(){
+    // From status row (if present)
+    const st = $('#raColStatus');
+    if (st && st.textContent) {
+      // "Using: Chumpz (ApeChain)" → "chumpz"
+      const name = st.textContent
+        .replace(/^.*using:\s*/i,'')
+        .split('—')[0]
+        .split('(')[0]
+        .trim()
+        .toLowerCase();
+      if (name) return name;
+    }
+    // From visible select (if present)
+    const sel = $('#raColSelect');
+    if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
+      const t = (sel.selectedOptions[0].textContent || '')
+        .split('—')[0].split('(')[0].trim().toLowerCase();
+      if (t) return t;
+    }
+    return null;
+  }
+
+  function detectContractAndChain(){
+    // Highest priority: URL/query or explicit window overrides
+    const q     = new URLSearchParams(location.search);
+    const cQ    = q.get('contract') || q.get('c') || '';
+    const chQ   = q.get('chain') || q.get('network') || '';
+    const cWin  = window.__RA_CONTRACT || window._RA_CONTRACT || '';
+    const chWin = window.__RA_CHAIN    || window._RA_CHAIN    || '';
+    if (cQ || cWin) {
+      const c = normHex(cQ || cWin);
+      const ch = slugFromChain(chQ || chWin || CONTRACT_FOR[c]);
+      return { contract: c, chain: ch, name: '' };
+    }
+
+    // Next: look up by collection name shown in UI
+    const name = detectSelectionName();
+    if (name && KNOWN[name]) {
+      return { contract: normHex(KNOWN[name].address), chain: KNOWN[name].chain, name };
+    }
+
+    // Otherwise, do nothing; let the app’s original loader handle it
+    return null;
+  }
+
+  function readTokenId(){
+    const ids = [
+      '#tokenId', '#token', '#tokenIdInput',
+      'input[name="token"]', 'input[name="tokenId"]',
+      'input[placeholder*="Token"]'
+    ];
+    for (const s of ids){
+      const el = $(s);
+      const v  = (el && (el.value || '').trim()) || '';
+      if (v) return v;
+    }
+    // Fallback: any input/textarea with "token" in placeholder + a value
+    const maybe = Array.from(document.querySelectorAll('input,textarea'))
+      .find(el => /token/i.test(el.placeholder || '') && (el.value || '').trim());
+    return maybe ? maybe.value.trim() : '';
+  }
+
+  function normalizeUrl(u){
+    if (!u) return null;
+    if (u.startsWith('ipfs://')) return 'https://cloudflare-ipfs.com/ipfs/' + u.replace('ipfs://','').replace(/^ipfs\//,'');
+    if (u.startsWith('ar://'))   return 'https://arweave.net/' + u.replace('ar://','');
+    return u;
+  }
+
+  async function fetchAsDataURL(url){
+    const r = await fetch(url, { mode:'cors', cache:'no-store' });
+    if (!r.ok) throw new Error('fetch failed');
+    const b = await r.blob();
+    return await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(b);
+    });
+  }
+
+  async function reservoirCandidates(contract, tokenId, chainSlug){
+  let rsSlug = (chainSlug||'').toLowerCase();
+  // standardize our internal slugs
+  if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
+  if (rsSlug === 'base') rsSlug = 'base';
+  if (rsSlug === 'ape' || rsSlug === 'apechain' || rsSlug === 'apecoinchain') rsSlug = 'apechain';
+
+  // choose correct host per chain (per Reservoir docs)
+  // https://nft.reservoir.tools/reference/supported-chains
+  const HOST = (
+    rsSlug === 'apechain'  ? 'https://api-apechain.reservoir.tools' :
+    rsSlug === 'base'      ? 'https://api-base.reservoir.tools'     :
+                             'https://api.reservoir.tools'           // ethereum default
+  );
+
+  const url = `${HOST}/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&limit=1`;
+  const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
+  if (!r.ok) return [];
+  const j = await r.json();
+  const t = j?.tokens?.[0]?.token || {};
+  const m = t.media || {};
+  return [
+    m?.original?.url || m?.original?.mediaUrl,
+    t.imageLarge, t.image, t.imageUrl, t.imageSmall
+  ].filter(Boolean).map(normalizeUrl);
+}
+
+function killOldBase(c){
+  const objs = (c.getObjects() || []).slice();
+  const cw = c.getWidth(), ch = c.getHeight();
+
+  const imgLike = o => o && (o.type === 'image' || o._element);
+  const isGroup = o => o && o.type === 'group';
+
+  const boundsArea = o => {
+    try {
+      const br = o.getBoundingRect(true, true);
+      return (br?.width || 0) * (br?.height || 0);
+    } catch(_) { return 0; }
+  };
+
+  const imageArea = o => {
+    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0) * (o.scaleX||1));
+    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0) * (o.scaleY||1));
+    return w * h;
+  };
+
+  // Collect all candidates we may want to remove; compute a reasonable threshold
+  const imgNonSys = objs.filter(o => imgLike(o) && !o._raSys && !o._raTokenId && !o._isBgRect);
+  const maxImageA = imgNonSys.length ? Math.max(...imgNonSys.map(imageArea)) : 0;
+  const bigImageThreshold = Math.max(cw * ch * 0.25, maxImageA * 0.75); // robust threshold
+
+  // If the active object is one of the candidates, drop selection first (avoids drawControls errors)
+  try {
+    const active = c.getActiveObject && c.getActiveObject();
+    if (active && (imgNonSys.includes(active) || isGroup(active))) {
+      c.discardActiveObject();
+    }
+  } catch(_) {}
+
+  objs.forEach(o => {
+    if (!o) return;
+    if (o._isBgRect || o._raSys || o._raTokenId) return;  // never touch bg/sys/label
+
+    let looksLikeBase = false;
+
+    // Explicit flags or fingerprints
+    if (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract) {
+      looksLikeBase = true;
+    }
+
+    // Large non-overlay image = probable base
+    if (!looksLikeBase && imgLike(o) && o._kind !== 'overlay') {
+      const a = imageArea(o);
+      if (a >= bigImageThreshold) looksLikeBase = true;
+    }
+
+    // Group base (e.g., old non-token base with corner stamps)
+    if (!looksLikeBase && isGroup(o)) {
+      if (o._kind !== 'overlay') {
+        const A = boundsArea(o);
+        const stamps = Array.isArray(o._objects) && o._objects.some(ch => ch && (ch._isWatermark || ch.raWM || ch.raPos));
+        if (A >= cw * ch * 0.25 || stamps) looksLikeBase = true;
+      }
+    }
+
+    if (looksLikeBase) {
+      try { c.remove(o); } catch(_) {}
+    }
+  });
+
+  try { c.requestRenderAll(); } catch(_) {}
+}
+
+  function fitAndAddAsBase(img){
+    const c = getCanvas(); if (!c) return false;
+    img.set({ originX:'center', originY:'center' });
+    const cw=c.getWidth(), ch=c.getHeight();
+    const sc = Math.min(cw/(img.width||cw), ch/(img.height||ch), 1);
+    if (Number.isFinite(sc) && sc>0) img.scale(sc);
+    img.left = cw/2; img.top = ch/2; img.setCoords();
+
+    // lock as base
+    img._isBase = true;
+    img._raBaseSig = 'BASE_V1';     // <-- paste THIS line here (fingerprint)    
+    img.selectable=false; img.evented=false; img.hasControls=false;
+    img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
+
+c.add(img);
+// Let the deterministic enforcer set exact indices
+try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+c.requestRenderAll();
+return true;
+
+
+  }
+
+  function annotateBase(meta){
+    const c = getCanvas(); if (!c) return;
+    const base = (c.getObjects?.()||[]).find(o => o && o._isBase && !o._isBgRect);
+    if (!base) return;
+    base._tokenContract = normHex(meta.contract || '');
+    base._tokenChain    = meta.chain || '';  // 'ethereum' | 'apechain' | 'base'
+    base._tokenName     = meta.name || '';
+    try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
+    try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function upsertTokenLabel(id){
+    const c = getCanvas(); if (!c || !window.fabric) return;
+    (c.getObjects()||[]).forEach(o => { if (o && o._raTokenId) c.remove(o); });
+    const txt = new fabric.Text('#'+String(id), {
+      originX:'center', originY:'top',
+      left:c.getWidth()/2, top: 32,
+      fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      fontSize:48, fill:'#fff', stroke:'transparent', strokeWidth:0,
+      selectable:false, evented:false
+    });
+    txt._raTokenId = true; txt._raSys = true;
+    c.add(txt);
+    try{ c.bringToFront(txt); }catch(_){}
+  }
+
+  async function loadViaDataURL(u){
+    return await new Promise(res => {
+      fabric.Image.fromURL(u, img => res(img), {}); // dataURL → no crossOrigin needed
+    });
+  }
+  async function loadViaNoCors(u){
+    return await new Promise(res => {
+      // Intentionally no {crossOrigin:'anonymous'} to avoid blocking where host has no CORS.
+      fabric.Image.fromURL(u, img => res(img), {});
+    });
+  }
+
+  async function runLoader({ contract, chain, name }, tokenId){
+    const c = getCanvas(), f = window.fabric;
+    if (!c || !f) { alert('Canvas not ready'); return; }
+
+    // 1) Query Reservoir with the correct chain
+    let urls = await reservoirCandidates(contract, tokenId, chain);
+
+// ApeChain often needs tokenURI → metadata fallback
+if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
+  try{
+    const u = await window.__fetchApechainImageURL(contract, tokenId);
+    if (u) urls = [u];
+  }catch(_){}
+}
+
+if (!urls || !urls.length){
+  alert('No image found for that token.');
+  return;
+}
+
+    // 2) CORS‑safe path first (best for export)
+    try { c.discardActiveObject(); } catch(_){}
+    killOldBase(c);
+    for (const u of urls){
+      try{
+        const data = await fetchAsDataURL(u);
+        const img  = await loadViaDataURL(data);
+        if (img){
+          fitAndAddAsBase(img);
+          // ...after fitAndAddAsBase(...)
+annotateBase({ contract, chain, name: name || '' });
+// no automatic label here — user controls it from “Token ID Styles”
+return;
+
+        }
+      }catch(_){}
+    }
+
+    // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
+const img = await loadViaNoCors(urls[0]);
+if (img){
+  fitAndAddAsBase(img);
+  annotateBase({ contract, chain, name: name || '' });
+  // no auto label — user adds it from “Token ID Styles”
+  return;
+}
+
+    alert('Failed to load token image.');
+  }
+
+  // ---------- wire once (capture phase). We only hijack when we know the contract+chain. ----------
+  function looksLikeLoadByToken(node){
+    if (!node) return false;
+    const btn = node.id && /loadbytoken|loadtoken/i.test(node.id);
+    if (btn) return true;
+    const t = (node.textContent || '').toLowerCase().replace(/\s+/g,' ');
+    return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
+  }
+
+ // Helper: find the Token ID Styles card so we can skip hijacking inside it
+function findTokenIdStylesCard(){
+  const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
+  const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
+  return h ? (h.closest('.card,section,div') || h.parentElement) : null;
+}
+
+function onClick(e){
+  const el = e.target && e.target.closest && e.target.closest('button, a');
+  if (!el) return;
+
+  // ⛔️ Do NOT hijack clicks in the Token ID Styles card (this button is for the label UI)
+  const stylesCard = findTokenIdStylesCard();
+  if (stylesCard && stylesCard.contains(el)) return;
+
+  if (!looksLikeLoadByToken(el)) return;
+
+  const tokenId  = readTokenId();
+  const detected = detectContractAndChain();
+
+  if (tokenId && detected && detected.contract) {
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    runLoader(detected, tokenId);
+  }
+}
+
+  // Boot
+  if (!document.__raTokenLoaderXChainBound){
+    document.__raTokenLoaderXChainBound = true;
+    document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
+  }
+})();
+
+/* ===== RA_TOKEN_ID_STYLE_WIRING_V3 — no auto-create; update only; proper format; de-dupe ===== */
+;(() => {
+  if (window.__RA_TOKEN_ID_STYLE_WIRING_V3__) return;
+  window.__RA_TOKEN_ID_STYLE_WIRING_V3__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function getLabel(){
+    const c = C(); if (!c) return null;
+    return window.idLabel || (c.getObjects()||[]).find(o => o && o._raTokenId) || null;
+  }
+
+  function deDupeLabel(){
+    const c = C(); if (!c) return null;
+    const labs = (c.getObjects()||[]).filter(o => o && o._raTokenId);
+    if (!labs.length) return null;
+    const keep = labs[0];
+    for (let i = 1; i < labs.length; i++){
+      try { c.remove(labs[i]); } catch(_) {}
+    }
+    window.idLabel = keep;
+    return keep;
+  }
+
+  // Reformat with your existing formatter if present; else plain
+  function formatShown(rawId){
+    const fmtSel = document.getElementById('idFormat');
+    const fmt = (fmtSel && fmtSel.value) ? fmtSel.value : 'plain';   // <-- pass value, not node
+    if (typeof window.formatTokenId === 'function'){
+      return window.formatTokenId('#' + String(rawId), fmt);
+    }
+    return '#'+ String(rawId).replace(/^#+/,'');
+  }
+
+  function readTokenIdValue(){
+    const sels = [
+      '#raTokenIdDisplay','#tokenIdDisplay',
+      '#tokenIdInput','#tokenId','#token',
+      'input[name="tokenId"]','input[name="token"]',
+      'input[placeholder*="Token"]'
+    ];
+    for (const sel of sels){
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const raw = (el.value ?? el.textContent ?? '').trim();
+      const d = (raw.match(/\d+/) || [''])[0];
+      if (d) return d;
+    }
+    return '';
+  }
+
+  // Update only an existing label; do not create one if none exists (prevents stray '#')
+  function applyStylesToExisting(){
+    const c = C(); if (!c) return;
+    const l = deDupeLabel() || getLabel();   // if there were dupes, collapse to one
+    if (!l) return;   // nothing to update → bail (no auto-create here)
+
+    // Reformat text from the current token id, if present
+    const idVal = readTokenIdValue();
+    if (idVal){
+      const shown = formatShown(idVal);
+      if (l.text !== shown){
+        l.set({ text: shown });
+        try { c.fire('object:modified', { target: l }); } catch(_){}
+      }
+    }
+
+    // Style controls (size/color/outline/width)
+    const size  = document.getElementById('idSize');
+    const fill  = document.getElementById('idColor');
+    const strk  = document.getElementById('idStrokeColor');
+    const sw    = document.getElementById('idStrokeWidth');
+
+    let changed = false;
+    if (size && size.value){
+      const v = parseInt(size.value,10);
+      if (Number.isFinite(v) && v > 0 && l.fontSize !== v){ l.set('fontSize', v); changed = true; }
+    }
+    if (fill && fill.value){
+      if (l.fill !== fill.value){ l.set('fill', fill.value); changed = true; }
+    }
+    if (strk && strk.value){
+      if (l.stroke !== strk.value){ l.set('stroke', strk.value); changed = true; }
+    }
+    if (sw && sw.value){
+      const w = parseInt(sw.value,10);
+      if (Number.isFinite(w) && l.strokeWidth !== w){ l.set('strokeWidth', w); changed = true; }
+    }
+
+    if (changed){
+      l.setCoords();
+      try { c.fire('object:modified', { target: l }); } catch(_){}
+    }
+
+    // Keep editable and on top (without re-adding)
+    l.selectable = true; l.evented = true; l.hasControls = true;
+    try { const n=(c.getObjects()||[]).length; c.bringToFront(l); c.moveTo(l, n-1); } catch(_){}
+    c.requestRenderAll();
+    window.idLabel = l;
+  }
+
+  // Always remove exactly one label on Delete Token ID (one click)
+  function wireDelete(){
+    const btn = document.getElementById('deleteTokenId') ||
+                Array.from(document.querySelectorAll('button')).find(b => /delete\s*token\s*id/i.test((b.textContent||'').trim()));
+    if (!btn || btn.__raTokDel3) return;
+    btn.__raTokDel3 = true;
+    btn.addEventListener('click', (e)=>{
+      const c = C(); if (!c) return;
+      const l = getLabel();
+      if (!l) return;
+      try {
+        c.remove(l);
+        window.idLabel = null;
+        c.fire('object:modified', { target: l });
+        c.requestRenderAll();
+      } catch(_) {}
+      // do not stop propagation — let any other UI update too
+    }, true);
+  }
+
+  // Wire style controls (format/size/color/outline/width) to update existing label
+  function wireControls(){
+    const ids = ['idFormat','idSize','idColor','idStrokeColor','idStrokeWidth'];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el || el.__raTokCtl3) return;
+      el.__raTokCtl3 = true;
+      el.addEventListener('change', applyStylesToExisting);
+      el.addEventListener('input',  applyStylesToExisting);
+    });
+  }
+
+  function boot(){
+    if (!C()) return setTimeout(boot, 200);
+    wireControls();
+    wireDelete();
+  }
+
+  if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', boot, { once:true }); }
+  else { boot(); }
+})();
+
+// ===== DEBUG: dump current stacking and tags (run in console: raDump()) =====
+window.raDump = () => {
+  const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  if (!c) { console.log('No canvas'); return; }
+  (c.getObjects()||[]).forEach((o,i)=>{
+    const t = (o.type||'obj').padEnd(7);
+    console.log(
+      String(i).padStart(2,' '),
+      t,
+      (o._isBgRect ? '[BG]'   : '   '),
+      (o._isBase   ? '[BASE]' : '     '),
+      (o._raSys    ? '[SYS]'  : '    '),
+      (o._raTokenId? '[ID]'   : '   '),
+      (o._kind ? (`[${o._kind}]`).padEnd(10) : '          '),
+      (o._raBaseSig === 'BASE_V1' ? '(fingerprinted)' : ''),
+      (o._tokenContract ? '(token)' : '')
+    );
+  });
+};
+
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — center-ring only; make/show on uploads; no overlay interference ===== */
+;(() => {
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Rebel contract (lowercase)
+  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
+
+  // Recognizers (STRICT ring match — do NOT treat corner stamps as watermark)
+  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isRing   = o => !!(o && o._raWMCenter === true);      // <— only the center ring
+  const isBg     = o => !!(o && o._isBgRect);
+  const isBase   = o => !!(o && o._isBase);
+  const isID     = o => !!(o && o._raTokenId);
+
+  // Small “restore” window to avoid one-frame flashes
+  let lastRestoreSeen = 0;
+  const restoring = () => {
+    if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
+    return (Date.now() - lastRestoreSeen) < 400;
+  };
+
+  function quarantine(o){
+    if (!o) return;
+    o._raSys = true;
+    if (!isID(o)) o.excludeFromExport = true;
+    if (isFooter(o) || isRing(o)) {
+      o.selectable=false; o.evented=false; o.hasControls=false;
+      o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+    }
+  }
+
+  function centerRing(wm){
+    const c = C(); if (!c || !wm) return;
+    wm.originX = 'center'; wm.originY = 'center';
+    wm.left = c.getWidth() / 2; wm.top = c.getHeight() / 2;
+    wm.setCoords();
+  }
+
+  function assertTopNow(){
+    const c = C(); if (!c) return;
+    const all  = c.getObjects?.() || [];
+    const bg   = all.find(isBg);
+    const base = all.find(isBase);
+
+    if (bg){
+      bg.selectable=false; bg.evented=false; bg.hasControls=false;
+      try { c.moveTo(bg, 0); } catch(_){}
+    }
+
+    // Footer: hidden on Rebel or while restoring
+    const foot = all.find(isFooter);
+    const cc = String(base?._tokenContract || '').toLowerCase();
+    if (foot){
+      quarantine(foot);
+      if (restoring() || (cc && cc === REBEL_CONTRACT)) foot.visible = false;
+    }
+
+    // Single center ring, always seated right above base and centered
+    const wm = all.find(isRing);
+    if (wm){
+      quarantine(wm);
+      centerRing(wm);
+      if (base){
+        const baseZ = all.indexOf(base);
+        try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
+      }
+    }
+
+    // Token ID on absolute top (footer below it if visible)
+    try {
+      if (foot && foot.visible !== false) c.bringToFront(foot);
+      const id = all.find(isID);
+      if (id && id.visible !== false) c.bringToFront(id);
+    } catch(_){}
+  }
+
+  // Create or show the center ring watermark when rules say it should be visible.
+  function ensureRingPresent(){
+    const c = C(); if (!c) return;
+    const all  = c.getObjects?.() || [];
+    const base = all.find(isBase);
+    if (!base) return;
+
+    const cc = String(base._tokenContract || '').toLowerCase();
+    const hs = (window.RA_HOLDER_STATE || {});
+    const isHolder = !!(hs.hasRebel || hs.hasFriend);
+
+    // show ring for: manual uploads (no contract) and Friend tokens (non‑Rebel),
+    // hide ring for: Rebel tokens and any holder
+    const shouldShow = (!cc || cc !== REBEL_CONTRACT) && !isHolder;
+
+    let wm = all.find(isRing);
+    if (!wm && shouldShow){
+      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+      fabric.Image.fromURL(src, img => {
+        if (!img) return;
+        img.set({
+          originX:'center', originY:'center',
+          selectable:false, evented:false, hasControls:false,
+          objectCaching:false,
+          opacity: (typeof window.__RA_WM_ADMIN_OPACITY === 'number'
+                    ? window.__RA_WM_ADMIN_OPACITY : 0.18)
+        });
+        img._raWMCenter = true;          // tag as “the ring WM”
+        img._raSys = true; img.excludeFromExport = true;
+
+        centerRing(img);
+        c.add(img);
+        assertTopNow();
+        try { c.requestRenderAll(); } catch(_){}
+      }, { crossOrigin:'anonymous' });
+    } else if (wm){
+      wm.visible = shouldShow;
+      centerRing(wm);
+      assertTopNow();
+      try { c.requestRenderAll(); } catch(_){}
+    }
+  }
+
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmFooterFixShimV7rBound) return;
+    c.__raWmFooterFixShimV7rBound = true;
+
+    // Prevent one‑frame footer flash during restores
+    c.on?.('before:render', () => {
+      if (!restoring()) return;
+      (c.getObjects?.() || []).forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
+    });
+
+    // Keep order/centering stable at all times
+    c.on?.('after:render',    assertTopNow);
+    c.on?.('object:modified', assertTopNow);
+    c.on?.('object:removed',  assertTopNow);
+
+    // When a new Base is added (manual upload / token load), ensure ring state
+    c.on?.('object:added', (e) => {
+      if (e && e.target && e.target._isBase) ensureRingPresent();
+      assertTopNow();
+    });
+
+    // React to admin/wallet/rules changes
+    ['ra-wm-recalc','ra-holder-update','ra-collection-change']
+      .forEach(ev => document.addEventListener(ev, () => { ensureRingPresent(); }));
+
+    // Keep ring centered on canvas size changes
+    try {
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmCenterResizeObs){
+        c.__raWmCenterResizeObs = true;
+        new ResizeObserver(() => {
+          const wm = (c.getObjects?.()||[]).find(isRing);
+          if (wm){ centerRing(wm); try { c.requestRenderAll(); } catch(_) {} }
+        }).observe(el);
+      }
+    } catch(_){}
+
+    // First pass
+    ensureRingPresent();
+    assertTopNow();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
+
+/* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
+;(() => {
+  if (window.__RA_WM_RULES_V9__) return;
+  window.__RA_WM_RULES_V9__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
+
+  // recognizers
+  const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true || o._raWatermark === true || o._wm));
+  const isBase = o => !!(o && o._isBase);
+  const isFooter = o => !!(o && (o._raBrandFooter ||
+                          (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+
+  const faintOpacity = () =>
+    (typeof window.__RA_WM_ADMIN_OPACITY === 'number') ? window.__RA_WM_ADMIN_OPACITY : 0.18;
+  const targetPct = () => {
+    const p = (typeof window.__RA_WM_TARGET_PCT === 'number') ? window.__RA_WM_TARGET_PCT : 0.28;
+    return Math.max(0.05, Math.min(1, p));
+  };
+
+  const holderState = () => (window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false });
+
+  function currentBase(c){
+    const objs = (c.getObjects?.() || []);
+    return objs.find(isBase) || null;
+  }
+  function classifyBase(base){
+    if (!base) return 'none';
+    const cc = String(base._tokenContract || '').toLowerCase();
+    if (!cc) return 'manual';                          // manual upload (no token metadata)
+    if (cc === REBEL_CONTRACT) return 'rebel';         // your collection
+    return 'friend';                                   // any other token collection
+  }
+
+  function dedupeRing(c){
+    const wms = (c.getObjects?.()||[]).filter(isWM);
+    if (wms.length > 1){
+      const keep = wms[wms.length - 1];
+      wms.slice(0, -1).forEach(o => { try { c.remove(o); } catch(_) {} });
+      return keep;
+    }
+    return wms[0] || null;
+  }
+  function seatAboveBase(wm, c){
+    try{
+      const objs = c.getObjects() || [];
+      const base = objs.find(isBase); if (!base) return;
+      const baseZ = objs.indexOf(base);
+      c.moveTo(wm, Math.min(objs.length - 1, baseZ + 1));
+    }catch(_){}
+  }
+  function scaleToCanvas(wm, c){
+    try{
+      const cw = c.getWidth();
+      const natW = wm.width || 1;
+      const sc = (cw * targetPct()) / Math.max(1, natW);
+      wm.scaleX = sc; wm.scaleY = sc;
+      wm.left = cw/2; wm.top = c.getHeight()/2;
+      wm.setCoords();
+    }catch(_){}
+  }
+  function ensureRingVisible(c){
+    let wm = dedupeRing(c);
+    if (!wm){
+      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+      fabric.Image.fromURL(src, img => {
+        if (!img) return;
+        img._raWMCenter = true; img._isWatermark = true; img._raSys = true;
+        img.excludeFromExport = true;
+        img.selectable=false; img.evented=false; img.hasControls=false; img.objectCaching=false;
+        img.opacity = faintOpacity();
+        scaleToCanvas(img, c);
+        c.add(img);
+        seatAboveBase(img, c);
+        try { c.requestRenderAll(); } catch(_) {}
+      }, { crossOrigin:'anonymous' });
+      return;
+    }
+    wm.visible = true;
+    scaleToCanvas(wm, c);
+    seatAboveBase(wm, c);
+  }
+  function hideRing(c){
+    let changed = false;
+    (c.getObjects?.()||[]).forEach(o => { if (isWM(o) && o.visible !== false) { o.visible=false; changed=true; }});
+    if (changed){ try { c.requestRenderAll(); } catch(_) {} }
+  }
+
+  // We do NOT force footer here; your footer block handles creation/placement.
+  // We only hide footer for Rebel during restore to prevent flashes (v7 already does this).
+  // This shim focuses on getting the ring visibility right and never touching overlays.
+
+  function applyRules(){
+    const c = C(); if (!c) return;
+    const base = currentBase(c);
+    const kind = classifyBase(base);
+    const H = holderState();
+
+    // Decide ring visibility
+    let ringOn = false;
+    if (kind === 'manual') {
+      ringOn = true;                         // manual upload → ring + footer
+    } else if (kind === 'rebel') {
+      ringOn = !H.hasRebel;                  // Rebel token → ring only if NOT holder
+    } else if (kind === 'friend') {
+      ringOn = !H.hasFriend;                 // Friend token → ring if NOT holder (footer handled elsewhere)
+    } else {
+      ringOn = false;
+    }
+
+    if (ringOn) ensureRingVisible(c); else hideRing(c);
+
+    // Never interfere with overlays/uploads UI
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  // ——— Wiring ———
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
+
+    // Base changes only (ignore overlays)
+    c.on('object:added',   e => { if (e?.target && isBase(e.target)) applyRules(); });
+    c.on('object:removed', e => { if (e?.target && isBase(e.target)) applyRules(); });
+
+    // Wallet or collection changes
+    ['ra-holder-update','ra-collection-change','ra-wm-recalc'].forEach(ev=>{
+      document.addEventListener(ev, applyRules);
+    });
+
+    // Canvas resize (size dropdown etc.)
+    try{
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmRulesV9Resize) {
+        c.__raWmRulesV9Resize = true;
+        new ResizeObserver(() => applyRules()).observe(el);
+      }
+    }catch(_){}
+
+    // First pass
+    applyRules();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
+
+/* ===== RA_WM_DEDUPE_ENFORCE_v3 — single WM, correct visibility, no overlay interference ===== */
+;(() => {
+  if (window.__RA_WM_DEDUPE_ENFORCE_V3__) return;
+  window.__RA_WM_DEDUPE_ENFORCE_V3__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase in data
+
+  const isBase   = o => !!(o && o._isBase);
+  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm));
+
+  const holder = () => {
+    const s = window.RA_HOLDER_STATE || {};
+    return !!(s.hasRebel || s.hasFriend);
+  };
+
+  function mode(c) {
+    const objs = (c.getObjects?.() || []);
+    const base = objs.find(isBase);
+    if (!base) return 'empty';
+    const contract = String(base._tokenContract || '').toLowerCase();
+    if (!contract) return 'manual';
+    return (contract === REBEL) ? 'rebel' : 'friend';
+  }
+
+  function fix() {
+    const c = C(); if (!c) return;
+
+    const objs = (c.getObjects?.() || []);
+    const base = objs.find(isBase);
+    const foot = objs.find(isFooter);
+    let   wms  = objs.filter(isWM);
+
+    // --- De-dupe: keep the center ring and remove/hide the rest ---
+    if (wms.length > 1) {
+      const keep = wms.find(w => w._raWMCenter) || wms[0];
+      wms.forEach(w => { if (w !== keep) { try { c.remove(w); } catch(_) { w.visible = false; } } });
+      wms = keep ? [keep] : [];
+    }
+    const wm = wms[0] || null;
+
+    // --- Decide visibility ---
+    const m = mode(c);
+    let showRing = false, showFoot = false;
+
+    if (m === 'manual') { showRing = true;  showFoot = true;  }
+    if (m === 'friend') { showRing = true;  showFoot = true;  }
+    if (m === 'rebel')  { showRing = false; showFoot = false; }
+
+    // Wallet override: holders get no ring, footer stays on (branding)
+    if (holder()) { showRing = false; showFoot = true; }
+
+    // --- Apply & keep ordering stable (ring just above base) ---
+    if (wm) {
+      wm.visible = !!showRing;
+      try {
+        const baseZ = objs.indexOf(base);
+        if (base && baseZ >= 0) c.moveTo(wm, Math.min(objs.length - 1, baseZ + 1));
+        wm.selectable = wm.evented = wm.hasControls = false;
+      } catch(_) {}
+    }
+    if (foot) {
+      foot.visible = !!showFoot;
+      foot.selectable = false; foot.evented = false; foot.hasControls = false;
+    }
+
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  function wire() {
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmDedupeV3) return; c.__raWmDedupeV3 = true;
+
+    // Run after every meaningful change
+    c.on?.('after:render',       fix);
+    c.on?.('object:added',       fix);
+    c.on?.('object:removed',     fix);
+    c.on?.('object:modified',    fix);
+    c.on?.('selection:created',  fix);
+    c.on?.('selection:updated',  fix);
+
+    // React to higher-level signals
+    document.addEventListener('ra-collection-change', fix);
+    document.addEventListener('ra-wm-recalc',         fix);
+    document.addEventListener('ra-holder-update',     fix);
+
+    // First pass
+    fix();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once: true });
+  } else {
+    wire();
+  }
+})();
+
+
+/* ===== RA_WM_CTRL_V10 — single ring WM, stable sizing, correct visibility, no overlay interference ===== */
+// debug: window.__debugWM() to inspect state
+;(() => {
+  if (window.__RA_WM_CTRL_V10__) return;
+  window.__RA_WM_CTRL_V10__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Contracts (lowercase)
+  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
+
+  // --- helpers ---
+  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isBase   = o => !!(o && o._isBase);
+  const isBg     = o => !!(o && o._isBgRect);
+
+  // center-ring watermark recognizer: our own flag OR obvious center ring (not small corner stamps)
+  const isWMCentre = o => !!(o && (o._raWMCenter === true || (o._isWatermark === true && !o.raWM && !o.raPos)));
+  const isSmallWM  = o => !!(o && (o.raWM === true || typeof o.raPos === 'string')); // corner stamps
+
+  function objects(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
+  function baseObj(){ return objects().find(isBase) || null; }
+
+  function holderState(){
+    const s = window.RA_HOLDER_STATE || {};
+    return {
+      hasRebel: !!s.hasRebel,
+      hasFriend: !!s.hasFriend,
+      any: !!(s.hasRebel || s.hasFriend)
+    };
+  }
+
+  function currentContext(){
+    const base = baseObj();
+    const contract = String(base?._tokenContract || '').toLowerCase();
+    if (!base) return { kind:'none', contract:'' };
+    if (contract) {
+      if (contract === REBEL_CONTRACT) return { kind:'rebelToken', contract };
+      return { kind:'friendToken', contract };
+    }
+    return { kind:'manual', contract:'' };
+  }
+
+  function faintOpacity(){
+    // allow admin to override
+    if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return Math.max(0, Math.min(1, window.__RA_WM_ADMIN_OPACITY));
+    return 0.18;
+  }
+
+  function scaleRingToCanvas(wm){
+    const c=C(); if (!c || !wm) return;
+    const cw = c.getWidth(), ch = c.getHeight();
+    const natW = wm.width || 1;
+    const pct = (typeof window.__RA_WM_TARGET_PCT === 'number') ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT)) : 0.28;
+    const sc = (cw * pct) / Math.max(1, natW);
+    wm.scaleX = wm.scaleY = sc;
+    wm.left = cw/2; wm.top = ch/2;
+    wm.setCoords();
+  }
+
+  function ensureSingleRing(){
+    const c=C(); if (!c) return null;
+    const all = objects();
+
+    // purge any accidental duplicate center rings (keep the topmost)
+    const centres = all.filter(isWMCentre);
+    if (centres.length > 1){
+      // sort by z (index), keep highest
+      const withIndex = centres.map(o=>({o, i: all.indexOf(o)})).sort((a,b)=>a.i-b.i);
+      const keep = withIndex.pop().o;
+      withIndex.forEach(({o})=>{ try{ c.remove(o); }catch(_){ } });
+      // re-fetch
+    }
+
+    let wm = (c.getObjects?.()||[]).find(isWMCentre);
+
+    if (!wm){
+      // create one
+      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+      try{
+        fabric.Image.fromURL(src, img=>{
+          if (!img) return;
+          img.set({
+            originX:'center', originY:'center',
+            selectable:false, evented:false, hasControls:false,
+            objectCaching:false, opacity:faintOpacity(),
+            perPixelTargetFind:false, hoverCursor:'default'
+          });
+          img._raWMCenter = true;
+          img._isWatermark = true;
+          img._raSys = true;
+          img.excludeFromExport = true;
+
+          scaleRingToCanvas(img);
+          c.add(img);
+
+          // seat just above base for consistent faint look
+          try{
+            const base = baseObj();
+            if (base){
+              const all2 = objects();
+              const baseZ = all2.indexOf(base);
+              c.moveTo(img, Math.min(all2.length-1, baseZ+1));
+            }
+          }catch(_){}
+          try { c.requestRenderAll(); } catch(_){}
+        }, { crossOrigin:'anonymous' });
+      }catch(_){}
+      return null;
+    }
+
+    // normalize properties each pass
+    wm._raWMCenter = true;
+    wm._isWatermark = true;
+    wm._raSys = true;
+    wm.excludeFromExport = true;
+    wm.selectable = false; wm.evented=false; wm.hasControls=false;
+    wm.perPixelTargetFind=false; wm.hoverCursor='default';
+    wm.opacity = faintOpacity();
+    scaleRingToCanvas(wm);
+
+    // place just above base
+    try{
+      const base = baseObj();
+      if (base){
+        const all2 = objects();
+        const baseZ = all2.indexOf(base);
+        c.moveTo(wm, Math.min(all2.length-1, baseZ+1));
+      }
+    }catch(_){}
+    return wm;
+  }
+
+  function enforceFooterAndRingVisibility(){
+    const c=C(); if (!c) return;
+    const ctx = currentContext();
+    const h = holderState();
+    const all = objects();
+
+    // footers
+    const foot = all.find(isFooter);
+    if (foot){
+      // Rebel: never show; Friend + Manual: show
+      const wantFoot = (ctx.kind === 'friendToken' || ctx.kind === 'manual');
+      foot.visible = !!wantFoot;
+      // footer is UI → keep above overlays
+      try { c.bringToFront(foot); } catch(_){}
+    }
+
+    // small corner watermarks inside groups must never "show" as independent objects (but we won't tear groups)
+    all.forEach(o => { if (isSmallWM(o)) { try { o.visible = true; } catch(_){ } } });
+
+    // ring
+    const wm = ensureSingleRing();
+    if (!wm) { try{ c.requestRenderAll(); }catch(_){ } return; }
+
+    let showRing = true;
+    if (ctx.kind === 'rebelToken') {
+      showRing = !h.hasRebel; // holders of Rebel: no ring
+    } else if (ctx.kind === 'friendToken') {
+      showRing = !h.hasFriend; // holders of Friend: no ring
+    } else if (ctx.kind === 'manual') {
+      showRing = !h.any; // any holder removes ring on manual uploads
+    }
+
+    wm.visible = !!showRing;
+
+    // seat above base again to be safe
+    try{
+      const base = baseObj();
+      if (base){
+        const all2 = objects();
+        const baseZ = all2.indexOf(base);
+        c.moveTo(wm, Math.min(all2.length-1, baseZ+1));
+      }
+    }catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  // --- wire once ---
+
+  // tiny debug helper
+  window.__debugWM = function(){
+    try{
+      const c=C(); const all=(c?.getObjects?.()||[]);
+      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
+      console.log('wm centres:', centres);
+      const base = baseObj(); const foot = all.find(isFooter);
+      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
+                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
+                  'ctx:', currentContext(), 'holder:', holderState());
+    }catch(e){ console.warn(e); }
+  };
+
+  function wire(){
+    const c=C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmCtrlV10) return; c.__raWmCtrlV10 = true;
+
+    const reflow = ()=>{ try{ enforceFooterAndRingVisibility(); }catch(_){ } };
+
+    // run on relevant events
+    c.on?.('object:added', (e)=>{
+      const t=e?.target;
+      // when a base arrives, or at init, recalc
+      if (t && (t._isBase || t._raWMCenter || t._raBrandFooter)) reflow();
+      // also, if overlay was added, just ensure ring sizing/order; postpone to next tick
+      setTimeout(reflow, 0);
+    });
+    c.on?.('object:removed', reflow);
+    c.on?.('object:modified', reflow);
+    c.on?.('after:render',  ()=>{ /* keep scale stable on resize */ reflow(); });
+
+    document.addEventListener('ra-wm-recalc', reflow);
+    document.addEventListener('ra-collection-change', reflow);
+    document.addEventListener('ra-holder-update', reflow);
+
+    // also watch canvas element size
+    try{
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmCtrlV10RO){
+        c.__raWmCtrlV10RO = true;
+        new ResizeObserver(()=> reflow()).observe(el);
+      }
+    }catch(_){}
+
+    // initial
+    reflow();
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
   }
 })();
