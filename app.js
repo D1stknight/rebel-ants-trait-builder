@@ -8664,3 +8664,102 @@ window.raDump = () => {
     wire();
   }
 })();
+
+/* ===== RA_WM_DEDUPE_ENFORCE_v3 — single WM, correct visibility, no overlay interference ===== */
+;(() => {
+  if (window.__RA_WM_DEDUPE_ENFORCE_V3__) return;
+  window.__RA_WM_DEDUPE_ENFORCE_V3__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase in data
+
+  const isBase   = o => !!(o && o._isBase);
+  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm));
+
+  const holder = () => {
+    const s = window.RA_HOLDER_STATE || {};
+    return !!(s.hasRebel || s.hasFriend);
+  };
+
+  function mode(c) {
+    const objs = (c.getObjects?.() || []);
+    const base = objs.find(isBase);
+    if (!base) return 'empty';
+    const contract = String(base._tokenContract || '').toLowerCase();
+    if (!contract) return 'manual';
+    return (contract === REBEL) ? 'rebel' : 'friend';
+  }
+
+  function fix() {
+    const c = C(); if (!c) return;
+
+    const objs = (c.getObjects?.() || []);
+    const base = objs.find(isBase);
+    const foot = objs.find(isFooter);
+    let   wms  = objs.filter(isWM);
+
+    // --- De-dupe: keep the center ring and remove/hide the rest ---
+    if (wms.length > 1) {
+      const keep = wms.find(w => w._raWMCenter) || wms[0];
+      wms.forEach(w => { if (w !== keep) { try { c.remove(w); } catch(_) { w.visible = false; } } });
+      wms = keep ? [keep] : [];
+    }
+    const wm = wms[0] || null;
+
+    // --- Decide visibility ---
+    const m = mode(c);
+    let showRing = false, showFoot = false;
+
+    if (m === 'manual') { showRing = true;  showFoot = true;  }
+    if (m === 'friend') { showRing = true;  showFoot = true;  }
+    if (m === 'rebel')  { showRing = false; showFoot = false; }
+
+    // Wallet override: holders get no ring, footer stays on (branding)
+    if (holder()) { showRing = false; showFoot = true; }
+
+    // --- Apply & keep ordering stable (ring just above base) ---
+    if (wm) {
+      wm.visible = !!showRing;
+      try {
+        const baseZ = objs.indexOf(base);
+        if (base && baseZ >= 0) c.moveTo(wm, Math.min(objs.length - 1, baseZ + 1));
+        wm.selectable = wm.evented = wm.hasControls = false;
+      } catch(_) {}
+    }
+    if (foot) {
+      foot.visible = !!showFoot;
+      foot.selectable = false; foot.evented = false; foot.hasControls = false;
+    }
+
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  function wire() {
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmDedupeV3) return; c.__raWmDedupeV3 = true;
+
+    // Run after every meaningful change
+    c.on?.('after:render',       fix);
+    c.on?.('object:added',       fix);
+    c.on?.('object:removed',     fix);
+    c.on?.('object:modified',    fix);
+    c.on?.('selection:created',  fix);
+    c.on?.('selection:updated',  fix);
+
+    // React to higher-level signals
+    document.addEventListener('ra-collection-change', fix);
+    document.addEventListener('ra-wm-recalc',         fix);
+    document.addEventListener('ra-holder-update',     fix);
+
+    // First pass
+    fix();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once: true });
+  } else {
+    wire();
+  }
+})();
