@@ -8234,3 +8234,48 @@ window.raDump = () => {
     wire();
   }
 })();
+
+/* ===== WM_OPACITY_LOCK_SHIM_v1 — keep watermark opacity/scale stable on resize ===== */
+(() => {
+  function stableWatermark() {
+    const c = window.canvas;
+    if (!c) return;
+
+    const objs = c.getObjects() || [];
+    objs.forEach(o => {
+      if (o && (o._raWatermark || o._isWatermark || /watermark/i.test(o.name||''))) {
+        // Always restore baseline opacity
+        if (typeof o._baselineOpacity === "number") {
+          o.opacity = o._baselineOpacity;
+        } else {
+          o._baselineOpacity = o.opacity || 0.25;  // record first seen opacity
+        }
+
+        // Force scale to 1:1 logical size (independent of canvas zoom/resize)
+        if (o.scaleX && o.scaleX !== 1) o.scaleX = 1;
+        if (o.scaleY && o.scaleY !== 1) o.scaleY = 1;
+
+        o.setCoords();
+      }
+    });
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  // Run after resize, undo, or new objects
+  document.addEventListener("ra-wm-recalc", stableWatermark);
+  document.addEventListener("ra-collection-change", stableWatermark);
+  if (window.canvas) {
+    window.canvas.on("object:added", stableWatermark);
+    window.canvas.on("object:modified", stableWatermark);
+    window.canvas.on("after:render", stableWatermark);
+  }
+
+  // Hook into resize observer
+  const c = window.canvas;
+  if (c) {
+    const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+    if (el && window.ResizeObserver) {
+      new ResizeObserver(() => { stableWatermark(); }).observe(el);
+    }
+  }
+})();
