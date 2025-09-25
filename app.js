@@ -8194,82 +8194,17 @@ window.raDump = () => {
   }
 })();
 
-/* ===== RA_WM_RESIZE_MASK_SHIM_v1 — hide WM during resize; reveal after settle (prevents “thick” frame) ===== */
+/* ===== RA_WM_DEDUPE_SHIM_v2 — keep a single WM; preserve original z-index (no top forcing) ===== */
 ;(() => {
-  if (window.__RA_WM_RESIZE_MASK_SHIM_V1__) return;
-  window.__RA_WM_RESIZE_MASK_SHIM_V1__ = true;
-
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
-
-  let resizingUntil = 0;          // timestamp until which we consider ourselves “resizing”
-  const MASK_MS = 220;            // length of the mask window after each size change
-
-  function hideWM() {
-    const c = C(); if (!c) return;
-    (c.getObjects?.()||[]).forEach(o => { if (isWM(o) && o.visible !== false) o.visible = false; });
-    try { c.requestRenderAll(); } catch(_) {}
-  }
-
-  function showWM() {
-    const c = C(); if (!c) return;
-    (c.getObjects?.()||[]).forEach(o => {
-      if (isWM(o)) {
-        // only re-show if we are past the mask window
-        if (Date.now() >= resizingUntil) o.visible = true;
-      }
-    });
-    try { c.requestRenderAll(); } catch(_) {}
-  }
-
-  function startResizeMask() {
-    resizingUntil = Date.now() + MASK_MS;
-    hideWM();
-    // unmask after settle; if more resizes arrive, the timestamp will be pushed
-    setTimeout(() => { if (Date.now() >= resizingUntil) showWM(); }, MASK_MS + 10);
-  }
-
-  function wire() {
-    const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmResizeMaskShimV1) return; c.__raWmResizeMaskShimV1 = true;
-
-    // Use a ResizeObserver on the canvas element to detect 700/900/1024/1200 changes
-    try {
-      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmResizeMaskObs) {
-        c.__raWmResizeMaskObs = true;
-        new ResizeObserver(() => { startResizeMask(); }).observe(el);
-      }
-    } catch(_) {}
-
-    // If we happen to draw during the mask window, keep WM hidden for that frame
-    c.on?.('before:render', () => {
-      if (Date.now() < resizingUntil) hideWM();
-    });
-
-    // Once the mask window passes, the existing v7 shim will re-assert order/top; we just re-show
-    c.on?.('after:render', () => {
-      if (Date.now() >= resizingUntil) showWM();
-    });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once: true });
-  } else {
-    wire();
-  }
-})();
-
-/* ===== RA_WM_DEDUPE_SHIM_v1 — keep a single WM on top; no scale/opacity changes ===== */
-;(() => {
-  if (window.__RA_WM_DEDUPE_SHIM_V1__) return;
-  window.__RA_WM_DEDUPE_SHIM_V1__ = true;
+  if (window.__RA_WM_DEDUPE_SHIM_V2__) return;
+  window.__RA_WM_DEDUPE_SHIM_V2__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Match the same tags your code uses for the watermark
+  // Match the same tags you use for watermark + helpers
   const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
-  const isID = o => !!(o && o._raTokenId);
+  const isBg = o => !!(o && o._isBgRect);
+  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
 
   const area = o => {
     const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
@@ -8277,58 +8212,67 @@ window.raDump = () => {
     return w*h;
   };
 
-  function dedupeAndTop() {
+  function preserveZ() {
     const c = C(); if (!c) return;
     const objs = c.getObjects?.() || [];
     const wms = objs.filter(isWM);
     if (!wms.length) return;
 
-    // Keep the largest one (most likely the intended WM), hide the rest (no remove → no history churn)
+    // Choose keeper (largest by drawn area) and hide the rest (no remove => no history churn)
     const keep = wms.slice().sort((a,b)=>area(b)-area(a))[0];
-    wms.forEach(o => {
-      o._raSys = true;                   // treat as system
-      o.excludeFromExport = true;        // keep out of undo snapshots
-      o.selectable = false; o.evented = false; o.hasControls = false;
-      if (o !== keep) o.visible = false; // hide extras only
+    wms.forEach(o=>{
+      o._raSys = true;                 // system layer → skip undo JSON
+      o.excludeFromExport = true;
+      o.selectable=false; o.evented=false; o.hasControls=false;
+      if (o !== keep) o.visible = false;
     });
 
-    // Bring the keeper to top; let the Token-ID label sit above if present
-    try {
-      c.bringToFront(keep);
-      const id = objs.find(isID);
-      if (id && id.visible !== false) c.bringToFront(id);
-    } catch(_) {}
+    // If we haven't recorded a "home" z-index yet, store the keeper's current z
+    const zIdx = (objs || []).indexOf(keep);
+    if (keep._raWmHomeZ == null && zIdx >= 0) keep._raWmHomeZ = zIdx;
+
+    // If a home z-index exists, restore it
+    if (Number.isFinite(keep._raWmHomeZ)) {
+      try { c.moveTo(keep, Math.max(0, Math.min(keep._raWmHomeZ, objs.length-1))); } catch(_) {}
+    } else {
+      // Otherwise, place just above the base (keeps faint look) without forcing top
+      const base = objs.find(isBase);
+      if (base) {
+        const baseZ = objs.indexOf(base);
+        try { c.moveTo(keep, Math.min(objs.length-1, baseZ + 1)); } catch(_) {}
+      }
+    }
 
     try { c.requestRenderAll(); } catch(_) {}
   }
 
   function wire() {
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmDedupeShimV1) return; c.__raWmDedupeShimV1 = true;
+    if (c.__raWmDedupeShimV2) return; c.__raWmDedupeShimV2 = true;
 
-    // Run once shortly after boot (covers first load)
-    setTimeout(dedupeAndTop, 60);
+    // Initial run (covers first load)
+    setTimeout(preserveZ, 60);
 
-    // On canvas churn, just dedupe + keep on top (no scale/opacity changes here)
-    c.on?.('object:added',    dedupeAndTop);
-    c.on?.('object:removed',  dedupeAndTop);
-    c.on?.('object:modified', dedupeAndTop);
-    c.on?.('selection:created', dedupeAndTop);
-    c.on?.('selection:updated', dedupeAndTop);
-    c.on?.('after:render',    dedupeAndTop);
+    // Do not change scale/opacity; only dedupe + keep at original z on churn
+    c.on?.('object:added',    preserveZ);
+    c.on?.('object:removed',  preserveZ);
+    c.on?.('object:modified', preserveZ);
+    c.on?.('selection:created', preserveZ);
+    c.on?.('selection:updated', preserveZ);
+    c.on?.('after:render',    preserveZ);
 
-    // On canvas element resize (700/900/1024/1200), dedupe immediately
+    // On canvas element resize (700/900/1024/1200), dedupe and restore to the same z
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmDedupeResizeObs) {
-        c.__raWmDedupeResizeObs = true;
-        new ResizeObserver(() => dedupeAndTop()).observe(el);
+      if (el && !c.__raWmDedupeResizeObsV2) {
+        c.__raWmDedupeResizeObsV2 = true;
+        new ResizeObserver(() => preserveZ()).observe(el);
       }
     } catch(_) {}
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once:true });
+    document.addEventListener('DOMContentLoaded', wire, { once: true });
   } else {
     wire();
   }
