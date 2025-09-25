@@ -8203,7 +8203,7 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM immediate top on all edits; footer no-flash on Rebel ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM seated just above base (faint); footer no-flash on Rebel ===== */
 ;(() => {
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7__) return;
   window.__RA_WM_FOOTER_FIX_SHIM_V7__ = true;
@@ -8215,6 +8215,7 @@ window.raDump = () => {
 
   const isFooter = o => !!(o && (o._raBrandFooter ||
                         (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  // Strict WM detector so uploads/overlays aren’t misclassified
   const isWM     = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase);
@@ -8226,6 +8227,12 @@ window.raDump = () => {
     if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
     return (Date.now() - lastRestoreSeen) < 400;
   };
+
+  function faintOpacity() {
+    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
+      ? window.__RA_WM_ADMIN_OPACITY
+      : 0.18; // keep watermark faint by default
+  }
 
   function quarantine(o){
     if (!o) return;
@@ -8240,7 +8247,7 @@ window.raDump = () => {
   function objs(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
   function baseObj(){ return objs().find(isBase) || null; }
 
-  // IMMEDIATE z-order enforcement: runs synchronously on key events
+  // Z-order enforcement: BG at 0; footer per rules; WM sits just above BASE (faint look)
   function assertTopNow(){
     const c = C(); if (!c) return;
     const all = objs();
@@ -8264,18 +8271,31 @@ window.raDump = () => {
       }
     }
 
-    // Watermark always-on-top (under ID), immediately
+    // Watermark: quarantine, clamp faint opacity, and seat JUST ABOVE BASE (never at top)
     const wm = all.find(isWM);
-    if (wm) quarantine(wm);
+    if (wm) {
+      quarantine(wm);
 
-// Seat WM just above BASE (keeps "faint" look), not at the very top
-if (wm && wm.visible !== false && base) {
-  const baseZ = all.indexOf(base);
-  try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch (_){}
-}
+      // Clamp faintness on every pass (prevents “thick” look after resize/add)
+      if (wm.visible !== false) {
+        wm.opacity = faintOpacity();
+      }
+
+      // Seat above base; if base not ready, seat just above bg
+      if (wm.visible !== false) {
+        let targetZ = 1; // just above bg by default
+        const bgIx  = all.findIndex(isBg);
+        if (bgIx >= 0) targetZ = Math.min(all.length - 1, bgIx + 1);
+        if (base) {
+          const baseZ = all.indexOf(base);
+          targetZ = Math.min(all.length - 1, baseZ + 1);
+        }
+        try { c.moveTo(wm, targetZ); } catch (_){}
+      }
+    }
 
     try {
-      // WM top, then footer (if visible), then ID absolutely top
+      // Footer (if visible) above WM; Token-ID absolutely top
       if (foot && foot.visible !== false) c.bringToFront(foot);
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
@@ -8286,19 +8306,18 @@ if (wm && wm.visible !== false && base) {
     const c = C(); if (!c) return setTimeout(wire, 120);
     if (c.__raWmFooterFixShimV7) return; c.__raWmFooterFixShimV7 = true;
 
-    // Hide footer BEFORE a restoring frame draws → no flash
+    // Hide footer BEFORE a restoring frame draws → no flash; also assert order pre-draw
     c.on?.('before:render', () => {
       if (!restoring()) return;
       const all = objs();
       all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
-      // Also assert WM order before draw to prevent a one-frame cover
       assertTopNow();
     });
 
-    // Re-assert WM/foot order immediately after each draw too (covers resize/scale)
+    // Re-assert order immediately after each draw (covers resize/scale)
     c.on?.('after:render', () => { assertTopNow(); });
 
-    // IMMEDIATE re-assert on all user churn
+    // Re-assert on all user churn
     c.on?.('object:added',    assertTopNow);
     c.on?.('object:modified', assertTopNow);
     c.on?.('object:removed',  assertTopNow);
