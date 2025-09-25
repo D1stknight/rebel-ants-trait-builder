@@ -573,7 +573,7 @@ async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
 
   const img = await fabricFromURL(dataUrl);
-  img.set({ originX: "center", originY: "center" });
+  img.set({ originX:"center", originY:"center" });
 
   // fit to canvas (no upscaling)
   const cw = canvas.getWidth(), ch = canvas.getHeight();
@@ -584,10 +584,16 @@ async function loadBaseImage(dataUrl, isToken){
 
   let obj;
   if (isToken) {
-    // Token = RA (real asset) => NO ring watermark (footer only)
+    // NEW: hide any non-token ring immediately (prevents flicker on token loads)
+    try {
+      const os = canvas.getObjects() || [];
+      os.forEach(o => { if (o && (o._raWMCenter === true || o._isWatermark === true)) o.visible = false; });
+    } catch (_) {}
+
+    // Token = RA (real asset) => NO ring watermark
     img._isBase = true;
     lockBaseObject(img);
-    img.set({ left: cw / 2, top: ch / 2 }); img.setCoords();
+    img.set({ left:cw/2, top:ch/2 }); img.setCoords();
     obj = img;
 
     canvas.add(obj);
@@ -596,11 +602,11 @@ async function loadBaseImage(dataUrl, isToken){
     canvas.requestRenderAll();
 
   } else {
-    // Non-token (uploads) => base group (e.g., with corner stamps)
+    // Non-token => add corner stamps
     const group = await makeStampedGroup(img, bw, bh, 0.15);
     group._isBase = true;
     lockBaseObject(group);
-    group.set({ left: cw / 2, top: ch / 2 }); group.setCoords();
+    group.set({ left:cw/2, top:ch/2 }); group.setCoords();
     obj = group;
 
     canvas.add(obj);
@@ -608,10 +614,14 @@ async function loadBaseImage(dataUrl, isToken){
     bringInterfaceToFront();
     canvas.requestRenderAll();
 
-    // Add faint ring WM for uploads (unless wallet holder)
-    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch (_) {}
+    // NEW: ensure ring watermark shows and seats above base (call twice)
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+    requestAnimationFrame(() => {
+      try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+    });
   }
 }
+
 // Add overlay (with small corner stamps unless permanent)
 async function addOverlayToCanvas(src, isPermanent){
   const img = await fabricFromURL(src);
