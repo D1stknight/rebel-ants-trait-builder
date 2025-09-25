@@ -8194,14 +8194,13 @@ window.raDump = () => {
   }
 })();
 
-/* ===== RA_WM_MINI_SHIM_vA — single WM; faint after resize (just above base); no scale/opacity changes ===== */
+/* ===== RA_WM_PIN_BELOW_USERS_v1 — single WM; always just above base (faint), never on top ===== */
 ;(() => {
-  if (window.__RA_WM_MINI_SHIM_vA__) return;
-  window.__RA_WM_MINI_SHIM_vA__ = true;
+  if (window.__RA_WM_PIN_BELOW_USERS_v1__) return;
+  window.__RA_WM_PIN_BELOW_USERS_v1__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Tags consistent with your code
   const isWM   = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
   const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
 
@@ -8211,69 +8210,74 @@ window.raDump = () => {
     return w*h;
   };
 
-  // Keep exactly one WM visible; mark as system; do NOT move or rescale
-  function dedupeOnly() {
-    const c = C(); if (!c) return;
+  // Keep exactly one watermark visible (no history churn), mark as system
+  function getOneWM() {
+    const c = C(); if (!c) return null;
     const objs = c.getObjects?.() || [];
     const wms = objs.filter(isWM);
-    if (!wms.length) return;
+    if (!wms.length) return null;
 
     const keep = wms.slice().sort((a,b)=>area(b)-area(a))[0];
     wms.forEach(o => {
       o._raSys = true;
-      o.excludeFromExport = true;       // keep out of undo snapshots
-      o.selectable=false; o.evented=false; o.hasControls=false;
-      if (o !== keep) o.visible = false; // hide extras only
+      o.excludeFromExport = true;
+      o.selectable = false; o.evented = false; o.hasControls = false;
+      if (o !== keep) o.visible = false;  // hide extras only
     });
-
-    try { c.requestRenderAll(); } catch(_) {}
     return keep;
   }
 
-  // After a resize, seat WM just above base (keeps the faint look)
+  // Seat watermark directly above base (keeps faint look), BELOW user overlays/text
   function seatWmAboveBase() {
     const c = C(); if (!c) return;
     const objs = c.getObjects?.() || [];
-    const wm   = objs.find(isWM);
-    const base = objs.find(isBase);
-    if (!wm || !base) return;
+    const wm   = getOneWM(); if (!wm) return;
 
-    const baseZ = objs.indexOf(base);
+    const base = objs.find(isBase);
+    if (!base) return;
+
+    const baseZ   = objs.indexOf(base);
     const targetZ = Math.min(objs.length - 1, baseZ + 1);
-    try { c.moveTo(wm, targetZ); } catch(_) {}
-    try { c.requestRenderAll(); } catch(_) {}
+
+    // Only move if needed
+    const curZ = objs.indexOf(wm);
+    if (curZ !== targetZ) {
+      try { c.moveTo(wm, targetZ); } catch(_) {}
+      try { c.requestRenderAll(); } catch(_) {}
+    }
   }
 
-  let lastResizeAt = 0;
-  const RESIZE_WINDOW_MS = 350; // small window after resize to override any top-forcing
+  // Schedule seat after other handlers (e.g., v7) have run
+  let ticking = false;
+  function scheduleSeat() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => { ticking = false; seatWmAboveBase(); });
+  }
 
   function wire() {
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmMiniShimVA) return; c.__raWmMiniShimVA = true;
+    if (c.__raWmPinBelowUsers_v1) return; c.__raWmPinBelowUsers_v1 = true;
 
-    // Initial pass (covers first load)
-    setTimeout(dedupeOnly, 60);
+    // First pass (handles initial load)
+    setTimeout(scheduleSeat, 60);
 
-    // On normal churn, only dedupe (do not move → v7 continues to handle overlays/order)
-    c.on?.('object:added',    dedupeOnly);
-    c.on?.('object:removed',  dedupeOnly);
-    c.on?.('object:modified', dedupeOnly);
-    c.on?.('selection:created', dedupeOnly);
-    c.on?.('selection:updated', dedupeOnly);
-    c.on?.('after:render',    () => {
-      dedupeOnly();
-      if (lastResizeAt && (Date.now() - lastResizeAt) <= RESIZE_WINDOW_MS) {
-        // For a brief window after resize, seat WM under overlays (just above base)
-        seatWmAboveBase();
-      }
-    });
+    // Re-seat after any churn (no opacity/scale edits here)
+    c.on?.('object:added',       scheduleSeat);
+    c.on?.('object:removed',     scheduleSeat);
+    c.on?.('object:modified',    scheduleSeat);
+    c.on?.('selection:created',  scheduleSeat);
+    c.on?.('selection:updated',  scheduleSeat);
 
-    // Canvas element resize: mark the window so we re-seat WM faintly for a moment
+    // After each draw, run once more (our handler is registered after v7, so this wins)
+    c.on?.('after:render', scheduleSeat);
+
+    // Re-seat after canvas size changes (700/900/1024/1200)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmMiniShimResizeObs) {
-        c.__raWmMiniShimResizeObs = true;
-        new ResizeObserver(() => { lastResizeAt = Date.now(); }).observe(el);
+      if (el && !c.__raWmPinResizeObs) {
+        c.__raWmPinResizeObs = true;
+        new ResizeObserver(() => scheduleSeat()).observe(el);
       }
     } catch(_) {}
   }
