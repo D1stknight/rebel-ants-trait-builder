@@ -8342,67 +8342,128 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM seated just above base (faint); footer no-flash on Rebel ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7b — single WM, stable z, footer no‑flash on Rebel ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V7__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V7__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V7B__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V7B__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Rebel contract(s) — lowercase
+  // Rebel contract (lowercase); footer hidden on Rebel
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
+  // --- predicates ---
   const isFooter = o => !!(o && (o._raBrandFooter ||
                         (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  // Strict WM detector so uploads/overlays aren’t misclassified
-  const isWM     = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
+  // Be generous in what we accept as "watermark"
+  const isWM     = o => !!(o && (
+                        o._raWMCenter === true ||
+                        o._isWatermark === true ||
+                        o._raWatermark === true ||
+                        o.raWM === true ||
+                        o._wm === true ||
+                        (typeof o.name === 'string' && /watermark/i.test(o.name))
+                      ));
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
 
-  // Treat the short window after restore as "still restoring" to prevent footer flash
+  // Treat the short window after restore as "still restoring" → prevent footer flash
   let lastRestoreSeen = 0;
   const restoring = () => {
     if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
     return (Date.now() - lastRestoreSeen) < 400;
   };
 
-  function faintOpacity() {
-    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
-      ? window.__RA_WM_ADMIN_OPACITY
-      : 0.18; // keep watermark faint by default
-  }
-
   function quarantine(o){
     if (!o) return;
     o._raSys = true;
-    if (!isID(o)) o.excludeFromExport = true; // keep sys out of undo snapshots
+    if (!isID(o)) o.excludeFromExport = true; // keep sys out of history snapshots
     if (isFooter(o) || isWM(o)) {
       o.selectable=false; o.evented=false; o.hasControls=false;
       o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+      // keep it visually neutral while we seat it
+      if (o.objectCaching) o.objectCaching = false;
     }
   }
 
-  function objs(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
-  function baseObj(){ return objs().find(isBase) || null; }
+  // Helpers for object access
+  const objs = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
+  const baseObj = () => objs().find(isBase) || null;
 
-  // Z-order enforcement: BG at 0; footer per rules; WM sits just above BASE (faint look)
+  // Recursively find watermark children inside groups and hide them (prevents “second” WM)
+  function hideEmbeddedWatermarks(node){
+    if (!node) return;
+    const kids = node._objects || node._children || null;
+    if (!kids) return;
+    for (const k of kids){
+      if (isWM(k)) { k.visible = false; try{ k.dirty=true; }catch(_){} }
+      hideEmbeddedWatermarks(k);
+    }
+  }
+
+  // Return all top-level WMs + hide any embedded (group) WMs
+  function collectTopLevelWMs(){
+    const out = [];
+    for (const o of objs()){
+      // if it’s a group, hide watermark children so they never draw
+      if (o && (o.type === 'group' || o._objects)) hideEmbeddedWatermarks(o);
+      if (isWM(o)) out.push(o);
+    }
+    return out;
+  }
+
+  // Keep exactly one WM. Prefer the center-ring (_raWMCenter), remove others.
+  function dedupeWM(){
+    const c = C(); if (!c) return { keep:null, removed:0 };
+    const list = collectTopLevelWMs();
+    if (list.length <= 1) return { keep: list[0] || null, removed: 0 };
+
+    let keep = list.find(w => w._raWMCenter === true) || list[0];
+    let removed = 0;
+
+    for (const w of list){
+      if (w === keep) continue;
+      try { c.remove(w); removed++; } catch(_) {}
+    }
+    return { keep, removed };
+  }
+
+  // Put the keeper WM just above the Base (stable z; keeps “faint ring” look)
+  function seatWMJustAboveBase(wm){
+    const c = C(); if (!c || !wm) return;
+    try{
+      const all = objs();
+      const base = baseObj();
+      quarantine(wm);
+      if (base){
+        const baseZ = all.indexOf(base);
+        c.moveTo(wm, Math.min(all.length - 1, baseZ + 1));
+      }else{
+        // no base yet: keep WM near back but above bg
+        const bg = all.find(isBg);
+        const bgZ = bg ? all.indexOf(bg) : -1;
+        c.moveTo(wm, Math.min(all.length - 1, bgZ + 1));
+      }
+    }catch(_){}
+  }
+
+  // IMMEDIATE z‑order enforcement + dedupe
   function assertTopNow(){
     const c = C(); if (!c) return;
     const all = objs();
 
-    // Lock BG and keep at index 0
+    // 0) Lock BG at index 0
     const bg = all.find(isBg);
     if (bg) {
       bg.selectable=false; bg.evented=false; bg.hasControls=false;
       try { c.moveTo(bg, 0); } catch(_) {}
     }
 
-    // Footer gating (hide while restoring and on Rebel)
+    // 1) Footer gating
     const foot = all.find(isFooter);
     const base = baseObj();
     const cc = String(base?._tokenContract || '').toLowerCase();
-
     if (foot){
       quarantine(foot);
       if (restoring() || (cc && cc === REBEL_CONTRACT)) {
@@ -8410,53 +8471,34 @@ window.raDump = () => {
       }
     }
 
-    // Watermark: quarantine, clamp faint opacity, and seat JUST ABOVE BASE (never at top)
-    const wm = all.find(isWM);
-    if (wm) {
-      quarantine(wm);
+    // 2) Watermark: dedupe, then seat stably above Base
+    const { keep:wm } = dedupeWM();
+    if (wm && wm.visible !== false) seatWMJustAboveBase(wm);
 
-      // Clamp faintness on every pass (prevents “thick” look after resize/add)
-      if (wm.visible !== false) {
-        wm.opacity = faintOpacity();
-      }
-
-      // Seat above base; if base not ready, seat just above bg
-      if (wm.visible !== false) {
-        let targetZ = 1; // just above bg by default
-        const bgIx  = all.findIndex(isBg);
-        if (bgIx >= 0) targetZ = Math.min(all.length - 1, bgIx + 1);
-        if (base) {
-          const baseZ = all.indexOf(base);
-          targetZ = Math.min(all.length - 1, baseZ + 1);
-        }
-        try { c.moveTo(wm, targetZ); } catch (_){}
-      }
-    }
-
-    try {
-      // Footer (if visible) above WM; Token-ID absolutely top
+    // 3) Token ID should be absolute top
+    try{
       if (foot && foot.visible !== false) c.bringToFront(foot);
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
-    } catch(_){}
+    }catch(_){}
   }
 
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmFooterFixShimV7) return; c.__raWmFooterFixShimV7 = true;
+    if (c.__raWmFooterFixShimV7B) return;
+    c.__raWmFooterFixShimV7B = true;
 
-    // Hide footer BEFORE a restoring frame draws → no flash; also assert order pre-draw
+    // During restore: hide footer before draw; also assert WM order
     c.on?.('before:render', () => {
       if (!restoring()) return;
-      const all = objs();
-      all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
+      objs().forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
       assertTopNow();
     });
 
-    // Re-assert order immediately after each draw (covers resize/scale)
+    // After each draw, re-assert (covers resize/scale)
     c.on?.('after:render', () => { assertTopNow(); });
 
-    // Re-assert on all user churn
+    // React to user churn immediately
     c.on?.('object:added',    assertTopNow);
     c.on?.('object:modified', assertTopNow);
     c.on?.('object:removed',  assertTopNow);
@@ -8464,11 +8506,11 @@ window.raDump = () => {
     c.on?.('selection:updated', assertTopNow);
     c.on?.('mouse:up', assertTopNow);
 
-    // React to admin/wallet signals instantly
+    // React to admin/wallet signals
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
       .forEach(ev => document.addEventListener(ev, assertTopNow));
 
-    // Also react to canvas element resize (covers 900/1024/1200 changes)
+    // React to canvas element resize (900/1024/1200)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmResizeObs) {
@@ -8479,6 +8521,17 @@ window.raDump = () => {
 
     // First pass
     assertTopNow();
+
+    // tiny debug helper: count WMs + indices
+    window.__dbg_countWM = () => {
+      const a = objs();
+      const wms = a.filter(isWM);
+      return {
+        total: wms.length,
+        indices: wms.map(w => a.indexOf(w)),
+        names: wms.map(w => w.name || '(wm)')
+      };
+    };
   }
 
   if (document.readyState==='loading'){
