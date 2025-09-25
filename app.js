@@ -8136,7 +8136,7 @@ window.raDump = () => {
     if (wm) quarantine(wm);
 
 // Seat WM just above BASE (keeps "faint" look), not at the very top
-if (wm && wm.visible !== false && base) {
+if (wm && wm.visible !== false) {
   const baseZ = all.indexOf(base);
   try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch (_){}
 }   
