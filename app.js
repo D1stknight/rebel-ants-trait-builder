@@ -8071,10 +8071,10 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v4 — no-flash footer on Undo + stable WM layer ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v5 — no-flash footer on Undo + watermark always-on-top ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V4__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V4__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V5__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V5__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
@@ -8082,7 +8082,7 @@ window.raDump = () => {
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
   const isFooter = o => !!(o && (o._raBrandFooter ||
-                         (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+                        (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
   const isWM  = o => !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
   const isBg  = o => !!(o && o._isBgRect);
   const isBase= o => !!(o && o._isBase);
@@ -8094,11 +8094,11 @@ window.raDump = () => {
     return w*h;
   };
 
-  // Persist last restore timestamp; treat a short window after as "still restoring"
+  // Track a short grace window after restore to prevent any footer flash
   let lastRestoreSeen = 0;
   function restoring() {
     if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
-    return (Date.now() - lastRestoreSeen) < 400; // ↑ grace window to prevent flashes
+    return (Date.now() - lastRestoreSeen) < 400; // small grace to cover the next frame(s)
   }
 
   function quarantine(o){
@@ -8114,80 +8114,80 @@ window.raDump = () => {
   function keepOneHideRest(arr, chooser){
     if (!arr.length) return null;
     const keep = chooser(arr);
-    arr.forEach(o => {
+    arr.forEach(o=>{
       quarantine(o);
       if (o !== keep) o.visible = false; // hide extras (no history churn)
     });
     return keep;
   }
 
-  function objs() { const c=C(); return c ? (c.getObjects?.()||[]) : []; }
+  function objs(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
   function baseObj(){ return objs().find(isBase) || null; }
 
   function sanitize(){
     const c = C(); if (!c) return;
     const all = objs();
 
-    // Mark sys layers and dedupe
+    // 0) Keep BG locked & at index 0 (prevents ghost box after Unlock All)
+    const bg = all.find(isBg);
+    if (bg){
+      bg.selectable=false; bg.evented=false; bg.hasControls=false;
+      try { c.moveTo(bg, 0); } catch(_) {}
+    }
+
+    // 1) Quarantine & dedupe footer + watermark
     all.forEach(o => { if (isFooter(o) || isWM(o)) quarantine(o); });
 
-    const foot = keepOneHideRest(all.filter(isFooter), arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]);
-    const wm   = keepOneHideRest(all.filter(isWM),    arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]);
+    const foot = keepOneHideRest(all.filter(isFooter),
+      arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]
+    );
+    const wm = keepOneHideRest(all.filter(isWM),
+      arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]
+    );
 
-    // Footer gating: hide during restore; hide on Rebel; otherwise allow
-    if (foot) {
-      if (restoring()) {
+    // 2) Footer gating:
+    //    - Hide during restore window → no flash
+    //    - Hide on Rebel (base contract known)
+    if (foot){
+      if (restoring()){
         foot.visible = false;
       } else {
         const cc = String(baseObj()?._tokenContract || '').toLowerCase();
-        foot.visible = !!cc && cc !== REBEL_CONTRACT;
+        foot.visible = !!cc && cc !== REBEL_CONTRACT;  // friends show, Rebel hides
       }
       quarantine(foot);
     }
 
-    // Keep BG non-interactive and index 0
-    const bg = all.find(isBg);
-    if (bg) {
-      bg.selectable=false; bg.evented=false; bg.hasControls=false;
-      try { C().moveTo(bg, 0); } catch(_) {}
-    }
+    // 3) Watermark always-on-top (under ID/footer): keep visible state from admin/wallet,
+    //    but enforce stacking so it never sits under user content → consistent look
+    if (wm) quarantine(wm);
 
-    // Stable stacking:
-    //  BG(0) → BASE(1) → users → FOOTER (if visible) → WM (anchored just above base) → ID top
-    const base = baseObj();
-    const users = all.filter(o => !(isBg(o)||isBase(o)||isFooter(o)||isWM(o)||isID(o)));
-    let i = 0;
-    if (bg)   C().moveTo(bg,   i++);
-    if (base) C().moveTo(base, i++);
-    users.forEach(o => C().moveTo(o, i++));
-    if (foot && foot.visible !== false) C().moveTo(foot, i++);
-    if (wm   && wm.visible   !== false) C().moveTo(wm,   i++);  // anchored below user content
-    const id = all.find(isID);
-    if (id && id.visible !== false) C().moveTo(id, i++);        // absolute top
+    try {
+      // Order: bring WM to top (then footer if visible), then ID absolutely top
+      if (wm   && wm.visible   !== false) c.bringToFront(wm);
+      if (foot && foot.visible !== false) c.bringToFront(foot);
+      const id = all.find(isID);
+      if (id && id.visible !== false) c.bringToFront(id);
+    } catch(_){}
 
-    try { C().requestRenderAll(); } catch(_) {}
+    try { c.requestRenderAll(); } catch(_) {}
   }
 
-  // Throttled scheduler
-  let pending = false;
-  function schedule() {
-    if (pending) return;
-    pending = true;
-    setTimeout(() => { pending = false; sanitize(); }, 30);
-  }
-
+  // Hide footer BEFORE a restoring frame draws → prevents a one-frame flash
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmFooterFixShimV4) return; c.__raWmFooterFixShimV4 = true;
+    if (c.__raWmFooterFixShimV5) return; c.__raWmFooterFixShimV5 = true;
 
-    // Hide footer BEFORE each draw while restoring → no flash
     c.on?.('before:render', () => {
       if (!restoring()) return;
       const all = c.getObjects ? c.getObjects() : [];
       all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
     });
 
-    // After draw / changes, keep sys tidy
+    // After draw / object churn, keep sys tidy + watermark top
+    let pending=false;
+    const schedule = ()=>{ if (pending) return; pending=true; setTimeout(()=>{ pending=false; sanitize(); }, 30); };
+
     c.on?.('after:render', () => { if (restoring()) schedule(); });
     c.on?.('object:added',    schedule);
     c.on?.('object:modified', schedule);
@@ -8197,7 +8197,7 @@ window.raDump = () => {
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
       .forEach(ev => document.addEventListener(ev, schedule));
 
-    // Poll the restore flag briefly; keeps footer hidden across the entire window
+    // Poll briefly; keeps footer hidden across the whole restore window
     const iv = setInterval(() => {
       if (!C()) { clearInterval(iv); return; }
       if (restoring()) schedule();
