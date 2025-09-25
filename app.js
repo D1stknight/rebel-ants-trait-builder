@@ -8487,3 +8487,176 @@ window.raDump = () => {
     wire();
   }
 })();
+
+/* ===== RA_WM_ENFORCER_V8 — uploads show ring; tokens hide ring; no flicker; seat above base ===== */
+;(() => {
+  if (window.__RA_WM_ENFORCER_V8__) return;
+  window.__RA_WM_ENFORCER_V8__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // recognizers
+  const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true || o._raWatermark === true || o._wm));
+  const isBase = o => !!(o && o._isBase);
+
+  // admin-tuned faint/size, with safe defaults
+  const faintOpacity = () =>
+    (typeof window.__RA_WM_ADMIN_OPACITY === 'number') ? window.__RA_WM_ADMIN_OPACITY : 0.18;
+
+  const targetPct = () => {
+    const p = (typeof window.__RA_WM_TARGET_PCT === 'number') ? window.__RA_WM_TARGET_PCT : 0.28;
+    return Math.max(0.05, Math.min(1, p));
+  };
+
+  const isHolder = () => {
+    const s = window.RA_HOLDER_STATE || {};
+    return !!(s.hasRebel || s.hasFriend);
+  };
+
+  function seatAboveBase(wm, c){
+    try{
+      const objs = c.getObjects() || [];
+      const base = objs.find(isBase);
+      if (!base) return;
+      const baseZ = objs.indexOf(base);
+      const target = Math.min(objs.length - 1, baseZ + 1);
+      c.moveTo(wm, target);
+    }catch(_){}
+  }
+
+  function scaleToCanvas(wm, c){
+    try{
+      const cw = c.getWidth(), ch = c.getHeight();
+      const natW = wm.width || 1;
+      const sc = (cw * targetPct()) / Math.max(1, natW);
+      wm.scaleX = sc; wm.scaleY = sc;
+      wm.left = cw/2; wm.top = ch/2;
+      wm.setCoords();
+    }catch(_){}
+  }
+
+  function hideRing(c){
+    c = c || C(); if (!c) return;
+    let changed = false;
+    (c.getObjects()||[]).forEach(o => { if (isWM(o) && o.visible !== false) { o.visible = false; changed = true; } });
+    if (changed) { try { c.requestRenderAll(); } catch(_) {} }
+  }
+
+  function dedupeRing(c){
+    c = c || C(); if (!c) return;
+    const wms = (c.getObjects()||[]).filter(isWM);
+    if (wms.length > 1){
+      const keep = wms[wms.length - 1];
+      wms.slice(0, -1).forEach(o => { try { c.remove(o); } catch(_) {} });
+      return keep;
+    }
+    return wms[0] || null;
+  }
+
+  function ensureRing(c){
+    c = c || C(); if (!c) return;
+
+    // holders see NO ring
+    if (isHolder()) { hideRing(c); return; }
+
+    // ensure single instance
+    let wm = dedupeRing(c);
+
+    if (!wm){
+      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+      fabric.Image.fromURL(src, img => {
+        if (!img) return;
+        img._raWMCenter = true; img._isWatermark = true; img._raSys = true;
+        img.excludeFromExport = true;
+        img.selectable = false; img.evented = false; img.hasControls = false;
+        img.objectCaching = false;
+        img.opacity = faintOpacity();
+
+        scaleToCanvas(img, c);
+        c.add(img);
+        seatAboveBase(img, c);
+        try { c.requestRenderAll(); } catch(_) {}
+      }, { crossOrigin: 'anonymous' });
+      return;
+    }
+
+    // make visible, sized, and seated in the right z spot
+    wm.visible = true;
+    scaleToCanvas(wm, c);
+    seatAboveBase(wm, c);
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  // ——— Flicker guard for tokens ———
+  let lastBaseAt = 0;
+  let lastBaseWasToken = false;
+  const looksToken = b => !!(b && (b._tokenContract || b._raBaseSig || b._tokenChain));
+
+  function onBaseAdded(o, c){
+    lastBaseAt = Date.now();
+    lastBaseWasToken = looksToken(o);
+
+    if (lastBaseWasToken){
+      // hide immediately and again next frame
+      hideRing(c);
+      requestAnimationFrame(() => hideRing(c));
+    } else {
+      // non-token upload: create/show ring now and once more next frame
+      ensureRing(c);
+      requestAnimationFrame(() => ensureRing(c));
+    }
+  }
+
+  function onAdded(e){
+    const c = e?.target?.canvas || C(); if (!c) return;
+    const o = e?.target;
+    if (o && isBase(o)) onBaseAdded(o, c);
+  }
+
+  function beforeRender(){
+    // suppress a single-frame flash right after a token base appears
+    if (lastBaseWasToken && (Date.now() - lastBaseAt) < 300) hideRing();
+  }
+
+  function onResize(){
+    const c = C(); if (!c) return;
+    const wm = dedupeRing(c);
+    if (wm){ scaleToCanvas(wm, c); seatAboveBase(wm, c); try { c.requestRenderAll(); } catch(_) {} }
+  }
+
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmEnforcerV8) return; c.__raWmEnforcerV8 = true;
+
+    // object lifecycle
+    c.on('object:added', onAdded);
+    c.on('before:render', beforeRender);
+
+    // keep seated after user churn
+    ['object:removed','object:modified','selection:created','selection:updated','mouse:up']
+      .forEach(ev => c.on(ev, () => ensureRing(c)));
+
+    // admin/wallet signals
+    ['ra-holder-update','ra-collection-change','ra-wm-recalc']
+      .forEach(ev => document.addEventListener(ev, () => ensureRing()));
+
+    // resize observer (canvas size dropdown)
+    try{
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmEnforcerV8Resize){
+        c.__raWmEnforcerV8Resize = true;
+        new ResizeObserver(onResize).observe(el);
+      }
+    }catch(_){}
+
+    // initial pass: if a base is already present
+    const base = (c.getObjects()||[]).find(isBase);
+    if (base) { onBaseAdded(base, c); }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
