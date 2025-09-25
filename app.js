@@ -100,135 +100,9 @@ function normalize(u){
   return u;
 }
 
-/* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
-;(() => {
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Strict detectors
-  const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
-  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
-  const isBg   = o => !!(o && o._isBgRect);
-
-  function isHolder() {
-    const s = (window.RA_HOLDER_STATE || {});
-    return !!(s.hasRebel || s.hasFriend);
-  }
-
-  // Faintness (admin can override by setting window.__RA_WM_ADMIN_OPACITY)
-  function faintOpacity() {
-    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
-      ? window.__RA_WM_ADMIN_OPACITY
-      : 0.18; // default faint
-  }
-
-  // Target size (% of canvas width) — admin can override with window.__RA_WM_TARGET_PCT
-  function targetPct() {
-    const pct = (typeof window.__RA_WM_TARGET_PCT === 'number')
-      ? window.__RA_WM_TARGET_PCT
-      : 0.28; // default 28% of canvas width
-    return Math.max(0.05, Math.min(1, pct));
-  }
-
-  function scaleRingToCanvas(wm) {
-    const c = C(); if (!c || !wm) return;
-    const cw = c.getWidth();
-    const natW = wm.width || 1;
-    const sc = (cw * targetPct()) / Math.max(1, natW);
-    wm.scaleX = sc; wm.scaleY = sc;
-    wm.left = cw / 2; wm.top = c.getHeight() / 2;
-    wm.setCoords();
-  }
-
-  // Seat WM just above BASE (keeps faint look); if base not present, seat above BG
-  function seatAboveBase(wm) {
-    const c = C(); if (!c || !wm) return;
-    try {
-      const all  = c.getObjects() || [];
-      const base = all.find(isBase);
-      const bgIx = all.findIndex(isBg);
-      let targetZ = Math.min(all.length - 1, (bgIx >= 0 ? bgIx : -1) + 1);
-      if (base) {
-        const baseZ = all.indexOf(base);
-        targetZ = Math.min(all.length - 1, baseZ + 1);
-      }
-      const curZ = all.indexOf(wm);
-      if (curZ !== targetZ) c.moveTo(wm, targetZ);
-    } catch (_) {}
-  }
-
-  // Create/show ring watermark unless holder; otherwise hide it.
-  window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
-    const c = C(); if (!c) return;
-
-    // Holder: hide ring, keep footer
-    if (isHolder()) {
-      (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) o.visible = false; });
-      try { c.requestRenderAll(); } catch(_) {}
-      return;
-    }
-
-    // If ring exists → ensure visible, clamp faintness, scale + seat, render
-    let wm = (c.getObjects?.()||[]).find(isWM);
-    if (wm) {
-      wm.visible = true;
-      wm.opacity = faintOpacity();
-      scaleRingToCanvas(wm);
-      seatAboveBase(wm);
-      try { c.requestRenderAll(); } catch(_) {}
-      return;
-    }
-
-    // Create new ring from WM_SRC (must be exported from CONFIG)
-    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
-    fabric.Image.fromURL(src, img => {
-      if (!img) return;
-      img.set({
-        originX: 'center', originY: 'center',
-        selectable: false, evented: false, hasControls: false,
-        objectCaching: false, opacity: faintOpacity()
-      });
-      // Tag so v7 recognizes it as watermark
-      img._raWMCenter = true;
-      img._isWatermark = true;
-      img._raSys = true; img.excludeFromExport = true;
-
-      // Size & position
-      scaleRingToCanvas(img);
-      c.add(img);
-
-      // Seat immediately so it isn’t hidden under the base
-      seatAboveBase(img);
-
-      // Double-tap re-seat after other listeners (rare race protection)
-      requestAnimationFrame(() => { seatAboveBase(img); try { c.requestRenderAll(); } catch(_) {} });
-
-      try { c.requestRenderAll(); } catch(_) {}
-    }, { crossOrigin: 'anonymous' });
-  };
-
-  // React to wallet status (show/hide ring)
-  document.addEventListener('ra-holder-update', () => {
-    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
-  });
-
-  // Keep ring sized/positioned on canvas resizes
-  try {
-    const c = C();
-    const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
-    if (el && !c.__raNonTokenRingResizeObs) {
-      c.__raNonTokenRingResizeObs = true;
-      new ResizeObserver(() => {
-        const wm = (c.getObjects?.()||[]).find(isWM);
-        if (wm) {
-          wm.opacity = faintOpacity();
-          scaleRingToCanvas(wm);
-          seatAboveBase(wm);
-          try { c.requestRenderAll(); } catch(_) {}
-        }
-      }).observe(el);
-    }
-  } catch(_) {}
-})();
+/* [REMOVED duplicate Non-token ring watermark helper] */
+;
 /* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
 ;(() => {
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -397,20 +271,6 @@ function normalize(u){
       return true;
     } catch(_) { return false; }
   }
-
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
 
   function wire(){
     const card = findTokenIdCard();
@@ -3249,20 +3109,6 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
   let burstTimer = null;
   function schedulePush(label){ if (isMuted()) return; if (burstTimer) return; burstTimer = setTimeout(()=>{ burstTimer=null; push(label); }, 40); }
 
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
     c = C(); if (!c) return defer(wire, 120);
     ensureUI();
@@ -4049,20 +3895,6 @@ const shouldShow =
     (c.getObjects() || []).forEach(centerIfMoved);
   }
 
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
     const c = C(); if (!c) { setTimeout(wire, 120); return; }
 
@@ -4630,20 +4462,6 @@ tile.appendChild(cap);
     clearTimer = setTimeout(clearTop, S.lingerMs);
   }
 
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
   const c = C();
   if (!c) return setTimeout(wire, 120);
@@ -4662,7 +4480,7 @@ tile.appendChild(cap);
     c.on('selection:cleared', onEnd);
 
     // Clean on zoom/pan/resize (if your UI does that)
-    c.on('after:render', ()=>{/* keep last guides while dragging; cleared on mouse:up */});
+    c/* removed after:render hook to avoid loops */ // .on('after:render', ()=>{/* keep last guides while dragging; cleared on mouse:up */});
     window.addEventListener('resize', clearTop, {passive:true});
     window.addEventListener('orientationchange', ()=>setTimeout(clearTop,150), {passive:true});
   }
@@ -4829,20 +4647,6 @@ tile.appendChild(cap);
       });
     }
   }
-
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
 
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
@@ -5069,20 +4873,6 @@ tile.appendChild(cap);
   })();
 
   // 3) Follow canvas changes: apply whenever something is added/modified
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
     const c = C(); if (!c || c.__raWmFollow) { if (!c) setTimeout(wire, 150); return; }
     c.__raWmFollow = true;
@@ -5351,20 +5141,6 @@ tile.appendChild(cap);
     try { c.bringToFront(wm); } catch(_){}
     c.requestRenderAll();
   }
-
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
 
   function wire(){
     const c = C(); if (!c) { setTimeout(wire, 150); return; }
@@ -7145,20 +6921,6 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   // --- wire everything
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
     const card = findCard(); if (!card) return false;
 
@@ -7354,20 +7116,6 @@ async function loadTokenFromCollection(tokenId, col){
     hint._t = setTimeout(()=>{ hint.style.display = 'none'; }, 1800);
   }
 
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
     const card = findCustomTextCard(); if (!card){ setTimeout(wire, 300); return; }
     const ctl  = findCurvedControl(card); if (!ctl){ setTimeout(wire, 300); return; }
@@ -7438,20 +7186,6 @@ async function loadTokenFromCollection(tokenId, col){
     try { box.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
     try { box.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
   }
-
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
 
   function wire(){
     const card = findCustomTextCard(); if (!card){ setTimeout(wire, 300); return; }
@@ -8604,20 +8338,6 @@ window.raDump = () => {
     }
   }
 
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
     if (c.__raWmFooterFixShimV7rBound) return;
@@ -8786,20 +8506,6 @@ window.raDump = () => {
   }
 
   // ——— Wiring ———
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
     if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
@@ -8833,338 +8539,6 @@ window.raDump = () => {
   }
 })();
 
-/* ===== RA_WM_DEDUPE_ENFORCE_v3 — single WM, correct visibility, no overlay interference ===== */
-;(() => {
-  if (window.__RA_WM_DEDUPE_ENFORCE_V3__) return;
-  window.__RA_WM_DEDUPE_ENFORCE_V3__ = true;
 
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase in data
-
-  const isBase   = o => !!(o && o._isBase);
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm));
-
-  const holder = () => {
-    const s = window.RA_HOLDER_STATE || {};
-    return !!(s.hasRebel || s.hasFriend);
-  };
-
-  function mode(c) {
-    const objs = (c.getObjects?.() || []);
-    const base = objs.find(isBase);
-    if (!base) return 'empty';
-    const contract = String(base._tokenContract || '').toLowerCase();
-    if (!contract) return 'manual';
-    return (contract === REBEL) ? 'rebel' : 'friend';
-  }
-
-  function fix() {
-    const c = C(); if (!c) return;
-
-    const objs = (c.getObjects?.() || []);
-    const base = objs.find(isBase);
-    const foot = objs.find(isFooter);
-    let   wms  = objs.filter(isWM);
-
-    // --- De-dupe: keep the center ring and remove/hide the rest ---
-    if (wms.length > 1) {
-      const keep = wms.find(w => w._raWMCenter) || wms[0];
-      wms.forEach(w => { if (w !== keep) { try { c.remove(w); } catch(_) { w.visible = false; } } });
-      wms = keep ? [keep] : [];
-    }
-    const wm = wms[0] || null;
-
-    // --- Decide visibility ---
-    const m = mode(c);
-    let showRing = false, showFoot = false;
-
-    if (m === 'manual') { showRing = true;  showFoot = true;  }
-    if (m === 'friend') { showRing = true;  showFoot = true;  }
-    if (m === 'rebel')  { showRing = false; showFoot = false; }
-
-    // Wallet override: holders get no ring, footer stays on (branding)
-    if (holder()) { showRing = false; showFoot = true; }
-
-    // --- Apply & keep ordering stable (ring just above base) ---
-    if (wm) {
-      wm.visible = !!showRing;
-      try {
-        const baseZ = objs.indexOf(base);
-        if (base && baseZ >= 0) c.moveTo(wm, Math.min(objs.length - 1, baseZ + 1));
-        wm.selectable = wm.evented = wm.hasControls = false;
-      } catch(_) {}
-    }
-    if (foot) {
-      foot.visible = !!showFoot;
-      foot.selectable = false; foot.evented = false; foot.hasControls = false;
-    }
-
-    try { c.requestRenderAll(); } catch(_) {}
-  }
-
-  function wire() {
-    const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmDedupeV3) return; c.__raWmDedupeV3 = true;
-
-    // Run after every meaningful change
-    c.on?.('after:render',       fix);
-    c.on?.('object:added',       fix);
-    c.on?.('object:removed',     fix);
-    c.on?.('object:modified',    fix);
-    c.on?.('selection:created',  fix);
-    c.on?.('selection:updated',  fix);
-
-    // React to higher-level signals
-    document.addEventListener('ra-collection-change', fix);
-    document.addEventListener('ra-wm-recalc',         fix);
-    document.addEventListener('ra-holder-update',     fix);
-
-    // First pass
-    fix();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once: true });
-  } else {
-    wire();
-  }
-})();
-
-
-/* ===== RA_WM_CTRL_V10 — single ring WM, stable sizing, correct visibility, no overlay interference ===== */
-// debug: window.__debugWM() to inspect state
-;(() => {
-  if (window.__RA_WM_CTRL_V10__) return;
-  window.__RA_WM_CTRL_V10__ = true;
-
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  // Contracts (lowercase)
-  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
-
-  // --- helpers ---
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isBase   = o => !!(o && o._isBase);
-  const isBg     = o => !!(o && o._isBgRect);
-
-  // center-ring watermark recognizer: our own flag OR obvious center ring (not small corner stamps)
-  const isWMCentre = o => !!(o && (o._raWMCenter === true || (o._isWatermark === true && !o.raWM && !o.raPos)));
-  const isSmallWM  = o => !!(o && (o.raWM === true || typeof o.raPos === 'string')); // corner stamps
-
-  function objects(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
-  function baseObj(){ return objects().find(isBase) || null; }
-
-  function holderState(){
-    const s = window.RA_HOLDER_STATE || {};
-    return {
-      hasRebel: !!s.hasRebel,
-      hasFriend: !!s.hasFriend,
-      any: !!(s.hasRebel || s.hasFriend)
-    };
-  }
-
-  function currentContext(){
-    const base = baseObj();
-    const contract = String(base?._tokenContract || '').toLowerCase();
-    if (!base) return { kind:'none', contract:'' };
-    if (contract) {
-      if (contract === REBEL_CONTRACT) return { kind:'rebelToken', contract };
-      return { kind:'friendToken', contract };
-    }
-    return { kind:'manual', contract:'' };
-  }
-
-  function faintOpacity(){
-    // allow admin to override
-    if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return Math.max(0, Math.min(1, window.__RA_WM_ADMIN_OPACITY));
-    return 0.18;
-  }
-
-  function scaleRingToCanvas(wm){
-    const c=C(); if (!c || !wm) return;
-    const cw = c.getWidth(), ch = c.getHeight();
-    const natW = wm.width || 1;
-    const pct = (typeof window.__RA_WM_TARGET_PCT === 'number') ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT)) : 0.28;
-    const sc = (cw * pct) / Math.max(1, natW);
-    wm.scaleX = wm.scaleY = sc;
-    wm.left = cw/2; wm.top = ch/2;
-    wm.setCoords();
-  }
-
-  function ensureSingleRing(){
-    const c=C(); if (!c) return null;
-    const all = objects();
-
-    // purge any accidental duplicate center rings (keep the topmost)
-    const centres = all.filter(isWMCentre);
-    if (centres.length > 1){
-      // sort by z (index), keep highest
-      const withIndex = centres.map(o=>({o, i: all.indexOf(o)})).sort((a,b)=>a.i-b.i);
-      const keep = withIndex.pop().o;
-      withIndex.forEach(({o})=>{ try{ c.remove(o); }catch(_){ } });
-      // re-fetch
-    }
-
-    let wm = (c.getObjects?.()||[]).find(isWMCentre);
-
-    if (!wm){
-      // create one
-      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
-      try{
-        fabric.Image.fromURL(src, img=>{
-          if (!img) return;
-          img.set({
-            originX:'center', originY:'center',
-            selectable:false, evented:false, hasControls:false,
-            objectCaching:false, opacity:faintOpacity(),
-            perPixelTargetFind:false, hoverCursor:'default'
-          });
-          img._raWMCenter = true;
-          img._isWatermark = true;
-          img._raSys = true;
-          img.excludeFromExport = true;
-
-          scaleRingToCanvas(img);
-          c.add(img);
-
-          // seat just above base for consistent faint look
-          try{
-            const base = baseObj();
-            if (base){
-              const all2 = objects();
-              const baseZ = all2.indexOf(base);
-              c.moveTo(img, Math.min(all2.length-1, baseZ+1));
-            }
-          }catch(_){}
-          try { c.requestRenderAll(); } catch(_){}
-        }, { crossOrigin:'anonymous' });
-      }catch(_){}
-      return null;
-    }
-
-    // normalize properties each pass
-    wm._raWMCenter = true;
-    wm._isWatermark = true;
-    wm._raSys = true;
-    wm.excludeFromExport = true;
-    wm.selectable = false; wm.evented=false; wm.hasControls=false;
-    wm.perPixelTargetFind=false; wm.hoverCursor='default';
-    wm.opacity = faintOpacity();
-    scaleRingToCanvas(wm);
-
-    // place just above base
-    try{
-      const base = baseObj();
-      if (base){
-        const all2 = objects();
-        const baseZ = all2.indexOf(base);
-        c.moveTo(wm, Math.min(all2.length-1, baseZ+1));
-      }
-    }catch(_){}
-    return wm;
-  }
-
-  function enforceFooterAndRingVisibility(){
-    const c=C(); if (!c) return;
-    const ctx = currentContext();
-    const h = holderState();
-    const all = objects();
-
-    // footers
-    const foot = all.find(isFooter);
-    if (foot){
-      // Rebel: never show; Friend + Manual: show
-      const wantFoot = (ctx.kind === 'friendToken' || ctx.kind === 'manual');
-      foot.visible = !!wantFoot;
-      // footer is UI → keep above overlays
-      try { c.bringToFront(foot); } catch(_){}
-    }
-
-    // small corner watermarks inside groups must never "show" as independent objects (but we won't tear groups)
-    all.forEach(o => { if (isSmallWM(o)) { try { o.visible = true; } catch(_){ } } });
-
-    // ring
-    const wm = ensureSingleRing();
-    if (!wm) { try{ c.requestRenderAll(); }catch(_){ } return; }
-
-    let showRing = true;
-    if (ctx.kind === 'rebelToken') {
-      showRing = !h.hasRebel; // holders of Rebel: no ring
-    } else if (ctx.kind === 'friendToken') {
-      showRing = !h.hasFriend; // holders of Friend: no ring
-    } else if (ctx.kind === 'manual') {
-      showRing = !h.any; // any holder removes ring on manual uploads
-    }
-
-    wm.visible = !!showRing;
-
-    // seat above base again to be safe
-    try{
-      const base = baseObj();
-      if (base){
-        const all2 = objects();
-        const baseZ = all2.indexOf(base);
-        c.moveTo(wm, Math.min(all2.length-1, baseZ+1));
-      }
-    }catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  // --- wire once ---
-
-  // tiny debug helper
-  window.__debugWM = function(){
-    try{
-      const c=C(); const all=(c?.getObjects?.()||[]);
-      const centres = all.filter(isWMCentre).map(o=>({z: all.indexOf(o), vis:o.visible, sc:o.scaleX, w:o.width, h:o.height}));
-      console.log('wm centres:', centres);
-      const base = baseObj(); const foot = all.find(isFooter);
-      console.log('base:', base ? {z:all.indexOf(base), contract:(base._tokenContract||'')} : null,
-                  'footer:', foot ? {z:all.indexOf(foot), vis:foot.visible} : null,
-                  'ctx:', currentContext(), 'holder:', holderState());
-    }catch(e){ console.warn(e); }
-  };
-
-  function wire(){
-    const c=C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmCtrlV10) return; c.__raWmCtrlV10 = true;
-
-    const reflow = ()=>{ try{ enforceFooterAndRingVisibility(); }catch(_){ } };
-
-    // run on relevant events
-    c.on?.('object:added', (e)=>{
-      const t=e?.target;
-      // when a base arrives, or at init, recalc
-      if (t && (t._isBase || t._raWMCenter || t._raBrandFooter)) reflow();
-      // also, if overlay was added, just ensure ring sizing/order; postpone to next tick
-      setTimeout(reflow, 0);
-    });
-    c.on?.('object:removed', reflow);
-    c.on?.('object:modified', reflow);
-    c.on?.('after:render',  ()=>{ /* keep scale stable on resize */ reflow(); });
-
-    document.addEventListener('ra-wm-recalc', reflow);
-    document.addEventListener('ra-collection-change', reflow);
-    document.addEventListener('ra-holder-update', reflow);
-
-    // also watch canvas element size
-    try{
-      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmCtrlV10RO){
-        c.__raWmCtrlV10RO = true;
-        new ResizeObserver(()=> reflow()).observe(el);
-      }
-    }catch(_){}
-
-    // initial
-    reflow();
-  }
-
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', wire, { once:true });
-  } else {
-    wire();
-  }
-})();
+/* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
+;
