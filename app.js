@@ -1,33 +1,31 @@
-  /* ===============================
-(function(){
-     CONFIG
-     =============================== */
-  ;(() => {
-    // Prefer ?contract=… or window._RA_CONTRACT, else default to Rebel Ants
-    const CONTRACT =
-      new URLSearchParams(location.search).get('contract')
-      || (window._RA_CONTRACT && String(window._RA_CONTRACT))
-      || "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+ /* ===============================
+   CONFIG
+   =============================== */
+;(() => {
+  // Prefer ?contract=… or window._RA_CONTRACT, else default to Rebel Ants
+  const CONTRACT =
+    new URLSearchParams(location.search).get('contract')
+    || (window._RA_CONTRACT && String(window._RA_CONTRACT))
+    || "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
 
-    const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
+  const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
-    // ---- ApeChain RPC default (only if not provided elsewhere)
-    if (!window.__APECHAIN_RPC) {
-      window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
-    }
+  // ---- ApeChain RPC default (only if not provided elsewhere)
+  if (!window.__APECHAIN_RPC) {
+    window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
+  }
 
-    // ---- Watermark...
-    const __wmQS = new URLSearchParams(location.search).get('wm');
-    let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
+  // ---- Watermark...
+  const __wmQS = new URLSearchParams(location.search).get('wm');
+  let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
 
-    (function checkWatermark(){
-      const test = new Image();
-      test.crossOrigin = "anonymous";
-      test.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback
-      test.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now();
-    })();
-  })();   // closes inner arrow IIFE
-})();     // closes the outer IIFE  ✅
+  (function checkWatermark(){
+    const test = new Image();
+    test.crossOrigin = "anonymous";
+    test.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback
+    test.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now();
+  })();
+})(); // ← single IIFE close
 
   // ===============================
   //  FABRIC DEFAULTS
