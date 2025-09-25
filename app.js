@@ -8051,10 +8051,10 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_TOP_SHIM_V2 — footer/watermark quarantine + dedupe + top-order (undo-safe) ===== */
+/* ===== RA_WM_FOOTER_TOP_SHIM_V3 — footer default hidden until base known; watermark/foot dedupe/top ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_TOP_SHIM_V2__) return;
-  window.__RA_WM_FOOTER_TOP_SHIM_V2__ = true;
+  if (window.__RA_WM_FOOTER_TOP_SHIM_V3__) return;
+  window.__RA_WM_FOOTER_TOP_SHIM_V3__ = true;
 
   const getC = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
@@ -8063,7 +8063,6 @@ window.raDump = () => {
     '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'
   ]);
 
-  // Lightweight type detectors
   const isBg   = o => !!(o && o._isBgRect);
   const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
   const isID   = o => !!(o && o._raTokenId);
@@ -8079,25 +8078,23 @@ window.raDump = () => {
     return w*h;
   };
 
-  // Pick ONE and mark the rest invisible (no remove → no history churn)
-  function keepOneHideRest(arr, chooser){
-    if (!arr.length) return null;
-    const keep = chooser(arr);
-    arr.forEach(o=>{
-      quarantine(o);
-      if (o !== keep) o.visible = false;
-    });
-    return keep;
-  }
-
-  // Mark footer/WM as system, exclude from export so Undo never serializes them
   function quarantine(o){
     if (!o) return;
     o._raSys = true;
-    if (!isID(o)) o.excludeFromExport = true;
+    if (!isID(o)) o.excludeFromExport = true; // keep sys out of undo snapshots
     if (isFooter(o) || isWM(o)) {
       o.selectable=false; o.evented=false; o.hasControls=false;
     }
+  }
+
+  function keepOneHideRest(arr, chooser){
+    if (!arr.length) return null;
+    const keep = chooser(arr);
+    arr.forEach(o => {
+      quarantine(o);
+      if (o !== keep) o.visible = false; // hide extras, no remove → no history churn
+    });
+    return keep;
   }
 
   function currentBaseMeta(c){
@@ -8114,7 +8111,7 @@ window.raDump = () => {
     const c = getC(); if (!c) return;
     const objs = c.getObjects ? c.getObjects() : [];
 
-    // Mark any footer/WM we find as system & excluded
+    // Mark all footers/WM as system & excluded
     objs.forEach(o => { if (isFooter(o) || isWM(o)) quarantine(o); });
 
     // Dedupe to exactly one footer & one watermark
@@ -8125,17 +8122,19 @@ window.raDump = () => {
       arr => arr.slice().sort((a,b)=>area(b)-area(a))[0]
     );
 
-    // Gating: Rebel -> footer hidden, Friends -> footer shown
+    // Footer gating
     const meta = currentBaseMeta(c);
-    const isRebel = meta.contract && REBEL_CONTRACTS.has(meta.contract);
+    const hasContract = !!meta.contract;
+    const isRebel = hasContract && REBEL_CONTRACTS.has(meta.contract);
+
     if (foot) {
-      foot.visible = !isRebel;   // NEVER show footer on Rebel
+      // default hidden until we know the base contract
+      foot.visible = hasContract ? !isRebel : false;
       quarantine(foot);
     }
     if (wm) quarantine(wm);
 
-    // Keep order top-most without disturbing undo stack:
-    // Bring footer then WM to front (if visible), then Token ID label on absolute top
+    // Order: keep sys on top, but let ID be absolute top if present
     try {
       if (foot && foot.visible !== false) c.bringToFront(foot);
       if (wm   && wm.visible   !== false) c.bringToFront(wm);
@@ -8146,7 +8145,6 @@ window.raDump = () => {
     try { c.requestRenderAll(); } catch(_){}
   }
 
-  // Run a few frames after changes/restores to catch multi-frame settles
   function schedule(times=2, delay=60){
     let n=0; const step=()=>{ sanitize(); if (++n<times) setTimeout(step, delay); };
     setTimeout(step, 0);
@@ -8154,19 +8152,16 @@ window.raDump = () => {
 
   function wire(){
     const c = getC(); if (!c) { setTimeout(wire, 120); return; }
-    if (c.__raWmFooterTopShim) return; c.__raWmFooterTopShim = true;
+    if (c.__raWmFooterTopShimV3) return; c.__raWmFooterTopShimV3 = true;
 
-    // React to object churn (adding overlays, moving text, undo restores)
     c.on('object:added',    ()=> schedule());
     c.on('object:modified', ()=> schedule());
     c.on('object:removed',  ()=> schedule());
 
-    // Respect your admin/wallet signals (your core blocks fire these)
     document.addEventListener('ra-wm-recalc',        ()=> schedule());
     document.addEventListener('ra-holder-update',    ()=> schedule());
     document.addEventListener('ra-collection-change',()=> schedule());
 
-    // First pass on boot
     schedule(2,60);
   }
 
