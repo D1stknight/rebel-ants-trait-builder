@@ -8259,3 +8259,77 @@ window.raDump = () => {
     wire();
   }
 })();
+
+/* ===== RA_WM_DEDUPE_SHIM_v1 — keep a single WM on top; no scale/opacity changes ===== */
+;(() => {
+  if (window.__RA_WM_DEDUPE_SHIM_V1__) return;
+  window.__RA_WM_DEDUPE_SHIM_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Match the same tags your code uses for the watermark
+  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
+  const isID = o => !!(o && o._raTokenId);
+
+  const area = o => {
+    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
+    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
+    return w*h;
+  };
+
+  function dedupeAndTop() {
+    const c = C(); if (!c) return;
+    const objs = c.getObjects?.() || [];
+    const wms = objs.filter(isWM);
+    if (!wms.length) return;
+
+    // Keep the largest one (most likely the intended WM), hide the rest (no remove → no history churn)
+    const keep = wms.slice().sort((a,b)=>area(b)-area(a))[0];
+    wms.forEach(o => {
+      o._raSys = true;                   // treat as system
+      o.excludeFromExport = true;        // keep out of undo snapshots
+      o.selectable = false; o.evented = false; o.hasControls = false;
+      if (o !== keep) o.visible = false; // hide extras only
+    });
+
+    // Bring the keeper to top; let the Token-ID label sit above if present
+    try {
+      c.bringToFront(keep);
+      const id = objs.find(isID);
+      if (id && id.visible !== false) c.bringToFront(id);
+    } catch(_) {}
+
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  function wire() {
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmDedupeShimV1) return; c.__raWmDedupeShimV1 = true;
+
+    // Run once shortly after boot (covers first load)
+    setTimeout(dedupeAndTop, 60);
+
+    // On canvas churn, just dedupe + keep on top (no scale/opacity changes here)
+    c.on?.('object:added',    dedupeAndTop);
+    c.on?.('object:removed',  dedupeAndTop);
+    c.on?.('object:modified', dedupeAndTop);
+    c.on?.('selection:created', dedupeAndTop);
+    c.on?.('selection:updated', dedupeAndTop);
+    c.on?.('after:render',    dedupeAndTop);
+
+    // On canvas element resize (700/900/1024/1200), dedupe immediately
+    try {
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmDedupeResizeObs) {
+        c.__raWmDedupeResizeObs = true;
+        new ResizeObserver(() => dedupeAndTop()).observe(el);
+      }
+    } catch(_) {}
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
