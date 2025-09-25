@@ -8072,137 +8072,125 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7b — BG lock; footer no-flash on Rebel; WM always just above base (faint) ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7 — WM just above base on all edits; footer no-flash on Rebel ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V7B__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V7B__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V7__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V7__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Rebel contract(s) — lowercase
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
-  // detectors
+  const isFooter = o => !!(o && (o._raBrandFooter ||
+                        (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isWM     = o => !!(o && (o._raWMCenter || o._raWMOverlayFallback || o._isWatermark || o._raWatermark || o._wm));
   const isBg     = o => !!(o && o._isBgRect);
-  const isBase   = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
+  const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM     = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm || /watermark/i.test(o.name||'')));
 
-  // small grace after undo/redo JSON restore to prevent footer flash
-  let lastRestore = 0;
+  // Treat the short window after restore as "still restoring" to prevent footer flash
+  let lastRestoreSeen = 0;
   const restoring = () => {
-    if (window.__RA_RESTORING__) { lastRestore = Date.now(); return true; }
-    return (Date.now() - lastRestore) < 400;
+    if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
+    return (Date.now() - lastRestoreSeen) < 400;
   };
 
-  const objs = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
-
-  const area = o => {
-    const w=(o.getScaledWidth?o.getScaledWidth():(o.width||0)*(o.scaleX||1));
-    const h=(o.getScaledHeight?o.getScaledHeight():(o.height||0)*(o.scaleY||1));
-    return w*h;
-  };
-
-  // choose keeper, hide extras (no history churn)
-  function dedupeWM(list){
-    if (!list.length) return null;
-    const keep = list.slice().sort((a,b)=>area(b)-area(a))[0];
-    list.forEach(o=>{
-      o._raSys = true; o.excludeFromExport = true;
+  function quarantine(o){
+    if (!o) return;
+    o._raSys = true;
+    if (!isID(o)) o.excludeFromExport = true; // keep sys out of undo snapshots
+    if (isFooter(o) || isWM(o)) {
       o.selectable=false; o.evented=false; o.hasControls=false;
-      if (o !== keep) o.visible = false;
-    });
-    return keep;
+      o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+    }
   }
 
-  function lockBg(){
-    const c=C(); if (!c) return;
-    const bg = objs().find(isBg);
-    if (bg){
+  function objs(){ const c=C(); return c ? (c.getObjects?.()||[]) : []; }
+  function baseObj(){ return objs().find(isBase) || null; }
+
+  // IMMEDIATE z-order enforcement: runs synchronously on key events
+  function assertTopNow(){
+    const c = C(); if (!c) return;
+    const all = objs();
+
+    // Lock BG and keep at index 0
+    const bg = all.find(isBg);
+    if (bg) {
       bg.selectable=false; bg.evented=false; bg.hasControls=false;
       try { c.moveTo(bg, 0); } catch(_) {}
     }
-  }
 
-  function currentContract(){
-    const base = objs().find(isBase);
-    return String(base?._tokenContract||'').toLowerCase();
-  }
+    // Footer gating (hide while restoring and on Rebel)
+    const foot = all.find(isFooter);
+    const base = baseObj();
+    const cc = String(base?._tokenContract || '').toLowerCase();
 
-  // Core ordering: BG(0) → BASE(1) → users → FOOT (friends) → WM (just above base) → ID top
-  function enforceOrder(){
-    const c=C(); if (!c) return;
-
-    lockBg();
-
-    const all = objs();
-    const base = all.find(isBase) || null;
-    const foot = all.find(isFooter) || null;
-    const id   = all.find(isID) || null;
-    const wms  = all.filter(isWM);
-    const wm   = dedupeWM(wms); // keep one, hide extras
-
-    // footer gating (hide during restore; hide for Rebel; keep non-interactive)
     if (foot){
-      foot._raSys = true; foot.excludeFromExport = true;
-      foot.selectable=false; foot.evented=false; foot.hasControls=false;
-      const cc = currentContract();
-      foot.visible = !restoring() && (!!cc && cc !== REBEL_CONTRACT);
+      quarantine(foot);
+      if (restoring() || (cc && cc === REBEL_CONTRACT)) {
+        foot.visible = false;
+      }
     }
 
-    // seat WM just above BASE (keeps "faint" look, below user layers)
-    if (base && wm && wm.visible !== false){
-      const z = all.indexOf(base);
-      try { c.moveTo(wm, Math.min(all.length-1, z+1)); } catch(_){}
+    // Watermark: quarantine then seat JUST ABOVE BASE (faint), not at the top
+    const wm = all.find(isWM);
+    if (wm) {
+      quarantine(wm);
+      if (base && wm.visible !== false) {
+        const baseZ = all.indexOf(base);
+        try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
+      }
     }
 
-    // footer above WM if visible; ID absolutely top
     try {
+      // Footer above WM if visible (friends)
       if (foot && foot.visible !== false) c.bringToFront(foot);
-      if (id   && id.visible   !== false) c.bringToFront(id);
+      // Token-ID label absolutely top
+      const id = all.find(isID);
+      if (id && id.visible !== false) c.bringToFront(id);
     } catch(_){}
-
-    try { c.requestRenderAll(); } catch(_){}
   }
 
   function wire(){
-    const c=C(); if (!c) return setTimeout(wire,120);
-    if (c.__raWmFooterV7b) return; c.__raWmFooterV7b = true;
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmFooterFixShimV7) return; c.__raWmFooterFixShimV7 = true;
 
     // Hide footer BEFORE a restoring frame draws → no flash
     c.on?.('before:render', () => {
       if (!restoring()) return;
-      const list = objs();
-      const foot = list.find(isFooter);
-      if (foot && foot.visible !== false) foot.visible = false;
+      const all = objs();
+      all.forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
+      // Also assert order before draw (WM will be re-seated above base here too)
+      assertTopNow();
     });
 
-    // Re-assert order after draw and any churn
-    const tick = ()=> enforceOrder();
-    c.on?.('after:render',    tick);
-    c.on?.('object:added',    tick);
-    c.on?.('object:modified', tick);
-    c.on?.('object:removed',  tick);
-    c.on?.('selection:created', tick);
-    c.on?.('selection:updated', tick);
-    c.on?.('mouse:up', tick);
+    // Re-assert order immediately after each draw (covers resize/scale)
+    c.on?.('after:render', () => { assertTopNow(); });
 
-    // Admin/wallet signals that can affect footer/WM
+    // IMMEDIATE re-assert on all user churn
+    c.on?.('object:added',    assertTopNow);
+    c.on?.('object:modified', assertTopNow);
+    c.on?.('object:removed',  assertTopNow);
+    c.on?.('selection:created', assertTopNow);
+    c.on?.('selection:updated', assertTopNow);
+    c.on?.('mouse:up', assertTopNow);
+
+    // React to admin/wallet signals instantly
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, tick));
+      .forEach(ev => document.addEventListener(ev, assertTopNow));
 
-    // Also re-apply after canvas element resizes (700/900/1024/1200)
+    // Also react to canvas element resize (covers 900/1024/1200 changes)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmFooterResizeV7b) {
-        c.__raWmFooterResizeV7b = true;
-        new ResizeObserver(() => tick()).observe(el);
+      if (el && !c.__raWmResizeObs) {
+        c.__raWmResizeObs = true;
+        new ResizeObserver(() => { assertTopNow(); }).observe(el);
       }
     } catch(_){}
 
     // First pass
-    tick();
+    assertTopNow();
   }
 
   if (document.readyState==='loading'){
