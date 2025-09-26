@@ -9379,7 +9379,7 @@ document.addEventListener('ra-collection-change', (e) => {
       const bw = (b.getScaledWidth ? b.getScaledWidth() : b.width*(b.scaleX||1));
       return bw - aw; // descending; largest first
     })[0];
-    wms.forEach(o => { if (o !== keep) { try{ c.remove(o); }catch(_){ } });
+    wms.forEach(o => { if (o !== keep) { try { c.remove(o); } catch(_){ } } });
     try { keep.setCoords(); c.requestRenderAll(); } catch(_){}
   }
 
