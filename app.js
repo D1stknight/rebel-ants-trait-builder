@@ -9155,44 +9155,47 @@ document.addEventListener('ra-collection-change', (e) => {
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
 ;
 
-/* ===== WM CONSOLIDATION PHASE 1.2c (INTERIM MANAGER) =====
-   Replaces 1.2b. Enforces updated rule matrix:
-     - Disconnected: always ring + footer (token or upload)
-     - Connected + Rebel token: no ring, no footer
-     - Connected + Friend token:
-         * If user owns ANY collection (rebel or friend): footer only
-         * If user owns NONE: ring + footer
-     - Connected + Upload:
-         * If user owns ANY: (configurable) default ring + footer
-         * If user owns NONE: ring + footer
-   Additional:
-     - Ring scaling uses admin STATE.sizePct if present (clamped); else DEFAULT_RING_WIDTH_PCT
-     - Footer persistence independent of undo
-     - Undo no longer toggles ring/footer; only passive normalization
-     - Dedupe ring objects
+/* ===== WM CONSOLIDATION PHASE 1.2d (UNDO SAFE + STRICT DISCONNECTED RULES) =====
+   Interim stabilization before Phase 2 unified manager.
+
+   Key changes:
+   - Only use explicit window.__RA_WALLET_CONNECTED__ (boolean) for connection state.
+   - Disconnected ALWAYS => ring + footer (tokens or uploads) enforced after object events.
+   - Undo/redo no longer drives visibility decisions; only passive scale/footer restore after cooldown.
+   - Cooldown window after undo/redo to avoid interfering with Fabric selection restore.
+   - Persistent ring scaling (reapplied each cycle) & automatic enlargement if too small.
+   - Idempotent ring request if desired ring missing (fires ra-wm-recalc).
 */
-(function RA_WM_PHASE_12C(){
-  if (window.__RA_WM_PHASE_12C__) return;
-  window.__RA_WM_PHASE_12C__ = true;
 
-  /* ---- CONFIG ---- */
-  const DEFAULT_RING_WIDTH_PCT     = 0.45;  // Larger default ring (was 0.35)
-  const MIN_RING_WIDTH_PCT         = 0.25;
-  const MAX_RING_WIDTH_PCT         = 0.60;
-  const ENLARGE_IF_SMALLER_THAN_PX = 120;   // If scaled width < this after apply, bump up toward MIN
-  const FOOTER_TEXT = 'Powered by Rebel Studios';
+(function RA_WM_PHASE_12D(){
+  if (window.__RA_WM_PHASE_12D__) return;
+  window.__RA_WM_PHASE_12D__ = true;
 
-  // Decide if footer appears on Rebel token when connected (you said NO)
-  const FOOTER_ON_REBEL_CONNECTED  = false;
-  // Decide if ring appears on plain uploads when holder is connected (you want ring, set true)
-  const RING_ON_UPLOAD_WHEN_HOLDER = true;
+  /* -------- CONFIG -------- */
+  const DEFAULT_RING_WIDTH_PCT = 0.50;   // bigger nominal width
+  const MIN_RING_WIDTH_PCT     = 0.30;
+  const MAX_RING_WIDTH_PCT     = 0.65;
+  const RING_ENLARGE_THRESHOLD = 130;    // px; if scaledWidth < this while disconnected, enlarge
+  const FOOTER_TEXT            = 'Powered by Rebel Studios';
+  const REBEL_HAS_NOTHING      = { hasRebel:false, hasFriend:false }; // fallback
 
-  // If your app doesn't explicitly set wallet connection, you can manually set:
-  // window.__RA_WALLET_CONNECTED__ = true/false elsewhere.
+  // Visibility rules (adjust easily if needed)
+  const SHOW_FOOTER_ON_REBEL_CONNECTED = false; // connected Rebel token => footer? (you said no)
+  const SHOW_RING_ON_UPLOAD_HOLDER     = true;  // when connected & owns any collection, uploads show ring?
+  // NOTE: If you change the two flags above, retest the rule matrix.
 
-  /* ---- Helpers ---- */
+  /* -------- HELPERS -------- */
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-  function holderState(){ return window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false }; }
+
+  function holderState(){
+    return window.RA_HOLDER_STATE || REBEL_HAS_NOTHING;
+  }
+
+  function walletConnected(){
+    // ONLY trust explicit flag (default false)
+    if (typeof window.__RA_WALLET_CONNECTED__ === 'boolean') return window.__RA_WALLET_CONNECTED__;
+    return false;
+  }
 
   function deriveRebelAddr(){
     try {
@@ -9207,27 +9210,19 @@ document.addEventListener('ra-collection-change', (e) => {
   const REBEL_ADDR = deriveRebelAddr();
 
   function findBase(){
-    const c=C(); if (!c) return null;
+    const c=C(); if(!c) return null;
     return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
   }
 
   function baseKind(){
     const base = findBase();
-    if (!base) return 'upload';
+    if(!base) return 'upload';
     const addr = (base._tokenContract || base.contract || '').toLowerCase();
-    if (addr){
+    if(addr){
       if (REBEL_ADDR && addr === REBEL_ADDR) return 'rebel-token';
       return 'friend-token';
     }
     return 'upload';
-  }
-
-  function walletConnected(){
-    // If the app sets a reliable flag, prefer it.
-    if (typeof window.__RA_WALLET_CONNECTED__ === 'boolean') return window.__RA_WALLET_CONNECTED__;
-    // Fallback heuristic: if RA_HOLDER_STATE was ever populated
-    const hs = holderState();
-    return !!(hs.hasRebel || hs.hasFriend);
   }
 
   function allRings(){
@@ -9243,173 +9238,173 @@ document.addEventListener('ra-collection-change', (e) => {
     ) || null;
   }
 
+  function ensureFooter(){
+    const c=C(); if(!c) return;
+    if (findFooter()) return;
+    try {
+      if (!window.fabric) return;
+      const t = new fabric.Text(FOOTER_TEXT, {
+        fontFamily:'Inter, system-ui, Arial, sans-serif',
+        fontSize:12, fill:'#cfcfcf', opacity:0.88,
+        originX:'right', originY:'bottom',
+        left:c.getWidth()-10, top:c.getHeight()-8,
+        selectable:false, evented:false,
+        _raBrandFooter:true, _raSys:true
+      });
+      c.add(t);
+      c.bringToFront(t);
+    }catch(_){}
+  }
+
+  function scaledWidth(o){
+    if(!o) return 0;
+    if (o.getScaledWidth) return o.getScaledWidth();
+    return (o.width||0) * (o.scaleX||1);
+  }
+
+  function scaleRing(ring){
+    const c=C(); if(!c || !ring) return;
+    const cw = c.getWidth();
+    let pct;
+    if (window.STATE && typeof window.STATE.sizePct === 'number'){
+      pct = window.STATE.sizePct;
+    } else {
+      pct = DEFAULT_RING_WIDTH_PCT;
+    }
+    pct = Math.min(MAX_RING_WIDTH_PCT, Math.max(MIN_RING_WIDTH_PCT, pct));
+    let targetPx = cw * pct;
+
+    if (!walletConnected()){ // enlarge disconnected scenario if previously tiny
+      if (scaledWidth(ring) < RING_ENLARGE_THRESHOLD){
+        targetPx = Math.max(targetPx, cw * Math.max(pct, 0.45));
+      }
+    }
+
+    try {
+      const baseW = ring.width || ring._element?.naturalWidth || 512;
+      const sc = targetPx / baseW;
+      ring.scaleX = ring.scaleY = sc;
+      ring.setCoords();
+    } catch(_){}
+  }
+
   function deleteExtraRings(){
     const c=C(); if(!c) return;
     const rings = allRings();
     if (rings.length <= 1) return;
-    // Keep largest scaled width (likely the intended one)
     let keep = rings[0], kW = scaledWidth(keep);
     for (let i=1;i<rings.length;i++){
       const w = scaledWidth(rings[i]);
       if (w > kW){ keep = rings[i]; kW = w; }
     }
-    rings.forEach(r => { if (r !== keep){ try{ c.remove(r); }catch(_){ } } });
+    rings.forEach(r => { if (r !== keep){ try{ c.remove(r); }catch(_){ } });
   }
 
-  function scaledWidth(o){
-    if (!o) return 0;
-    if (o.getScaledWidth) return o.getScaledWidth();
-    return (o.width||0) * (o.scaleX||1);
-  }
-
-  function ensureFooter(){
-    const c=C(); if(!c) return null;
-    const ft = findFooter();
-    if (ft) return ft;
-    try {
-      if (!window.fabric) return null;
-      const t = new fabric.Text(FOOTER_TEXT, {
-        fontFamily:'Inter, system-ui, Arial, sans-serif',
-        fontSize:12, fill:'#cfcfcf', opacity:0.88,
-        originX:'right', originY:'bottom',
-        left: c.getWidth()-10, top:c.getHeight()-8,
-        selectable:false, evented:false,
-        _raBrandFooter:true, _raSys:true
-      });
-      c.add(t); return t;
-    }catch(_){}
-    return null;
-  }
-
-  function scaleRing(ring){
-    const c=C(); if(!c || !ring) return;
-    try{
-      const cw = c.getWidth();
-      // If admin STATE.sizePct available use it (interpreted as width fraction) else default
-      let pct = (window.STATE && typeof window.STATE.sizePct === 'number')
-        ? window.STATE.sizePct
-        : DEFAULT_RING_WIDTH_PCT;
-      pct = Math.min(MAX_RING_WIDTH_PCT, Math.max(MIN_RING_WIDTH_PCT, pct));
-      const targetPx = cw * pct;
-      const nativeW = ring.width || ring._element?.naturalWidth || 512;
-      const sc = targetPx / nativeW;
-      ring.scaleX = ring.scaleY = sc;
-      ring.setCoords();
-      // If still tiny (< ENLARGE_IF_SMALLER_THAN_PX) bump to min ring width pct if needed
-      if (scaledWidth(ring) < ENLARGE_IF_SMALLER_THAN_PX){
-        const minPx = cw * MIN_RING_WIDTH_PCT;
-        const sc2 = minPx / nativeW;
-        ring.scaleX = ring.scaleY = sc2;
-        ring.setCoords();
-      }
-    }catch(_){}
-  }
-
-  /* ---- Rule Computation ---- */
+  /* -------- RULE MATRIX -------- */
   function computeDesired(){
-    const hs = holderState();
-    const kind = baseKind();
-    const ownsAny = !!(hs.hasRebel || hs.hasFriend);
     const connected = walletConnected();
+    const hs = holderState();
+    const ownsAny = !!(hs.hasRebel || hs.hasFriend);
+    const kind = baseKind();
 
-    let wantRing=false, wantFooter=false;
-
+    // Disconnected ALWAYS ring + footer
     if (!connected){
-      // Disconnected: ALWAYS both
-      return { wantRing:true, wantFooter:true, kind, hs };
+      return { wantRing:true, wantFooter:true, connected, kind, ownsAny };
     }
 
     if (kind === 'rebel-token'){
-      return { wantRing:false, wantFooter:FOOTER_ON_REBEL_CONNECTED, kind, hs };
+      return { wantRing:false, wantFooter:SHOW_FOOTER_ON_REBEL_CONNECTED, connected, kind, ownsAny };
     }
 
     if (kind === 'friend-token'){
-      if (ownsAny){
-        return { wantRing:false, wantFooter:true, kind, hs };
-      } else {
-        return { wantRing:true, wantFooter:true, kind, hs };
-      }
+      if (ownsAny) return { wantRing:false, wantFooter:true, connected, kind, ownsAny };
+      return { wantRing:true, wantFooter:true, connected, kind, ownsAny };
     }
 
-    // upload (plain) while connected
+    // upload (plain) connected
     if (ownsAny){
-      return { wantRing: RING_ON_UPLOAD_WHEN_HOLDER, wantFooter:true, kind, hs };
+      return { wantRing:RING_ON_UPLOAD_WHEN_HOLDER, wantFooter:true, connected, kind, ownsAny };
     }
-    return { wantRing:true, wantFooter:true, kind, hs };
+    return { wantRing:true, wantFooter:true, connected, kind, ownsAny };
   }
 
-  /* ---- Apply ---- */
+  /* -------- APPLY (Authoritative) -------- */
+  let lastApplyStamp = 0;
   function applyState(reason){
     const c=C(); if(!c) return;
+    lastApplyStamp = Date.now();
 
     deleteExtraRings();
-
     const { wantRing, wantFooter } = computeDesired();
 
     let ring = allRings()[0];
-
     if (!wantRing && ring){
       try { c.remove(ring); } catch(_){}
       ring = null;
     } else if (wantRing && !ring){
-      // Let existing admin block create it if possible
+      // Ask admin block to create
       try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
     }
 
-    // After a short delay (if creation was async) finalize ring scale & ordering
-    setTimeout(()=>{
-      let currentRing = allRings()[0];
-      if (wantRing){
-        if (currentRing){
-          scaleRing(currentRing);
-          try { c.bringToFront(currentRing); } catch(_){}
-        }
-      } else if (currentRing){
+    setTimeout(()=> {
+      const currentRing = allRings()[0];
+      if (wantRing && currentRing){
+        scaleRing(currentRing);
+        try { c.bringToFront(currentRing); } catch(_){}
+      } else if (!wantRing && currentRing){
         try { c.remove(currentRing); } catch(_){}
-        currentRing = null;
       }
 
-      // Footer
-      const ft = findFooter();
       if (wantFooter){
-        const f = ft || ensureFooter();
-        if (f){
-          // Order: ensure footer below ring if ring exists
-          if (currentRing){
-            try { c.bringToFront(f); c.bringToFront(currentRing); } catch(_){}
-          } else {
-            try { c.bringToFront(f); } catch(_){}
-          }
-        }
-      } else if (ft){
-        try { c.remove(ft); } catch(_){}
+        ensureFooter();
+      } else {
+        const f = findFooter();
+        if (f) try { C().remove(f); } catch(_){}
+      }
+
+      // Order: footer below ring if both
+      const f2 = findFooter();
+      const r2 = allRings()[0];
+      if (f2){
+        try { c.bringToFront(f2); } catch(_){}
+      }
+      if (r2){
+        try { c.bringToFront(r2); } catch(_){}
       }
 
       try { c.requestRenderAll(); } catch(_){}
-      // Debug (optional):
-      // console.log('[WM 1.2c]', reason, {wantRing, wantFooter});
+      // console.log('[WM 1.2d apply]', reason, {wantRing, wantFooter});
     }, wantRing ? 40 : 10);
   }
 
-  /* ---- Passive Normalization (scale/footer after undo) ---- */
-  function passiveNormalize(label){
-    // Just ensure scale + footer if rules say so; do NOT flip ring that shouldn't show
-    applyState('passive-'+label);
+  /* -------- PASSIVE (Undo Safe) -------- */
+  let undoCooldownUntil = 0;
+
+  function passiveAfterUndo(label){
+    // Do not change visibility inside cooldown period, just restore scale/footer if already required
+    const now = Date.now();
+    if (now < undoCooldownUntil) return;
+    const st = computeDesired();
+    if (st.wantFooter && !findFooter()) ensureFooter();
+    const ring = allRings()[0];
+    if (st.wantRing && ring){
+      scaleRing(ring);
+    }
+    // Do not remove anything here.
   }
 
-  /* ---- Event Hooks ---- */
-
+  /* -------- HOOKS -------- */
   function hookCanvas(){
     const c=C(); if(!c){ setTimeout(hookCanvas,150); return; }
-    if (c.__raWm12cCanvas) return;
-    c.__raWm12cCanvas = true;
+    if (c.__raWm12dCanvas) return;
+    c.__raWm12dCanvas = true;
     const schedule = (()=>{ let raf=null; return (why)=>{ if(raf) return; raf=requestAnimationFrame(()=>{ raf=null; applyState(why); }); }; })();
     c.on('object:added',   ()=> schedule('added'));
     c.on('object:removed', ()=> schedule('removed'));
     c.on('object:modified',()=> schedule('modified'));
   }
 
-  function hookExternalEvents(){
+  function hookExternal(){
     document.addEventListener('ra-holder-update', ()=> setTimeout(()=> applyState('holder'), 25));
     document.addEventListener('ra-wm-recalc',      ()=> setTimeout(()=> applyState('recalc'), 10));
     document.addEventListener('ra-collection-change', ()=> setTimeout(()=> applyState('collection'), 40));
@@ -9419,21 +9414,22 @@ document.addEventListener('ra-collection-change', (e) => {
   function hookUndoRedo(){
     ['undo','redo'].forEach(name=>{
       const fn = window[name];
-      if (typeof fn === 'function' && !fn.__raWm12c){
+      if (typeof fn === 'function' && !fn.__raWm12d){
         window[name] = function(){
           const out = fn.apply(this, arguments);
-          // passive normalization (do not change rule logic)
-          setTimeout(()=> passiveNormalize(name), 60);
+          undoCooldownUntil = Date.now() + 120; // let Fabric restore fully
+          setTimeout(()=> passiveAfterUndo(name), 180);
+          setTimeout(()=> applyState(name+'-post'), 260); // authoritative re-apply after cooldown
           return out;
         };
-        window[name].__raWm12c = true;
+        window[name].__raWm12d = true;
       }
     });
   }
 
   function init(){
     hookCanvas();
-    hookExternalEvents();
+    hookExternal();
     hookUndoRedo();
     setTimeout(()=> applyState('initial'), 400);
   }
