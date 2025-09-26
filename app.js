@@ -3426,34 +3426,25 @@ c.on('object:removed', (e)=>{
     const t = (o.type||'').toLowerCase();
     return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
   };
-  const isOverlay = o => {
-    // Implementation E: return false for objects with any of _raSys, _raWMCenter, _isWatermark, _isBgRect, _isBase, _raTokenId
-    if (!o) return false;
-    if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
-    if (isBg(o) || isBase(o) || isText(o)) return false;
-function isOverlay(o) {
+ // Overlay detector (no recursion bug)
+const isOverlay = (o) => {
   if (!o) return false;
-
-  // Exclude system objects, watermarks, base/bg, token id, and non-interactive
+  // Exclude system / watermark / bg / base / token label
   if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
-  if (o.selectable === false || o.evented === false) return false;
 
   const k = (o._kind || '').toLowerCase();
-
-  // Include only specific overlay types
   if (k === 'overlay' || k === 'sticker' || k === 'icon') return true;
 
-  // For groups, include only if all children are valid overlays
-  if (o.type === 'group' || typeof o.getObjects === 'function') {
-    const children = o.getObjects?.() || o._objects || [];
-    if (!children.length) return false;
-    return children.every(child => isOverlay(child));
+  // Groups: treat as overlay if ANY child is an overlay‑kind
+  if (o.type === 'group') {
+    const kids = (o.getObjects?.() || o._objects || []);
+    return kids.some(ch => {
+      const ck = (ch._kind || '').toLowerCase();
+      return ck === 'overlay' || ck === 'sticker' || ck === 'icon';
+    });
   }
-
-  // Default: exclude unknowns from animation
   return false;
-}
-  };
+};
 
   function pickTargets(c, scope){
     const objs = (c.getObjects?.()||[]).filter(o => !isBg(o));
