@@ -1232,7 +1232,6 @@ safeAddListener("clearAllOverlays", "click", () => {
   canvas.requestRenderAll?.();
 });
   canvas.requestRenderAll();
-});
 
 /* -------- Overlays panel & uploads -------- */
 safeAddListener("overlayUpload","change", async (e)=>{
@@ -1447,21 +1446,9 @@ function wireSnap(retries = 0) {
     c.requestRenderAll?.();
   });
 }
-      const tol = 8, cw=c.getWidth(), ch=c.getHeight();
-      const hw=halfW(o), hh=halfH(o);
-      // centers
-      if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
-      if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
-      // edges
-      if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
-      if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
-      if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
-      if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
-    }
 
 // Initialize with retry/backoff; event handlers are wired inside wireSnap()
 wireSnap();
-})();
 
 /* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
 (function adminDock(){
@@ -6397,8 +6384,8 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   window.__walletConnecting = false;
   if (typeof CONNECTING !== 'undefined') CONNECTING = false;
 }
-    }
   }
+
   async function refresh(){
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected.'; return; }
