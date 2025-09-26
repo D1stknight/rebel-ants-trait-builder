@@ -408,43 +408,34 @@ function clearBaseOnly(){
   baseGroup = null; canvas.requestRenderAll();
 }
 
-// Place two corner stamps into a center-origin group
+// Return only the main image (no corner stamps) globally
 async function makeStampedGroup(img, bw, bh, wmWidthRatio){
-  const wmTL = await fabricFromURL(WM_SRC);
-  const wmBR = await fabricFromURL(WM_SRC);
-  const wmTargetW = Math.max(16, bw * wmWidthRatio);
-  const margin    = Math.max(6,  bw * 0.02);
-
-  const scaleTL = wmTargetW / wmTL.width;
-  const scaleBR = wmTargetW / wmBR.width;
-  wmTL.scale(scaleTL); wmBR.scale(scaleBR);
-
-  Object.assign(wmTL, {
-    selectable:false, evented:false, hasControls:false,
-    _isWatermark:true, raWM:true, raPos:"TL"
-  });
-  Object.assign(wmBR, {
-    selectable:false, evented:false, hasControls:false,
-    _isWatermark:true, raWM:true, raPos:"BR"
-  });
-
-  wmTL.set({
-    originX:"center", originY:"center",
-    left: -bw/2 + margin + wmTL.width*scaleTL/2,
-    top:  -bh/2 + margin + wmTL.height*scaleTL/2
-  });
-  wmBR.set({
-    originX:"center", originY:"center",
-    left:  bw/2 - margin - wmBR.width*scaleBR/2,
-    top:   bh/2 - margin - wmBR.height*scaleBR/2
-  });
-
-  const group = new fabric.Group([img, wmTL, wmBR], { originX:"center", originY:"center" });
-  return group;
+  // Implementation A: Eliminate all corner-stamp code paths 
+  // Return only the main image to prevent duplicate watermarks
+  img.set({ originX:"center", originY:"center" });
+  return img;
 }
 
 async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
+
+  // Implementation A: When switching to token mode, pre-hide/remove any _raWMCenter or _isWatermark elements
+  // and cancel any WM timers before render
+  if (isToken) {
+    try {
+      const os = canvas.getObjects() || [];
+      os.forEach(o => { 
+        if (o && (o._raWMCenter === true || o._isWatermark === true)) {
+          canvas.remove(o);
+        }
+      });
+      // Cancel any pending watermark timers
+      if (window.__raWMTimer) {
+        clearTimeout(window.__raWMTimer);
+        window.__raWMTimer = null;
+      }
+    } catch (_) {}
+  }
 
   const img = await fabricFromURL(dataUrl);
   img.set({ originX:"center", originY:"center" });
@@ -458,42 +449,24 @@ async function loadBaseImage(dataUrl, isToken){
 
   let obj;
   if (isToken) {
-    // NEW: hide any non-token ring immediately (prevents flicker on token loads)
-    try {
-      const os = canvas.getObjects() || [];
-      os.forEach(o => { if (o && (o._raWMCenter === true || o._isWatermark === true)) o.visible = false; });
-    } catch (_) {}
-
-    // Token = RA (real asset) => NO ring watermark
+    // Token = RA (real asset) => NO ring watermark, only main image
     img._isBase = true;
     lockBaseObject(img);
     img.set({ left:cw/2, top:ch/2 }); img.setCoords();
     obj = img;
-
-    canvas.add(obj);
-    baseGroup = obj;
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-
   } else {
-    // Non-token => add corner stamps
+    // Non-token => use makeStampedGroup (which now returns only main image)
     const group = await makeStampedGroup(img, bw, bh, 0.15);
     group._isBase = true;
     lockBaseObject(group);
     group.set({ left:cw/2, top:ch/2 }); group.setCoords();
     obj = group;
-
-    canvas.add(obj);
-    baseGroup = obj;
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-
-    // NEW: ensure ring watermark shows and seats above base (call twice)
-    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
-    requestAnimationFrame(() => {
-      try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
-    });
   }
+
+  canvas.add(obj);
+  baseGroup = obj;
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
 }
 
 // Add overlay (with small corner stamps unless permanent)
@@ -1048,6 +1021,18 @@ safeAddListener("duplicate","click", ()=>{
   const o = canvas.getActiveObject(); if (!o) return;
   o.clone(c=>{
     c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
+    
+    // Implementation C: recursively set _kind='overlay' on the clone and children
+    function setOverlayKind(obj) {
+      if (obj) {
+        obj._kind = 'overlay';
+        if (obj._objects && Array.isArray(obj._objects)) {
+          obj._objects.forEach(setOverlayKind);
+        }
+      }
+    }
+    setOverlayKind(c);
+    
     canvas.add(c).setActiveObject(c);
     canvas.requestRenderAll();
   });
@@ -1174,7 +1159,19 @@ safeAddListener("unlockAll","click", ()=>{
 });
 
 safeAddListener("clearAllOverlays","click", ()=>{
-  canvas.getObjects().slice().forEach(o=>{ if (o._kind==='overlay') canvas.remove(o); });
+  // Implementation C: Remove any object with _kind==='overlay' and any group containing overlay children
+  function hasOverlayChildren(obj) {
+    if (obj && obj._objects && Array.isArray(obj._objects)) {
+      return obj._objects.some(child => child._kind === 'overlay' || hasOverlayChildren(child));
+    }
+    return false;
+  }
+  
+  canvas.getObjects().slice().forEach(o => { 
+    if (o._kind === 'overlay' || hasOverlayChildren(o)) {
+      canvas.remove(o); 
+    }
+  });
   canvas.requestRenderAll();
 });
 
@@ -1230,6 +1227,18 @@ document.addEventListener("keydown", (e)=>{
     try {
       o.clone(cl => {
         cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 });
+        
+        // Implementation C: recursively set _kind='overlay' on the clone and children
+        function setOverlayKind(obj) {
+          if (obj) {
+            obj._kind = 'overlay';
+            if (obj._objects && Array.isArray(obj._objects)) {
+              obj._objects.forEach(setOverlayKind);
+            }
+          }
+        }
+        setOverlayKind(cl);
+        
         c.add(cl);
         c.setActiveObject(cl);
         c.requestRenderAll();
@@ -1293,34 +1302,58 @@ document.addEventListener("keydown", (e)=>{
 
   window.__snapOn = true;
 
-  // Fabric event wiring (only once per canvas instance)
-  const c = C();
-  if (!c) return; // canvas not ready yet — this IIFE is cheap and can re-run later if you call it
-  if (c.__snapWired) return;
-  c.__snapWired = true;
-
   function halfW(o){
     return (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) / 2;
   }
   function halfH(o){
     return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2;
   }
-  function clampSnap(o){
-    if (!window.__snapOn) return;
-    const tol = 8, cw=c.getWidth(), ch=c.getHeight();
-    const hw=halfW(o), hh=halfH(o);
-    // centers
-    if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
-    if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
-    // edges
-    if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
-    if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
-    if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
-    if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
+
+  // Implementation D: Retry-bind object:moving and mouse:up once canvas is ready; wire only once
+  function wireSnapEvents() {
+    const c = C();
+    if (!c) {
+      // Retry after a short delay if canvas not ready
+      setTimeout(wireSnapEvents, 120);
+      return;
+    }
+    if (c.__snapWired) return; // Wire only once
+    c.__snapWired = true;
+
+    function isSnapTarget(o) {
+      // Implementation D: On object:moving, snap only overlays/text (exclude bg/base/system/watermark)
+      if (!o) return false;
+      if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase) return false;
+      if (o._raTokenId) return false; // exclude token ID text
+      
+      const kind = (o._kind || '').toLowerCase();
+      const type = (o.type || '').toLowerCase();
+      
+      // Include overlays, stickers, icons, and text objects
+      return kind === 'overlay' || kind === 'sticker' || kind === 'icon' || 
+             kind === 'customtext' || type === 'textbox' || type === 'i-text' || type === 'text';
+    }
+
+    function clampSnap(o){
+      if (!window.__snapOn || !isSnapTarget(o)) return;
+      const tol = 8, cw=c.getWidth(), ch=c.getHeight();
+      const hw=halfW(o), hh=halfH(o);
+      // centers
+      if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
+      if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
+      // edges
+      if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
+      if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
+      if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
+      if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
+    }
+
+    c.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
+    c.on("mouse:up", ()=> c.requestRenderAll());
   }
 
-  c.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
-  c.on("mouse:up", ()=> c.requestRenderAll());
+  // Start the wiring process
+  wireSnapEvents();
 })();
 
 /* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
@@ -3320,10 +3353,21 @@ c.on('object:removed', (e)=>{
     return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
   };
   const isOverlay = o => {
+    // Implementation E: return false for objects with any of _raSys, _raWMCenter, _isWatermark, _isBgRect, _isBase, _raTokenId
+    if (!o) return false;
+    if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
     if (isBg(o) || isBase(o) || isText(o)) return false;
+    
     const k = (o._kind||'').toLowerCase();
-    // Treat any non-base/non-text drawable as overlay by default.
-    return k==='overlay' || k==='sticker' || k==='icon' || true;
+    // Implementation E: Return true only for _kind in ['overlay','sticker','icon']
+    if (k === 'overlay' || k === 'sticker' || k === 'icon') return true;
+    
+    // For groups, include only if all drawable children are overlays
+    if (o.type === 'group' && o._objects && Array.isArray(o._objects)) {
+      return o._objects.every(child => isOverlay(child) || !child); // all children must be overlays or falsy
+    }
+    
+    return false; // Default to false to ensure watermarks/footers are excluded
   };
 
   function pickTargets(c, scope){
@@ -3705,6 +3749,9 @@ const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' 
 
   // ---------- centered watermark layer ----------
   function ensureCenteredWM(c){
+    // Implementation H: Guard any watermark creation/visibility changes when window.__RA_RESTORING__ is true
+    if (window.__RA_RESTORING__) return;
+    
     if (!c || !STATE.img) return;
 
     const base = findBase(c);
@@ -6154,15 +6201,35 @@ tile.appendChild(cap);
   }
 
   // --- Connect / Refresh / Disconnect
+  // Implementation F: Wallet connect reentrancy guard
+  let CONNECTING = false;
+
   async function connect(){
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected (MetaMask/Coinbase).'; return; }
+    
+    // Implementation F: Wrap eth_requestAccounts with a CONNECTING guard to avoid concurrent requests
+    if (CONNECTING) {
+      out.textContent = 'Connection in progress...';
+      return;
+    }
+    
+    CONNECTING = true;
     try{
       const accounts = await eth.request({ method:'eth_requestAccounts' });
       const chainId  = await eth.request({ method:'eth_chainId' });
       const address  = accounts?.[0] || null;
       setConnected(!!address, address, chainId, eth, 'Connected. Click “Check holdings”.');
-    }catch(_){ out.textContent = 'Connect cancelled or failed.'; }
+    }catch(err){ 
+      // Implementation F: show a friendly message only for error code 4001 (cancelled)
+      if (err && err.code === 4001) {
+        out.textContent = 'Connection cancelled by user.';
+      } else {
+        out.textContent = 'Connection failed. Please try again.';
+      }
+    } finally {
+      CONNECTING = false;
+    }
   }
   async function refresh(){
     const eth = window.ethereum;
@@ -8297,18 +8364,63 @@ window.raDump = () => {
 
   // Create or show the center ring watermark when rules say it should be visible.
   function ensureRingPresent(){
+    // Implementation H: Guard any watermark creation/visibility changes when window.__RA_RESTORING__ is true
+    if (window.__RA_RESTORING__) return;
+    
     const c = C(); if (!c) return;
     const all  = c.getObjects?.() || [];
     const base = all.find(isBase);
-    if (!base) return;
+    
+    // Implementation B: if no base image is present yet, do not create/resize a ring; hide any existing _raWMCenter
+    if (!base) {
+      const existingRing = all.find(isRing);
+      if (existingRing) {
+        existingRing.visible = false;
+        try { c.requestRenderAll(); } catch(_) {}
+      }
+      return;
+    }
 
     const cc = String(base._tokenContract || '').toLowerCase();
     const hs = (window.RA_HOLDER_STATE || {});
+    
+    // Implementation G: Build RA_HOLDER_STATE.matches by exact contract across all configured chains
+    const matches = hs.matches || [];
+    const rebelMatch = matches.find(m => m.holds && m.tag === 'rebel' && m.address && m.address.toLowerCase() === cc);
+    const chumpzMatch = matches.find(m => m.holds && m.tag === 'friend' && 
+                                     m.address && m.address.toLowerCase() === '0xa9a1d086623475595a02991664742e4a1cbafcb8' &&
+                                     cc === '0xa9a1d086623475595a02991664742e4a1cbafcb8');
+    
+    // Implementation G: For Rebel base: if holder matches Rebel contract, do not create the center ring at all
+    if (cc === REBEL_CONTRACT && rebelMatch) {
+      let wm = all.find(isRing);
+      if (wm) {
+        c.remove(wm);
+        try { c.requestRenderAll(); } catch(_) {}
+      }
+      return;
+    }
+    
+    // Implementation G: For Chumpz base: if holder matches Chumpz on Ape RPC, hide ring and keep footer
+    if (cc === '0xa9a1d086623475595a02991664742e4a1cbafcb8' && chumpzMatch) {
+      let wm = all.find(isRing);
+      if (wm) {
+        c.remove(wm);
+        try { c.requestRenderAll(); } catch(_) {}
+      }
+      return; // footer will be handled separately
+    }
+
+    // Legacy holder logic for other cases
     const isHolder = !!(hs.hasRebel || hs.hasFriend);
 
     // show ring for: manual uploads (no contract) and Friend tokens (non‑Rebel),
-    // hide ring for: Rebel tokens and any holder
-    const shouldShow = (!cc || cc !== REBEL_CONTRACT) && !isHolder;
+    // hide ring for: Rebel tokens and any holder (unless overridden by admin)
+    // Implementation G: respect holder override (window.__raWMForce.off) to prevent re-enabling ring
+    const force = window.__raWMForce;
+    const shouldShow = (force && force.off) ? false :
+                      (force && force.on) ? true :
+                      ((!cc || cc !== REBEL_CONTRACT) && !isHolder);
 
     let wm = all.find(isRing);
     if (!wm && shouldShow){
