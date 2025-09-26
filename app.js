@@ -8269,9 +8269,6 @@ window.raDump = () => {
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Rebel contract (lowercase)
-  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
-
   // Recognizers (STRICT ring match — do NOT treat corner stamps as watermark)
   const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
   const isRing   = o => !!(o && o._raWMCenter === true);      // <— only the center ring
@@ -8360,7 +8357,7 @@ window.raDump = () => {
 
     // show ring for: manual uploads (no contract) and Friend tokens (non‑Rebel),
     // hide ring for: Rebel tokens and any holder
-    const shouldShow = (!cc || cc !== REBEL_CONTRACT) && !isHolder;
+    const shouldShow = false; // Ring management handled by rules block
 
     let wm = all.find(isRing);
     if (!wm && shouldShow){
@@ -8392,29 +8389,17 @@ window.raDump = () => {
 
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmFooterFixShimV7rBound) return;
-    c.__raWmFooterFixShimV7rBound = true;
+    if (c.__raWmFooterFixShimV8Bound) return;
+    c.__raWmFooterFixShimV8Bound = true;
 
-    // Prevent one‑frame footer flash during restores
-    c.on?.('before:render', () => {
-      if (!restoring()) return;
-      (c.getObjects?.() || []).forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
-    });
-
-    // Keep order/centering stable at all times
-    c.on?.('after:render',    assertTopNow);
-    c.on?.('object:modified', assertTopNow);
-    c.on?.('object:removed',  assertTopNow);
-
-    // When a new Base is added (manual upload / token load), ensure ring state
-    c.on?.('object:added', (e) => {
-      if (e && e.target && e.target._isBase) ensureRingPresent();
-      assertTopNow();
-    });
+    // Keep order/centering stable at all times (but not during restore)
+    c.on?.('after:render', () => { if (!restoring()) assertTopNow(); });
+    c.on?.('object:modified', () => { if (!restoring()) assertTopNow(); });
+    c.on?.('object:removed', () => { if (!restoring()) assertTopNow(); });
 
     // React to admin/wallet/rules changes
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, () => { ensureRingPresent(); }));
+      .forEach(ev => document.addEventListener(ev, () => { if (!restoring()) assertTopNow(); }));
 
     // Keep ring centered on canvas size changes
     try {
@@ -8422,6 +8407,7 @@ window.raDump = () => {
       if (el && !c.__raWmCenterResizeObs){
         c.__raWmCenterResizeObs = true;
         new ResizeObserver(() => {
+          if (restoring()) return;
           const wm = (c.getObjects?.()||[]).find(isRing);
           if (wm){ centerRing(wm); try { c.requestRenderAll(); } catch(_) {} }
         }).observe(el);
@@ -8429,8 +8415,7 @@ window.raDump = () => {
     } catch(_){}
 
     // First pass
-    ensureRingPresent();
-    assertTopNow();
+    if (!restoring()) assertTopNow();
   }
 
   if (document.readyState === 'loading') {
@@ -8440,13 +8425,12 @@ window.raDump = () => {
   }
 })();
 
-/* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
+/* ===== RA_WM_RULES_V10 — correct ring/foot behavior with exact contract matching and restore guards ===== */
 ;(() => {
-  if (window.__RA_WM_RULES_V9__) return;
-  window.__RA_WM_RULES_V9__ = true;
+  if (window.__RA_WM_RULES_V10__) return;
+  window.__RA_WM_RULES_V10__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
 
   // recognizers
   const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true || o._raWatermark === true || o._wm));
@@ -8461,7 +8445,8 @@ window.raDump = () => {
     return Math.max(0.05, Math.min(1, p));
   };
 
-  const holderState = () => (window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false });
+  const holderState = () => (window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false, matches:[] });
+  const restoring = () => window.__RA_RESTORING__;
 
   function currentBase(c){
     const objs = (c.getObjects?.() || []);
@@ -8471,7 +8456,10 @@ window.raDump = () => {
     if (!base) return 'none';
     const cc = String(base._tokenContract || '').toLowerCase();
     if (!cc) return 'manual';                          // manual upload (no token metadata)
-    if (cc === REBEL_CONTRACT) return 'rebel';         // your collection
+    // Use exact contract matching from holder state
+    const matches = holderState().matches || [];
+    const rebelMatch = matches.find(m => m.tag === 'rebel' && m.address.toLowerCase() === cc);
+    if (rebelMatch) return 'rebel';
     return 'friend';                                   // any other token collection
   }
 
@@ -8503,11 +8491,13 @@ window.raDump = () => {
     }catch(_){}
   }
   function ensureRingVisible(c){
+    if (restoring()) return; // Don't create during restore
+    
     let wm = dedupeRing(c);
     if (!wm){
       const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
       fabric.Image.fromURL(src, img => {
-        if (!img) return;
+        if (!img || restoring()) return; // Guard against restore during async load
         img._raWMCenter = true; img._isWatermark = true; img._raSys = true;
         img.excludeFromExport = true;
         img.selectable=false; img.evented=false; img.hasControls=false; img.objectCaching=false;
@@ -8529,24 +8519,31 @@ window.raDump = () => {
     if (changed){ try { c.requestRenderAll(); } catch(_) {} }
   }
 
-  // We do NOT force footer here; your footer block handles creation/placement.
-  // We only hide footer for Rebel during restore to prevent flashes (v7 already does this).
-  // This shim focuses on getting the ring visibility right and never touching overlays.
-
+  // Ring visibility logic using exact contract matching
   function applyRules(){
+    if (restoring()) return; // Don't interfere during restore
+    
     const c = C(); if (!c) return;
     const base = currentBase(c);
     const kind = classifyBase(base);
     const H = holderState();
 
-    // Decide ring visibility
+    // Decide ring visibility using exact contract matching
     let ringOn = false;
     if (kind === 'manual') {
       ringOn = true;                         // manual upload → ring + footer
     } else if (kind === 'rebel') {
-      ringOn = !H.hasRebel;                  // Rebel token → ring only if NOT holder
+      // For Rebel tokens, check if user actually holds this specific contract
+      const cc = String(base._tokenContract || '').toLowerCase();
+      const holdsThisContract = !!(H.matches || []).find(m => 
+        m.holds && m.tag === 'rebel' && m.address.toLowerCase() === cc);
+      ringOn = !holdsThisContract;           // ring only if NOT holder of this specific Rebel contract
     } else if (kind === 'friend') {
-      ringOn = !H.hasFriend;                 // Friend token → ring if NOT holder (footer handled elsewhere)
+      // For Friend tokens, check if user holds this specific contract
+      const cc = String(base._tokenContract || '').toLowerCase();
+      const holdsThisContract = !!(H.matches || []).find(m => 
+        m.holds && m.address.toLowerCase() === cc);
+      ringOn = !holdsThisContract;           // ring if NOT holder of this specific contract
     } else {
       ringOn = false;
     }
@@ -8560,28 +8557,28 @@ window.raDump = () => {
   // ——— Wiring ———
   function wire(){
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
+    if (c.__raWmRulesV10) return; c.__raWmRulesV10 = true;
 
-    // Base changes only (ignore overlays)
-    c.on('object:added',   e => { if (e?.target && isBase(e.target)) applyRules(); });
-    c.on('object:removed', e => { if (e?.target && isBase(e.target)) applyRules(); });
+    // Base changes only (ignore overlays) - guard against restore
+    c.on('object:added',   e => { if (!restoring() && e?.target && isBase(e.target)) applyRules(); });
+    c.on('object:removed', e => { if (!restoring() && e?.target && isBase(e.target)) applyRules(); });
 
     // Wallet or collection changes
     ['ra-holder-update','ra-collection-change','ra-wm-recalc'].forEach(ev=>{
-      document.addEventListener(ev, applyRules);
+      document.addEventListener(ev, () => { if (!restoring()) applyRules(); });
     });
 
     // Canvas resize (size dropdown etc.)
     try{
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
-      if (el && !c.__raWmRulesV9Resize) {
-        c.__raWmRulesV9Resize = true;
-        new ResizeObserver(() => applyRules()).observe(el);
+      if (el && !c.__raWmRulesV10Resize) {
+        c.__raWmRulesV10Resize = true;
+        new ResizeObserver(() => { if (!restoring()) applyRules(); }).observe(el);
       }
     }catch(_){}
 
     // First pass
-    applyRules();
+    if (!restoring()) applyRules();
   }
 
   if (document.readyState === 'loading') {
