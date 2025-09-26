@@ -1231,8 +1231,6 @@ safeAddListener("clearAllOverlays", "click", () => {
   canvas.discardActiveObject?.();
   canvas.requestRenderAll?.();
 });
-  canvas.requestRenderAll();
-});
 
 /* -------- Overlays panel & uploads -------- */
 safeAddListener("overlayUpload","change", async (e)=>{
@@ -1447,17 +1445,6 @@ function wireSnap(retries = 0) {
     c.requestRenderAll?.();
   });
 }
-      const tol = 8, cw=c.getWidth(), ch=c.getHeight();
-      const hw=halfW(o), hh=halfH(o);
-      // centers
-      if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
-      if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
-      // edges
-      if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
-      if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
-      if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
-      if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
-    }
 
 // Initialize with retry/backoff; event handlers are wired inside wireSnap()
 wireSnap();
@@ -6397,8 +6384,8 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   window.__walletConnecting = false;
   if (typeof CONNECTING !== 'undefined') CONNECTING = false;
 }
-    }
   }
+  
   async function refresh(){
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected.'; return; }
@@ -6882,57 +6869,206 @@ function annotateBase(meta){
   try { c.requestRenderAll(); } catch(_){}
 }
 
+// Robust token media resolver with fallback to tokenURI
+async function resolveTokenMedia(contract, tokenId, col) {
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
+  const tokenKey = `${contract}:${tokenId}`;
+  
+  // Step A: Try Reservoir first
+  const reservoirUrl = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
+  
+  try {
+    const r = await fetch(reservoirUrl, { headers: { 'accept': 'application/json' }, cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      const t = j?.tokens?.[0]?.token || {};
+      const media = t.media || {};
+      const img = normalizeUrl(
+        (media.original && (media.original.url || media.original.mediaUrl)) ||
+        t.imageLarge || t.image || t.imageSmall
+      );
+      if (img) return img; // Success with Reservoir
+    }
+  } catch (err) {
+    console.warn('Reservoir lookup failed:', err);
+  }
+
+  // Step B: Fallback to tokenURI via RPC
+  try {
+    const rpcUrl = col.rpcUrl || getRpcForChain(col.chainId);
+    if (!rpcUrl) throw new Error('No RPC URL available for chain');
+
+    // Call tokenURI(tokenId) on the contract
+    const tokenUriResult = await callTokenURI(contract, tokenId, rpcUrl);
+    if (!tokenUriResult) throw new Error('No tokenURI returned');
+
+    // Step C: Resolve metadata URL schemes and extract image
+    const metadataUrl = normalizeMetadataUrl(tokenUriResult);
+    const metadata = await fetchMetadataWithTimeout(metadataUrl);
+    
+    const imageUrl = normalizeUrl(
+      metadata.image || metadata.image_url || metadata.imageURI
+    );
+    
+    if (imageUrl) return imageUrl;
+    
+  } catch (err) {
+    console.warn('TokenURI fallback failed:', err);
+  }
+
+  throw new Error('No image found via Reservoir or tokenURI fallback');
+}
+
+// Get RPC URL for chain ID
+function getRpcForChain(chainId) {
+  const normalizedChainId = normalizeChainId(chainId);
+  if (normalizedChainId === '0x1') return 'https://rpc.ankr.com/eth';
+  if (normalizedChainId === '0x8173') return window.__APECHAIN_RPC || 'https://rpc.apecoinchain.org';
+  if (normalizedChainId === '0x2105') return 'https://mainnet.base.org';
+  return null;
+}
+
+// Call tokenURI via RPC with timeout
+async function callTokenURI(contract, tokenId, rpcUrl) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+  try {
+    // ERC-721 tokenURI function signature: 0xc87b56dd
+    const data = '0xc87b56dd' + parseInt(tokenId, 10).toString(16).padStart(64, '0');
+    
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_call',
+        params: [{ to: contract, data }, 'latest'],
+        id: 1
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) throw new Error(`RPC call failed: ${response.status}`);
+    
+    const result = await response.json();
+    if (result.error) throw new Error(`RPC error: ${result.error.message}`);
+    
+    // Decode hex string result (skip first 64 chars for offset, next 64 for length)
+    const hexResult = result.result;
+    if (!hexResult || hexResult === '0x') return null;
+    
+    const dataStart = 2 + 64 + 64; // Skip 0x + offset + length  
+    const hexData = hexResult.slice(dataStart);
+    return hexData ? Buffer.from(hexData, 'hex').toString('utf8').replace(/\0/g, '') : null;
+    
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Normalize metadata URL schemes
+function normalizeMetadataUrl(uri) {
+  if (!uri) return null;
+  
+  // Handle data URLs (base64 JSON)
+  if (uri.startsWith('data:')) return uri;
+  
+  // Handle IPFS
+  if (uri.startsWith('ipfs://')) {
+    return 'https://cloudflare-ipfs.com/ipfs/' + uri.replace('ipfs://', '').replace(/^ipfs\//, '');
+  }
+  
+  // Handle Arweave
+  if (uri.startsWith('ar://')) {
+    return 'https://arweave.net/' + uri.replace('ar://', '');
+  }
+  
+  // Handle HTTP/HTTPS
+  if (uri.startsWith('http://') || uri.startsWith('https://')) {
+    return uri;
+  }
+  
+  return uri;
+}
+
+// Fetch metadata with timeout and parse JSON
+async function fetchMetadataWithTimeout(url) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+
+  try {
+    // Handle data URLs
+    if (url.startsWith('data:')) {
+      const base64Data = url.split(',')[1];
+      const jsonStr = Buffer.from(base64Data, 'base64').toString('utf8');
+      return JSON.parse(jsonStr);
+    }
+
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal
+    });
+
+    if (!response.ok) throw new Error(`Metadata fetch failed: ${response.status}`);
+    
+    return await response.json();
+    
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function loadTokenFromCollection(tokenId, col){
   const contract = (col && col.address) || '';
   if (!contract){ alert('No contract for selected collection.'); return; }
 
-  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
-  const tokenKey = `${contract}:${tokenId}`;
-  const url = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
+  try {
+    const img = await resolveTokenMedia(contract, tokenId, col);
+    if (!img) { 
+      alert('No image found for that token.'); 
+      return; 
+    }
 
-  const r = await fetch(url, { headers:{ 'accept':'application/json' }, cache:'no-store' });
-  if (!r.ok){ alert('Lookup failed for that token.'); return; }
-
-  const j = await r.json();
-  const t = j?.tokens?.[0]?.token || {};
-  const media = t.media || {};
-  const img = normalizeUrl(
-    (media.original && (media.original.url || media.original.mediaUrl)) ||
-    t.imageLarge || t.image || t.imageSmall
-  );
-  if (!img){ alert('No image found for that token.'); return; }
-
-  // Use your existing base loader
-  if (typeof window.loadBaseImage === 'function') {
-    await window.loadBaseImage(img, /*isToken*/ true);
-  } else if (typeof window.loadBase === 'function') {
-    await window.loadBase(img);
-  } else {
-    // very safe fallback
-    const i = new Image();
-    i.crossOrigin = 'anonymous';
-    await new Promise((res,rej)=>{ i.onload=res; i.onerror=rej; i.src=img; });
-    const base = new fabric.Image(i, { selectable:false, evented:false, _isBase:true });
-    const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+    // Use your existing base loader
+    if (typeof window.loadBaseImage === 'function') {
+      await window.loadBaseImage(img, /*isToken*/ true);
+    } else if (typeof window.loadBase === 'function') {
+      await window.loadBase(img);
+    } else {
+      // very safe fallback
+      const i = new Image();
+      i.crossOrigin = 'anonymous';
+      await new Promise((res,rej)=>{ i.onload=res; i.onerror=rej; i.src=img; });
+      const base = new fabric.Image(i, { selectable:false, evented:false, _isBase:true });
+      const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+    }
+  
+  } catch (error) {
+    console.error('Token loading failed:', error);
+    alert(error.message || 'Failed to load token image');
+    return;
   }
 
   function autoFitBase(){
-  const c = window.canvas; if (!c) return;
-  const base = (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect);
-  if (!base || !base.width || !base.height) return;
+    const c = window.canvas; if (!c) return;
+    const base = (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect);
+    if (!base || !base.width || !base.height) return;
 
-  const maxW = c.getWidth(), maxH = c.getHeight();
-  const scale = Math.min(maxW / base.width, maxH / base.height);
+    const maxW = c.getWidth(), maxH = c.getHeight();
+    const scale = Math.min(maxW / base.width, maxH / base.height);
 
-  base.set({
-    scaleX: scale, scaleY: scale,
-    left: (maxW - base.width * scale) / 2,
-    top:  (maxH - base.height * scale) / 2
-  });
-  base.setCoords();
-  try{ c.requestRenderAll(); }catch(_){}
-}
+    base.set({
+      scaleX: scale, scaleY: scale,
+      left: (maxW - base.width * scale) / 2,
+      top:  (maxH - base.height * scale) / 2
+    });
+    base.setCoords();
+    try{ c.requestRenderAll(); }catch(_){}
+  }
+  
   // Tag the base so the footer/watermark can react
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
   annotateBase({ contract, chain: slug, name: col.name });
   autoFitBase();
 }
@@ -8989,9 +9125,8 @@ document.addEventListener('ra-collection-change', (e) => {
   }
   if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9('ra-collection-change');
 });
-    });
 
-    // Canvas resize (size dropdown etc.)
+// Canvas resize (size dropdown etc.)
     try{
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmRulesV9Resize) {
