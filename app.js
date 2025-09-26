@@ -30,6 +30,9 @@
   window.WM_SRC = WM_SRC;
 })(); // end CONFIG
 
+// Global flag to disable corner-stamp groups and prevent BR stamp flicker
+window.__RA_NO_STAMP_GROUPS = true;
+
   // ===============================
   //  FABRIC DEFAULTS
   // ===============================
@@ -410,6 +413,12 @@ function clearBaseOnly(){
 
 // Place two corner stamps into a center-origin group
 async function makeStampedGroup(img, bw, bh, wmWidthRatio){
+  // No-op when global flag is set to prevent stamp flicker
+  if (window.__RA_NO_STAMP_GROUPS) {
+    const group = new fabric.Group([img], { originX:"center", originY:"center" });
+    return group;
+  }
+
   const wmTL = await fabricFromURL(WM_SRC);
   const wmBR = await fabricFromURL(WM_SRC);
   const wmTargetW = Math.max(16, bw * wmWidthRatio);
@@ -509,7 +518,8 @@ async function addOverlayToCanvas(src, isPermanent){
   if (isFinite(sc) && sc > 0) img.scale(sc);
 
   let obj;
-  if (isPermanent) {
+  if (isPermanent || window.__RA_NO_STAMP_GROUPS) {
+    // Add image directly when permanent or stamp groups disabled
     img._kind = "overlay";
     obj = img;
   } else {
@@ -1048,6 +1058,8 @@ safeAddListener("duplicate","click", ()=>{
   const o = canvas.getActiveObject(); if (!o) return;
   o.clone(c=>{
     c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
+    // Preserve _kind property from original for Clear All Overlays to work
+    c._kind = o._kind || 'overlay';
     canvas.add(c).setActiveObject(c);
     canvas.requestRenderAll();
   });
@@ -1230,6 +1242,8 @@ document.addEventListener("keydown", (e)=>{
     try {
       o.clone(cl => {
         cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 });
+        // Preserve _kind property from original for Clear All Overlays to work
+        cl._kind = o._kind || 'overlay';
         c.add(cl);
         c.setActiveObject(cl);
         c.requestRenderAll();
@@ -1256,6 +1270,13 @@ document.addEventListener("keydown", (e)=>{
 /* -------- SNAP + ALIGN UI (fixed to use window.canvas safely) -------- */
 (function snapAlign(){
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Retry if canvas isn't ready yet
+  const c = C();
+  if (!c) {
+    setTimeout(snapAlign, 250);
+    return;
+  }
 
   // UI row (Center buttons + Snap toggle)
   const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
@@ -1294,8 +1315,6 @@ document.addEventListener("keydown", (e)=>{
   window.__snapOn = true;
 
   // Fabric event wiring (only once per canvas instance)
-  const c = C();
-  if (!c) return; // canvas not ready yet — this IIFE is cheap and can re-run later if you call it
   if (c.__snapWired) return;
   c.__snapWired = true;
 
@@ -6157,12 +6176,26 @@ tile.appendChild(cap);
   async function connect(){
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected (MetaMask/Coinbase).'; return; }
+    
+    // Reentrancy guard
+    if (window.__RA_CONNECTING){ out.textContent='Connection already in progress...'; return; }
+    window.__RA_CONNECTING = true;
+    
     try{
       const accounts = await eth.request({ method:'eth_requestAccounts' });
       const chainId  = await eth.request({ method:'eth_chainId' });
       const address  = accounts?.[0] || null;
       setConnected(!!address, address, chainId, eth, 'Connected. Click “Check holdings”.');
-    }catch(_){ out.textContent = 'Connect cancelled or failed.'; }
+    }catch(err){ 
+      // Better error message for code 4001 cancels
+      if (err && err.code === 4001) {
+        out.textContent = 'Connection request was cancelled by user.';
+      } else {
+        out.textContent = 'Connect cancelled or failed.';
+      }
+    } finally {
+      window.__RA_CONNECTING = false;
+    }
   }
   async function refresh(){
     const eth = window.ethereum;
