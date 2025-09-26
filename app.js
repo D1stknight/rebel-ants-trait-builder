@@ -159,6 +159,9 @@ function normalize(u){
   // Create/show ring watermark unless holder; otherwise hide it.
   window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
     const c = C(); if (!c) return;
+    
+    // Guard against watermark changes during restore operations
+    if (window.__RA_RESTORING__) return;
 
     // If wallet is holder, hide any ring watermark and bail (footer stays)
     if (isHolder()) {
@@ -3801,6 +3804,9 @@ const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' 
   // ---------- centered watermark layer ----------
   function ensureCenteredWM(c){
     if (!c || !STATE.img) return;
+    
+    // Guard against watermark changes during restore operations
+    if (window.__RA_RESTORING__) return;
 
     const base = findBase(c);
     const hasBase = !!base;
@@ -3950,14 +3956,20 @@ const shouldShow =
       });
 
     // 🔔 Wallet holder status changed → re-evaluate watermark
-    document.addEventListener('ra-holder-update', ()=> ensureCenteredWM(c)); 
-    document.addEventListener('ra-wm-recalc',    ()=> ensureCenteredWM(c));
+    document.addEventListener('ra-holder-update', ()=> { 
+      if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
+    }); 
+    document.addEventListener('ra-wm-recalc', ()=> { 
+      if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
+    });
     }
 
     // 4) keep WM scaled if canvas element resizes
     try {
       const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-      new ResizeObserver(()=> ensureCenteredWM(c)).observe(el);
+      new ResizeObserver(()=> { 
+        if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
+      }).observe(el);
     } catch(_) {}
 
     // 5) admin UI
@@ -8469,6 +8481,10 @@ window.raDump = () => {
   // Create or show the center ring watermark when rules say it should be visible.
   function ensureRingPresent(){
     const c = C(); if (!c) return;
+    
+    // Guard against watermark changes during restore operations
+    if (window.__RA_RESTORING__) return;
+    
     const all  = c.getObjects?.() || [];
     const base = all.find(isBase);
     if (!base) return;
