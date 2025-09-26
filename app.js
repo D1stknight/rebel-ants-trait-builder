@@ -9131,4 +9131,414 @@ document.addEventListener('ra-collection-change', (e) => {
 
 
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
+
+/* ==========================================================
+   UNIFIED_WATERMARK_CONTROLLER_v1
+   
+   Replaces seven overlapping watermark systems with a single unified controller:
+   - Loads & saves settings via /api/ra-settings 
+   - Provides Admin dock (only with ?admin=1) for toggling settings and saving
+   - Honors wallet holder gating (Rebel holders locally suppress watermark)
+   - Distinguishes token vs upload bases with flags _isTokenBase / _isUploadBase
+   - Shows fallback watermark if no base image but user overlays/text exist (respects showOnUploads)
+   - Keeps stable layer order (bg -> base -> watermark -> overlays/text -> footer)
+   - Avoids repeated / burst re-renders common in the legacy patches
+   ========================================================== */
+(() => {
+  if (window.__UNIFIED_WATERMARK_CONTROLLER_V1__) return;
+  window.__UNIFIED_WATERMARK_CONTROLLER_V1__ = true;
+
+  // ---------- Core Configuration ----------
+  const API_ENDPOINT = '/api/ra-settings';
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+  
+  // ---------- Helpers ----------
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $ = (id) => document.getElementById(id);
+  
+  // ---------- State Management ----------
+  let STATE = {
+    enabled: true,
+    showOnTokens: true,
+    showOnUploads: true,
+    opacity: 0.18,
+    sizePct: 0.22,
+    img: null
+  };
+  
+  let debounceTimer = null;
+  let resizeObserver = null;
+  
+  // ---------- Settings API ----------
+  async function loadSettings() {
+    try {
+      const response = await fetch(API_ENDPOINT);
+      const data = await response.json();
+      if (data.ok && data.settings) {
+        STATE = { ...STATE, ...data.settings };
+        return data.settings;
+      }
+    } catch (e) {
+      console.warn('Failed to load watermark settings:', e);
+    }
+    return null;
+  }
+  
+  async function saveSettings() {
+    try {
+      const response = await fetch(API_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: STATE.enabled,
+          showOnTokens: STATE.showOnTokens,
+          showOnUploads: STATE.showOnUploads,
+          opacity: STATE.opacity,
+          sizePct: STATE.sizePct
+        })
+      });
+      const data = await response.json();
+      return data.ok;
+    } catch (e) {
+      console.warn('Failed to save watermark settings:', e);
+      return false;
+    }
+  }
+  
+  // ---------- Watermark Image Loading ----------
+  async function ensureWatermarkImage() {
+    if (STATE.img) return STATE.img;
+    
+    try {
+      if (window.raWatermark && typeof window.raWatermark.ready === 'function') {
+        await window.raWatermark.ready();
+        STATE.img = window.raWatermark.img() || null;
+      }
+      
+      if (!STATE.img) {
+        // Fallback loading
+        STATE.img = await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+        });
+      }
+      
+      return STATE.img;
+    } catch (e) {
+      console.warn('Failed to load watermark image:', e);
+      return null;
+    }
+  }
+  
+  // ---------- Canvas State Analysis ----------
+  function findBase(canvas) {
+    if (!canvas) return null;
+    return (canvas.getObjects() || []).find(o => o && o._isBase && !o._isBgRect) || null;
+  }
+  
+  function hasUserContent(canvas) {
+    if (!canvas) return false;
+    return !!(canvas.getObjects() || []).find(o => 
+      o && !o._isBgRect && !o._raWMCenter && !o._raWMOverlayFallback && !o._raSys
+    );
+  }
+  
+  function isTokenBase(base) {
+    return base && base._isTokenBase === true;
+  }
+  
+  function isUploadBase(base) {
+    return base && base._isUploadBase === true;
+  }
+  
+  // ---------- Layer Ordering ----------
+  function enforceLayerOrder(canvas) {
+    if (!canvas) return;
+    
+    const objects = canvas.getObjects() || [];
+    const layers = {
+      bg: [],
+      base: [],
+      watermark: [],
+      content: [],
+      footer: []
+    };
+    
+    // Categorize objects
+    objects.forEach(obj => {
+      if (obj._isBgRect) layers.bg.push(obj);
+      else if (obj._isBase) layers.base.push(obj);
+      else if (obj._raWMCenter || obj._raWMOverlayFallback) layers.watermark.push(obj);
+      else if (obj._raFooter || obj._raBrandFooter) layers.footer.push(obj);
+      else layers.content.push(obj);
+    });
+    
+    // Reorder: bg -> base -> watermark -> content -> footer
+    const orderedObjects = [
+      ...layers.bg,
+      ...layers.base,
+      ...layers.watermark,
+      ...layers.content,
+      ...layers.footer
+    ];
+    
+    // Only reorder if necessary
+    const needsReorder = objects.some((obj, idx) => obj !== orderedObjects[idx]);
+    if (needsReorder) {
+      // Clear and re-add in correct order
+      canvas._objects.length = 0;
+      orderedObjects.forEach(obj => canvas._objects.push(obj));
+    }
+  }
+  
+  // ---------- Watermark Application ----------
+  async function applyWatermark(force = false) {
+    const canvas = C();
+    if (!canvas) return;
+    
+    await ensureWatermarkImage();
+    if (!STATE.img) return;
+    
+    const base = findBase(canvas);
+    const hasBase = !!base;
+    const isToken = isTokenBase(base);
+    const hasContent = hasUserContent(canvas);
+    
+    // Check wallet holder override
+    const holderForce = window.__raWMForce;
+    let shouldShow = false;
+    
+    if (holderForce && holderForce.off) {
+      // Rebel holders: locally suppress watermark
+      shouldShow = false;
+    } else if (holderForce && holderForce.on) {
+      // Force on
+      shouldShow = true;
+    } else if (hasBase) {
+      // Base image exists: honor token/upload settings
+      shouldShow = STATE.enabled && (
+        (isToken && STATE.showOnTokens) || 
+        (!isToken && STATE.showOnUploads)
+      );
+    } else if (hasContent && STATE.showOnUploads) {
+      // Fallback: no base but has overlays/text, show if showOnUploads enabled
+      shouldShow = STATE.enabled;
+    }
+    
+    // Find existing watermark
+    let watermark = (canvas.getObjects() || []).find(o => 
+      o && (o._raWMCenter || o._raWMOverlayFallback)
+    );
+    
+    if (!shouldShow) {
+      if (watermark) {
+        canvas.remove(watermark);
+        enforceLayerOrder(canvas);
+        canvas.requestRenderAll();
+      }
+      return;
+    }
+    
+    // Create or update watermark
+    if (!watermark) {
+      watermark = new fabric.Image(STATE.img, {
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+        hasControls: false,
+        _raWMCenter: hasBase,
+        _raWMOverlayFallback: !hasBase,
+        _raSys: true
+      });
+      canvas.add(watermark);
+    }
+    
+    // Position and scale
+    const canvasWidth = canvas.getWidth();
+    const canvasHeight = canvas.getHeight();
+    const targetWidth = Math.max(16, canvasWidth * STATE.sizePct);
+    const scale = targetWidth / (STATE.img.width || targetWidth);
+    
+    watermark.set({
+      left: canvasWidth / 2,
+      top: canvasHeight / 2,
+      scaleX: scale,
+      scaleY: scale,
+      opacity: STATE.opacity
+    });
+    
+    watermark.setCoords();
+    enforceLayerOrder(canvas);
+    canvas.requestRenderAll();
+  }
+  
+  // ---------- Admin Interface ----------
+  function createAdminDock() {
+    if (!isAdmin) return;
+    
+    const existing = $('raUnifiedWMAdmin');
+    if (existing) return;
+    
+    const dock = document.createElement('div');
+    dock.id = 'raUnifiedWMAdmin';
+    dock.innerHTML = `
+      <div style="position:fixed; top:10px; right:10px; z-index:9999; background:#1f2937; border:1px solid #374151; border-radius:8px; padding:16px; color:#e5e7eb; font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial; min-width:280px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <strong>Watermark Settings</strong>
+          <button id="raWMHide" style="background:none; border:none; color:#9ca3af; cursor:pointer; font-size:16px;">&times;</button>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input id="raWMEnabled" type="checkbox"> Enabled
+          </label>
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input id="raWMShowTokens" type="checkbox"> Show on tokens
+          </label>
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input id="raWMShowUploads" type="checkbox"> Show on uploads
+          </label>
+          <label style="display:flex; align-items:center; gap:8px;">
+            Opacity: <input id="raWMOpacity" type="range" min="0" max="1" step="0.01" style="flex:1; margin-left:8px;">
+          </label>
+          <label style="display:flex; align-items:center; gap:8px;">
+            Size: <input id="raWMSize" type="range" min="0.05" max="1" step="0.01" style="flex:1; margin-left:8px;">
+          </label>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <button id="raWMSave" style="flex:1; padding:6px; background:#059669; border:none; border-radius:4px; color:white; cursor:pointer;">Save</button>
+            <button id="raWMRefresh" style="flex:1; padding:6px; background:#374151; border:none; border-radius:4px; color:white; cursor:pointer;">Refresh</button>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(dock);
+    
+    // Wire up controls
+    const enabledEl = $('raWMEnabled');
+    const tokensEl = $('raWMShowTokens');
+    const uploadsEl = $('raWMShowUploads');
+    const opacityEl = $('raWMOpacity');
+    const sizeEl = $('raWMSize');
+    
+    function updateUI() {
+      if (enabledEl) enabledEl.checked = STATE.enabled;
+      if (tokensEl) tokensEl.checked = STATE.showOnTokens;
+      if (uploadsEl) uploadsEl.checked = STATE.showOnUploads;
+      if (opacityEl) opacityEl.value = STATE.opacity;
+      if (sizeEl) sizeEl.value = STATE.sizePct;
+    }
+    
+    function readUI() {
+      STATE.enabled = enabledEl ? enabledEl.checked : STATE.enabled;
+      STATE.showOnTokens = tokensEl ? tokensEl.checked : STATE.showOnTokens;
+      STATE.showOnUploads = uploadsEl ? uploadsEl.checked : STATE.showOnUploads;
+      STATE.opacity = opacityEl ? parseFloat(opacityEl.value) : STATE.opacity;
+      STATE.sizePct = sizeEl ? parseFloat(sizeEl.value) : STATE.sizePct;
+    }
+    
+    updateUI();
+    
+    // Event handlers
+    [enabledEl, tokensEl, uploadsEl].forEach(el => {
+      if (el) el.addEventListener('change', () => {
+        readUI();
+        debouncedApply();
+      });
+    });
+    
+    [opacityEl, sizeEl].forEach(el => {
+      if (el) el.addEventListener('input', () => {
+        readUI();
+        debouncedApply();
+      });
+    });
+    
+    const saveBtn = $('raWMSave');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        readUI();
+        const success = await saveSettings();
+        saveBtn.textContent = success ? 'Saved!' : 'Error';
+        setTimeout(() => { saveBtn.textContent = 'Save'; }, 1500);
+        debouncedApply();
+      });
+    }
+    
+    const refreshBtn = $('raWMRefresh');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', async () => {
+        await loadSettings();
+        updateUI();
+        debouncedApply();
+      });
+    }
+    
+    const hideBtn = $('raWMHide');
+    if (hideBtn) {
+      hideBtn.addEventListener('click', () => {
+        dock.style.display = 'none';
+      });
+    }
+  }
+  
+  // ---------- Debounced Application ----------
+  function debouncedApply() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => applyWatermark(), 100);
+  }
+  
+  // ---------- Event Wiring ----------
+  function wireEvents() {
+    const canvas = C();
+    if (!canvas || canvas.__unifiedWMWired) return;
+    canvas.__unifiedWMWired = true;
+    
+    // Canvas object events
+    canvas.on('object:added', debouncedApply);
+    canvas.on('object:removed', debouncedApply);
+    canvas.on('object:modified', debouncedApply);
+    
+    // Canvas resize
+    try {
+      const element = canvas.getElement ? canvas.getElement() : (canvas.wrapperEl || canvas.upperCanvasEl);
+      if (element && !resizeObserver) {
+        resizeObserver = new ResizeObserver(debouncedApply);
+        resizeObserver.observe(element);
+      }
+    } catch (e) {}
+    
+    // Wallet holder events
+    document.addEventListener('ra-holder-update', debouncedApply);
+    document.addEventListener('ra-wm-recalc', debouncedApply);
+  }
+  
+  // ---------- Initialization ----------
+  async function initialize() {
+    await loadSettings();
+    createAdminDock();
+    wireEvents();
+    debouncedApply();
+  }
+  
+  // ---------- Backward Compatibility ----------
+  if (!window.raWM) {
+    window.raWM = {
+      update: () => debouncedApply(),
+      getState: () => ({ ...STATE }),
+      apply: applyWatermark
+    };
+  }
+  
+  // ---------- Bootstrap ----------
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initialize, { once: true });
+  } else {
+    setTimeout(initialize, 0);
+  }
+  
+})();
 ;
