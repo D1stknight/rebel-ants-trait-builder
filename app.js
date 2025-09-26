@@ -159,6 +159,9 @@ function normalize(u){
   // Create/show ring watermark unless holder; otherwise hide it.
   window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
     const c = C(); if (!c) return;
+    
+    // Guard against watermark changes during restore operations
+    if (window.__RA_RESTORING__) return;
 
     // If wallet is holder, hide any ring watermark and bail (footer stays)
     if (isHolder()) {
@@ -1022,16 +1025,27 @@ safeAddListener("duplicate","click", ()=>{
   o.clone(c=>{
     c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
     
-    // Implementation C: recursively set _kind='overlay' on the clone and children
-    function setOverlayKind(obj) {
-      if (obj) {
-        obj._kind = 'overlay';
-        if (obj._objects && Array.isArray(obj._objects)) {
-          obj._objects.forEach(setOverlayKind);
-        }
-      }
-    }
-    setOverlayKind(c);
+// Preserve permanence flag from original
+if (typeof o?._isPermanent !== 'undefined') {
+  c._isPermanent = o._isPermanent;
+}
+
+// Force the clone and its children to be treated as overlays
+function setOverlayKindDeep(obj) {
+  if (!obj) return;
+
+  // Skip system/base/watermark/bg/token-id elements
+  const isSystem =
+    obj._raSys || obj._isWatermark || obj._isBgRect || obj._isBase || obj._raWMCenter || obj._raTokenId;
+
+  if (!isSystem) {
+    obj._kind = 'overlay';
+  }
+
+  const children = (typeof obj.getObjects === 'function' ? obj.getObjects() : obj._objects) || [];
+  children.forEach(setOverlayKindDeep);
+}
+setOverlayKindDeep(c);
     
     canvas.add(c).setActiveObject(c);
     canvas.requestRenderAll();
@@ -1158,20 +1172,65 @@ safeAddListener("unlockAll","click", ()=>{
   c.requestRenderAll();
 });
 
-safeAddListener("clearAllOverlays","click", ()=>{
-  // Implementation C: Remove any object with _kind==='overlay' and any group containing overlay children
-  function hasOverlayChildren(obj) {
-    if (obj && obj._objects && Array.isArray(obj._objects)) {
-      return obj._objects.some(child => child._kind === 'overlay' || hasOverlayChildren(child));
+safeAddListener("clearAllOverlays", "click", () => {
+  const isSystem = (o) =>
+    o?._raSys || o?._isWatermark || o?._isBgRect || o?._isBase || o?._raWMCenter || o?._raTokenId;
+
+  const isRemovableOverlay = (o) =>
+    o && o._kind === "overlay" && !o._isPermanent && !isSystem(o);
+
+  function removeChildFromGroup(group, child) {
+    // Prefer Fabric APIs when available
+    if (typeof group.removeWithUpdate === "function") {
+      group.removeWithUpdate(child);
+    } else if (typeof group.remove === "function") {
+      group.remove(child);
+      // best-effort bounds update
+      group._calcBounds?.();
+      group.setCoords?.();
+    } else if (Array.isArray(group._objects)) {
+      // Fallback: mutate internal array
+      group._objects = group._objects.filter((o) => o !== child);
+      group._calcBounds?.();
+      group.setCoords?.();
     }
-    return false;
   }
-  
-  canvas.getObjects().slice().forEach(o => { 
-    if (o._kind === 'overlay' || hasOverlayChildren(o)) {
-      canvas.remove(o); 
+
+  function pruneGroupRecursive(obj) {
+    if (!obj || typeof obj.getObjects !== "function") return;
+
+    // Copy to avoid mutation during iteration
+    const children = (obj.getObjects?.() || obj._objects || []).slice();
+
+    children.forEach((child) => {
+      if (isRemovableOverlay(child)) {
+        removeChildFromGroup(obj, child);
+      } else if (typeof child.getObjects === "function" || child.type === "group") {
+        pruneGroupRecursive(child);
+        const remaining = child.getObjects?.() || child._objects || [];
+        if (remaining.length === 0 && !child._isPermanent) {
+          removeChildFromGroup(obj, child);
+        }
+      }
+    });
+  }
+
+  // Pass 1: remove top-level removable overlays; prune groups recursively
+  (canvas.getObjects?.() || []).slice().forEach((o) => {
+    if (isRemovableOverlay(o)) {
+      canvas.remove(o);
+    } else if (typeof o.getObjects === "function" || o.type === "group") {
+      pruneGroupRecursive(o);
+      const remaining = o.getObjects?.() || o._objects || [];
+      if (remaining.length === 0 && (o._kind === "overlay" || !o._isPermanent)) {
+        canvas.remove(o);
+      }
     }
   });
+
+  canvas.discardActiveObject?.();
+  canvas.requestRenderAll?.();
+});
   canvas.requestRenderAll();
 });
 
@@ -1302,40 +1361,92 @@ document.addEventListener("keydown", (e)=>{
 
   window.__snapOn = true;
 
-  function halfW(o){
-    return (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) / 2;
-  }
-  function halfH(o){
-    return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2;
-  }
+// Helpers to get half width/height with scale applied
+function halfW(o){
+  return (o?.getScaledWidth ? o.getScaledWidth() : (o?.width||0)*(o?.scaleX||1)) / 2;
+}
+function halfH(o){
+  return (o?.getScaledHeight ? o.getScaledHeight() : (o?.height||0)*(o?.scaleY||1)) / 2;
+}
 
-  // Implementation D: Retry-bind object:moving and mouse:up once canvas is ready; wire only once
-  function wireSnapEvents() {
-    const c = C();
-    if (!c) {
-      // Retry after a short delay if canvas not ready
-      setTimeout(wireSnapEvents, 120);
-      return;
+// Snap wiring with capped retry/backoff; wire only once
+function wireSnap(retries = 0) {
+  const c = C();
+  if (!c) {
+    if (retries < 10) {
+      setTimeout(() => wireSnap(retries + 1), 100 * Math.pow(1.5, retries));
     }
-    if (c.__snapWired) return; // Wire only once
-    c.__snapWired = true;
+    return;
+  }
+  if (c.__snapWired) return;
+  c.__snapWired = true;
 
-    function isSnapTarget(o) {
-      // Implementation D: On object:moving, snap only overlays/text (exclude bg/base/system/watermark)
-      if (!o) return false;
-      if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase) return false;
-      if (o._raTokenId) return false; // exclude token ID text
-      
-      const kind = (o._kind || '').toLowerCase();
-      const type = (o.type || '').toLowerCase();
-      
-      // Include overlays, stickers, icons, and text objects
-      return kind === 'overlay' || kind === 'sticker' || kind === 'icon' || 
-             kind === 'customtext' || type === 'textbox' || type === 'i-text' || type === 'text';
+  // Only overlays/stickers/icons/text; exclude bg/base/system/watermark/token-id
+  function isSnapTarget(o) {
+    if (!o) return false;
+    if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase) return false;
+    if (o._raTokenId) return false; // exclude token ID display
+    const kind = (o._kind || '').toLowerCase();
+    const type = (o.type || '').toLowerCase();
+    return kind === 'overlay' || kind === 'sticker' || kind === 'icon' ||
+           kind === 'customtext' || type === 'textbox' || type === 'i-text' || type === 'text';
+  }
+
+  function clampSnap(o){
+    if (!window.__snapOn || !isSnapTarget(o)) return;
+
+    const cw = (typeof c.getWidth === 'function') ? c.getWidth() : (c.width || 0);
+    const ch = (typeof c.getHeight === 'function') ? c.getHeight() : (c.height || 0);
+    if (!cw || !ch) return;
+
+    const tol = 8;
+    const hw = halfW(o);
+    const hh = halfH(o);
+
+    // Current edges/center of object
+    let left = o.left ?? 0;
+    let top  = o.top  ?? 0;
+    const width  = hw * 2;
+    const height = hh * 2;
+
+    const objCenterX = left + hw;
+    const objCenterY = top + hh;
+    const objRight   = left + width;
+    const objBottom  = top  + height;
+
+    // Canvas references
+    const canvasCenterX = cw / 2;
+    const canvasCenterY = ch / 2;
+
+    // Snap to canvas center lines
+    if (Math.abs(objCenterX - canvasCenterX) <= tol) {
+      left = canvasCenterX - hw;
+    }
+    if (Math.abs(objCenterY - canvasCenterY) <= tol) {
+      top = canvasCenterY - hh;
     }
 
-    function clampSnap(o){
-      if (!window.__snapOn || !isSnapTarget(o)) return;
+    // Snap to canvas edges
+    if (Math.abs(left - 0) <= tol) left = 0;                         // left edge
+    if (Math.abs(top - 0) <= tol) top = 0;                           // top edge
+    if (Math.abs(objRight - cw) <= tol) left = cw - width;           // right edge
+    if (Math.abs(objBottom - ch) <= tol) top = ch - height;          // bottom edge
+
+    // Apply
+    o.set({ left, top });
+    o.setCoords?.();
+  }
+
+  // Events: snap while moving; finalize on mouse up
+  c.on?.('object:moving', (e) => {
+    const o = e?.target;
+    clampSnap(o);
+  });
+
+  c.on?.('mouse:up', () => {
+    c.requestRenderAll?.();
+  });
+}
       const tol = 8, cw=c.getWidth(), ch=c.getHeight();
       const hw=halfW(o), hh=halfH(o);
       // centers
@@ -1348,12 +1459,8 @@ document.addEventListener("keydown", (e)=>{
       if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
     }
 
-    c.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
-    c.on("mouse:up", ()=> c.requestRenderAll());
-  }
-
-  // Start the wiring process
-  wireSnapEvents();
+// Initialize with retry/backoff; event handlers are wired inside wireSnap()
+wireSnap();
 })();
 
 /* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
@@ -3357,17 +3464,28 @@ c.on('object:removed', (e)=>{
     if (!o) return false;
     if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
     if (isBg(o) || isBase(o) || isText(o)) return false;
-    
-    const k = (o._kind||'').toLowerCase();
-    // Implementation E: Return true only for _kind in ['overlay','sticker','icon']
-    if (k === 'overlay' || k === 'sticker' || k === 'icon') return true;
-    
-    // For groups, include only if all drawable children are overlays
-    if (o.type === 'group' && o._objects && Array.isArray(o._objects)) {
-      return o._objects.every(child => isOverlay(child) || !child); // all children must be overlays or falsy
-    }
-    
-    return false; // Default to false to ensure watermarks/footers are excluded
+function isOverlay(o) {
+  if (!o) return false;
+
+  // Exclude system objects, watermarks, base/bg, token id, and non-interactive
+  if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
+  if (o.selectable === false || o.evented === false) return false;
+
+  const k = (o._kind || '').toLowerCase();
+
+  // Include only specific overlay types
+  if (k === 'overlay' || k === 'sticker' || k === 'icon') return true;
+
+  // For groups, include only if all children are valid overlays
+  if (o.type === 'group' || typeof o.getObjects === 'function') {
+    const children = o.getObjects?.() || o._objects || [];
+    if (!children.length) return false;
+    return children.every(child => isOverlay(child));
+  }
+
+  // Default: exclude unknowns from animation
+  return false;
+}
   };
 
   function pickTargets(c, scope){
@@ -3753,6 +3871,9 @@ const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' 
     if (window.__RA_RESTORING__) return;
     
     if (!c || !STATE.img) return;
+    
+    // Guard against watermark changes during restore operations
+    if (window.__RA_RESTORING__) return;
 
     const base = findBase(c);
     const hasBase = !!base;
@@ -3863,28 +3984,59 @@ const shouldShow =
       c.__raNoStampsV2 = true;
 
       c.on('object:added', (e)=>{
+        // Guard against watermark re-evaluation during restore operations
+        if (window.__RA_RESTORING__) return;
+        
         const t = e?.target;
         if (!t) return;
 
         if (t.type==='group'){
           if (stripStampsFromGroup(t)) c.requestRenderAll();
         }
-        // keep WM consistent
-        ensureCenteredWM(c);
+        
+        // Only re-evaluate watermark for base image changes, not overlays/text
+        if (t._kind === 'base' || t._isBase) {
+          ensureCenteredWM(c);
+        }
       });
 
-      c.on('object:modified', ()=> ensureCenteredWM(c));
-      c.on('object:removed',  ()=> ensureCenteredWM(c));
+      c.on('object:modified', (e)=> {
+        // Guard against watermark re-evaluation during restore operations
+        if (window.__RA_RESTORING__) return;
+        
+        const t = e?.target;
+        // Only re-evaluate watermark for base image changes, not overlays/text
+        if (!t || t._kind === 'base' || t._isBase) {
+          ensureCenteredWM(c);
+        }
+      });
+      
+      c.on('object:removed', (e)=> {
+        // Guard against watermark re-evaluation during restore operations
+        if (window.__RA_RESTORING__) return;
+        
+        const t = e?.target;
+        // Only re-evaluate watermark for base image changes, not overlays/text
+        if (!t || t._kind === 'base' || t._isBase) {
+          ensureCenteredWM(c);
+        }
+      });
 
     // 🔔 Wallet holder status changed → re-evaluate watermark
-    document.addEventListener('ra-holder-update', ()=> ensureCenteredWM(c)); 
-    document.addEventListener('ra-wm-recalc',    ()=> ensureCenteredWM(c));
+    document.addEventListener('ra-holder-update', ()=> { 
+      if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
+    }); 
+    document.addEventListener('ra-wm-recalc', ()=> { 
+      if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
+    });
     }
 
     // 4) keep WM scaled if canvas element resizes
     try {
       const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-      new ResizeObserver(()=> ensureCenteredWM(c)).observe(el);
+      new ResizeObserver(()=> { 
+        if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
+      }).observe(el);
     } catch(_) {}
 
     // 5) admin UI
@@ -6208,27 +6360,40 @@ tile.appendChild(cap);
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected (MetaMask/Coinbase).'; return; }
     
-    // Implementation F: Wrap eth_requestAccounts with a CONNECTING guard to avoid concurrent requests
-    if (CONNECTING) {
-      out.textContent = 'Connection in progress...';
-      return;
-    }
-    
-    CONNECTING = true;
+} finally {
+  window.__walletConnecting = false;
+  if (typeof CONNECTING !== 'undefined') CONNECTING = false;
+}
     try{
+      out.textContent = 'Connecting...';
       const accounts = await eth.request({ method:'eth_requestAccounts' });
       const chainId  = await eth.request({ method:'eth_chainId' });
       const address  = accounts?.[0] || null;
       setConnected(!!address, address, chainId, eth, 'Connected. Click “Check holdings”.');
     }catch(err){ 
-      // Implementation F: show a friendly message only for error code 4001 (cancelled)
-      if (err && err.code === 4001) {
-        out.textContent = 'Connection cancelled by user.';
-      } else {
-        out.textContent = 'Connection failed. Please try again.';
+} catch (err) {
+  // Handle user cancellation (error code 4001) more gracefully
+  if (err && err.code === 4001) {
+    if (out) out.textContent = 'Request cancelled';
+    // Clear the message after a short delay for next attempt
+    setTimeout(() => {
+      if (out && out.textContent === 'Request cancelled') out.textContent = '';
+    }, 2000);
+  } else {
+    console.error('Wallet connect error:', err);
+    if (out) out.textContent = 'Connection failed. Please try again.';
+    // Clear error message after delay
+    setTimeout(() => {
+      if (out && (out.textContent === 'Connection failed' || out.textContent === 'Connection failed. Please try again.')) {
+        out.textContent = '';
       }
-    } finally {
-      CONNECTING = false;
+    }, 3000);
+  }
+} finally {
+  // Clear both reentrancy flags
+  window.__walletConnecting = false;
+  if (typeof CONNECTING !== 'undefined') CONNECTING = false;
+}
     }
   }
   async function refresh(){
@@ -6247,7 +6412,16 @@ tile.appendChild(cap);
   }
   function disconnect(){
     // Soft disconnect: clear our UI/state. For a full revoke, user disconnects in wallet UI.
+    // Reset holder state and re-evaluate watermarks for non-holders
+    window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
+    window.__raWMForce = null; // Remove any holder-based watermark override
+    
     setDisconnected('Disconnected in app. (Use the wallet menu to fully disconnect this site.)');
+    
+    // Trigger watermark re-evaluation for non-holder state
+    try { 
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
+    } catch(_) {}
   }
 
   function setConnected(ok, address, chainId, provider, msg){
@@ -6264,12 +6438,22 @@ tile.appendChild(cap);
   }
   function setDisconnected(msg){
     window.RA_WALLET_STATE = { connected:false, address:null, chainId:null, provider:null };
+    
+    // Reset holder state when disconnected
+    window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
+    window.__raWMForce = null; // Remove any holder-based watermark override
+    
     qs('#raW_connect', box).style.display  = '';
     btnRefresh.style.display = 'none';
     btnDisc.style.display    = 'none';
     row1.style.display       = 'none';
     actions.style.display    = 'none';
     out.textContent          = msg || '';
+    
+    // Trigger watermark re-evaluation for non-holder state
+    try { 
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
+    } catch(_) {}
   }
 
   // --- Holdings
@@ -6483,7 +6667,16 @@ tile.appendChild(cap);
 
     // App‑level events that can change what should show
     ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
-      document.addEventListener(ev, () => { ensure(); });
+      document.addEventListener(ev, (e) => {
+        // For collection changes, only respond if there's a base image loaded
+        if (ev === 'ra-collection-change') {
+          const c = C();
+          if (!c) return;
+          const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+          if (!base) return; // No base loaded yet, skip watermark evaluation
+        }
+        ensure();
+      });
     });
   }
 
@@ -8368,6 +8561,10 @@ window.raDump = () => {
     if (window.__RA_RESTORING__) return;
     
     const c = C(); if (!c) return;
+    
+    // Guard against watermark changes during restore operations
+    if (window.__RA_RESTORING__) return;
+    
     const all  = c.getObjects?.() || [];
     const base = all.find(isBase);
     
@@ -8474,7 +8671,16 @@ window.raDump = () => {
 
     // React to admin/wallet/rules changes
     ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, () => { ensureRingPresent(); }));
+      .forEach(ev => document.addEventListener(ev, (e) => { 
+        // For collection changes, only respond if there's a base image loaded
+        if (ev === 'ra-collection-change') {
+          const c = C();
+          if (!c) return;
+          const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+          if (!base) return; // No base loaded yet, skip watermark evaluation
+        }
+        ensureRingPresent();
+      }));
 
     // Keep ring centered on canvas size changes
     try {
@@ -8628,7 +8834,16 @@ window.raDump = () => {
 
     // Wallet or collection changes
     ['ra-holder-update','ra-collection-change','ra-wm-recalc'].forEach(ev=>{
-      document.addEventListener(ev, applyRules);
+      document.addEventListener(ev, (e) => {
+        // For collection changes, only respond if there's a base image loaded
+        if (ev === 'ra-collection-change') {
+          const c = C();
+          if (!c) return;
+          const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+          if (!base) return; // No base loaded yet, skip watermark evaluation
+        }
+        applyRules();
+      });
     });
 
     // Canvas resize (size dropdown etc.)
