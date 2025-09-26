@@ -9154,3 +9154,164 @@ document.addEventListener('ra-collection-change', (e) => {
 
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
 ;
+
+/* ===== WM CONSOLIDATION PHASE 1.1 PATCH =====
+   - Recreate / reassert watermark & footer after undo/redo or JSON restore
+   - Normalize oversize watermark from legacy sizePct (0.7+)
+   - Keep logic minimal until Phase 2 unified manager
+*/
+(function RA_WM_PHASE1_1_PATCH(){
+  if (window.__RA_WM_PHASE1_1__) return;
+  window.__RA_WM_PHASE1_1__ = true;
+
+  const MAX_WIDTH_PCT = 0.35;    // Cap watermark to 35% of canvas width (tweakable)
+  const LEGACY_LARGE_THRESHOLD = 0.50; // If stored sizePct > this, treat as legacy & normalize
+  const LEGACY_DEFAULT = 0.28;   // Normalized target for legacy large values
+  const FOOTER_TEXT = 'Powered by Rebel Studios';
+
+  function C(){
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+
+  function findWM(){
+    const c = C(); if (!c) return null;
+    return (c.getObjects()||[]).find(o => o && o._raWMCenter === true) || null;
+  }
+
+  function wmImageNaturalWidth(wm){
+    return wm?.width || wm?._element?.naturalWidth || 512;
+  }
+
+  function normalizeWatermark(){
+    const c = C(); if (!c) return;
+    const wm = findWM(); if (!wm) return;
+
+    // If an earlier admin sizePct implied a giant width, clamp it
+    try {
+      const cw = c.getWidth();
+      const ww = wm.getScaledWidth ? wm.getScaledWidth() : (wm.width * (wm.scaleX||1));
+      const maxW = cw * MAX_WIDTH_PCT;
+
+      if (ww > maxW + 1) {
+        const baseW = wmImageNaturalWidth(wm);
+        const scale = maxW / baseW;
+        wm.scaleX = wm.scaleY = scale;
+        wm.setCoords();
+      }
+
+      // If global STATE structure exists and has sizePct > threshold, silently adapt
+      if (window.STATE && typeof window.STATE.sizePct === 'number') {
+        if (window.STATE.sizePct > LEGACY_LARGE_THRESHOLD) {
+          window.STATE.sizePct = LEGACY_DEFAULT;
+        }
+      }
+    } catch(_) {}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  // --- Footer handling (very lightweight) ---
+  function findFooter(){
+    const c = C(); if (!c) return null;
+    return (c.getObjects()||[]).find(o =>
+      o && (o._raBrandFooter ||
+            o._raFooterId === 'footer-group' ||
+            (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text)))
+    ) || null;
+  }
+
+  function ensureFooter(){
+    const c = C(); if (!c) return;
+    if (findFooter()) return;
+    // Create a simple text footer in bottom-right corner
+    try {
+      if (!window.fabric) return;
+      const txt = new fabric.Text(FOOTER_TEXT, {
+        fontFamily: 'Inter, system-ui, Arial, sans-serif',
+        fontSize: 12,
+        fill: '#cfcfcf',
+        opacity: 0.88,
+        originX: 'right',
+        originY: 'bottom',
+        left: c.getWidth() - 10,
+        top:  c.getHeight() - 8,
+        selectable: false,
+        evented: false,
+        _raBrandFooter: true,
+        _raSys: true
+      });
+      c.add(txt);
+      c.bringToFront(txt);
+      c.requestRenderAll();
+    } catch(_){}
+  }
+
+  // Reassert both watermark & footer (order: create underlying, then fix scale)
+  function reassert(reason){
+    // Reason kept for debug if needed
+    try {
+      // If the active admin watermark creator is still around, trigger its recalculation
+      try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
+      // Normalize size AFTER potential re-creation
+      setTimeout(() => { normalizeWatermark(); ensureFooter(); }, 0);
+    } catch(_){}
+  }
+
+  // --- Patch undo/redo if exposed globally ---
+  (function patchUndoRedo(){
+    const g = window;
+    ['undo','redo'].forEach(fnName => {
+      if (typeof g[fnName] === 'function' && !g[fnName].__raWmPatched){
+        const orig = g[fnName];
+        g[fnName] = function(){
+          const out = orig.apply(this, arguments);
+            // Recapture / re-eval after history step
+            setTimeout(()=> reassert(fnName), 10);
+          return out;
+        };
+        g[fnName].__raWmPatched = true;
+      }
+    });
+  })();
+
+  // --- Patch Fabric loadFromJSON completion (if already patched earlier we piggyback) ---
+  (function patchLoadFromJSON(){
+    const c = C(); if (!c) { setTimeout(patchLoadFromJSON, 200); return; }
+    if (c.__raPhase1LoadPatch) return;
+    c.__raPhase1LoadPatch = true;
+    try {
+      const orig = c.loadFromJSON;
+      if (typeof orig === 'function'){
+        c.loadFromJSON = function(json, cb, reviver){
+          return orig.call(c, json, function(){
+            try { cb && cb(); } catch(_){}
+            // Reassert after restore sequence
+            setTimeout(()=> reassert('loadFromJSON'), 20);
+          }, reviver);
+        };
+      }
+    } catch(_){}
+  })();
+
+  // --- Listen for app-specific events that might already fire ---
+  document.addEventListener('ra-holder-update', ()=> {
+    // Holder gating may hide watermark; if it should be visible again ensure scale normalization
+    setTimeout(()=> normalizeWatermark(), 30);
+  });
+
+  // Basic object events (overlay deletes can remove footer accidentally)
+  (function wireCanvasEvents(){
+    const c = C(); if (!c) { setTimeout(wireCanvasEvents, 300); return; }
+    if (c.__raPhase1ObjPatch) return;
+    c.__raPhase1ObjPatch = true;
+    const rebalance = ()=> setTimeout(()=>{ normalizeWatermark(); ensureFooter(); }, 0);
+    c.on('object:removed', rebalance);
+    c.on('object:modified', rebalance);
+    c.on('object:added',   ()=> {
+      // Only normalize if a watermark exists & is too large
+      setTimeout(()=> normalizeWatermark(), 0);
+    });
+  })();
+
+  // Initial pass after page load (in case watermark is already oversized)
+  setTimeout(()=> { normalizeWatermark(); ensureFooter(); }, 400);
+})();
