@@ -3038,7 +3038,7 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     removeTempFabricWM
   });
 })();
-LEGACY WM REMOVED PHASE1 */
+/* LEGACY WM REMOVED PHASE1 END */
 /* ==========================================================
    RA_UNDO_REDO_SAFE_MINI_V1
    • Super‑safe: never restores anything unless you click Undo/Redo.
@@ -4845,7 +4845,7 @@ tile.appendChild(cap);
     wire();
   }
 })();
-LEGACY WM REMOVED PHASE1 */
+/* LEGACY WM REMOVED PHASE1 END */
 
 /* LEGACY WM REMOVED PHASE1
 /* ==========================================================
@@ -4976,7 +4976,7 @@ LEGACY WM REMOVED PHASE1 */
     loadFromServerAndApply();
   }
 })();
-LEGACY WM REMOVED PHASE1 */
+/* LEGACY WM REMOVED PHASE1 END */
 
 /* LEGACY WM REMOVED PHASE1
 /* ==========================================================
@@ -5043,7 +5043,7 @@ LEGACY WM REMOVED PHASE1 */
   }
   wire();
 })();
-LEGACY WM REMOVED PHASE1 */
+/* LEGACY WM REMOVED PHASE1 END */
 
 /* LEGACY WM REMOVED PHASE1
 /* ==========================================================
@@ -5207,7 +5207,7 @@ LEGACY WM REMOVED PHASE1 */
     boot();
   }
 })();
-LEGACY WM REMOVED PHASE1 */
+/* LEGACY WM REMOVED PHASE1 END */
 
 /* LEGACY WM REMOVED PHASE1
 /* ==========================================================
@@ -6490,7 +6490,7 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   // optional: try a silent refresh on load
   (async ()=>{ try{ await refresh(); }catch(_){} })();
 })();
-LEGACY WM REMOVED PHASE1 */
+/* LEGACY WM REMOVED PHASE1 END */
 
 /* LEGACY WM REMOVED PHASE1
 /* ========== RA_WM_HOLDER_GATING_v2 — wallet → watermark behavior (no loops) ========== */
@@ -6514,7 +6514,7 @@ LEGACY WM REMOVED PHASE1 */
   // Wallet checker emits 'ra-holder-update' with detail: { hasRebel, hasFriend, ... }
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
-LEGACY WM REMOVED PHASE1 */
+/* LEGACY WM REMOVED PHASE1 END */
 
 /* ================= UNIFIED_WATERMARK_CONTROLLER_v1 ================= */
 (() => {
