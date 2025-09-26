@@ -1319,135 +1319,115 @@ document.addEventListener("keydown", (e)=>{
     return;
   }
 });
-/* -------- SNAP + ALIGN UI (fixed to use window.canvas safely) -------- */
-(function snapAlign(){
+/* -------- SNAP + ALIGN UI (v2 – robust bounding box snapping) -------- */
+(function snapAlignV2(){
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // UI row (Center buttons + Snap toggle)
-  const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
-  const holder = header ? header.parentNode : document.body;
-
-  if (!document.getElementById("raSnapRow")){
-    const row = document.createElement("div");
-    row.id = "raSnapRow";
-    row.style.cssText = "margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
-    row.innerHTML = `
-      <button class="btn small" id="raCenterH">Center H</button>
-      <button class="btn small" id="raCenterV">Center V</button>
-      <button class="btn small" id="raCenterHV">Center HV</button>
-      <button class="btn small" id="raSnapToggle">Snap: On</button>
-      <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
-    `;
-    holder.appendChild(row);
-
-    // Button wiring uses a fresh canvas reference each click
-    document.getElementById("raSnapToggle").onclick = ()=>{
-      window.__snapOn = !window.__snapOn;
-      document.getElementById("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
-    };
-    function center(which){
-      const c = C(); if (!c) return;
-      const o = c.getActiveObject(); if(!o) return;
-      if (which==="H" || which==="HV") o.left = c.getWidth()/2;
-      if (which==="V" || which==="HV") o.top  = c.getHeight()/2;
-      o.setCoords(); c.requestRenderAll();
+  function ensureUI(){
+    let row = document.getElementById("raSnapRow");
+    if (!row){
+      const header = Array.from(document.querySelectorAll("h3,h2")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
+      const holder = header ? header.parentNode : document.body;
+      row = document.createElement("div");
+      row.id = "raSnapRow";
+      row.style.cssText = "margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
+      row.innerHTML = `
+        <button class="btn small" id="raCenterH">Center H</button>
+        <button class="btn small" id="raCenterV">Center V</button>
+        <button class="btn small" id="raCenterHV">Center HV</button>
+        <button class="btn small" id="raSnapToggle">Snap: On</button>
+        <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
+      `;
+      holder.appendChild(row);
+      document.getElementById("raCenterH").onclick  = ()=>center("H");
+      document.getElementById("raCenterV").onclick  = ()=>center("V");
+      document.getElementById("raCenterHV").onclick = ()=>center("HV");
     }
-    document.getElementById("raCenterH").onclick  = ()=>center("H");
-    document.getElementById("raCenterV").onclick  = ()=>center("V");
-    document.getElementById("raCenterHV").onclick = ()=>center("HV");
+    const toggle = document.getElementById("raSnapToggle");
+    if (toggle && !toggle.__wired){
+      toggle.__wired = true;
+      toggle.onclick = ()=>{
+        window.__snapOn = !window.__snapOn;
+        toggle.textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
+      };
+    }
   }
 
-  window.__snapOn = true;
-
-// Helpers to get half width/height with scale applied
-function halfW(o){
-  return (o?.getScaledWidth ? o.getScaledWidth() : (o?.width||0)*(o?.scaleX||1)) / 2;
-}
-function halfH(o){
-  return (o?.getScaledHeight ? o.getScaledHeight() : (o?.height||0)*(o?.scaleY||1)) / 2;
-}
-
-// Snap wiring with capped retry/backoff; wire only once
-function wireSnap(retries = 0) {
-  const c = C();
-  if (!c) {
-    if (retries < 10) {
-      setTimeout(() => wireSnap(retries + 1), 100 * Math.pow(1.5, retries));
-    }
-    return;
+  function center(which){
+    const c = C(); if (!c) return;
+    const o = c.getActiveObject(); if(!o) return;
+    const cw = c.getWidth(), ch = c.getHeight();
+    if (which==="H" || which==="HV") o.left = cw/2;
+    if (which==="V" || which==="HV") o.top  = ch/2;
+    o.setCoords(); c.requestRenderAll();
   }
-  if (c.__snapWired) return;
-  c.__snapWired = true;
 
-  // Only overlays/stickers/icons/text; exclude bg/base/system/watermark/token-id
-  function isSnapTarget(o) {
+  function isSnapTarget(o){
     if (!o) return false;
-    if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase) return false;
-    if (o._raTokenId) return false; // exclude token ID display
-    const kind = (o._kind || '').toLowerCase();
-    const type = (o.type || '').toLowerCase();
-    return kind === 'overlay' || kind === 'sticker' || kind === 'icon' ||
-           kind === 'customtext' || type === 'textbox' || type === 'i-text' || type === 'text';
+    if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
+    const kind = (o._kind||'').toLowerCase();
+    const t = (o.type||'').toLowerCase();
+    return kind==='overlay' || kind==='sticker' || kind==='icon' || kind==='customtext' ||
+           t==='textbox' || t==='i-text' || t==='text';
   }
 
-  function clampSnap(o){
+  function snapObject(o){
     if (!window.__snapOn || !isSnapTarget(o)) return;
+    const c = C(); if (!c) return;
+    let br;
+    try { br = o.getBoundingRect(true, true); } catch(_){ return; }
 
-    const cw = (typeof c.getWidth === 'function') ? c.getWidth() : (c.width || 0);
-    const ch = (typeof c.getHeight === 'function') ? c.getHeight() : (c.height || 0);
-    if (!cw || !ch) return;
-
+    const cw = c.getWidth(), ch = c.getHeight();
     const tol = 8;
-    const hw = halfW(o);
-    const hh = halfH(o);
 
-    // Current edges/center of object
-    let left = o.left ?? 0;
-    let top  = o.top  ?? 0;
-    const width  = hw * 2;
-    const height = hh * 2;
+    const centerX = br.left + br.width / 2;
+    const centerY = br.top  + br.height / 2;
 
-    const objCenterX = left + hw;
-    const objCenterY = top + hh;
-    const objRight   = left + width;
-    const objBottom  = top  + height;
+    let dx = 0, dy = 0;
 
-    // Canvas references
-    const canvasCenterX = cw / 2;
-    const canvasCenterY = ch / 2;
+    // Center lines
+    if (Math.abs(centerX - cw/2) <= tol) dx += (cw/2 - centerX);
+    if (Math.abs(centerY - ch/2) <= tol) dy += (ch/2 - centerY);
 
-    // Snap to canvas center lines
-    if (Math.abs(objCenterX - canvasCenterX) <= tol) {
-      left = canvasCenterX - hw;
+    // Edges
+    if (Math.abs(br.left - 0) <= tol) dx += (0 - br.left);
+    if (Math.abs(br.top - 0) <= tol) dy += (0 - br.top);
+    if (Math.abs((br.left + br.width) - cw) <= tol) dx += (cw - (br.left + br.width));
+    if (Math.abs((br.top + br.height) - ch) <= tol) dy += (ch - (br.top + br.height));
+
+    if (dx || dy){
+      // Shift object by delta; object's origin (often center) stays consistent
+      o.left += dx;
+      o.top  += dy;
+      o.setCoords();
     }
-    if (Math.abs(objCenterY - canvasCenterY) <= tol) {
-      top = canvasCenterY - hh;
-    }
-
-    // Snap to canvas edges
-    if (Math.abs(left - 0) <= tol) left = 0;                         // left edge
-    if (Math.abs(top - 0) <= tol) top = 0;                           // top edge
-    if (Math.abs(objRight - cw) <= tol) left = cw - width;           // right edge
-    if (Math.abs(objBottom - ch) <= tol) top = ch - height;          // bottom edge
-
-    // Apply
-    o.set({ left, top });
-    o.setCoords?.();
   }
 
-  // Events: snap while moving; finalize on mouse up
-  c.on?.('object:moving', (e) => {
-    const o = e?.target;
-    clampSnap(o);
-  });
+  function wireSnap(){
+    const c = C(); if (!c){ setTimeout(wireSnap,120); return; }
+    if (c.__snapV2Wired) return;
+    c.__snapV2Wired = true;
 
-  c.on?.('mouse:up', () => {
-    c.requestRenderAll?.();
-  });
-}
+    if (typeof window.__snapOn === 'undefined') window.__snapOn = true;
 
-// Initialize with retry/backoff; event handlers are wired inside wireSnap()
-wireSnap();
+    function handler(e){
+      const o = e && e.target;
+      if (!o) return;
+      snapObject(o);
+    }
+
+    c.on('object:moving',   handler);
+    c.on('object:scaling',  handler);
+    c.on('object:rotating', handler);
+
+    c.on('mouse:up', ()=>{
+      const o = c.getActiveObject();
+      if (o){ snapObject(o); c.requestRenderAll(); }
+    });
+  }
+
+  ensureUI();
+  wireSnap();
 })();
 
 /* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
