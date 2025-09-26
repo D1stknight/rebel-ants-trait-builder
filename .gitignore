@@ -1,0 +1,16 @@
+# Test files
+test_watermark_consolidation.js
+
+# Temporary files
+*.tmp
+*.temp
+
+# Node modules (if any)
+node_modules/
+
+# Log files
+*.log
+
+# Build artifacts
+dist/
+build/
