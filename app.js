@@ -8,6 +8,10 @@
     || (window._RA_CONTRACT && String(window._RA_CONTRACT))
     || "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
 
+  // Normalize rebel contract early for reliable footer gating
+  window.__REBEL_CONTRACT = CONTRACT.toLowerCase();
+  window.CONTRACT = CONTRACT;
+
   const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
   // ---- ApeChain RPC default (only if not provided elsewhere)
@@ -870,14 +874,19 @@ safeAddListener("loadToken","click", async ()=>{
     try{
       const objs = canvas.getObjects() || [];
       const base = objs.find(o => o._isBase && !o._isBgRect);
-      if (base) base._tokenContract = contract;
+      if (base) {
+        base._tokenContract = contract.toLowerCase();
+        base._tokenIsRebel = (base._tokenContract === window.__REBEL_CONTRACT);
+      }
     }catch(_){}
 
     if (statusEl) statusEl.textContent = "Loaded 👍";
 
-    // Let any watermark/brand-footer listeners re-evaluate
-    try { document.dispatchEvent(new Event("ra-wm-recalc")); } catch(_){}
-    try { canvas.requestRenderAll(); } catch(_){}
+    // Let any watermark/brand-footer listeners re-evaluate (after annotation)
+    requestAnimationFrame(() => {
+      try { document.dispatchEvent(new Event("ra-wm-recalc")); } catch(_){}
+      try { canvas.requestRenderAll(); } catch(_){}
+    });
   }catch(_){
     if (statusEl) statusEl.textContent = "Failed to load token.";
   }
@@ -3447,32 +3456,30 @@ c.on('object:removed', (e)=>{
     return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
   };
   const isOverlay = o => {
-    // Implementation E: return false for objects with any of _raSys, _raWMCenter, _isWatermark, _isBgRect, _isBase, _raTokenId
     if (!o) return false;
+
+    // Exclude system objects, watermarks, base/bg, token id, and non-interactive
     if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
     if (isBg(o) || isBase(o) || isText(o)) return false;
-function isOverlay(o) {
-  if (!o) return false;
 
-  // Exclude system objects, watermarks, base/bg, token id, and non-interactive
-  if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
-  if (o.selectable === false || o.evented === false) return false;
+    const k = (o._kind || '').toLowerCase();
 
-  const k = (o._kind || '').toLowerCase();
+    // Include specific overlay types
+    if (k === 'overlay' || k === 'sticker' || k === 'icon') return true;
 
-  // Include only specific overlay types
-  if (k === 'overlay' || k === 'sticker' || k === 'icon') return true;
+    // For groups, include only if all children are valid overlays
+    if (o.type === 'group' && (o.getObjects || o._objects)) {
+      const children = o.getObjects?.() || o._objects || [];
+      if (!children.length) return false;
+      return children.every(child => isOverlay(child));
+    }
 
-  // For groups, include only if all children are valid overlays
-  if (o.type === 'group' || typeof o.getObjects === 'function') {
-    const children = o.getObjects?.() || o._objects || [];
-    if (!children.length) return false;
-    return children.every(child => isOverlay(child));
-  }
+    // Include images that aren't system/base/text and aren't explicitly excluded
+    if ((o.type === 'image' || o.type === 'Image') && o.selectable !== false) {
+      return true;
+    }
 
-  // Default: exclude unknowns from animation
-  return false;
-}
+    return false;
   };
 
   function pickTargets(c, scope){
@@ -3852,53 +3859,13 @@ const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' 
     c.requestRenderAll();
   }
 
-  // ---------- centered watermark layer ----------
+  // ---------- [LEGACY] centered watermark layer ----------
+  // DEACTIVATED: Replaced by RA_UNIFIED_WATERMARK_CONTROLLER_V1
   function ensureCenteredWM(c){
-    // Implementation H: Guard any watermark creation/visibility changes when window.__RA_RESTORING__ is true
-    if (window.__RA_RESTORING__) return;
-    
-    if (!c || !STATE.img) return;
-    
-    // Guard against watermark changes during restore operations
-    if (window.__RA_RESTORING__) return;
-
-    const base = findBase(c);
-    const hasBase = !!base;
-    const isToken = baseIsToken(base);
-
-    const force = (window && window.__raWMForce) || null;
-// Personal override (from wallet) wins; else fall back to admin toggles
-const shouldShow =
-  hasBase && (
-    (force && force.off) ? false :
-    (force && force.on)  ? true  :
-    (STATE.enabled && ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads)))
-  );
-
-    let wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
-    if (!shouldShow){
-      if (wm){ c.remove(wm); c.requestRenderAll(); }
-      return;
+    // Route to unified controller
+    if (window.raWM && window.raWM.update) {
+      window.raWM.update('legacy-ensure-centered');
     }
-
-    if (!wm){
-      wm = new fabric.Image(STATE.img, {
-        originX:'center', originY:'center',
-        left:c.getWidth()/2, top:c.getHeight()/2,
-        selectable:false, evented:false, hasControls:false,
-        _raWMCenter:true, _raSys:true
-      });
-      c.add(wm);
-    }
-
-    const targetW = clamp(Math.round(c.getWidth()*STATE.sizePct), 16, c.getWidth()*1.4);
-    const s = targetW / (STATE.img.width||targetW);
-    wm.scaleX = s; wm.scaleY = s;
-    wm.opacity = clamp(STATE.opacity, 0, 1);
-    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
-    wm.setCoords();
-    c.bringToFront(wm);
-    c.requestRenderAll();
   }
 
   // ---------- admin dock (only with ?admin=1) ----------
@@ -3946,11 +3913,51 @@ const shouldShow =
     const c = C();
     const sync = ()=>{ save(); ensureCenteredWM(c); };
 
-    $('#raWmCEnabled').onchange = e=>{ STATE.enabled = !!e.target.checked; sync(); };
-    $('#raWmCOnTok').onchange   = e=>{ STATE.showOnTokens  = !!e.target.checked; sync(); };
-    $('#raWmCOnUp').onchange    = e=>{ STATE.showOnUploads = !!e.target.checked; sync(); };
-    $('#raWmCOpacity').oninput  = e=>{ STATE.opacity = clamp(parseFloat(e.target.value||'0.18'),0,1); sync(); };
-    $('#raWmCSize').oninput     = e=>{ STATE.sizePct = clamp(parseFloat(e.target.value||'0.88'),0.3,1.2); sync(); };
+    $('#raWmCEnabled').onchange = e=>{ 
+      const enabled = !!e.target.checked;
+      if (window.raWM) {
+        const settings = window.raWM.getSettings();
+        window.raWM.setSettings({...settings, enabled});
+      } else {
+        STATE.enabled = enabled; sync(); 
+      }
+    };
+    $('#raWmCOnTok').onchange = e=>{ 
+      const showOnTokens = !!e.target.checked;
+      if (window.raWM) {
+        const settings = window.raWM.getSettings();
+        window.raWM.setSettings({...settings, showOnTokens});
+      } else {
+        STATE.showOnTokens = showOnTokens; sync(); 
+      }
+    };
+    $('#raWmCOnUp').onchange = e=>{ 
+      const showOnUploads = !!e.target.checked;
+      if (window.raWM) {
+        const settings = window.raWM.getSettings();
+        window.raWM.setSettings({...settings, showOnUploads});
+      } else {
+        STATE.showOnUploads = showOnUploads; sync(); 
+      }
+    };
+    $('#raWmCOpacity').oninput = e=>{ 
+      const opacity = clamp(parseFloat(e.target.value||'0.18'),0,1);
+      if (window.raWM) {
+        const settings = window.raWM.getSettings();
+        window.raWM.setSettings({...settings, opacity});
+      } else {
+        STATE.opacity = opacity; sync(); 
+      }
+    };
+    $('#raWmCSize').oninput = e=>{ 
+      const sizePct = clamp(parseFloat(e.target.value||'0.88'),0.3,1.2);
+      if (window.raWM) {
+        const settings = window.raWM.getSettings();
+        window.raWM.setSettings({...settings, sizePct});
+      } else {
+        STATE.sizePct = sizePct; sync(); 
+      }
+    };
     $('#raWmCRefresh').onclick  = sync;
     $('#raWmCHide').onclick     = ()=>{ pane.style.display='none'; };
   }
@@ -4875,127 +4882,33 @@ tile.appendChild(cap);
 })();
 
 /* ==========================================================
-   RA_WM_GLOBAL_SYNC_v3 — PASTE AT THE VERY BOTTOM OF app.js
-   Uses /api/ra-settings to load+save watermark settings for everyone.
+   RA_WM_GLOBAL_SYNC_v3 — [DEACTIVATED]
+   Replaced by RA_UNIFIED_WATERMARK_CONTROLLER_V1
    ========================================================== */
 (() => {
-  const GET_URL  = '/api/ra-settings';  // your endpoint (GET returns {ok, settings:{...}})
-  const POST_URL = '/api/ra-settings';  // same endpoint for saving
+  // DEACTIVATED: Server sync now handled by unified controller
+  console.log('[RA] RA_WM_GLOBAL_SYNC_v3 deactivated - using unified controller');
 
-  const isAdmin = /\badmin=1\b/i.test(location.search);
-
-  function canvas() {
-    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  }
-
-  // Put server values onto the centered watermark layer that's already on the canvas
-  function applyToCanvas(settings) {
-    if (typeof settings === 'string') { try { settings = JSON.parse(settings); } catch(_) {} }
-
-    const c = canvas(); if (!c) return false;
-    const wm = (c.getObjects() || []).find(o => o && o._raWMCenter);
-    if (!wm) return false;
-
-    const opacity = Math.max(0, Math.min(1, Number(settings?.opacity ?? 0.18)));
-    const sizePct = Math.max(0.05, Math.min(1, Number(settings?.sizePct ?? 0.88)));
-
-    const targetW = Math.round(c.getWidth() * sizePct);
-    const baseW   = wm.width || (wm._element?.naturalWidth) || 512;
-    const s = targetW / baseW;
-
-    wm.opacity = opacity;
-    wm.scaleX = s; wm.scaleY = s;
-    wm.left = c.getWidth() / 2; wm.top = c.getHeight() / 2;
-    wm.setCoords();
-    c.bringToFront(wm);
-    c.requestRenderAll();
-    return true;
-  }
-
-  // Everyone: load the latest settings on open
+  // Preserve server loading for the unified controller
+  const GET_URL = '/api/ra-settings';
+  
   async function loadFromServerAndApply() {
     try {
-      const url = GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now(); // avoid cache
+      const url = GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now();
       const r = await fetch(url, { cache: 'no-store' });
       if (!r.ok) return;
       const j = await r.json();
       let s = j.settings ?? j.data ?? j;
       if (typeof s === 'string') { try { s = JSON.parse(s); } catch(_) {} }
 
-      // Try now; if the watermark layer isn't on the canvas yet, retry briefly
-      let tries = 0;
-      const tick = () => {
-        if (applyToCanvas(s)) return;
-        if (++tries < 30) setTimeout(tick, 150);
-      };
-      tick();
+      // Route to unified controller
+      if (window.raWM && window.raWM.setSettings) {
+        window.raWM.setSettings(s);
+      }
     } catch (_) {}
   }
 
-  // Read the current admin slider values
-  function currentAdminValues() {
-    const on  = document.getElementById('raWmCEnabled');
-    const tok = document.getElementById('raWmCOnTok');
-    const up  = document.getElementById('raWmCOnUp');
-    const op  = document.getElementById('raWmCOpacity');
-    const sz  = document.getElementById('raWmCSize');
-    return {
-      enabled: !!(on && on.checked),
-      showOnTokens:  !!(tok && tok.checked),
-      showOnUploads: !!(up && up.checked),
-      opacity: op ? Number(op.value) : 0.18,
-      sizePct: sz ? Number(sz.value) : 0.88
-    };
-  }
-
-  // Save to the server (your /api/ra-settings has no auth, so this is simple)
-  async function saveToServer(body) {
-    try {
-      await fetch(POST_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-    } catch(_) {}
-  }
-
-  // When admin sliders appear, send changes to server (debounced) and apply locally
-  function wireAdminSaveOnce() {
-    if (!isAdmin) return;
-
-    const op = document.getElementById('raWmCOpacity');
-    const sz = document.getElementById('raWmCSize');
-    const on = document.getElementById('raWmCEnabled');
-    const tok = document.getElementById('raWmCOnTok');
-    const up = document.getElementById('raWmCOnUp');
-
-    if (!op || op.__wmSyncBound) return;
-
-    const debounced = (() => {
-      let t; return () => {
-        clearTimeout(t);
-        t = setTimeout(() => {
-          const body = currentAdminValues();
-          saveToServer(body);   // push to server for everyone
-          applyToCanvas(body);  // reflect immediately in this tab
-        }, 250);
-      };
-    })();
-
-    [op, sz].forEach(el => el && el.addEventListener('input', debounced));
-    [on, tok, up].forEach(el => el && el.addEventListener('change', debounced));
-
-    op.__wmSyncBound = sz && (sz.__wmSyncBound = true);
-    if (on)  on.__wmSyncBound  = true;
-    if (tok) tok.__wmSyncBound = true;
-    if (up)  up.__wmSyncBound  = true;
-  }
-
-  // Keep waiting for the admin controls to appear, then wire them once
-  const mo = new MutationObserver(wireAdminSaveOnce);
-  mo.observe(document.documentElement, { childList: true, subtree: true });
-
-  // Load settings for everyone on page open
+  // Still load settings on startup
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', loadFromServerAndApply, { once: true });
   } else {
@@ -5004,365 +4917,34 @@ tile.appendChild(cap);
 })();
 
 /* ==========================================================
-   RA_WM_FOLLOW_EVENTS_v1 — paste below the v3 block
-   Makes sure the server settings apply even when you load
-   the token later. Re-applies on object add/modify.
+   RA_WM_FOLLOW_EVENTS_v1 — [DEACTIVATED]
+   Replaced by RA_UNIFIED_WATERMARK_CONTROLLER_V1
    ========================================================== */
 (() => {
-  const GET_URL = '/api/ra-settings'; // same endpoint
-
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
-
-  function applyToCanvas(settings){
-    if (!settings) return false;
-    const c = C(); if (!c) return false;
-    const wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
-    if (!wm) return false;
-
-    const opacity = Math.max(0, Math.min(1, Number(settings.opacity ?? 0.18)));
-    const sizePct = Math.max(0.05, Math.min(1, Number(settings.sizePct ?? 0.88)));
-
-    const targetW = Math.round(c.getWidth() * sizePct);
-    const baseW   = wm.width || (wm._element?.naturalWidth) || 512;
-    const s = targetW / baseW;
-
-    wm.opacity = opacity;
-    wm.scaleX = s; wm.scaleY = s;
-    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
-    wm.setCoords();
-    c.bringToFront(wm);
-    c.requestRenderAll();
-    return true;
-  }
-
-  let latest = null;
-
-  async function fetchLatest(){
-    try{
-      const r = await fetch(GET_URL + (GET_URL.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache:'no-store' });
-      if (!r.ok) return;
-      const j = await r.json();
-      latest = j.settings ?? j.data ?? j;
-    }catch(_){}
-  }
-
-  // 1) Grab settings once on open
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fetchLatest, { once:true });
-  } else { fetchLatest(); }
-
-  // 2) Try to apply a few times right away (covers fast loads)
-  let tries = 0, maxTries = 50; // ~25s total
-  (function tick(){
-    if (applyToCanvas(latest)) return;
-    if (++tries < maxTries) setTimeout(tick, 500);
-  })();
-
-  // 3) Follow canvas changes: apply whenever something is added/modified
-  function wire(){
-    const c = C(); if (!c || c.__raWmFollow) { if (!c) setTimeout(wire, 150); return; }
-    c.__raWmFollow = true;
-    c.on('object:added',    ()=> applyToCanvas(latest));
-    c.on('object:modified', ()=> applyToCanvas(latest));
-  }
-  wire();
+  // DEACTIVATED: Event handling now done by unified controller
+  console.log('[RA] RA_WM_FOLLOW_EVENTS_v1 deactivated - using unified controller');
 })();
 
 /* ==========================================================
-   RA_WM_SERVER_MASTER_v1  — PASTE AT THE VERY BOTTOM
-   What this does (no other edits needed):
-   • Loads settings from /api/ra-settings on open.
-   • Makes the three toggles (Enabled / Show on tokens / Show on uploads)
-     save to the server AND actually show/hide the watermark.
-   • Makes the sliders (Opacity / Size) save to the server and apply.
-   • Turns the "Refresh" button into "Save for everyone" + re-apply.
-   • Works for admin and non-admin pages.
+   RA_WM_SERVER_MASTER_v1 — [DEACTIVATED]
+   Replaced by RA_UNIFIED_WATERMARK_CONTROLLER_V1
+   Server save/load now handled by updated admin controls
    ========================================================== */
 (() => {
-  const API = '/api/ra-settings';
-
-  // --- Fabric helpers ---
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const $ = (id) => document.getElementById(id);
-
-  function baseIsToken(){
-    const c = C(); if (!c) return null;
-    const base = (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect);
-    if (!base) return null;
-    // in your app: token base = plain Image; uploads = Group
-    return base.type === 'image';
-  }
-
-  function findWM(){
-    const c = C(); if (!c) return null;
-    return (c.getObjects()||[]).find(o => o && o._raWMCenter) || null;
-  }
-
-  // --- server I/O ---
-  async function getServer(){
-    const r = await fetch(API + (API.includes('?') ? '&' : '?') + 'v=' + Date.now(), { cache:'no-store' });
-    if (!r.ok) throw new Error('GET failed');
-    const j = await r.json();
-    return j.settings ?? j.data ?? j;
-  }
-  async function postServer(body){
-    await fetch(API, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify(body)
-    });
-  }
-
-  // --- current UI values (when admin panel is visible) ---
-  function readAdminUI(){
-    return {
-      enabled:       !!($('raWmCEnabled')?.checked),
-      showOnTokens:  !!($('raWmCOnTok')?.checked),
-      showOnUploads: !!($('raWmCOnUp')?.checked),
-      opacity:  Number($('raWmCOpacity')?.value ?? 0.18),
-      sizePct:  Number($('raWmCSize')?.value ?? 0.88)
-    };
-  }
-
-  // --- apply settings to the existing centered watermark layer ---
-  function applyToWM(s){
-    const c = C(); const wm = findWM();
-    if (!c || !wm || !s) return;
-
-    // 1) visibility: obey Enabled + token/upload switches
-    const isTok = baseIsToken();
-    const show  = !!s.enabled && ((isTok && !!s.showOnTokens) || (!isTok && !!s.showOnUploads));
-    wm.visible  = show;
-
-    // 2) size + opacity from server
-    const sizePct = Math.max(0.05, Math.min(1.4, Number(s.sizePct ?? 0.88)));
-    const op      = Math.max(0, Math.min(1,   Number(s.opacity ?? 0.18)));
-
-    const baseW = wm.width || (wm._element?.naturalWidth) || 512;
-    const targetW = Math.round(c.getWidth() * sizePct);
-    const sc = targetW / baseW;
-
-    wm.scaleX = sc; wm.scaleY = sc;
-    wm.opacity = op;
-    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
-    wm.setCoords();
-
-    // keep it on top but invisible if show==false
-    try { c.bringToFront(wm); } catch(_){}
-    c.requestRenderAll();
-  }
-
-  // keep watermark in sync when canvas objects change
-  function wireCanvasFollows(stateRef){
-    const c = C(); if (!c || c.__raWmServerMaster) { if (!c) setTimeout(()=>wireCanvasFollows(stateRef), 150); return; }
-    c.__raWmServerMaster = true;
-    const reapply = ()=> applyToWM(stateRef.val);
-    c.on('object:added',    reapply);
-    c.on('object:removed',  reapply);
-    c.on('object:modified', reapply);
-    // first pass
-    setTimeout(reapply, 0);
-  }
-
-  // --- admin wiring: make every control "save + apply" ---
-  function wireAdmin(stateRef){
-    const ids = {
-      en:  'raWmCEnabled',
-      tok: 'raWmCOnTok',
-      up:  'raWmCOnUp',
-      op:  'raWmCOpacity',
-      sz:  'raWmCSize',
-      rf:  'raWmCRefresh'
-    };
-    const en  = $(ids.en), tok = $(ids.tok), up = $(ids.up),
-          op  = $(ids.op), sz  = $(ids.sz),  rf = $(ids.rf);
-
-    if (!op || op.__raWmServerMasterUI) return;   // not visible yet or already wired
-    op.__raWmServerMasterUI = sz && (sz.__raWmServerMasterUI = true);
-    if (en)  en.__raWmServerMasterUI  = true;
-    if (tok) tok.__raWmServerMasterUI = true;
-    if (up)  up.__raWmServerMasterUI  = true;
-    if (rf)  rf.__raWmServerMasterUI  = true;
-
-    const saveAndApply = async () => {
-      const body = readAdminUI();
-      stateRef.val = body;            // remember latest
-      try { await postServer(body); } catch(_){}
-      applyToWM(body);                // instant visual feedback
-    };
-
-    [op, sz].forEach(el => el && el.addEventListener('input',  saveAndApply));
-    [en, tok, up].forEach(el => el && el.addEventListener('change', saveAndApply));
-
-    // Make "Refresh" behave like "Save for everyone"
-    if (rf){
-      rf.addEventListener('click', (e)=>{
-        e.preventDefault();
-        saveAndApply();
-      });
-    }
-  }
-
-  // --- boot: load server once, enforce everywhere, then wire admin if present ---
-  const STATE = { val: null };
-
-  async function boot(){
-    try { STATE.val = await getServer(); } catch(_){ STATE.val = readAdminUI(); }
-    // Apply when watermark shows up (the other script adds it)
-    (function waitWm(tries=0){
-      const wm = findWM();
-      if (wm) { applyToWM(STATE.val); return; }
-      if (tries < 60) setTimeout(()=>waitWm(tries+1), 250);
-    })();
-
-    wireCanvasFollows(STATE);
-
-    // If admin panel is on screen, wire it; keep trying until it appears.
-    const mo = new MutationObserver(()=> wireAdmin(STATE));
-    mo.observe(document.documentElement, { childList:true, subtree:true });
-    wireAdmin(STATE);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
+  // DEACTIVATED: Admin controls updated to use unified controller
+  console.log('[RA] RA_WM_SERVER_MASTER_v1 deactivated - using unified controller');
 })();
 
 /* ==========================================================
-   RA_WM_OVERLAY_ONLY_FALLBACK_v1 — paste at the very bottom
-   - If there is NO base image but overlays/text are present,
-     show a centered watermark (uses your "Show on uploads" setting).
-   - When a base image is added, remove this fallback so your
-     normal watermark logic runs as usual.
+   RA_WM_OVERLAY_ONLY_FALLBACK_v1 — [DEACTIVATED]
+   Replaced by RA_UNIFIED_WATERMARK_CONTROLLER_V1
    ========================================================== */
 (() => {
-  const API = '/api/ra-settings';
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  // Read saved settings (enabled, showOnUploads, opacity, size)
-  let settings = null;
-  async function loadSettings(){
-    try {
-      const r = await fetch(API + '?v=' + Date.now(), { cache:'no-store' });
-      if (!r.ok) return;
-      const j = await r.json();
-      settings = j.settings ?? j.data ?? j;
-    } catch(_){}
-  }
-
-  // Use the watermark image already preloaded by your app (raWatermark).
-  async function ensureImage(){
-    try {
-      if (window.raWatermark && typeof window.raWatermark.ready === 'function'){
-        await window.raWatermark.ready();
-        return window.raWatermark.img() || null;
-      }
-    } catch(_){}
-    // Fallback (should rarely be needed)
-    return await new Promise(res => {
-      const im = new Image();
-      im.crossOrigin = 'anonymous';
-      im.onload = () => res(im);
-      im.src = '/assets/watermark.png?v=wm10';
-    });
-  }
-
-  function hasBase(c){
-    return !!(c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect);
-  }
-  function canvasHasContent(c){
-    return !!(c.getObjects()||[]).find(o => o && !o._isBgRect && !o._raWMCenter && !o._raWMOverlayFallback);
-  }
-
-  function removeFallback(){
-    const c = C(); if (!c) return;
-    (c.getObjects()||[]).filter(o => o && o._raWMOverlayFallback).forEach(o => c.remove(o));
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  async function update(){
-    const c = C(); if (!c) return;
-
-    if (!settings) await loadSettings();
-    // If settings aren't available, or watermarking is globally off, remove and stop.
-    if (!settings || !settings.enabled) { removeFallback(); return; }
-
-    const haveBase   = hasBase(c);
-    const haveStuff  = canvasHasContent(c);
-
-    // If there is a base image, let the normal watermark handle it.
-    if (haveBase) { removeFallback(); return; }
-
-    // Nothing on canvas? nothing to show.
-    if (!haveStuff) { removeFallback(); return; }
-
-    // Respect "Show on uploads" for overlay-only use.
-    if (!settings.showOnUploads) { removeFallback(); return; }
-
-    // Ensure we have the watermark image
-    const img = await ensureImage(); if (!img) return;
-
-    // Create or update the fallback watermark (our own tag; main code won't touch it)
-    let wm = (c.getObjects()||[]).find(o => o && o._raWMOverlayFallback);
-    if (!wm){
-      wm = new fabric.Image(img, {
-        originX:'center', originY:'center',
-        selectable:false, evented:false, hasControls:false,
-        _raWMOverlayFallback:true, _raSys:true
-      });
-      c.add(wm);
-    }
-
-    const sizePct = Math.max(0.05, Math.min(1.4, Number(settings.sizePct ?? 0.88)));
-    const op      = Math.max(0,    Math.min(1,   Number(settings.opacity ?? 0.18)));
-    const targetW = Math.round(c.getWidth() * sizePct);
-    const baseW   = img.width || 512;
-    const sc      = targetW / baseW;
-
-    wm.scaleX = sc; wm.scaleY = sc;
-    wm.opacity = op;
-    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2; wm.setCoords();
-    try { c.bringToFront(wm); } catch(_){}
-    c.requestRenderAll();
-  }
-
-  function wire(){
-    const c = C(); if (!c) { setTimeout(wire, 150); return; }
-    if (c.__raOverlayFallback) return;   // only once
-    c.__raOverlayFallback = true;
-
-    // Re-check whenever the canvas changes
-    c.on('object:added',   ()=> setTimeout(update, 0));
-    c.on('object:removed', ()=> setTimeout(update, 0));
-    c.on('object:modified',()=> setTimeout(update, 0));
-
-    // React when admin tweaks settings
-    ['raWmCEnabled','raWmCOnUp','raWmCOpacity','raWmCSize'].forEach(id=>{
-      const el = document.getElementById(id);
-      if (el && !el.__raOverlayFallback){
-        el.__raOverlayFallback = true;
-        ['change','input'].forEach(ev => el.addEventListener(ev, ()=>{ settings=null; update(); }));
-      }
-    });
-
-    // Keep in place on canvas resize
-    try {
-      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-      new ResizeObserver(()=> update()).observe(el);
-    } catch(_){}
-
-    // First run
-    update();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once:true });
-  } else {
-    wire();
-  }
+  // DEACTIVATED: Logic folded into unified controller
+  console.log('[RA] RA_WM_OVERLAY_ONLY_FALLBACK_v1 deactivated - using unified controller');
 })();
+
+/* ==========================================================
 
 /* ==========================================================
    RA_TEXT_ACTION_BAR_V2 + RA_EMOJI_PICKER_V2
@@ -8690,11 +8272,16 @@ window.raDump = () => {
     }
 
     // Footer: hidden on Rebel or while restoring
+    // IMPROVED: Check contract annotation more reliably
     const foot = all.find(isFooter);
     const cc = String(base?._tokenContract || '').toLowerCase();
+    const rebelContract = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
+    
     if (foot){
       quarantine(foot);
-      if (restoring() || (cc && cc === REBEL_CONTRACT)) foot.visible = false;
+      // Show footer ONLY if base exists AND contract is non-rebel AND not restoring
+      const shouldShowFooter = base && cc && cc !== rebelContract && !restoring();
+      foot.visible = shouldShowFooter;
     }
 
     // Single center ring, always seated right above base and centered
@@ -9149,3 +8736,298 @@ document.addEventListener('ra-collection-change', (e) => {
 
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
 ;
+
+/* ==========================================================
+   RA_UNIFIED_WATERMARK_CONTROLLER_V1
+   Single controller that consolidates all watermark logic:
+   - Maintains centered watermark with intrinsic dimensions
+   - Handles gating flags and admin settings
+   - Debounced updates for performance
+   - Proper scaling without compounding errors
+   ========================================================== */
+(() => {
+  if (window.__RA_UNIFIED_WM_V1__) return;
+  window.__RA_UNIFIED_WM_V1__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  // Unified watermark state
+  const STATE = {
+    img: null,
+    dataURL: null,
+    enabled: true,
+    showOnTokens: true,
+    showOnUploads: true,
+    opacity: 0.18,
+    sizePct: 0.88,
+    _natW: null,  // intrinsic width
+    _natH: null   // intrinsic height
+  };
+
+  // Load persisted settings from localStorage
+  try {
+    const saved = JSON.parse(localStorage.getItem('ra_wm_unified_v1') || '{}');
+    Object.assign(STATE, saved);
+  } catch(_) {}
+
+  // Save settings to localStorage
+  const saveSettings = () => {
+    try {
+      const toSave = {
+        enabled: STATE.enabled,
+        showOnTokens: STATE.showOnTokens,
+        showOnUploads: STATE.showOnUploads,
+        opacity: STATE.opacity,
+        sizePct: STATE.sizePct
+      };
+      localStorage.setItem('ra_wm_unified_v1', JSON.stringify(toSave));
+    } catch(_) {}
+  };
+
+  // Load watermark image with intrinsic dimensions
+  async function ensureWatermarkImage() {
+    if (STATE.img && STATE._natW && STATE._natH) return true;
+
+    const queryWM = new URLSearchParams(location.search).get('wm');
+    const candidates = [
+      queryWM && (/^https?:\/\//i.test(queryWM) || queryWM.startsWith('/')) ? queryWM : null,
+      '/assets/watermark.png?v=wm10',
+      '/watermark.png?v=wm10'
+    ].filter(Boolean);
+
+    for (const url of candidates) {
+      try {
+        const response = await fetch(url, { cache: 'no-store', mode: 'cors' });
+        if (!response.ok) continue;
+        
+        const blob = await response.blob();
+        const dataURL = await new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+
+        const img = await new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = reject;
+          image.crossOrigin = 'anonymous';
+          image.src = dataURL;
+        });
+
+        STATE.img = img;
+        STATE.dataURL = dataURL;
+        STATE._natW = img.naturalWidth || img.width;
+        STATE._natH = img.naturalHeight || img.height;
+        return true;
+      } catch(_) {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  // Determine if watermark should be shown
+  function shouldShowWatermark(c) {
+    if (window.__RA_RESTORING__) return false;
+    if (!STATE.enabled) return false;
+
+    const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+    if (!base) return false;
+
+    const isToken = base.type === 'image'; // token bases are plain images
+    const contract = String(base._tokenContract || '').toLowerCase();
+    const isRebel = contract === (window.__REBEL_CONTRACT || '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221');
+
+    // Check holder gating
+    const force = window.__raWMForce;
+    if (force && force.off) return false;
+    if (force && force.on) return true;
+
+    // Admin toggles
+    if (isToken && !STATE.showOnTokens) return false;
+    if (!isToken && !STATE.showOnUploads) return false;
+
+    return true;
+  }
+
+  // Create or update watermark object
+  function updateWatermarkObject(c) {
+    if (window.__RA_RESTORING__) return;
+    if (!STATE.img || !STATE._natW) return;
+
+    let wm = (c.getObjects() || []).find(o => o && o._raWMCenter);
+    
+    const shouldShow = shouldShowWatermark(c);
+    
+    if (!shouldShow) {
+      if (wm) {
+        c.remove(wm);
+        c.requestRenderAll();
+      }
+      return;
+    }
+
+    if (!wm) {
+      wm = new fabric.Image(STATE.img, {
+        originX: 'center',
+        originY: 'center',
+        left: c.getWidth() / 2,
+        top: c.getHeight() / 2,
+        selectable: false,
+        evented: false,
+        hasControls: false,
+        _raWMCenter: true,
+        _raSys: true,
+        excludeFromExport: true
+      });
+      c.add(wm);
+    }
+
+    // Scale using intrinsic dimensions to prevent compounding
+    const targetW = clamp(Math.round(c.getWidth() * STATE.sizePct), 16, c.getWidth() * 1.4);
+    const scale = clamp(targetW / STATE._natW, 0.05, 5);
+    
+    wm.scaleX = scale;
+    wm.scaleY = scale;
+    wm.opacity = clamp(STATE.opacity, 0, 1);
+    wm.left = c.getWidth() / 2;
+    wm.top = c.getHeight() / 2;
+    wm.setCoords();
+
+    // Position above base but below other elements
+    try {
+      const objects = c.getObjects();
+      const base = objects.find(o => o && o._isBase && !o._isBgRect);
+      if (base) {
+        const baseIndex = objects.indexOf(base);
+        c.moveTo(wm, Math.min(objects.length - 1, baseIndex + 1));
+      }
+      c.bringToFront(wm);
+    } catch(_) {}
+
+    c.requestRenderAll();
+  }
+
+  // Debounced update function
+  let updateTimer = null;
+  const update = (reason = 'unknown') => {
+    if (updateTimer) clearTimeout(updateTimer);
+    updateTimer = setTimeout(async () => {
+      const c = C();
+      if (!c) return;
+      
+      await ensureWatermarkImage();
+      updateWatermarkObject(c);
+      updateTimer = null;
+    }, 50);
+  };
+
+  // Event handlers
+  function wireEvents() {
+    const c = C();
+    if (!c || c.__raUnifiedWMWired) return;
+    c.__raUnifiedWMWired = true;
+
+    // Canvas events
+    c.on('object:added', (e) => {
+      if (window.__RA_RESTORING__) return;
+      const obj = e?.target;
+      if (!obj) return;
+      
+      // Normalize overlay kind for proper animation and snap support
+      window.normalizeOverlayKind(obj);
+      
+      if (obj && obj._isBase) {
+        // Base image changed, update watermark
+        requestAnimationFrame(() => update('base-added'));
+      }
+    });
+
+    c.on('object:removed', (e) => {
+      if (window.__RA_RESTORING__) return;
+      const obj = e?.target;
+      if (obj && obj._isBase) {
+        requestAnimationFrame(() => update('base-removed'));
+      }
+    });
+
+    // Wallet/holder events
+    document.addEventListener('ra-holder-update', () => {
+      if (!window.__RA_RESTORING__) update('holder-update');
+    });
+
+    document.addEventListener('ra-wm-recalc', () => {
+      if (!window.__RA_RESTORING__) update('wm-recalc');
+    });
+
+    // Canvas resize
+    try {
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el) {
+        new ResizeObserver(() => {
+          if (!window.__RA_RESTORING__) update('canvas-resize');
+        }).observe(el);
+      }
+    } catch(_) {}
+  }
+
+  // Settings API for admin controls
+  const setSettings = (newSettings) => {
+    const changed = Object.keys(newSettings).some(key => STATE[key] !== newSettings[key]);
+    Object.assign(STATE, newSettings);
+    saveSettings();
+    if (changed) update('settings-changed');
+  };
+
+  const getSettings = () => ({
+    enabled: STATE.enabled,
+    showOnTokens: STATE.showOnTokens,
+    showOnUploads: STATE.showOnUploads,
+    opacity: STATE.opacity,
+    sizePct: STATE.sizePct
+  });
+
+  // Expose unified API
+  window.raWM = Object.freeze({
+    update,
+    setSettings,
+    getSettings,
+    getState: () => STATE
+  });
+
+  // Overlay normalization utility
+  window.normalizeOverlayKind = (obj) => {
+    if (!obj || obj._isBase || obj._isBgRect || obj._raWMCenter || obj._raSys || obj._raTokenId) {
+      return;
+    }
+    if (obj.type === 'textbox' || obj.type === 'text') {
+      if (!obj._kind) obj._kind = 'customText';
+      return;
+    }
+    // For other objects that aren't system/base/text, mark as overlay
+    if (!obj._kind) {
+      obj._kind = 'overlay';
+    }
+  };
+
+  // Initialize
+  async function init() {
+    const c = C();
+    if (!c) {
+      setTimeout(init, 120);
+      return;
+    }
+
+    await ensureWatermarkImage();
+    wireEvents();
+    update('init');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+})();
