@@ -9297,7 +9297,7 @@ document.addEventListener('ra-collection-change', (e) => {
       const w = scaledWidth(rings[i]);
       if (w > kW){ keep = rings[i]; kW = w; }
     }
-    rings.forEach(r => { if (r !== keep){ try{ c.remove(r); }catch(_){ } });
+    rings.forEach(r => { if (r !== keep){ try{ c.remove(r); }catch(_){ } } });
   }
 
   /* -------- RULE MATRIX -------- */
