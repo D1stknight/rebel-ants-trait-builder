@@ -9155,188 +9155,61 @@ document.addEventListener('ra-collection-change', (e) => {
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
 ;
 
-/* ===== WM CONSOLIDATION PHASE 1.1 PATCH =====
-   - Recreate / reassert watermark & footer after undo/redo or JSON restore
-   - Normalize oversize watermark from legacy sizePct (0.7+)
-   - Keep logic minimal until Phase 2 unified manager
-*/
-(function RA_WM_PHASE1_1_PATCH(){
-  if (window.__RA_WM_PHASE1_1__) return;
-  window.__RA_WM_PHASE1_1__ = true;
+/* ===== WM CONSOLIDATION PHASE 1.2b STATE MANAGER (INTERIM) =====
+   Purpose:
+     - Deterministic watermark (ring) + footer visibility based on baseKind + holder status.
+     - Dedupe / remove orphaned ring after undo/redo (instead of hiding).
+     - Normalize scale (cap width %) uniformly.
+     - Avoid resurrecting ring where it should not exist (Rebel token when connected).
+     - Ensure footer persistence where configured.
 
-  const MAX_WIDTH_PCT = 0.35;    // Cap watermark to 35% of canvas width (tweakable)
-  const LEGACY_LARGE_THRESHOLD = 0.50; // If stored sizePct > this, treat as legacy & normalize
-  const LEGACY_DEFAULT = 0.28;   // Normalized target for legacy large values
+   Replace earlier 1.2 / 1.2a patches with this block. This is still a temporary layer
+   before Phase 2 full unified manager refactor.
+
+   Adjust CONFIG below as needed.
+*/
+(function RA_WM_PHASE_12B(){
+  if (window.__RA_WM_PHASE_12B__) return;
+  window.__RA_WM_PHASE_12B__ = true;
+
+  /* ---- CONFIG ---- */
+  const MAX_RING_WIDTH_PCT = 0.35;      // Ring max width as fraction of canvas width
+  const MIN_RING_WIDTH_PCT = 0.20;      // Lower clamp (if ring would be super tiny)
+  const SHOW_FOOTER_ON_REBEL_CONNECTED = false;  // If true, footer shows even on Rebel tokens when connected
+  const SHOW_RING_ON_UPLOAD_IF_HOLDER  = false;  // If true, holders also see ring on plain uploads
   const FOOTER_TEXT = 'Powered by Rebel Studios';
 
-  function C(){
-    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  }
-
-  function findWM(){
-    const c = C(); if (!c) return null;
-    return (c.getObjects()||[]).find(o => o && o._raWMCenter === true) || null;
-  }
-
-  function wmImageNaturalWidth(wm){
-    return wm?.width || wm?._element?.naturalWidth || 512;
-  }
-
-  function normalizeWatermark(){
-    const c = C(); if (!c) return;
-    const wm = findWM(); if (!wm) return;
-
-    // If an earlier admin sizePct implied a giant width, clamp it
-    try {
-      const cw = c.getWidth();
-      const ww = wm.getScaledWidth ? wm.getScaledWidth() : (wm.width * (wm.scaleX||1));
-      const maxW = cw * MAX_WIDTH_PCT;
-
-      if (ww > maxW + 1) {
-        const baseW = wmImageNaturalWidth(wm);
-        const scale = maxW / baseW;
-        wm.scaleX = wm.scaleY = scale;
-        wm.setCoords();
-      }
-
-      // If global STATE structure exists and has sizePct > threshold, silently adapt
-      if (window.STATE && typeof window.STATE.sizePct === 'number') {
-        if (window.STATE.sizePct > LEGACY_LARGE_THRESHOLD) {
-          window.STATE.sizePct = LEGACY_DEFAULT;
-        }
-      }
-    } catch(_) {}
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  // --- Footer handling (very lightweight) ---
-  function findFooter(){
-    const c = C(); if (!c) return null;
-    return (c.getObjects()||[]).find(o =>
-      o && (o._raBrandFooter ||
-            o._raFooterId === 'footer-group' ||
-            (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text)))
-    ) || null;
-  }
-
-  function ensureFooter(){
-    const c = C(); if (!c) return;
-    if (findFooter()) return;
-    // Create a simple text footer in bottom-right corner
-    try {
-      if (!window.fabric) return;
-      const txt = new fabric.Text(FOOTER_TEXT, {
-        fontFamily: 'Inter, system-ui, Arial, sans-serif',
-        fontSize: 12,
-        fill: '#cfcfcf',
-        opacity: 0.88,
-        originX: 'right',
-        originY: 'bottom',
-        left: c.getWidth() - 10,
-        top:  c.getHeight() - 8,
-        selectable: false,
-        evented: false,
-        _raBrandFooter: true,
-        _raSys: true
-      });
-      c.add(txt);
-      c.bringToFront(txt);
-      c.requestRenderAll();
-    } catch(_){}
-  }
-
-  // Reassert both watermark & footer (order: create underlying, then fix scale)
-  function reassert(reason){
-    // Reason kept for debug if needed
-    try {
-      // If the active admin watermark creator is still around, trigger its recalculation
-      try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
-      // Normalize size AFTER potential re-creation
-      setTimeout(() => { normalizeWatermark(); ensureFooter(); }, 0);
-    } catch(_){}
-  }
-
-  // --- Patch undo/redo if exposed globally ---
-  (function patchUndoRedo(){
-    const g = window;
-    ['undo','redo'].forEach(fnName => {
-      if (typeof g[fnName] === 'function' && !g[fnName].__raWmPatched){
-        const orig = g[fnName];
-        g[fnName] = function(){
-          const out = orig.apply(this, arguments);
-            // Recapture / re-eval after history step
-            setTimeout(()=> reassert(fnName), 10);
-          return out;
-        };
-        g[fnName].__raWmPatched = true;
-      }
-    });
-  })();
-
-  // --- Patch Fabric loadFromJSON completion (if already patched earlier we piggyback) ---
-  (function patchLoadFromJSON(){
-    const c = C(); if (!c) { setTimeout(patchLoadFromJSON, 200); return; }
-    if (c.__raPhase1LoadPatch) return;
-    c.__raPhase1LoadPatch = true;
-    try {
-      const orig = c.loadFromJSON;
-      if (typeof orig === 'function'){
-        c.loadFromJSON = function(json, cb, reviver){
-          return orig.call(c, json, function(){
-            try { cb && cb(); } catch(_){}
-            // Reassert after restore sequence
-            setTimeout(()=> reassert('loadFromJSON'), 20);
-          }, reviver);
-        };
-      }
-    } catch(_){}
-  })();
-
-  // --- Listen for app-specific events that might already fire ---
-  document.addEventListener('ra-holder-update', ()=> {
-    // Holder gating may hide watermark; if it should be visible again ensure scale normalization
-    setTimeout(()=> normalizeWatermark(), 30);
-  });
-
-  // Basic object events (overlay deletes can remove footer accidentally)
-  (function wireCanvasEvents(){
-    const c = C(); if (!c) { setTimeout(wireCanvasEvents, 300); return; }
-    if (c.__raPhase1ObjPatch) return;
-    c.__raPhase1ObjPatch = true;
-    const rebalance = ()=> setTimeout(()=>{ normalizeWatermark(); ensureFooter(); }, 0);
-    c.on('object:removed', rebalance);
-    c.on('object:modified', rebalance);
-    c.on('object:added',   ()=> {
-      // Only normalize if a watermark exists & is too large
-      setTimeout(()=> normalizeWatermark(), 0);
-    });
-  })();
-
-  // Initial pass after page load (in case watermark is already oversized)
-  setTimeout(()=> { normalizeWatermark(); ensureFooter(); }, 400);
-})();
-
-/* ===== WM CONSOLIDATION PHASE 1.2 HOTFIX =====
-   - Dedupe watermark instances
-   - Normalize watermark scale early (with retries)
-   - Footer persistence & reassert after undo/redo, base/collection changes
-   - Conditional ring hide: only hide ring for Rebel base when holder is a Rebel
-   - Neutralize global force-off side effect (__raWMForce) for non‑Rebel bases
-   - Prevent opacity stacking (remove extras instead of layering)
-   This is a temporary shim before full Phase 2 unified manager.
-*/
-(function RA_WM_PHASE1_2_HOTFIX(){
-  if (window.__RA_WM_PHASE1_2__) return;
-  window.__RA_WM_PHASE1_2__ = true;
-
-  const MAX_WIDTH_PCT = 0.35;           // Cap ring width to 35% of canvas width
-  const RETRY_MS      = 120;            // Retry interval for late image metrics
-  const RETRIES       = 6;              // Scale normalization retries
-  const FOOTER_TEXT   = 'Powered by Rebel Studios';
-
+  /* ---- Helpers ---- */
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
 
-  function rebelContractLower(){
+  function holderState(){
+    return window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false };
+  }
+
+  function findBase(){
+    const c=C(); if (!c) return null;
+    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+  }
+
+  function baseKind(){
+    const base = findBase();
+    if (!base) {
+      // If a user uploaded an image but we tag it as base you'll catch it above;
+      // no base: treat scenario as 'upload'
+      return 'upload';
+    }
+    // Heuristics from earlier code:
+    if (base._tokenContract || base.contract){
+      const addr = (base._tokenContract || base.contract || '').toLowerCase();
+      const rebelAddr = deriveRebelAddr();
+      if (rebelAddr && addr === rebelAddr) return 'rebel-token';
+      return 'friend-token';
+    }
+    // Non tokenized base (plain upload)
+    return 'upload';
+  }
+
+  function deriveRebelAddr(){
     try {
       if (window.RA_COLLECTIONS){
         const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
@@ -9346,54 +9219,45 @@ document.addEventListener('ra-collection-change', (e) => {
     } catch(_){}
     return '';
   }
-  const REBEL_ADDR = rebelContractLower();
 
-  function findBase(){
-    const c=C(); if (!c) return null;
-    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
-  }
-
-  function baseIsRebel(base){
-    if (!base) return false;
-    const addr = (base._tokenContract || base.contract || '').toLowerCase();
-    if (!addr) return false;
-    return addr === REBEL_ADDR && !!REBEL_ADDR;
-  }
-
-  function holderState(){
-    return window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false };
-  }
-
-  function allWMs(){
-    const c=C(); if(!c) return [];
+  function allRings(){
+    const c=C(); if (!c) return [];
     return (c.getObjects()||[]).filter(o => o && o._raWMCenter === true);
   }
 
-  function dedupeWM(){
+  function findFooter(){
+    const c=C(); if(!c) return null;
+    return (c.getObjects()||[]).find(o =>
+      o && (o._raBrandFooter || o._raFooterId==='footer-group' ||
+        (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text)))
+    ) || null;
+  }
+
+  function deleteExtraRings(){
     const c=C(); if(!c) return;
-    const wms = allWMs();
-    if (wms.length <= 1) return;
-    // Keep the “largest” (current intended) & newest visible; remove the rest
-    let keep = wms.slice().sort((a,b)=>{
-      const aw = (a.getScaledWidth ? a.getScaledWidth() : a.width*(a.scaleX||1));
-      const bw = (b.getScaledWidth ? b.getScaledWidth() : b.width*(b.scaleX||1));
-      return bw - aw; // descending; largest first
-    })[0];
-    wms.forEach(o => { if (o !== keep) { try { c.remove(o); } catch(_){ } } });
-    try { keep.setCoords(); c.requestRenderAll(); } catch(_){}
+    const rings = allRings();
+    if (rings.length <= 1) return;
+    // Keep largest by scaled width
+    let keep = rings[0], kW = getScaledWidth(keep);
+    for (let i=1;i<rings.length;i++){
+      const w = getScaledWidth(rings[i]);
+      if (w > kW){ keep = rings[i]; kW = w; }
+    }
+    rings.forEach(r => { if (r !== keep){ try{ c.remove(r); }catch(_){ } } });
+  }
+
+  function getScaledWidth(o){
+    if (!o) return 0;
+    if (o.getScaledWidth) return o.getScaledWidth();
+    return (o.width||0) * (o.scaleX||1);
   }
 
   function ensureFooter(){
     const c=C(); if(!c) return;
-    const existing = (c.getObjects()||[]).find(o =>
-      o && (o._raBrandFooter ||
-        o._raFooterId === 'footer-group' ||
-        (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text)))
-    );
-    if (existing) return;
+    if (findFooter()) return;
     try {
       if (!window.fabric) return;
-      const t = new fabric.Text(FOOTER_TEXT, {
+      const ft = new fabric.Text(FOOTER_TEXT, {
         fontFamily:'Inter, system-ui, Arial, sans-serif',
         fontSize:12, fill:'#cfcfcf', opacity:0.88,
         originX:'right', originY:'bottom',
@@ -9401,107 +9265,188 @@ document.addEventListener('ra-collection-change', (e) => {
         selectable:false, evented:false,
         _raBrandFooter:true, _raSys:true
       });
-      c.add(t); c.bringToFront(t); c.requestRenderAll();
-    } catch(_){}
-  }
-
-  function normalizeScale(retry=0){
-    const c=C(); if(!c) return;
-    const wm = allWMs()[0]; if(!wm) return;
-    try{
-      const cw = c.getWidth();
-      const baseW = wm.width || wm._element?.naturalWidth || 512;
-      const currentWidth = wm.getScaledWidth ? wm.getScaledWidth() :
-        (baseW * (wm.scaleX||1));
-      const maxW = cw * MAX_WIDTH_PCT;
-      if (currentWidth > maxW + 1){
-        const sc = maxW / baseW;
-        wm.scaleX = wm.scaleY = sc;
-        wm.setCoords();
-        c.requestRenderAll();
-      } else if (retry < RETRIES && currentWidth === 0){
-        // Possibly image not fully ready yet
-        setTimeout(()=> normalizeScale(retry+1), RETRY_MS);
-      }
+      c.add(ft);
+      c.bringToFront(ft);
     }catch(_){}
   }
 
-  function applyHolderVisibility(){
-    const c=C(); if(!c) return;
-    const wm = allWMs()[0]; if(!wm) return;
-    const base = findBase();
+  function scaleRing(ring){
+    const c=C(); if(!c || !ring) return;
+    try {
+      const cw = c.getWidth();
+      const baseW = ring.width || ring._element?.naturalWidth || 512;
+      let target = Math.min(MAX_RING_WIDTH_PCT, Math.max(MIN_RING_WIDTH_PCT, MAX_RING_WIDTH_PCT)); // currently just MAX; placeholder if dynamic later
+      const targetPx = cw * target;
+      const sc = targetPx / baseW;
+      // Only shrink if larger; if smaller than MIN we can enlarge a bit
+      const curW = getScaledWidth(ring);
+      if (Math.abs(curW - targetPx) > 2){
+        ring.scaleX = ring.scaleY = sc;
+        ring.setCoords();
+      }
+    } catch(_){}
+  }
+
+  /* ---- Desired State Computation ---- */
+  function computeDesired(){
     const hs = holderState();
-    // We only hide ring if user is Rebel holder AND current base is a Rebel token
-    const shouldHide = !!(hs.hasRebel && baseIsRebel(base));
-    // Neutralize earlier global force toggle by clearing __raWMForce if present
-    if (shouldHide){
-      wm.visible = false;
+    const kind = baseKind();
+    const ownsAny = !!(hs.hasRebel || hs.hasFriend);
+    let wantRing=false, wantFooter=false;
+
+    if (!walletConnected()){
+      // Disconnected: always ring + footer when any base (token or upload)
+      wantRing = true;
+      wantFooter = true;
+      return { wantRing, wantFooter, kind, hs };
+    }
+
+    // Connected:
+    if (kind === 'rebel-token'){
+      wantRing = false;
+      wantFooter = !!SHOW_FOOTER_ON_REBEL_CONNECTED;
+      return { wantRing, wantFooter, kind, hs };
+    }
+
+    if (kind === 'friend-token'){
+      if (ownsAny){
+        // Holder of ANY collection ⇒ footer only
+        wantRing = false;
+        wantFooter = true;
+      } else {
+        // Non-holder ⇒ both
+        wantRing = true;
+        wantFooter = true;
+      }
+      return { wantRing, wantFooter, kind, hs };
+    }
+
+    // Upload / other
+    if (ownsAny){
+      wantRing = !!SHOW_RING_ON_UPLOAD_IF_HOLDER;
+      wantFooter = true;
     } else {
-      wm.visible = true;
+      wantRing = true;
+      wantFooter = true;
     }
+    return { wantRing, wantFooter, kind, hs };
+  }
+
+  function walletConnected(){
+    // Heuristic: presence of RA_HOLDER_STATE or web3 connection might be tracked; we’ll assume
+    // if RA_HOLDER_STATE was ever set OR window.ethereum selected account etc.
+    const hs = holderState();
+    if (hs.hasRebel || hs.hasFriend) return true;
+    // You can refine: if (window.ethereum && ethereum.selectedAddress) return true;
+    // For now: treat false if no flags
+    return !!window.__RA_WALLET_CONNECTED__; // allow external toggle to set this
+  }
+
+  /* ---- Apply Desired State ---- */
+  function applyDesired(reason){
+    const c=C(); if(!c) return;
+    deleteExtraRings();
+
+    const { wantRing, wantFooter } = computeDesired();
+
+    let ring = allRings()[0];
+    if (!wantRing && ring){
+      try { c.remove(ring); } catch(_){}
+      ring = null;
+    } else if (wantRing && !ring){
+      // Ask upstream admin block to create one (if still present)
+      try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
+      // Slight delay to allow creation
+      setTimeout(()=>{
+        const r = allRings()[0];
+        if (r) { scaleRing(r); bringRingFront(); }
+        finalizeFooter(wantFooter);
+      }, 40);
+    }
+
+    if (ring && wantRing){
+      scaleRing(ring);
+      bringRingFront();
+    }
+
+    finalizeFooter(wantFooter);
+
     try { c.requestRenderAll(); } catch(_){}
+    // Debug (optional): console.log('[WM 1.2b]', reason, { wantRing, wantFooter });
   }
 
-  function reassert(reason){
-    // Dedupe → normalize → conditional visibility → footer
-    try { dedupeWM(); } catch(_){}
-    try { normalizeScale(); } catch(_){}
-    try { applyHolderVisibility(); } catch(_){}
-    try { ensureFooter(); } catch(_){}
-    // Debug hook (optional):
-    // console.log('[WM HOTFIX reassert]', reason);
-  }
-
-  // --- Undo/Redo already patched in Phase 1.1, add a follow-up reassert (stronger) ---
-  ['undo','redo'].forEach(fn => {
-    if (typeof window[fn] === 'function' && !window[fn].__raWmPhase12){
-      const orig = window[fn];
-      window[fn] = function(){
-        const out = orig.apply(this, arguments);
-        setTimeout(()=> reassert(fn), 30);
-        return out;
-      };
-      window[fn].__raWmPhase12 = true;
+  function finalizeFooter(wantFooter){
+    const c=C(); if(!c) return;
+    const ft = findFooter();
+    if (!wantFooter && ft){
+      try { c.remove(ft); } catch(_){}
+      return;
     }
-  });
+    if (wantFooter && !ft){
+      ensureFooter();
+    }
+    // Keep footer on top but below ring if both exist:
+    const ring = allRings()[0];
+    const footerObj = findFooter();
+    if (footerObj){
+      try { c.bringToFront(footerObj); } catch(_){}
+    }
+    if (ring){
+      try { c.bringToFront(ring); } catch(_){}
+    }
+  }
 
-  // --- Base/object events ---
-  (function wireCanvas(){
-    const c=C(); if(!c){ setTimeout(wireCanvas,150); return; }
-    if (c.__raWmPhase12) return;
-    c.__raWmPhase12 = true;
-    const debounced = (()=> {
-      let raf=null;
-      return (label)=>{
-        if (raf) return;
-        raf = requestAnimationFrame(()=>{
-          raf=null;
-          reassert(label);
-        });
-      };
-    })();
-    c.on('object:added',   ()=> debounced('added'));
-    c.on('object:removed', ()=> debounced('removed'));
-    c.on('object:modified',()=> debounced('modified'));
-  })();
+  function bringRingFront(){
+    const c=C(); if(!c) return;
+    const ring = allRings()[0]; if(!ring) return;
+    try { c.bringToFront(ring); } catch(_){}
+  }
 
-  // --- Wallet holder update ---
-  document.addEventListener('ra-holder-update', ()=> {
-    // Clear global force that hides everything; we manage conditionally now
-    try { window.__raWMForce = null; } catch(_){}
-    setTimeout(()=> reassert('holder-update'), 20);
-  });
+  /* ---- Hooks ---- */
+  function hookUndoRedo(){
+    ['undo','redo'].forEach(name=>{
+      const fn = window[name];
+      if (typeof fn === 'function' && !fn.__raWm12b){
+        window[name] = function(){
+          const out = fn.apply(this, arguments);
+            setTimeout(()=> applyDesired(name), 25);
+          return out;
+        };
+        window[name].__raWm12b = true;
+      }
+    });
+  }
 
-  // --- Collection change (your loader emits this custom event) ---
-  document.addEventListener('ra-collection-change', ()=> {
-    setTimeout(()=> reassert('collection-change'), 40);
-  });
+  function hookCanvas(){
+    const c=C(); if(!c){ setTimeout(hookCanvas,150); return; }
+    if (c.__raWm12bCanvas) return;
+    c.__raWm12bCanvas = true;
+    const bounce = (()=>{ let raf=null; return (why)=>{ if (raf) return; raf = requestAnimationFrame(()=>{ raf=null; applyDesired(why); }); }; })();
+    c.on('object:added',   ()=> bounce('added'));
+    c.on('object:removed', ()=> bounce('removed'));
+    c.on('object:modified',()=> bounce('modified'));
+  }
 
-  // --- Token/base load recalc event (already used upstream) ---
-  document.addEventListener('ra-wm-recalc', ()=> {
-    setTimeout(()=> reassert('wm-recalc'), 10);
-  });
+  function hookEvents(){
+    document.addEventListener('ra-holder-update', ()=> setTimeout(()=> applyDesired('holder-update'), 30));
+    document.addEventListener('ra-wm-recalc',      ()=> setTimeout(()=> applyDesired('recalc'), 10));
+    document.addEventListener('ra-collection-change', ()=> setTimeout(()=> applyDesired('collection-change'), 50));
+    // Allow external wallet connect/disconnect toggle:
+    document.addEventListener('ra-wallet-connect-state', ()=> setTimeout(()=> applyDesired('wallet-state'), 20));
+  }
 
-  // Initial stabilization (in case we started mid-state)
-  setTimeout(()=> reassert('initial'), 300);
+  function init(){
+    hookUndoRedo();
+    hookCanvas();
+    hookEvents();
+    setTimeout(()=> applyDesired('initial'), 400);
+  }
+
+  if (document.readyState === 'complete') {
+    setTimeout(init, 200);
+  } else {
+    window.addEventListener('load', ()=> setTimeout(init, 200), { once:true });
+  }
+
 })();
+
