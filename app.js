@@ -422,24 +422,6 @@ async function makeStampedGroup(img, bw, bh, wmWidthRatio){
 async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
 
-  // Implementation A: When switching to token mode, pre-hide/remove any _raWMCenter or _isWatermark elements
-  // and cancel any WM timers before render
-  if (isToken) {
-    try {
-      const os = canvas.getObjects() || [];
-      os.forEach(o => { 
-        if (o && (o._raWMCenter === true || o._isWatermark === true)) {
-          canvas.remove(o);
-        }
-      });
-      // Cancel any pending watermark timers
-      if (window.__raWMTimer) {
-        clearTimeout(window.__raWMTimer);
-        window.__raWMTimer = null;
-      }
-    } catch (_) {}
-  }
-
   const img = await fabricFromURL(dataUrl);
   img.set({ originX:"center", originY:"center" });
 
@@ -448,22 +430,21 @@ async function loadBaseImage(dataUrl, isToken){
   const sc = Math.min(cw / img.width, ch / img.height, 1);
   img.scale(sc);
 
-  const bw = img.width * sc, bh = img.height * sc;
-
   let obj;
   if (isToken) {
-    // Token = RA (real asset) => NO ring watermark, only main image
+    // Token load: image gets _isBase = true; _isTokenBase = true;
     img._isBase = true;
+    img._isTokenBase = true;
     lockBaseObject(img);
     img.set({ left:cw/2, top:ch/2 }); img.setCoords();
     obj = img;
   } else {
-    // Non-token => use makeStampedGroup (which now returns only main image)
-    const group = await makeStampedGroup(img, bw, bh, 0.15);
-    group._isBase = true;
-    lockBaseObject(group);
-    group.set({ left:cw/2, top:ch/2 }); group.setCoords();
-    obj = group;
+    // Upload load: image (not grouped) gets _isBase = true; _isUploadBase = true;
+    img._isBase = true;
+    img._isUploadBase = true;
+    lockBaseObject(img);
+    img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+    obj = img;
   }
 
   canvas.add(obj);
@@ -484,15 +465,9 @@ async function addOverlayToCanvas(src, isPermanent){
   const sc = Math.min(1, maxDim / Math.max(iw, ih));
   if (isFinite(sc) && sc > 0) img.scale(sc);
 
-  let obj;
-  if (isPermanent) {
-    img._kind = "overlay";
-    obj = img;
-  } else {
-    const group = await makeStampedGroup(img, (img.width||maxDim)*sc, (img.height||maxDim)*sc, 0.08);
-    group._kind = "overlay";
-    obj = group;
-  }
+  // Add overlays directly (no corner stamp group). Mark _kind = 'overlay'.
+  img._kind = "overlay";
+  let obj = img;
 
   canvas.add(obj);
   obj.set({ left:canvas.getWidth()/2, top:canvas.getHeight()/2 }); obj.setCoords();
@@ -2882,7 +2857,7 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
 })();
 
 /* ==========================================================
-   RA_WATERMARK_SWITCH_FOUNDATION_V1  — add-only, safe no-op
+   DEPRECATED: RA_WATERMARK_SWITCH_FOUNDATION_V1  — add-only, safe no-op
    What this gives you:
    • One switch to turn ON watermarking for the "Make Video" flow (later).
    • Safe preloading of the watermark as a dataURL (avoids CORS issues).
@@ -2895,6 +2870,7 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
 
    Optional: override watermark via ?wm=https://…/your.png (same as images)
    ========================================================== */
+/*
 (() => {
   if (window.__RA_WM_BOOTED__) return;
   window.__RA_WM_BOOTED__ = true;
@@ -3068,6 +3044,7 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     removeTempFabricWM
   });
 })();
+*/
 /* ==========================================================
    RA_UNDO_REDO_SAFE_MINI_V1
    • Super‑safe: never restores anything unless you click Undo/Redo.
@@ -3748,7 +3725,7 @@ function isOverlay(o) {
 })();
 
 /* ==========================================================
-   RA_WM_CENTER_ADMIN_NO_STAMPS_V2
+   DEPRECATED: RA_WM_CENTER_ADMIN_NO_STAMPS_V2
    • Removes corner stamps from EVERY new/old base or overlay.
      (We strip the stamp children out of the group; no re-centering bugs.)
    • One centered watermark layer with admin-only controls.
@@ -3759,6 +3736,7 @@ function isOverlay(o) {
    • No dependency on your Undo/Redo patch and no overrides.
      (We never touch window.raHist and we don’t replace base objects.)
    ========================================================== */
+/*
 (() => {
   if (window.__RA_WM_CENTER_ADMIN_NO_STAMPS_V2__) return;
   window.__RA_WM_CENTER_ADMIN_NO_STAMPS_V2__ = true;
@@ -4036,6 +4014,7 @@ const shouldShow =
     boot();
   }
 })();
+*/
 
 /* ==========================================================
    RA_FIX_UPLOAD_RECENTER_AFTER_STRIP_V1
@@ -4875,9 +4854,10 @@ tile.appendChild(cap);
 })();
 
 /* ==========================================================
-   RA_WM_GLOBAL_SYNC_v3 — PASTE AT THE VERY BOTTOM OF app.js
+   DEPRECATED: RA_WM_GLOBAL_SYNC_v3 — PASTE AT THE VERY BOTTOM OF app.js
    Uses /api/ra-settings to load+save watermark settings for everyone.
    ========================================================== */
+/*
 (() => {
   const GET_URL  = '/api/ra-settings';  // your endpoint (GET returns {ok, settings:{...}})
   const POST_URL = '/api/ra-settings';  // same endpoint for saving
@@ -5002,12 +4982,14 @@ tile.appendChild(cap);
     loadFromServerAndApply();
   }
 })();
+*/
 
 /* ==========================================================
-   RA_WM_FOLLOW_EVENTS_v1 — paste below the v3 block
+   DEPRECATED: RA_WM_FOLLOW_EVENTS_v1 — paste below the v3 block
    Makes sure the server settings apply even when you load
    the token later. Re-applies on object add/modify.
    ========================================================== */
+/*
 (() => {
   const GET_URL = '/api/ra-settings'; // same endpoint
 
@@ -5067,6 +5049,7 @@ tile.appendChild(cap);
   }
   wire();
 })();
+*/
 
 /* ==========================================================
    RA_WM_SERVER_MASTER_v1  — PASTE AT THE VERY BOTTOM
