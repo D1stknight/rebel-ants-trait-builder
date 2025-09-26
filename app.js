@@ -44,6 +44,14 @@
     fabric.Object.prototype.rotatingPointOffset = 20;
   }
 
+/* ===== WM CONSOLIDATION PHASE 1 (START) ===== */
+window.raFindWatermark = function raFindWatermark(){
+  const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  if (!c) return null;
+  return (c.getObjects()||[]).find(o => o && o._raWMCenter === true) || null;
+};
+/* ===== WM CONSOLIDATION PHASE 1 (END HEADER) ===== */
+
   // ===============================
   //  STATE
   // ===============================
@@ -101,6 +109,7 @@ function normalize(u){
 }
 
 
+/* ===== WM CONSOLIDATION P1 DISABLED: ensureNonTokenRingWM ===== 
 /* [REMOVED duplicate Non-token ring watermark helper] */
 ;
 /* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
@@ -226,6 +235,7 @@ function normalize(u){
     }
   } catch(_) {}
 })();
+/* ===== END DISABLED ===== */
 
 /* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
 (function(){
@@ -4848,6 +4858,7 @@ tile.appendChild(cap);
   }
 })();
 
+/* ===== WM CONSOLIDATION P1 DISABLED: RA_WM_GLOBAL_SYNC_v3 =====
 /* ==========================================================
    RA_WM_GLOBAL_SYNC_v3 — PASTE AT THE VERY BOTTOM OF app.js
    Uses /api/ra-settings to load+save watermark settings for everyone.
@@ -4976,7 +4987,9 @@ tile.appendChild(cap);
     loadFromServerAndApply();
   }
 })();
+/* ===== END DISABLED ===== */
 
+/* ===== WM CONSOLIDATION P1 DISABLED: RA_WM_FOLLOW_EVENTS_v1 =====
 /* ==========================================================
    RA_WM_FOLLOW_EVENTS_v1 — paste below the v3 block
    Makes sure the server settings apply even when you load
@@ -5041,7 +5054,9 @@ tile.appendChild(cap);
   }
   wire();
 })();
+/* ===== END DISABLED ===== */
 
+/* ===== WM CONSOLIDATION P1 DISABLED: RA_WM_SERVER_MASTER_v1 =====
 /* ==========================================================
    RA_WM_SERVER_MASTER_v1  — PASTE AT THE VERY BOTTOM
    What this does (no other edits needed):
@@ -5203,7 +5218,9 @@ tile.appendChild(cap);
     boot();
   }
 })();
+/* ===== END DISABLED ===== */
 
+/* ===== WM CONSOLIDATION P1 DISABLED: RA_WM_OVERLAY_ONLY_FALLBACK_v1 =====
 /* ==========================================================
    RA_WM_OVERLAY_ONLY_FALLBACK_v1 — paste at the very bottom
    - If there is NO base image but overlays/text are present,
@@ -5337,6 +5354,7 @@ tile.appendChild(cap);
     wire();
   }
 })();
+/* ===== END DISABLED ===== */
 
 /* ==========================================================
    RA_TEXT_ACTION_BAR_V2 + RA_EMOJI_PICKER_V2
@@ -8597,6 +8615,7 @@ window.raDump = () => {
   });
 };
 
+/* ===== WM CONSOLIDATION P1 DISABLED: RA_WM_FOOTER_FIX_SHIM_v7r =====
 /* ===== RA_WM_FOOTER_FIX_SHIM_v7r — center-ring only; make/show on uploads; no overlay interference ===== */
 ;(() => {
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
@@ -8941,7 +8960,9 @@ document.addEventListener('ra-base-loaded', (e) => {
     wire();
   }
 })();
+/* ===== END DISABLED ===== */
 
+/* ===== WM CONSOLIDATION P1 DISABLED: RA_WM_RULES_V9 =====
 /* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
 ;(() => {
   if (window.__RA_WM_RULES_V9__) return;
@@ -9121,6 +9142,7 @@ document.addEventListener('ra-collection-change', (e) => {
     wire();
   }
 })();
+/* ===== END DISABLED ===== */
 
 
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
