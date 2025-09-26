@@ -3340,9 +3340,11 @@ c.on('object:removed', (e)=>{
   };
   const isOverlay = o => {
     if (isBg(o) || isBase(o) || isText(o)) return false;
+    // Explicitly exclude watermark and system layers
+    if (o._isWatermark || o.raWM || o._raWMCenter || o._raBrandFooter || o._raSys) return false;
     const k = (o._kind||'').toLowerCase();
-    // Treat any non-base/non-text drawable as overlay by default.
-    return k==='overlay' || k==='sticker' || k==='icon' || true;
+    // Only include specifically marked overlays/stickers/icons, not everything else
+    return k==='overlay' || k==='sticker' || k==='icon';
   };
 
   function pickTargets(c, scope){
@@ -6244,20 +6246,31 @@ tile.appendChild(cap);
     if (!provider || !address || !chainId){ out.textContent='Connect your wallet first.'; return; }
     out.textContent = 'Checking…';
 
-    const cols = await getCollectionsFor(chainId);
-    if (!cols.length){
-      out.textContent = `No collections configured for ${netNameFromChainId(chainId)}.`;
+    // Fetch ALL collections, not just current chain
+    let allCols = [];
+    try{
+      const r = await fetch('/api/ra-collections');
+      if (r.ok){
+        const j = await r.json();
+        allCols = j.collections || [];
+      }
+    }catch(_){}
+
+    if (!allCols.length){
+      out.textContent = `No collections configured.`;
       window.RA_HOLDER_STATE = { checked:true, hasRebel:false, hasFriend:false, matches:[] };
       document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE }));
       return;
     }
 
     const matches = [];
-    for (const c of cols){
+    for (const c of allCols){
       let ok = false;
-      // try wallet provider first
-      try { ok = await balanceOf(provider, c.address, address); } catch(_){}
-      // fallback to RPC if provided (helps custom networks like ApeChain)
+      // For current chain, try wallet provider first
+      if ((c.chainId||'').toLowerCase() === chainId.toLowerCase()) {
+        try { ok = await balanceOf(provider, c.address, address); } catch(_){}
+      }
+      // For off-chain collections or fallback, use RPC if provided
       if (!ok && c.rpcUrl) {
         try { ok = await balanceOfRpc(c.rpcUrl, c.address, address); } catch(_){}
       }
@@ -6274,7 +6287,7 @@ tile.appendChild(cap);
       `Chain: ${netNameFromChainId(chainId)}`,
       `Address: ${short(address)}`,
       '',
-      ...matches.map(r => `• ${r.name||r.address} — ${r.holds ? '✅ holds' : '—'}`),
+      ...matches.map(r => `• ${r.name||r.address} (${netNameFromChainId(r.chainId||'0x1')}) — ${r.holds ? '✅ holds' : '—'}`),
       '',
       `Summary: ${hasRebel ? 'Rebel holder' : 'No Rebel'}${hasFriend ? ' + Friend collection' : ''}`
     ];
@@ -8249,10 +8262,10 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — center-ring only; make/show on uploads; no overlay interference ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v8 — improved center-ring with exact holder gating ===== */
 ;(() => {
-  if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V8__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V8__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
@@ -8267,11 +8280,7 @@ window.raDump = () => {
   const isID     = o => !!(o && o._raTokenId);
 
   // Small “restore” window to avoid one-frame flashes
-  let lastRestoreSeen = 0;
-  const restoring = () => {
-    if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
-    return (Date.now() - lastRestoreSeen) < 400;
-  };
+  const restoring = () => window.__RA_RESTORING__;
 
   function quarantine(o){
     if (!o) return;
@@ -8285,15 +8294,23 @@ window.raDump = () => {
 
   function centerRing(wm){
     const c = C(); if (!c || !wm) return;
+    const targetPct = (typeof window.__RA_WM_TARGET_PCT === 'number') ? window.__RA_WM_TARGET_PCT : 0.28;
+    const cw = c.getWidth();
+    const natW = wm.width || 1;
+    const sc = (cw * Math.max(0.05, Math.min(1, targetPct))) / Math.max(1, natW);
+    
     wm.originX = 'center'; wm.originY = 'center';
-    wm.left = c.getWidth() / 2; wm.top = c.getHeight() / 2;
+    wm.scaleX = sc; wm.scaleY = sc;
+    wm.left = cw / 2; wm.top = c.getHeight() / 2;
     wm.setCoords();
   }
 
   function assertTopNow(){
+    if (restoring()) return; // Don't interfere during restore
+    
     const c = C(); if (!c) return;
-    const all  = c.getObjects?.() || [];
-    const bg   = all.find(isBg);
+    const all = c.getObjects?.() || [];
+    const bg = all.find(isBg);
     const base = all.find(isBase);
 
     if (bg){
@@ -8301,12 +8318,14 @@ window.raDump = () => {
       try { c.moveTo(bg, 0); } catch(_){}
     }
 
-    // Footer: hidden on Rebel or while restoring
+    // Footer: hide for Rebel tokens using exact contract matching
     const foot = all.find(isFooter);
-    const cc = String(base?._tokenContract || '').toLowerCase();
     if (foot){
       quarantine(foot);
-      if (restoring() || (cc && cc === REBEL_CONTRACT)) foot.visible = false;
+      const cc = String(base?._tokenContract || '').toLowerCase();
+      const isRebelToken = !!(window.RA_HOLDER_STATE?.matches || []).find(m => 
+        m.holds && m.tag === 'rebel' && m.address.toLowerCase() === cc);
+      if (isRebelToken) foot.visible = false;
     }
 
     // Single center ring, always seated right above base and centered
