@@ -6353,6 +6353,7 @@ tile.appendChild(cap);
   }
 
   // --- Connect / Refresh / Disconnect
+
   // Implementation F: Wallet connect reentrancy guard
   let CONNECTING = false;
 
@@ -6360,17 +6361,19 @@ tile.appendChild(cap);
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected (MetaMask/Coinbase).'; return; }
     
-} finally {
-  window.__walletConnecting = false;
-  if (typeof CONNECTING !== 'undefined') CONNECTING = false;
+// Reentrancy guard (supports legacy and new flags)
+if (window.__walletConnecting || (typeof CONNECTING !== 'undefined' && CONNECTING)) {
+  if (out) out.textContent = 'Connection in progress...';
+  return;
 }
+window.__walletConnecting = true;
+if (typeof CONNECTING !== 'undefined') CONNECTING = true;
     try{
       out.textContent = 'Connecting...';
       const accounts = await eth.request({ method:'eth_requestAccounts' });
       const chainId  = await eth.request({ method:'eth_chainId' });
       const address  = accounts?.[0] || null;
       setConnected(!!address, address, chainId, eth, 'Connected. Click “Check holdings”.');
-    }catch(err){ 
 } catch (err) {
   // Handle user cancellation (error code 4001) more gracefully
   if (err && err.code === 4001) {
@@ -6507,8 +6510,14 @@ tile.appendChild(cap);
 
   // update on wallet events
   if (window.ethereum){
-    ethereum.on?.('accountsChanged', ()=>{ hintEl.textContent='Account changed — click Refresh.'; });
-    ethereum.on?.('chainChanged',   cid=>{ chainEl.textContent = netNameFromChainId(cid); hintEl.textContent='Network changed — click Refresh.'; });
+    ethereum.on?.('accountsChanged', ()=>{ 
+      out.textContent = ''; // Clear status on account change
+      hintEl.textContent='Account changed — click Refresh.'; 
+    });
+    ethereum.on?.('chainChanged',   cid=>{ 
+      out.textContent = ''; // Clear status on chain change
+      chainEl.textContent = netNameFromChainId(cid); hintEl.textContent='Network changed — click Refresh.'; 
+    });
   }
 
   // optional: try a silent refresh on load
@@ -8483,12 +8492,28 @@ window.raDump = () => {
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
+  // RAF-based watermark evaluation to prevent Safari timer races
+  let WM_EVAL_SCHEDULED = false;
+  let WM_READY = false;
+  let LOAD_TOKEN_SESSION = null;
+
+  function scheduleWMEval(reason) {
+    if (WM_EVAL_SCHEDULED || window.__RA_RESTORING__) return;
+    WM_EVAL_SCHEDULED = true;
+    requestAnimationFrame(() => {
+      WM_EVAL_SCHEDULED = false;
+      if (!window.__RA_RESTORING__) {
+        ensureRingPresent();
+      }
+    });
+  }
+
   // Rebel contract (lowercase)
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
 
   // Recognizers (STRICT ring match — do NOT treat corner stamps as watermark)
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isRing   = o => !!(o && o._raWMCenter === true);      // <— only the center ring
+  const isFooter = o => !!(o && (o._raBrandFooter || o._raFooterId === 'footer-group' || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isRing   = o => !!(o && (o._raWMCenter === true || o._raWMCenterId === 'center-ring'));      // <— only the center ring
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
@@ -8555,6 +8580,61 @@ window.raDump = () => {
     } catch(_){}
   }
 
+  // Helper functions for singleton ring and footer management
+  function getOrCreateRing() {
+    const c = C(); 
+    if (!c) return null;
+    
+    // Guard against operations during restore
+    if (window.__RA_RESTORING__) return null;
+    
+    // Find existing ring by stable id
+    let wm = (c.getObjects?.() || []).find(o => o && o._raWMCenterId === 'center-ring');
+    return wm;
+  }
+
+  function getOrCreateFooter() {
+    const c = C(); 
+    if (!c) return null;
+    
+    const all = c.getObjects?.() || [];
+    
+    // Remove any duplicate footers before proceeding
+    const footers = all.filter(isFooter);
+    if (footers.length > 1) {
+      // Keep the last one, remove extras
+      const keep = footers[footers.length - 1];
+      footers.slice(0, -1).forEach(f => {
+        try { c.remove(f); } catch(_) {}
+      });
+      return keep;
+    }
+    
+    return footers[0] || null;
+  }
+
+  function onBaseLoaded(base) {
+    // Generate unique token for this load session
+    LOAD_TOKEN_SESSION = Date.now() + '_' + Math.random().toString(36).substring(2);
+    
+    // Set WM_READY when base exists and has non-zero dimensions
+    if (base && base.width && base.height && base.width > 0 && base.height > 0) {
+      WM_READY = true;
+      scheduleWMEval('base-loaded');
+    }
+  }
+
+  function onBaseResized(base) {
+    // If ring exists, rescale once; no visibility toggle here
+    if (base && WM_READY) {
+      const wm = getOrCreateRing();
+      if (wm) {
+        centerRing(wm);
+        try { window.canvas && window.canvas.requestRenderAll(); } catch(_) {}
+      }
+    }
+  }
+
   // Create or show the center ring watermark when rules say it should be visible.
   function ensureRingPresent(){
     // Implementation H: Guard any watermark creation/visibility changes when window.__RA_RESTORING__ is true
@@ -8619,7 +8699,7 @@ window.raDump = () => {
                       (force && force.on) ? true :
                       ((!cc || cc !== REBEL_CONTRACT) && !isHolder);
 
-    let wm = all.find(isRing);
+    let wm = getOrCreateRing();
     if (!wm && shouldShow){
       const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
       fabric.Image.fromURL(src, img => {
@@ -8648,7 +8728,7 @@ window.raDump = () => {
   }
 
   function wire(){
-    const c = C(); if (!c) return setTimeout(wire, 120);
+    const c = C(); if (!c) { scheduleWMEval('retry-wire'); return setTimeout(wire, 120); }
     if (c.__raWmFooterFixShimV7rBound) return;
     c.__raWmFooterFixShimV7rBound = true;
 
@@ -8660,27 +8740,68 @@ window.raDump = () => {
 
     // Keep order/centering stable at all times
     c.on?.('after:render',    assertTopNow);
-    c.on?.('object:modified', assertTopNow);
+    c.on?.('object:modified', (e) => {
+      // Don't trigger WM changes on overlay/text object moves 
+      const obj = e?.target;
+      if (obj && (obj._kind === 'overlay' || obj._kind === 'text')) return;
+      assertTopNow();
+    });
     c.on?.('object:removed',  assertTopNow);
+
+    // Block object:moving events from triggering WM changes
+    c.on?.('object:moving', (e) => {
+      // Never react to object:moving for overlays/text - prevents blink on drag
+      return;
+    });
 
     // When a new Base is added (manual upload / token load), ensure ring state
     c.on?.('object:added', (e) => {
-      if (e && e.target && e.target._isBase) ensureRingPresent();
+      if (e && e.target && e.target._isBase) {
+        const base = e.target;
+        // Only fire onBaseLoaded once per load with token guard
+        const currentToken = LOAD_TOKEN_SESSION;
+        onBaseLoaded(base);
+        // Ignore subsequent fabric object:added for the same image if token matches
+        if (LOAD_TOKEN_SESSION === currentToken) {
+          scheduleWMEval('base-added');
+        }
+      }
       assertTopNow();
     });
 
-    // React to admin/wallet/rules changes
-    ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, (e) => { 
-        // For collection changes, only respond if there's a base image loaded
-        if (ev === 'ra-collection-change') {
-          const c = C();
-          if (!c) return;
-          const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
-          if (!base) return; // No base loaded yet, skip watermark evaluation
-        }
-        ensureRingPresent();
-      }));
+// Helpers
+function hasBaseLoaded() {
+  try {
+    const c = typeof C === 'function' ? C() : null;
+    if (!c || typeof c.getObjects !== 'function') return false;
+    return !!(c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+  } catch {
+    return false;
+  }
+}
+
+// React to admin/wallet changes (active)
+['ra-wm-recalc', 'ra-holder-update'].forEach(ev =>
+  document.addEventListener(ev, () => {
+    if (typeof ensureRingPresent === 'function') ensureRingPresent();
+    if (typeof scheduleWMEval === 'function') scheduleWMEval(ev);
+  })
+);
+
+// Collection change handler — passive unless a base is already loaded
+document.addEventListener('ra-collection-change', (e) => {
+  if (!hasBaseLoaded()) return; // skip until base is present
+  if (typeof ensureRingPresent === 'function') ensureRingPresent();
+  if (typeof scheduleWMEval === 'function') scheduleWMEval('ra-collection-change');
+});
+
+// Handle base loaded events — now safe to evaluate watermark/ring
+document.addEventListener('ra-base-loaded', (e) => {
+  const base = e.detail?.base;
+  if (base && typeof onBaseLoaded === 'function') onBaseLoaded(base);
+  if (typeof ensureRingPresent === 'function') ensureRingPresent();
+  if (typeof scheduleWMEval === 'function') scheduleWMEval('ra-base-loaded');
+});
 
     // Keep ring centered on canvas size changes
     try {
@@ -8688,14 +8809,17 @@ window.raDump = () => {
       if (el && !c.__raWmCenterResizeObs){
         c.__raWmCenterResizeObs = true;
         new ResizeObserver(() => {
-          const wm = (c.getObjects?.()||[]).find(isRing);
-          if (wm){ centerRing(wm); try { c.requestRenderAll(); } catch(_) {} }
+          const wm = getOrCreateRing();
+          if (wm){ 
+            centerRing(wm); 
+            try { c.requestRenderAll(); } catch(_) {} 
+          }
         }).observe(el);
       }
     } catch(_){}
 
     // First pass
-    ensureRingPresent();
+    scheduleWMEval('initial');
     assertTopNow();
   }
 
@@ -8713,6 +8837,19 @@ window.raDump = () => {
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
+
+  // RAF-based evaluation scheduling for this block too
+  let WM_EVAL_SCHEDULED_V9 = false;
+  function scheduleWMEvalV9(reason) {
+    if (WM_EVAL_SCHEDULED_V9 || window.__RA_RESTORING__) return;
+    WM_EVAL_SCHEDULED_V9 = true;
+    requestAnimationFrame(() => {
+      WM_EVAL_SCHEDULED_V9 = false;
+      if (!window.__RA_RESTORING__) {
+        applyRules();
+      }
+    });
+  }
 
   // recognizers
   const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true || o._raWatermark === true || o._wm));
@@ -8825,25 +8962,33 @@ window.raDump = () => {
 
   // ——— Wiring ———
   function wire(){
-    const c = C(); if (!c) return setTimeout(wire, 120);
+    const c = C(); if (!c) { scheduleWMEvalV9('retry-wire'); return setTimeout(wire, 120); }
     if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
 
-    // Base changes only (ignore overlays)
-    c.on('object:added',   e => { if (e?.target && isBase(e.target)) applyRules(); });
-    c.on('object:removed', e => { if (e?.target && isBase(e.target)) applyRules(); });
+    // Base changes only (ignore overlays) - block object:moving/modified for overlays
+    c.on('object:added',   e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-added'); });
+    c.on('object:removed', e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-removed'); });
 
-    // Wallet or collection changes
-    ['ra-holder-update','ra-collection-change','ra-wm-recalc'].forEach(ev=>{
-      document.addEventListener(ev, (e) => {
-        // For collection changes, only respond if there's a base image loaded
-        if (ev === 'ra-collection-change') {
-          const c = C();
-          if (!c) return;
-          const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
-          if (!base) return; // No base loaded yet, skip watermark evaluation
-        }
-        applyRules();
-      });
+// Wallet changes — active; collection change — passive unless base is loaded
+['ra-holder-update', 'ra-wm-recalc'].forEach(ev => {
+  document.addEventListener(ev, () => {
+    if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9(ev);
+  });
+});
+
+// Collection change handler — only act if a base image is already loaded
+document.addEventListener('ra-collection-change', (e) => {
+  try {
+    const c = typeof C === 'function' ? C() : null;
+    const hasBase =
+      !!(c && typeof c.getObjects === 'function' &&
+         (c.getObjects() || []).some(o => o && o._isBase && !o._isBgRect));
+    if (!hasBase) return; // stay passive until base loads
+  } catch {
+    return;
+  }
+  if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9('ra-collection-change');
+});
     });
 
     // Canvas resize (size dropdown etc.)
@@ -8851,12 +8996,12 @@ window.raDump = () => {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmRulesV9Resize) {
         c.__raWmRulesV9Resize = true;
-        new ResizeObserver(() => applyRules()).observe(el);
+        new ResizeObserver(() => scheduleWMEvalV9('resize')).observe(el);
       }
     }catch(_){}
 
     // First pass
-    applyRules();
+    scheduleWMEvalV9('initial');
   }
 
   if (document.readyState === 'loading') {
