@@ -1319,6 +1319,7 @@ document.addEventListener("keydown", (e)=>{
     return;
   }
 });
+
 /* -------- SNAP + ALIGN UI (v2 – robust bounding box snapping) -------- */
 (function snapAlignV2(){
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -1598,6 +1599,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (!window.canvas) return;
     const rawMult = parseInt((($("exportMultiplier")||{}).value) || "2", 10);
     const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
+
     let dataURL;
     try{
       dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
@@ -3426,6 +3428,7 @@ c.on('object:removed', (e)=>{
     const t = (o.type||'').toLowerCase();
     return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
   };
+
  // Overlay detector (no recursion bug)
 const isOverlay = (o) => {
   if (!o) return false;
@@ -6551,6 +6554,7 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
 }
   // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
+
   // Do not spawn or modify footer while a JSON restore is in progress
   if (window.__RA_RESTORING__) return false;
 
@@ -6634,6 +6638,7 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
 
     // App‑level events that can change what should show
     ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
+
       document.addEventListener(ev, (e) => {
         // For collection changes, only respond if there's a base image loaded
         if (ev === 'ra-collection-change') {
