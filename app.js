@@ -9315,3 +9315,193 @@ document.addEventListener('ra-collection-change', (e) => {
   // Initial pass after page load (in case watermark is already oversized)
   setTimeout(()=> { normalizeWatermark(); ensureFooter(); }, 400);
 })();
+
+/* ===== WM CONSOLIDATION PHASE 1.2 HOTFIX =====
+   - Dedupe watermark instances
+   - Normalize watermark scale early (with retries)
+   - Footer persistence & reassert after undo/redo, base/collection changes
+   - Conditional ring hide: only hide ring for Rebel base when holder is a Rebel
+   - Neutralize global force-off side effect (__raWMForce) for non‑Rebel bases
+   - Prevent opacity stacking (remove extras instead of layering)
+   This is a temporary shim before full Phase 2 unified manager.
+*/
+(function RA_WM_PHASE1_2_HOTFIX(){
+  if (window.__RA_WM_PHASE1_2__) return;
+  window.__RA_WM_PHASE1_2__ = true;
+
+  const MAX_WIDTH_PCT = 0.35;           // Cap ring width to 35% of canvas width
+  const RETRY_MS      = 120;            // Retry interval for late image metrics
+  const RETRIES       = 6;              // Scale normalization retries
+  const FOOTER_TEXT   = 'Powered by Rebel Studios';
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function rebelContractLower(){
+    try {
+      if (window.RA_COLLECTIONS){
+        const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
+        if (r) return (r.address || r.contract || '').toLowerCase();
+      }
+      if (typeof window.CONTRACT === 'string') return window.CONTRACT.toLowerCase();
+    } catch(_){}
+    return '';
+  }
+  const REBEL_ADDR = rebelContractLower();
+
+  function findBase(){
+    const c=C(); if (!c) return null;
+    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+  }
+
+  function baseIsRebel(base){
+    if (!base) return false;
+    const addr = (base._tokenContract || base.contract || '').toLowerCase();
+    if (!addr) return false;
+    return addr === REBEL_ADDR && !!REBEL_ADDR;
+  }
+
+  function holderState(){
+    return window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false };
+  }
+
+  function allWMs(){
+    const c=C(); if(!c) return [];
+    return (c.getObjects()||[]).filter(o => o && o._raWMCenter === true);
+  }
+
+  function dedupeWM(){
+    const c=C(); if(!c) return;
+    const wms = allWMs();
+    if (wms.length <= 1) return;
+    // Keep the “largest” (current intended) & newest visible; remove the rest
+    let keep = wms.slice().sort((a,b)=>{
+      const aw = (a.getScaledWidth ? a.getScaledWidth() : a.width*(a.scaleX||1));
+      const bw = (b.getScaledWidth ? b.getScaledWidth() : b.width*(b.scaleX||1));
+      return bw - aw; // descending; largest first
+    })[0];
+    wms.forEach(o => { if (o !== keep) { try{ c.remove(o); }catch(_){ } });
+    try { keep.setCoords(); c.requestRenderAll(); } catch(_){}
+  }
+
+  function ensureFooter(){
+    const c=C(); if(!c) return;
+    const existing = (c.getObjects()||[]).find(o =>
+      o && (o._raBrandFooter ||
+        o._raFooterId === 'footer-group' ||
+        (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text)))
+    );
+    if (existing) return;
+    try {
+      if (!window.fabric) return;
+      const t = new fabric.Text(FOOTER_TEXT, {
+        fontFamily:'Inter, system-ui, Arial, sans-serif',
+        fontSize:12, fill:'#cfcfcf', opacity:0.88,
+        originX:'right', originY:'bottom',
+        left: c.getWidth()-10, top:c.getHeight()-8,
+        selectable:false, evented:false,
+        _raBrandFooter:true, _raSys:true
+      });
+      c.add(t); c.bringToFront(t); c.requestRenderAll();
+    } catch(_){}
+  }
+
+  function normalizeScale(retry=0){
+    const c=C(); if(!c) return;
+    const wm = allWMs()[0]; if(!wm) return;
+    try{
+      const cw = c.getWidth();
+      const baseW = wm.width || wm._element?.naturalWidth || 512;
+      const currentWidth = wm.getScaledWidth ? wm.getScaledWidth() :
+        (baseW * (wm.scaleX||1));
+      const maxW = cw * MAX_WIDTH_PCT;
+      if (currentWidth > maxW + 1){
+        const sc = maxW / baseW;
+        wm.scaleX = wm.scaleY = sc;
+        wm.setCoords();
+        c.requestRenderAll();
+      } else if (retry < RETRIES && currentWidth === 0){
+        // Possibly image not fully ready yet
+        setTimeout(()=> normalizeScale(retry+1), RETRY_MS);
+      }
+    }catch(_){}
+  }
+
+  function applyHolderVisibility(){
+    const c=C(); if(!c) return;
+    const wm = allWMs()[0]; if(!wm) return;
+    const base = findBase();
+    const hs = holderState();
+    // We only hide ring if user is Rebel holder AND current base is a Rebel token
+    const shouldHide = !!(hs.hasRebel && baseIsRebel(base));
+    // Neutralize earlier global force toggle by clearing __raWMForce if present
+    if (shouldHide){
+      wm.visible = false;
+    } else {
+      wm.visible = true;
+    }
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function reassert(reason){
+    // Dedupe → normalize → conditional visibility → footer
+    try { dedupeWM(); } catch(_){}
+    try { normalizeScale(); } catch(_){}
+    try { applyHolderVisibility(); } catch(_){}
+    try { ensureFooter(); } catch(_){}
+    // Debug hook (optional):
+    // console.log('[WM HOTFIX reassert]', reason);
+  }
+
+  // --- Undo/Redo already patched in Phase 1.1, add a follow-up reassert (stronger) ---
+  ['undo','redo'].forEach(fn => {
+    if (typeof window[fn] === 'function' && !window[fn].__raWmPhase12){
+      const orig = window[fn];
+      window[fn] = function(){
+        const out = orig.apply(this, arguments);
+        setTimeout(()=> reassert(fn), 30);
+        return out;
+      };
+      window[fn].__raWmPhase12 = true;
+    }
+  });
+
+  // --- Base/object events ---
+  (function wireCanvas(){
+    const c=C(); if(!c){ setTimeout(wireCanvas,150); return; }
+    if (c.__raWmPhase12) return;
+    c.__raWmPhase12 = true;
+    const debounced = (()=> {
+      let raf=null;
+      return (label)=>{
+        if (raf) return;
+        raf = requestAnimationFrame(()=>{
+          raf=null;
+          reassert(label);
+        });
+      };
+    })();
+    c.on('object:added',   ()=> debounced('added'));
+    c.on('object:removed', ()=> debounced('removed'));
+    c.on('object:modified',()=> debounced('modified'));
+  })();
+
+  // --- Wallet holder update ---
+  document.addEventListener('ra-holder-update', ()=> {
+    // Clear global force that hides everything; we manage conditionally now
+    try { window.__raWMForce = null; } catch(_){}
+    setTimeout(()=> reassert('holder-update'), 20);
+  });
+
+  // --- Collection change (your loader emits this custom event) ---
+  document.addEventListener('ra-collection-change', ()=> {
+    setTimeout(()=> reassert('collection-change'), 40);
+  });
+
+  // --- Token/base load recalc event (already used upstream) ---
+  document.addEventListener('ra-wm-recalc', ()=> {
+    setTimeout(()=> reassert('wm-recalc'), 10);
+  });
+
+  // Initial stabilization (in case we started mid-state)
+  setTimeout(()=> reassert('initial'), 300);
+})();
