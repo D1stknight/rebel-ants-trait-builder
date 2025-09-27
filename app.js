@@ -3829,212 +3829,37 @@ const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' 
     return !!(base && base.type === 'image');
   }
 
-  // ---------- strip corner-stamp children from a group ----------
+// ---------- strip corner-stamp children from a group ----------
 // Phase 2 cleanup: legacy stamp detector neutralized
 function isStamp(o){ return false; }
 
 // Phase 2 cleanup: legacy group stamp stripper neutralized
 function stripStampsFromGroup(g){ return false; }
 
-function cleanCornerStamps(c){
-  if (!c) return;
-  (c.getObjects?.()||[]).forEach(o=>{
-    if (o?.type === 'group') stripStampsFromGroup(o);
-  });
-  try { c.requestRenderAll(); } catch(_){}
+// Keep a single harmless helper (no real work now)
+function cleanCornerStamps(c){ /* no-op */ }
+
+// ---------- centered watermark layer ----------
+// Phase 2 cleanup: legacy centered watermark logic neutralized.
+function ensureCenteredWM(c){ /* no-op */ }
+
+// Phase 2 cleanup: legacy sync helper neutralized
+const sync = () => { /* no-op */ };
+
+// ---------- admin dock (legacy watermark UI) ----------
+// Phase 2 cleanup: legacy admin watermark dock removed.
+function ensureAdminDock(){ /* no-op */ }
+
+// ---------- boot & wiring (legacy watermark) ----------
+// Phase 2 cleanup: legacy watermark boot logic neutralized.
+async function boot(){ /* no-op */ }
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot, { once:true });
+} else {
+  boot();
 }
 
-  function cleanCornerStamps(c){
-    if (!c) return;
-    (c.getObjects()||[]).forEach(o=>{
-      if (o.type==='group') stripStampsFromGroup(o);
-    });
-    c.requestRenderAll();
-  }
-
-  // ---------- centered watermark layer ----------
-  function ensureCenteredWM(c){
-    // Implementation H: Guard any watermark creation/visibility changes when window.__RA_RESTORING__ is true
-    if (window.__RA_RESTORING__) return;
-    
-    if (!c || !STATE.img) return;
-    
-    // Guard against watermark changes during restore operations
-    if (window.__RA_RESTORING__) return;
-
-    const base = findBase(c);
-    const hasBase = !!base;
-    const isToken = baseIsToken(base);
-
-    const force = (window && window.__raWMForce) || null;
-// Personal override (from wallet) wins; else fall back to admin toggles
-const shouldShow =
-  hasBase && (
-    (force && force.off) ? false :
-    (force && force.on)  ? true  :
-    (STATE.enabled && ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads)))
-  );
-
-    let wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
-    if (!shouldShow){
-      if (wm){ c.remove(wm); c.requestRenderAll(); }
-      return;
-    }
-
-    if (!wm){
-      wm = new fabric.Image(STATE.img, {
-        originX:'center', originY:'center',
-        left:c.getWidth()/2, top:c.getHeight()/2,
-        selectable:false, evented:false, hasControls:false,
-        _raWMCenter:true, _raSys:true
-      });
-      c.add(wm);
-    }
-
-    const targetW = clamp(Math.round(c.getWidth()*STATE.sizePct), 16, c.getWidth()*1.4);
-    const s = targetW / (STATE.img.width||targetW);
-    wm.scaleX = s; wm.scaleY = s;
-    wm.opacity = clamp(STATE.opacity, 0, 1);
-    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
-    wm.setCoords();
-    c.bringToFront(wm);
-    c.requestRenderAll();
-  }
-
-  // ---------- admin dock (only with ?admin=1) ----------
-  function ensureAdminDock(){
-    if (!isAdmin) return;
-
-    if ($('#raWmCenterDock')) return;
-    const holder =
-      $$('h3').find(h=>/selection/i.test((h.textContent||'').trim()))?.parentNode
-      || $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode
-      || document.body;
-
-    const pane = document.createElement('div');
-    pane.id = 'raWmCenterDock';
-    pane.style.cssText = 'margin:12px 0;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea;padding:10px';
-    pane.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <strong>Watermark</strong>
-        <div style="display:flex;gap:6px">
-          <button id="raWmCRefresh" class="btn small">Refresh</button>
-          <button id="raWmCHide" class="btn small">Hide</button>
-        </div>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
-        <label><input id="raWmCEnabled" type="checkbox"> Enabled</label>
-        <label><input id="raWmCOnTok"  type="checkbox"> Show on tokens</label>
-        <label><input id="raWmCOnUp"   type="checkbox"> Show on uploads</label>
-        <label style="display:flex;align-items:center;gap:6px">Opacity
-          <input id="raWmCOpacity" type="range" min="0" max="1" step="0.01" style="width:140px">
-        </label>
-        <label style="display:flex;align-items:center;gap:6px">Size (width %)
-          <input id="raWmCSize" type="range" min="0.3" max="1.2" step="0.01" style="width:160px">
-        </label>
-      </div>
-      <div style="margin-top:6px;font-size:11px;opacity:.65">Corner stamps are removed automatically from base & overlays.</div>
-    `;
-    holder.appendChild(pane);
-
-    $('#raWmCEnabled').checked   = !!STATE.enabled;
-    $('#raWmCOnTok').checked     = !!STATE.showOnTokens;
-    $('#raWmCOnUp').checked      = !!STATE.showOnUploads;
-    $('#raWmCOpacity').value     = STATE.opacity;
-    $('#raWmCSize').value        = STATE.sizePct;
-
-    const c = C();
-    const sync = ()=>{ save(); ensureCenteredWM(c); };
-
-    $('#raWmCEnabled').onchange = e=>{ STATE.enabled = !!e.target.checked; sync(); };
-    $('#raWmCOnTok').onchange   = e=>{ STATE.showOnTokens  = !!e.target.checked; sync(); };
-    $('#raWmCOnUp').onchange    = e=>{ STATE.showOnUploads = !!e.target.checked; sync(); };
-    $('#raWmCOpacity').oninput  = e=>{ STATE.opacity = clamp(parseFloat(e.target.value||'0.18'),0,1); sync(); };
-    $('#raWmCSize').oninput     = e=>{ STATE.sizePct = clamp(parseFloat(e.target.value||'0.88'),0.3,1.2); sync(); };
-    $('#raWmCRefresh').onclick  = sync;
-    $('#raWmCHide').onclick     = ()=>{ pane.style.display='none'; };
-  }
-
-  // ---------- boot & wiring ----------
-  async function boot(){
-    await ensureWM();
-    const c = C(); if (!c) return;
-
-    // 1) immediately remove any stamp-children already present
-    cleanCornerStamps(c);
-
-    // 2) watermark in correct state
-    ensureCenteredWM(c);
-
-    // 3) watch for future adds/mods
-    if (!c.__raNoStampsV2){
-      c.__raNoStampsV2 = true;
-
-      c.on('object:added', (e)=>{
-        // Guard against watermark re-evaluation during restore operations
-        if (window.__RA_RESTORING__) return;
-        
-        const t = e?.target;
-        if (!t) return;
-
-        if (t.type==='group'){
-          if (stripStampsFromGroup(t)) c.requestRenderAll();
-        }
-        
-        // Only re-evaluate watermark for base image changes, not overlays/text
-        if (t._kind === 'base' || t._isBase) {
-          ensureCenteredWM(c);
-        }
-      });
-
-      c.on('object:modified', (e)=> {
-        // Guard against watermark re-evaluation during restore operations
-        if (window.__RA_RESTORING__) return;
-        
-        const t = e?.target;
-        // Only re-evaluate watermark for base image changes, not overlays/text
-        if (!t || t._kind === 'base' || t._isBase) {
-          ensureCenteredWM(c);
-        }
-      });
-      
-      c.on('object:removed', (e)=> {
-        // Guard against watermark re-evaluation during restore operations
-        if (window.__RA_RESTORING__) return;
-        
-        const t = e?.target;
-        // Only re-evaluate watermark for base image changes, not overlays/text
-        if (!t || t._kind === 'base' || t._isBase) {
-          ensureCenteredWM(c);
-        }
-      });
-
-    // 🔔 Wallet holder status changed → re-evaluate watermark
-    document.addEventListener('ra-holder-update', ()=> { 
-      if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
-    }); 
-    document.addEventListener('ra-wm-recalc', ()=> { 
-      if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
-    });
-    }
-
-    // 4) keep WM scaled if canvas element resizes
-    try {
-      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-      new ResizeObserver(()=> { 
-        if (!window.__RA_RESTORING__) ensureCenteredWM(c); 
-      }).observe(el);
-    } catch(_) {}
-
-    // 5) admin UI
-    ensureAdminDock();
-  }
-
-  if (document.readyState==='loading') {
-    document.addEventListener('DOMContentLoaded', boot, {once:true});
-  } else {
-    boot();
-  }
 })();
 
 /* ==========================================================
