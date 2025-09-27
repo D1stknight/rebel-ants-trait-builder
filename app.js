@@ -33,36 +33,57 @@
   });
 })();
 /* ===============================
-   CONFIG
+   CONFIG (Phase 2 safe minimal)
    =============================== */
 ;(() => {
-  // Prefer ?contract=… or window._RA_CONTRACT, else default to Rebel Ants
+  if (window.__RA_WM_CONFIG_MIN__) return;
+  window.__RA_WM_CONFIG_MIN__ = true;
+
+  const qs = new URLSearchParams(location.search);
+
   const CONTRACT =
-    new URLSearchParams(location.search).get('contract')
-    || (window._RA_CONTRACT && String(window._RA_CONTRACT))
-    || "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+    qs.get('contract') ||
+    (window._RA_CONTRACT && String(window._RA_CONTRACT)) ||
+    "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
 
   const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
-  // ---- ApeChain RPC default (only if not provided elsewhere)
   if (!window.__APECHAIN_RPC) {
     window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
   }
 
-  // ---- Watermark...
-  const __wmQS = new URLSearchParams(location.search).get('wm');
-  let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
+  // Watermark / ring image source
+  const qsWM = qs.get('wm');
+  let candidate = isAllowedAssetURL(qsWM) ? qsWM : "/assets/watermark.png?v=wm10";
+  const FALLBACK = "/watermark.png?v=wm10";
 
-  (function checkWatermark(){
-    const test = new Image();
-    test.crossOrigin = "anonymous";
-    test.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback
-    test.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now();
-  })();
+  function validateAndExport(src){
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      window.WM_SRC = src;
+      window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src, ok:true } }));
+    };
+    img.onerror = () => {
+      if (src !== FALLBACK) {
+        validateAndExport(FALLBACK);
+      } else {
+        window.WM_SRC = FALLBACK;
+        window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src: FALLBACK, ok:false } }));
+      }
+    };
+    img.src = src + (src.includes("?") ? "&" : "?") + "t=" + Date.now();
+  }
 
-  // 🔴 Export WM_SRC so the rest of the app (stamps, loaders) can use it
-  window.WM_SRC = WM_SRC;
-})(); // end CONFIG
+  validateAndExport(candidate);
+
+  // Export environment snapshot
+  window.RA_ENV = Object.freeze({
+    contract: CONTRACT,
+    reservoirAPI: RESERVOIR,
+    apechainRPC: window.__APECHAIN_RPC
+  });
+})(); // end CONFIGG
 
   // ===============================
   //  FABRIC DEFAULTS
