@@ -1796,57 +1796,98 @@ document.addEventListener("DOMContentLoaded", ()=>{
 });  // <-- closes DOMContentLoaded
 
 /* =========================
-   RA_CANVAS_RESIZE_SYNC_ONLY_V8
+   RA_CANVAS_RESIZE_SYNC_ONLY_V8 (Phase 2 integrated)
+   - Single square canvas resize with optional proportional scaling
+   - Skips scaling watermark ring, background, system, token id label (configurable)
    ========================= */
 (function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
+  if (window.__RA_RESIZE_V8_INIT__) return;
+  window.__RA_RESIZE_V8_INIT__ = true;
+
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // Config flags (tweak if desired)
+  const SCALE_BASE      = true;   // scale base image/group when resizing
+  const SCALE_OVERLAYS  = true;   // scale user overlays
+  const SCALE_TOKEN_ID  = false;  // keep token ID label size constant (position shifts)
+  const MIN_SIZE = 400, MAX_SIZE = 2000;
+
+  function isWatermark(o){
+    return !!(o && (o._raWMRing || o._isWatermark || o._raWMCenter));
+  }
+  function isSystem(o){
+    return !!(o && (o._raSys || o._isBgRect || isWatermark(o)));
+  }
+  function isTokenIdLabel(o){
+    return !!(o && o._raTokenId);
+  }
+  function shouldScale(o){
+    if (!o) return false;
+    if (isSystem(o)) return false;
+    if (isTokenIdLabel(o)) return SCALE_TOKEN_ID;
+    if (o._isBase) return SCALE_BASE;
+    if (o._kind === 'overlay') return SCALE_OVERLAYS;
+    // Default: scale only if it's not an excluded category
+    return true;
+  }
 
   function resizeCanvasAndScale(newSize){
     const c = C(); if (!c) return;
-    newSize = parseInt(newSize, 10);
-if (!isFinite(newSize)) return;
-newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
+    let target = parseInt(newSize, 10);
+    if (!isFinite(target)) return;
+    target = Math.max(MIN_SIZE, Math.min(MAX_SIZE, target));
 
     const oldW = c.getWidth(), oldH = c.getHeight();
     if (!oldW || !oldH) return;
-
-    if (oldW === newSize && oldH === newSize){
+    if (oldW === target && oldH === target){
+      // Just normalize transform
       try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
       try { c.requestRenderAll(); } catch(_) {}
       return;
     }
 
-    const s = newSize / oldW;
+    const s = target / oldW; // square assumption
     const oldCenter = new fabric.Point(oldW/2, oldH/2);
-    const newCenter = new fabric.Point(newSize/2, newSize/2);
+    const newCenter = new fabric.Point(target/2, target/2);
 
+    // Snapshot object center + original scale for objects we will transform
     const objs = (c.getObjects() || []).slice();
     const info = objs.map(o => ({
       o,
-      ctr: (typeof o.getCenterPoint === 'function') ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0),
+      ctr: (typeof o.getCenterPoint === 'function')
+            ? o.getCenterPoint()
+            : new fabric.Point(o.left||0, o.top||0),
       sx: o.scaleX || 1,
-      sy: o.scaleY || 1
+      sy: o.scaleY || 1,
+      doScale: shouldScale(o)
     }));
 
-    c.setWidth(newSize);
-    c.setHeight(newSize);
+    // Resize canvas
+    c.setWidth(target);
+    c.setHeight(target);
 
+    // Adjust backgroundRect (no uniform scale; direct size)
     const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
     if (bgRect) {
       try {
-        bgRect.set({ width: newSize, height: newSize, left: 0, top: 0 });
+        bgRect.set({ width: target, height: target, left: 0, top: 0 });
         c.sendToBack(bgRect);
+        bgRect.setCoords();
       } catch(_) {}
     }
 
-    info.forEach(({o, ctr, sx, sy}) => {
+    // Transform eligible objects
+    info.forEach(({o, ctr, sx, sy, doScale}) => {
       try {
-        const vx = ctr.x - oldCenter.x;
-        const vy = ctr.y - oldCenter.y;
-        const nx = newCenter.x + vx * s;
-        const ny = newCenter.y + vy * s;
+        const offsetX = ctr.x - oldCenter.x;
+        const offsetY = ctr.y - oldCenter.y;
+        const nx = newCenter.x + offsetX * s;
+        const ny = newCenter.y + offsetY * s;
 
-        o.set({ scaleX: sx * s, scaleY: sy * s });
+        if (doScale){
+          o.set({ scaleX: sx * s, scaleY: sy * s });
+        }
+        // Always reposition to keep relative placement
         if (typeof o.setPositionByOrigin === 'function') {
           o.setPositionByOrigin(new fabric.Point(nx, ny), 'center', 'center');
         } else {
@@ -1856,38 +1897,58 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
       } catch(_) {}
     });
 
+    // Normalize viewport
     try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
     const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
+
+    // Re-seat watermark ring (it has its own scaling logic) & enforce layer order
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+
     try { c.requestRenderAll(); } catch(_) {}
   }
 
+  // Expose globally (overrides earlier Phase 2 setCanvasSize)
   window.raResizeCanvasAndScale = resizeCanvasAndScale;
   window.setCanvasSize = resizeCanvasAndScale;
 
   function wireSizeInput(){
     const el = document.getElementById('canvasSize');
-    if (el && !el.__raBound) {
-      el.__raBound = true;
-      el.addEventListener('change', (e)=> resizeCanvasAndScale(parseInt(e.target.value, 10)));
+    if (el && !el.__raBoundV8) {
+      el.__raBoundV8 = true;
+      el.addEventListener('change', (e)=> {
+        const v = parseInt(e.target.value, 10);
+        if (!isNaN(v)) resizeCanvasAndScale(v);
+      });
     }
   }
 
   function wireQuickButtons(){
-    if (document.__raSizeCaptureOnly) return;
-    document.__raSizeCaptureOnly = true;
+    if (document.__raSizeCaptureOnlyV8) return;
+    document.__raSizeCaptureOnlyV8 = true;
     document.addEventListener('click', function(ev){
       const btn = ev.target && ev.target.closest && ev.target.closest('button');
       if (!btn) return;
       const t = (btn.textContent||'').trim();
       if (/^(700|900|1024|1200)$/i.test(t)) {
         ev.preventDefault(); ev.stopImmediatePropagation(); ev.stopPropagation();
-        resizeCanvasAndScale(parseInt(t, 10));
+        const v = parseInt(t, 10);
+        resizeCanvasAndScale(v);
+        const sizeInput = document.getElementById('canvasSize');
+        if (sizeInput) sizeInput.value = v;
       }
     }, true);
   }
 
-  function boot(){ wireSizeInput(); wireQuickButtons(); }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  function boot(){
+    wireSizeInput();
+    wireQuickButtons();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
 
 /* ==========================================================
