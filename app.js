@@ -4000,33 +4000,39 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V4c
-   - Viewport (camera) presets now use a SNAPSHOT-BASED Ken Burns pipeline
-     (no reliance on the current Fabric viewportTransform or CSS scaling).
-   - Object (base / overlays / text) presets still animate live objects (with
-     previous composed-transform safeguards).
-   - Watermark / footer / overlays appear exactly as seen at snapshot time.
-   - Retains public API window.raAnimate (run/preview/export/stop/isRunning).
+   RA_ANIMATE_PREVIEW_VIDEO_V4d
+   Fixes:
+     • Preview now truly animates (no single frozen frame).
+     • Viewport (camera) animations use natural aspect by default (no "far away" shrink).
+     • Optional fit modes: native | cover | safeCover.
+     • Snapshot path still used for viewport presets (watermark/footer baked).
+     • Export and Preview share same animation math.
    ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V4C__) return; window.__RA_ANIM_V4C__ = true;
+  if (window.__RA_ANIM_V4D__) return; window.__RA_ANIM_V4D__ = true;
 
-  const VERSION = '4.0.3';
+  const VERSION = '4.0.4';
   const FPS = 30;
 
   const CONFIG = {
-    captureScale: 1.5,               // For live object animations (offscreen DPR)
+    /* Viewport snapshot pipeline */
+    cameraSnapshotForViewport: true,
+    cameraAspect: 'native',   // 'native' | 'square'
+    cameraFit: 'native',      // 'native' | 'cover' | 'safeCover'
+    cameraHiDPI: 1.5,         // DPI scale for snapshot animation render
+    cameraExtraSafePad: 0.12, // only used if cameraFit='safeCover'
+    cameraSnapshotScale: 1.0, // multiplier for initial toDataURL multiplier
+    previewUseRecorder: false, // true → preview encodes a video too (slower)
+    /* Object (non-viewport) path */
+    captureScale: 1.5,
     useOffscreen: true,
+    respectExistingViewport: true,
     maxDurationSec: 30,
     postFinishLayerEnsure: true,
-    postFinishWatermarkEnsure: true,
-    respectExistingViewport: true,   // For live object modes
-    cameraSnapshotForViewport: true, // <— NEW: snapshot path for viewport presets
-    cameraSnapshotScale: 1.0,        // Multiplier for snapshot (can set 2 for HQ)
-    cameraHiDPI: 1.5                 // Additional scale for recording canvas (Ken Burns)
+    postFinishWatermarkEnsure: true
   };
 
-  /* ---------- Utilities ---------- */
+  /* ---------- Utility ---------- */
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -4045,29 +4051,30 @@ document.addEventListener("DOMContentLoaded", ()=>{
   };
 
   const PRESETS = [
-    {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:+0.06}},
-    {id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
-    {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
-    {id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:-0.06}},
-    {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
-    {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
-    {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
-    {id:'pan_left',  name:'Pan left (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x: 0.06,y:0.00}, to:{z:1.00,x:-0.06,y:0.00}},
-    {id:'pan_right', name:'Pan right (slow)',   kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:-0.06,y:0.00}, to:{z:1.00,x: 0.06,y:0.00}},
-    {id:'zoom_in',   name:'Zoom in (gentle)',   kind:'viewport', ease:'ioCubic', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.15,x: 0.00,y: 0.00}},
-    {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
-    // Overlays / text
-    {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},     to:{s:1.00}},
-    {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},   to:{dyN:0.00}},
-    {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14},  to:{dyN:0.00}},
-    {id:'ov_slide_l',  name:'Overlays/Text slide in ←',         kind:'overlays', ease:'ioSine', from:{dxN:-0.18},  to:{dxN:0.00}},
-    {id:'ov_slide_r',  name:'Overlays/Text slide in →',         kind:'overlays', ease:'ioSine', from:{dxN: 0.18},  to:{dxN:0.00}},
-    {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00}, to:{alpha:1.00}},
-    {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},     to:{rot:0}},
-    {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},     to:{s:1.00}},
+    // Viewport
+    {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00}, to:{z:1.18,x:-0.06,y:+0.06}},
+    {id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00}, to:{z:1.18,x:+0.06,y:+0.06}},
+    {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00}, to:{z:1.18,x:-0.06,y:-0.06}},
+    {id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00}, to:{z:1.18,x:+0.06,y:-0.06}},
+    {id:'kb_out',   name:'Ken Burns — out',   kind:'viewport', ease:'ioSine', from:{z:1.15,x:0.00,y:0.00}, to:{z:1.00,x:0.00,y:0.00}},
+    {id:'pan_up',    name:'Pan up (slow)',    kind:'viewport', ease:'ioQuad', from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
+    {id:'pan_down',  name:'Pan down (slow)',  kind:'viewport', ease:'ioQuad', from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
+    {id:'pan_left',  name:'Pan left (slow)',  kind:'viewport', ease:'ioQuad', from:{z:1.00,x: 0.06,y:0.00}, to:{z:1.00,x:-0.06,y:0.00}},
+    {id:'pan_right', name:'Pan right (slow)', kind:'viewport', ease:'ioQuad', from:{z:1.00,x:-0.06,y:0.00}, to:{z:1.00,x: 0.06,y:0.00}},
+    {id:'zoom_in',   name:'Zoom in (gentle)', kind:'viewport', ease:'ioCubic',from:{z:1.00,x:0.00,y:0.00},  to:{z:1.15,x:0.00,y:0.00}},
+    {id:'zoom_out',  name:'Zoom out (gentle)',kind:'viewport', ease:'ioCubic',from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x:0.00,y:0.00}},
+    // Overlays/text
+    {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},    to:{s:1.00}},
+    {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},  to:{dyN:0.00}},
+    {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14}, to:{dyN:0.00}},
+    {id:'ov_slide_l',  name:'Overlays/Text slide in ←',         kind:'overlays', ease:'ioSine', from:{dxN:-0.18}, to:{dxN:0.00}},
+    {id:'ov_slide_r',  name:'Overlays/Text slide in →',         kind:'overlays', ease:'ioSine', from:{dxN: 0.18}, to:{dxN:0.00}},
+    {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00},to:{alpha:1.00}},
+    {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},    to:{rot:0}},
+    {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},    to:{s:1.00}},
     // Base
-    {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},     to:{s:1.06}},
-    {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06},  to:{dxN:0.00}}
+    {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},    to:{s:1.06}},
+    {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06}, to:{dxN:0.00}}
   ];
 
   /* ---------- UI ---------- */
@@ -4113,32 +4120,35 @@ document.addEventListener("DOMContentLoaded", ()=>{
         <button id="raAnimExport"  class="btn small">Export video</button>
         <span id="raAnimMsg" style="font-size:12px;opacity:.75;"></span>
       </div>
-      <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+      <div style="margin-top:10px">
+        <canvas id="raAnimLivePreview" style="display:none;max-width:100%;border-radius:8px;background:#000"></canvas>
+        <video  id="raAnimOut" style="display:none;margin-top:0;max-width:100%;border-radius:8px" controls></video>
+      </div>
       <div id="raAnimDL" style="margin-top:6px"></div>
     `;
     host.appendChild(dock);
-    const sel = $('#raAnimPreset', dock);
+    const sel = $('#raAnimPreset');
     PRESETS.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
 
     $('#raAnimPreview').onclick = ()=> run({record:false});
     $('#raAnimExport').onclick  = ()=> run({record:true});
     $('#raAnimPreset').onchange = () => {
       const id=$('#raAnimPreset').value;
-      const p = PRESETS.find(x=>x.id===id);
+      const p=PRESETS.find(x=>x.id===id);
       if (!p) return;
       if (p.kind!=='viewport' && $('#raAnimScope').value==='all'){
-        $('#raAnimScope').value = p.kind==='overlays' ? 'overlays' : p.kind;
+        $('#raAnimScope').value=p.kind==='overlays'?'overlays':p.kind;
         msg(`Preset targets ${p.kind} → auto-switched scope.`);
       }
-      if (p.ease) $('#raAnimEase').value = p.ease;
+      if (p.ease) $('#raAnimEase').value=p.ease;
     };
     return dock;
   }
 
   function msg(t){
     const m=$('#raAnimMsg'); if(!m) return;
-    m.textContent = t||'';
-    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2500);
+    m.textContent=t||'';
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2600);
   }
 
   /* ---------- Classification ---------- */
@@ -4189,76 +4199,112 @@ document.addEventListener("DOMContentLoaded", ()=>{
   function revokeURL(){ if(lastURL){ try{ URL.revokeObjectURL(lastURL);}catch(_){ } lastURL=null; } }
   window.addEventListener('beforeunload', revokeURL);
 
-  /* ---------- Snapshot Ken Burns (viewport only) ---------- */
-  async function snapshotCanvasPNG(targetSide=1024, multiplier=1){
+  async function snapshotCanvas(targetSide, multiplier=1){
     const c=C(); if(!c) throw new Error('Canvas not ready');
-    // We assume you already force watermark inclusion in a higher-level export helper.
-    const side = Math.max(c.getWidth(), c.getHeight()) || 1024;
-    const mul = Math.min(3, Math.max(.25, (targetSide/side)*multiplier));
+    const w=c.getWidth(), h=c.getHeight();
+    const baseSide = Math.max(w,h);
+    const mul = Math.min(3, Math.max(.25, (targetSide / baseSide) * multiplier));
     return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
   }
 
-  function animateSnapshot({img, preset, ease, dur_ms, record, scaleFactor, finishCb, msgCb}){
-    const w = img.naturalWidth;
-    const h = img.naturalHeight;
-
-    // Offscreen canvas (square = max dimension for uniform camera movement)
+  function computeFitScale(mode, w, h, maxZ, panX, panY){
+    if (mode==='native') return 1;
     const side = Math.max(w,h);
-    const outSide = Math.round(side * scaleFactor);
+    if (mode==='cover'){
+      return (side === w) ? side / w : side / h; // effectively side / maxDim = 1, but kept for clarity
+    }
+    if (mode==='safeCover'){
+      const base = 1;
+      const pad = CONFIG.cameraExtraSafePad + Math.max(Math.abs(panX), Math.abs(panY))*1.2 + (maxZ - 1)*0.5;
+      return base + pad;
+    }
+    return 1;
+  }
 
-    const off = document.createElement('canvas');
-    off.width = off.height = outSide;
-    const ctx = off.getContext('2d');
+  function animateSnapshot(options){
+    const {
+      img, preset, ease, dur_ms, record,
+      aspectMode, fitMode, hiDPI, previewCanvas, finishCb, msgCb
+    } = options;
+
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+
+    // Determine output canvas size
+    let outW, outH;
+    if (aspectMode === 'square'){
+      const side = Math.max(iw, ih);
+      outW = outH = Math.round(side * hiDPI);
+    } else {
+      outW = Math.round(iw * hiDPI);
+      outH = Math.round(ih * hiDPI);
+    }
+
+    const cvs = previewCanvas || document.createElement('canvas');
+    cvs.width = outW; cvs.height = outH;
+    const ctx = cvs.getContext('2d');
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // MediaRecorder
+    // Determine max zoom in timeline
+    const z0 = preset.from.z;
+    const z1 = preset.to.z;
+    const maxZ = Math.max(z0, z1);
+    const panXMax = Math.max(Math.abs(preset.from.x), Math.abs(preset.to.x));
+    const panYMax = Math.max(Math.abs(preset.from.y), Math.abs(preset.to.y));
+    const fitScale = computeFitScale(fitMode, iw, ih, maxZ, panXMax, panYMax);
+
+    // MediaRecorder for export
     let rec=null, chunks=[];
     if (record){
       try{
-        const mime=pickMimeType();
-        const stream=off.captureStream(FPS);
-        rec=new MediaRecorder(stream, { mimeType:mime });
+        const stream = cvs.captureStream(FPS);
+        const mime = pickMimeType();
+        rec = new MediaRecorder(stream, { mimeType: mime });
         rec.ondataavailable = e=>{ if(e.data && e.data.size) chunks.push(e.data); };
         rec.start();
       }catch(e){
-        msgCb && msgCb('Recording not supported');
+        msgCb && msgCb('Recorder unsupported');
       }
     }
 
     const t0 = performance.now();
-    let rafId=0;
+    let rafId = 0;
 
-    function drawFrame(tRaw){
-      // Interpolate camera
-      const z  = lerp(preset.from.z, preset.to.z, tRaw);
-      const xn = lerp(preset.from.x, preset.to.x, tRaw);
-      const yn = lerp(preset.from.y, preset.to.y, tRaw);
+    function draw(t){
+      const z = lerp(z0, z1, t);
+      const xn = lerp(preset.from.x, preset.to.x, t);
+      const yn = lerp(preset.from.y, preset.to.y, t);
 
-      // Base cover: keep entire image visible; treat (x,y) as normalized pan offsets of side
-      // We mimic your earlier Ken Burns math: translate relative to square center
-      ctx.clearRect(0,0,outSide,outSide);
+      ctx.clearRect(0,0,outW,outH);
       ctx.save();
-      ctx.translate(outSide/2, outSide/2);
-      ctx.scale(z, z);
+      // Scale canvas space back to image pixel space
+      ctx.scale(hiDPI, hiDPI);
 
-      const coverScale = Math.max(side / w, side / h); // scale image so the bigger dimension fits 'side'
-      ctx.scale(coverScale, coverScale);
+      // Center
+      const viewW = (aspectMode === 'square') ? Math.max(iw, ih) : iw;
+      const viewH = (aspectMode === 'square') ? Math.max(iw, ih) : ih;
 
-      // Pan: offsets in normalized (-0.5..0.5) side terms -> use xn, yn scaled by side * some factor
-      const panX = xn * side;
-      const panY = yn * side;
-      ctx.translate(panX / coverScale, panY / coverScale);
+      ctx.translate(viewW/2, viewH/2);
+      ctx.scale(fitScale * z, fitScale * z);
 
-      ctx.drawImage(img, -w/2, -h/2);
+      // Pan relative to original image size (using view dimension so square variant stays centered)
+      ctx.translate(xn * viewW, yn * viewH);
+
+      // Draw image centered
+      ctx.drawImage(img, -iw/2, -ih/2);
       ctx.restore();
     }
 
     function loop(){
+      if (stopRequested){
+        cleanup(true);
+        return;
+      }
       const now = performance.now();
       const raw = clamp((now - t0)/dur_ms, 0, 1);
-      const t = ease(raw);
-      drawFrame(t);
+      const e = ease(raw);
+      draw(e);
       if (raw < 1){
         rafId = requestAnimationFrame(loop);
       } else {
@@ -4266,133 +4312,71 @@ document.addEventListener("DOMContentLoaded", ()=>{
         let tail=2;
         (function tailLoop(){
           if (tail-- > 0){
+            draw(1);
             requestAnimationFrame(tailLoop);
           } else {
-            if (rec){
-              rec.onstop = () => finishCb && finishCb({ chunks, mime: rec.mimeType || 'video/webm', canvas: off });
-              rec.stop();
-            } else {
-              finishCb && finishCb({ chunks:[], mime:'', canvas: off });
-            }
+            cleanup(false);
           }
         })();
       }
     }
-    loop();
 
-    return { stop: () => { cancelAnimationFrame(rafId); try{ rec && rec.stop(); }catch(_){} } };
+    function cleanup(aborted){
+      cancelAnimationFrame(rafId);
+      if (rec){
+        try{
+          rec.onstop = () => {
+            const mime = rec.mimeType || 'video/webm';
+            if (!aborted){
+              const blob = new Blob(chunks, { type: mime });
+              finishCb && finishCb({ blob, mime, canvas: cvs });
+            } else {
+              finishCb && finishCb({ blob:null, mime, canvas: cvs, aborted:true });
+            }
+          };
+          rec.stop();
+        }catch(_){
+          finishCb && finishCb({ blob:null, mime:'', canvas:cvs, aborted:true });
+        }
+      } else {
+        finishCb && finishCb({ blob:null, mime:'', canvas:cvs, aborted });
+      }
+    }
+
+    loop();
+    return { stop: () => { stopRequested = true; } };
   }
 
-  /* ---------- Main run ---------- */
-  async function run(opts){
-    const record = !!opts.record;
-    const c=C(); if(!c){ alert('Canvas not ready'); return; }
-    if (running){ msg('Already running'); return; }
+  /* ---------- Live object animation path (unchanged logic from V4c with composition) ---------- */
+  function animateLiveObjects(params){
+    const {
+      c, preset, ease, dur_ms, record, scope, targets,
+      vt0, baseHasSkew, baseScale, baseE, baseF,
+      W, H, active, finishCb
+    } = params;
 
-    ensureDock();
-    let scope = $('#raAnimScope')?.value || 'all';
-    let preset = PRESETS.find(p=>p.id===$('#raAnimPreset')?.value) || PRESETS[0];
-    const easeFn = EASE[$('#raAnimEase')?.value] || EASE[preset.ease] || EASE.ioQuad;
-    let durSec = parseFloat($('#raAnimDur')?.value||'6');
-    if(!Number.isFinite(durSec)) durSec=6;
-    durSec = clamp(durSec, 2, CONFIG.maxDurationSec);
-    const dur_ms = Math.round(durSec*1000);
-
-    if (scope==='all' && preset.kind!=='viewport'){
-      scope = preset.kind==='overlays' ? 'overlays' : preset.kind;
-      $('#raAnimScope').value = scope;
-    }
-    const viewportOnly = (preset.kind==='viewport' && scope==='all');
-
-    running=true; stopRequested=false;
-    msg(record?'Recording…':'Playing…');
-
-    if (viewportOnly && CONFIG.cameraSnapshotForViewport){
-      // Snapshot path
-      let dataURL;
+    let rec=null, chunks=[];
+    let offCanvas=null, offCtx=null, streamCanvas=null;
+    const useOff = CONFIG.useOffscreen && record;
+    if (record){
       try{
-        const canvasSide = Math.max(c.getWidth(), c.getHeight());
-        dataURL = await snapshotCanvasPNG(canvasSide * CONFIG.cameraSnapshotScale, 1);
-      } catch(e){
-        msg('Snapshot failed; falling back');
-        running=false;
-        return;
-      }
-
-      const img = new Image();
-      img.src = dataURL;
-      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; });
-
-      const vidEl = $('#raAnimOut');
-      revokeURL();
-      $('#raAnimDL')?.replaceChildren?.();
-      if (vidEl){ vidEl.style.display='none'; vidEl.pause?.(); vidEl.removeAttribute('src'); }
-
-      const controller = animateSnapshot({
-        img,
-        preset,
-        ease: easeFn,
-        dur_ms,
-        record,
-        scaleFactor: CONFIG.cameraHiDPI,
-        msgCb: msg,
-        finishCb: ({chunks,mime,canvas})=>{
-          if (stopRequested){
-            running=false; stopRequested=false; msg('Canceled');
-            return;
-          }
-          if (record){
-            const blob = new Blob(chunks, { type: mime });
-            const url = URL.createObjectURL(blob);
-            lastURL = url;
-            if (vidEl){
-              vidEl.style.display='block';
-              vidEl.src = url;
-              vidEl.play?.().catch(()=>{});
-            }
-            const dl=$('#raAnimDL');
-            if (dl){
-              dl.innerHTML='';
-              const a=document.createElement('a');
-              a.textContent='Download animation';
-              a.href=url;
-              a.download=`animation_${Date.now()}.${extFromMime(mime)}`;
-              a.className='btn small';
-              dl.appendChild(a);
-            }
-            msg('Done');
-          } else {
-            // For preview without recording, still produce an in-memory recording for consistency (optional).
-            // Simpler: convert last frame to a Blob so video element can show it (simulate playback).
-            const frameURL = canvas.toDataURL('image/png');
-            if (vidEl){
-              vidEl.style.display='block';
-              vidEl.src = frameURL;
-            }
-            msg('Done');
-          }
-          running=false; stopRequested=false;
+        const mime=pickMimeType();
+        if (useOff){
+          offCanvas=document.createElement('canvas');
+          offCanvas.width=Math.round(W*CONFIG.captureScale);
+          offCanvas.height=Math.round(H*CONFIG.captureScale);
+          offCtx=offCanvas.getContext('2d',{alpha:false});
+          offCtx.imageSmoothingEnabled=true;
+          offCtx.imageSmoothingQuality='high';
+          streamCanvas=offCanvas;
+        } else {
+          streamCanvas=c.lowerCanvasEl || c.upperCanvasEl;
         }
-      });
-
-      // Expose controller if needed
-      window.__raAnimController = controller;
-      return;
-    }
-
-    // ---- Live object / (fallback) viewport path ----
-    const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
-    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-    const baseHasSkew = (vt0[1]!==0 || vt0[2]!==0);
-    const baseScale = vt0[0];
-    const baseE = vt0[4], baseF = vt0[5];
-    const active = c.getActiveObject?.();
-    c.discardActiveObject?.(); c.requestRenderAll?.();
-
-    const targets = viewportOnly ? [] : pickTargets(c, scope);
-    if (!viewportOnly && targets.length===0){
-      msg(scope==='base'?'Load a base image first': scope==='overlays'?'Add overlays first':'Add text first');
-      running=false; return;
+        const stream=streamCanvas.captureStream(FPS);
+        rec=new MediaRecorder(stream,{mimeType:mime});
+        rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+        rec.start();
+      }catch(_){}
     }
 
     const snap=new Map();
@@ -4401,39 +4385,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
       angle:o.angle, opacity:(o.opacity==null?1:o.opacity)
     }));
 
-    revokeURL();
-    $('#raAnimDL')?.replaceChildren?.();
-    const vidEl=$('#raAnimOut');
-    if(vidEl){ vidEl.pause?.(); vidEl.removeAttribute('src'); vidEl.style.display='none'; }
-
-    let rec=null, chunks=[];
-    let offCanvas=null, offCtx=null, streamCanvas=null;
-    const useOff = CONFIG.useOffscreen && record;
-    if(record){
-      const mime=pickMimeType();
-      if(useOff){
-        offCanvas=document.createElement('canvas');
-        offCanvas.width=Math.round(W*CONFIG.captureScale);
-        offCanvas.height=Math.round(H*CONFIG.captureScale);
-        offCtx=offCanvas.getContext('2d',{alpha:false});
-        offCtx.imageSmoothingEnabled=true;
-        offCtx.imageSmoothingQuality='high';
-        streamCanvas=offCanvas;
-      } else {
-        streamCanvas=c.lowerCanvasEl || c.upperCanvasEl;
-      }
-      try{
-        const stream=streamCanvas.captureStream(FPS);
-        rec=new MediaRecorder(stream,{mimeType:mime});
-        rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
-        rec.start();
-      }catch(err){
-        console.warn('[Animate] MediaRecorder failed:', err);
-        rec=null;
-      }
-    }
+    const t0=performance.now();
+    let rafId=0;
 
     function applyViewport(zCam,xN,yN){
+      const cx=W/2, cy=H/2;
       if (!CONFIG.respectExistingViewport || baseHasSkew){
         const e = (1 - zCam) * cx + xN * W;
         const f = (1 - zCam) * cy + yN * H;
@@ -4448,12 +4404,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
       c.setViewportTransform?.([finalScale,0,0,finalScale,finalE,finalF]);
     }
 
-    const t0=performance.now(); let rafId=0;
+    const viewportOnly = (preset.kind==='viewport' && scope==='all');
+
     function step(now){
       if (stopRequested){ finish(); return; }
       const raw=clamp((now - t0)/dur_ms,0,1);
-      const t=easeFn(raw);
-
+      const t=ease(raw);
       if (viewportOnly){
         const z  = lerp(preset.from.z, preset.to.z, t);
         const xn = lerp(preset.from.x, preset.to.x, t);
@@ -4469,9 +4425,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
         const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN,preset.to.dyN,t):0;
         const dpx = dx + dxN*W;
         const dpy = dy + dyN*H;
-        const s   = hasScale?lerp(preset.from.s,preset.to.s,t):1;
-        const rot = hasRot?  lerp(preset.from.rot,preset.to.rot,t):0;
-        const a   = hasAlpha?lerp(preset.from.alpha,preset.to.alpha,t):null;
+        const s   = hasScale? lerp(preset.from.s,preset.to.s,t):1;
+        const rot = hasRot?   lerp(preset.from.rot,preset.to.rot,t):0;
+        const a   = hasAlpha? lerp(preset.from.alpha,preset.to.alpha,t):null;
 
         targets.forEach(o=>{
           const o0=snap.get(o); if(!o0) return;
@@ -4510,9 +4466,93 @@ document.addEventListener("DOMContentLoaded", ()=>{
           rec.onstop=()=>{
             const type=rec.mimeType||'video/webm';
             const blob=new Blob(chunks,{type});
+            finishCb && finishCb({ blob, type, vt0, snap, targets, active });
+          };
+          rec.stop();
+        }catch(_){
+          finishCb && finishCb({ blob:null, type:'', vt0, snap, targets, active });
+        }
+      } else {
+        finishCb && finishCb({ blob:null, type:'', vt0, snap, targets, active });
+      }
+    }
+
+    requestAnimationFrame(step);
+  }
+
+  /* ---------- Main run ---------- */
+  async function run(opts){
+    const record = !!opts.record;
+    const c=C(); if(!c){ alert('Canvas not ready'); return; }
+    if (running){ msg('Already running'); return; }
+
+    ensureDock();
+
+    let scope = $('#raAnimScope')?.value || 'all';
+    const preset = PRESETS.find(p=>p.id===$('#raAnimPreset')?.value) || PRESETS[0];
+    const ease = EASE[$('#raAnimEase')?.value] || EASE[preset.ease] || EASE.ioQuad;
+    let durSec=parseFloat($('#raAnimDur')?.value||'6');
+    if(!Number.isFinite(durSec)) durSec=6;
+    durSec=clamp(durSec,2,CONFIG.maxDurationSec);
+    const dur_ms=Math.round(durSec*1000);
+    if (scope==='all' && preset.kind!=='viewport'){
+      scope = preset.kind==='overlays'? 'overlays' : preset.kind;
+      $('#raAnimScope').value=scope;
+    }
+    const viewportOnly = (preset.kind==='viewport' && scope==='all');
+
+    running=true; stopRequested=false;
+    msg(record?'Recording…':'Playing…');
+
+    // Clean previous links / outputs
+    revokeURL();
+    $('#raAnimDL')?.replaceChildren?.();
+    const vidEl=$('#raAnimOut');
+    const liveCanvas=$('#raAnimLivePreview');
+    if (vidEl){ vidEl.style.display='none'; vidEl.pause?.(); vidEl.removeAttribute('src'); }
+    if (liveCanvas){ liveCanvas.style.display='none'; }
+
+    if (viewportOnly && CONFIG.cameraSnapshotForViewport){
+      // Snapshot path
+      let dataURL;
+      try{
+        const targetSide = Math.max(c.getWidth(), c.getHeight()) * CONFIG.cameraSnapshotScale;
+        dataURL = await snapshotCanvas(targetSide, 1);
+      }catch(e){
+        msg('Snapshot failed (viewport). Falling back.');
+        running=false;
+        return;
+      }
+
+      const img = new Image();
+      img.src = dataURL;
+      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; });
+
+      let previewCanvasRef = null;
+      if (!record && !CONFIG.previewUseRecorder){
+        previewCanvasRef = liveCanvas;
+        previewCanvasRef.style.display='block';
+      }
+
+      const controller = animateSnapshot({
+        img,
+        preset,
+        ease,
+        dur_ms,
+        record,
+        aspectMode: CONFIG.cameraAspect,
+        fitMode: CONFIG.cameraFit,
+        hiDPI: record ? CONFIG.cameraHiDPI : 1, // keep preview light
+        previewCanvas: previewCanvasRef,
+        msgCb: msg,
+        finishCb: ({blob,mime,canvas,aborted})=>{
+          if (aborted){
+            running=false; stopRequested=false; msg('Canceled');
+            return;
+          }
+            if (record && blob){
             const url=URL.createObjectURL(blob);
             lastURL=url;
-            const vidEl=$('#raAnimOut');
             if (vidEl){
               vidEl.style.display='block';
               vidEl.src=url;
@@ -4524,34 +4564,77 @@ document.addEventListener("DOMContentLoaded", ()=>{
               const a=document.createElement('a');
               a.textContent='Download animation';
               a.href=url;
-              a.download=`animation_${Date.now()}.${extFromMime(type)}`;
+              a.download=`animation_${Date.now()}.${extFromMime(mime)}`;
               a.className='btn small';
               dl.appendChild(a);
             }
-            msg('Done');
-          };
-          rec.stop();
-        }catch(_){ msg('Done (no recorder)'); }
-      } else {
-        msg('Done');
-      }
-
-      try { c.setViewportTransform?.(vt0); } catch(_){}
-      targets.forEach(o=>{
-        const s=snap.get(o); if(!s) return;
-        o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
-        o.setCoords?.();
+            if (liveCanvas) liveCanvas.style.display='none';
+          }
+          running=false; stopRequested=false;
+          msg('Done');
+        }
       });
-      if (active) { try{ c.setActiveObject?.(active); }catch(_){ } }
 
-      if (CONFIG.postFinishLayerEnsure){ try{ window.raEnforceLayerOrder && window.raEnforceLayerOrder(); }catch(_){ } }
-      if (CONFIG.postFinishWatermarkEnsure){ try{ window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); }catch(_){ } }
-
-      c.requestRenderAll?.();
-      running=false; stopRequested=false;
+      window.__raAnimController = controller;
+      return;
     }
 
-    requestAnimationFrame(step);
+    // Live object path
+    const W=c.getWidth(), H=c.getHeight();
+    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
+    const baseHasSkew=(vt0[1]!==0 || vt0[2]!==0);
+    const baseScale=vt0[0];
+    const baseE=vt0[4], baseF=vt0[5];
+    const active=c.getActiveObject?.(); c.discardActiveObject?.();
+
+    const targets = viewportOnly ? [] : pickTargets(c, scope);
+    if (!viewportOnly && targets.length===0){
+      msg(scope==='base'?'Load a base first':scope==='overlays'?'Add overlays':'Add text');
+      running=false; return;
+    }
+
+    animateLiveObjects({
+      c, preset, ease, dur_ms, record, scope, targets,
+      vt0, baseHasSkew, baseScale, baseE, baseF, W, H, active,
+      finishCb: ({blob,type,vt0:savedVT, snap, targets, active})=>{
+        // Restore
+        try{ c.setViewportTransform?.(savedVT); }catch(_){}
+        targets.forEach(o=>{
+          const s=snap.get(o); if(!s) return;
+          o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
+          o.setCoords?.();
+        });
+        if (active) try{ c.setActiveObject?.(active);}catch(_){}
+        if (CONFIG.postFinishLayerEnsure) { try{ window.raEnforceLayerOrder && window.raEnforceLayerOrder(); }catch(_){ } }
+        if (CONFIG.postFinishWatermarkEnsure){ try{ window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); }catch(_){ } }
+        c.requestRenderAll?.();
+
+        if (record && blob){
+          const url=URL.createObjectURL(blob);
+          lastURL=url;
+          if (vidEl){
+            vidEl.style.display='block';
+            vidEl.src=url;
+            vidEl.play?.().catch(()=>{});
+          }
+          const dl=$('#raAnimDL');
+          if (dl){
+            dl.innerHTML='';
+            const a=document.createElement('a');
+            a.textContent='Download animation';
+            a.href=url;
+            a.download=`animation_${Date.now()}.${extFromMime(type)}`;
+            a.className='btn small';
+            dl.appendChild(a);
+          }
+        } else if (!record){
+          msg('Preview done');
+        } else {
+          msg('Done');
+        }
+        running=false; stopRequested=false;
+      }
+    });
   }
 
   function stop(){ if(running) stopRequested=true; }
@@ -4563,7 +4646,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
     export:()=>run({record:true}),
     stop,
     isRunning,
-    version: VERSION
+    version: VERSION,
+    config: CONFIG
   });
 
   function init(){ ensureDock(); }
