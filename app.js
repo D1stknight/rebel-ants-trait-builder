@@ -6322,7 +6322,7 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
       color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
     })
   };
-  const PAD = 20; // match position to other blocks
+  const PAD = 60; // moved footer further in from edge (fixes cut-off)
   const toLower = s => (s || '').toLowerCase();
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
