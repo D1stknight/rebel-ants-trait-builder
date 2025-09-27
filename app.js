@@ -1439,6 +1439,8 @@ document.addEventListener("keydown", (e)=>{
   function center(which){
     const c = C(); if (!c) return;
     const o = c.getActiveObject(); if(!o) return;
+    // Skip centering system / watermark / base / token id items
+    if (o._raSys || o._raWMRing || o._isWatermark || o._raWMCenter || o._isBgRect || o._isBase || o._raTokenId) return;
     const cw = c.getWidth(), ch = c.getHeight();
     if (which==="H" || which==="HV") o.left = cw/2;
     if (which==="V" || which==="HV") o.top  = ch/2;
@@ -1447,7 +1449,8 @@ document.addEventListener("keydown", (e)=>{
 
   function isSnapTarget(o){
     if (!o) return false;
-    if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
+    // Added _raWMRing to exclusion list for Phase 2 ring watermark
+    if (o._raSys || o._raWMRing || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
     const kind = (o._kind||'').toLowerCase();
     const t = (o.type||'').toLowerCase();
     return kind==='overlay' || kind==='sticker' || kind==='icon' || kind==='customtext' ||
@@ -1479,7 +1482,6 @@ document.addEventListener("keydown", (e)=>{
     if (Math.abs((br.top + br.height) - ch) <= tol) dy += (ch - (br.top + br.height));
 
     if (dx || dy){
-      // Shift object by delta; object's origin (often center) stays consistent
       o.left += dx;
       o.top  += dy;
       o.setCoords();
