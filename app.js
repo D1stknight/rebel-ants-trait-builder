@@ -2303,32 +2303,46 @@ document.addEventListener("DOMContentLoaded", ()=>{
   kick();
 })();
 
-/* ====================== RA_mobile_css_fit_inflow_v3 (MOBILE ONLY) ======================
-   Fixes mobile crash + keeps the drawing in normal page flow.
-   - Removes the bad "$$('.', wrap)" line that crashed Safari.
-   - Fits the stage to the phone width via CSS only (exports stay crisp).
-   - Hides any stray checkerboard strips and the fixed-layout ghost if present.
-   - Never touches desktop.
-   ====================================================================== */
+/* ====================== RA_MOBILE_CSS_FIT_V4 (MOBILE ONLY) ======================
+   Coexists with RA_MOBILE_FLOW_v29:
+   - If Konva mobile flow (v29) is active, this script no-ops.
+   - Otherwise (e.g., Fabric-only), it fits the main canvas via CSS without changing intrinsic size.
+   - Hides fixed-center ghost & stray checkerboard siblings once.
+   ============================================================================== */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_CSS_FIT_V3__) return;
-  window.__RA_MOBILE_CSS_FIT_V3__ = true;
+  if (!window.matchMedia(MQ).matches) return;
+  if (window.__RA_MOBILE_CSS_FIT_V4__) return;
+  window.__RA_MOBILE_CSS_FIT_V4__ = true;
+
+  // If Konva mobile flow script is present (v29), it manages layout itself.
+  if (window.__RA_MOBILE_STAGE_REFRESH || document.getElementById('ra-mobile-stage-frame')) {
+    // Konva flow active → bail
+    return;
+  }
 
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const  $ = (s, r=document)=>r.querySelector(s);
 
+  function isLikelyOffscreenUtilityCanvas(c){
+    // Heuristic: extremely small or 0-sized logical canvases used for measurement
+    return (c.width <= 2 && c.height <= 2);
+  }
+
   function findStageCanvas(){
-    const all = $$('canvas');
+    // Prefer a Fabric canvas (id="c") if present
+    const primary = $('#c');
+    if (primary && primary.width && primary.height) return primary;
+
+    // Otherwise pick the largest non-trivial canvas
+    const all = $$('canvas').filter(c => !isLikelyOffscreenUtilityCanvas(c));
     if (!all.length) return null;
-    // pick the intrinsically largest canvas — that's the drawing stage
-    return all.reduce((a,b)=> (b.width > (a?.width||0) ? b : a), null);
+    return all.reduce((a,b)=> (b.width * b.height > (a?.width||0)*(a?.height||0) ? b : a), null);
   }
 
   function hideGhostsAndStrips(wrap){
-    // Kill the fixed-center “ghost” if it exists (causes the huge blank gap)
     const ghost = document.getElementById('raCanvasGhost');
-    if (ghost){
+    if (ghost && ghost.getAttribute('data-ra-hidden-gap') !== '1'){
       ghost.style.display = 'none';
       ghost.style.height  = '0px';
       ghost.style.margin  = '0';
@@ -2336,9 +2350,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
       ghost.setAttribute('data-ra-hidden-gap', '1');
     }
 
-    // Collapse any checkerboard/empty siblings right around the stage block
     [wrap?.previousElementSibling, wrap?.nextElementSibling].forEach(el => {
-      if (!el) return;
+      if (!el || el.getAttribute('data-ra-hidden-gap') === '1') return;
       const cs = getComputedStyle(el);
       const looksChecker = (cs.backgroundImage||'').includes('linear-gradient')
                         || (cs.backgroundImage||'').includes('repeating');
@@ -2353,27 +2366,27 @@ document.addEventListener("DOMContentLoaded", ()=>{
     });
   }
 
+  let rafPending = false;
   function cssFit(){
+    if (!window.matchMedia(MQ).matches) return;
+    // Skip if Konva stage is present (let RA_MOBILE_FLOW handle)
+    if (window.stage && typeof window.stage.getContent === 'function') return;
+
     const stage = findStageCanvas();
     if (!stage) return;
-
-    // Usually the stage’s parent div; fall back to the canvas itself
     const wrap = stage.parentElement || stage;
 
-    // Intrinsic render size (used by export)
     const W = Math.max(1, stage.width);
     const H = Math.max(1, stage.height);
 
-    // Available width inside page
     const host  = wrap.parentElement || document.body;
     const hostW = Math.max(320, host.clientWidth || window.innerWidth);
-    const sidePad = 28; // layout breathing room
+    const sidePad = 28;
     const targetW = Math.min(W, hostW - sidePad);
     const scale   = Math.min(1, targetW / W);
     const dW      = Math.round(W * scale);
     const dH      = Math.round(H * scale);
 
-    // View‑only sizing (do NOT change canvas.width/height)
     Object.assign(wrap.style, {
       width: dW + 'px',
       height: dH + 'px',
@@ -2382,7 +2395,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
       position: 'relative'
     });
 
-    // If the container holds multiple canvases (scene/hit), size them all
     $$('canvas', wrap).forEach(c => {
       c.style.width    = dW + 'px';
       c.style.height   = dH + 'px';
@@ -2393,48 +2405,72 @@ document.addEventListener("DOMContentLoaded", ()=>{
     hideGhostsAndStrips(wrap);
   }
 
+  function scheduleFit(){
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      cssFit();
+    });
+  }
+
   function bindLoadTriggers(){
-    // Re-fit after real load actions
-    const cards = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
-    cards.forEach(card => {
+    const markers = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
+    markers.forEach(card => {
       $$('button', card).forEach(btn => {
         const t = (btn.textContent||'').toLowerCase().trim();
-        if (t === 'load' || t === 'load by token' || t === 'clear upload'){
+        if (['load', 'load by token', 'clear upload'].includes(t)){
           if (!btn.__raFitBound){
             btn.__raFitBound = true;
-            btn.addEventListener('click', () => setTimeout(cssFit, 60), {passive:true});
+            btn.addEventListener('click', () => setTimeout(scheduleFit, 60), {passive:true});
           }
         }
       });
       const file = $('input[type="file"]', card);
       if (file && !file.__raFitBound){
         file.__raFitBound = true;
-        file.addEventListener('change', () => setTimeout(cssFit, 60), {passive:true});
+        file.addEventListener('change', () => setTimeout(scheduleFit, 60), {passive:true});
       }
     });
   }
 
-  // Observe DOM churns so the fit reapplies if the app re-renders
-  new MutationObserver(() => { bindLoadTriggers(); cssFit(); })
-    .observe(document.documentElement, { childList:true, subtree:true });
+  // MutationObserver to refit on dynamic UI changes
+  const mo = new MutationObserver(() => {
+    if (!window.matchMedia(MQ).matches) return;
+    // Skip if Konva stage logic appears later
+    if (window.stage && typeof window.stage.getContent === 'function') return;
+    bindLoadTriggers();
+    scheduleFit();
+  });
+  mo.observe(document.documentElement, { childList:true, subtree:true });
 
-  window.addEventListener('resize',           () => { if (window.matchMedia(MQ).matches) cssFit(); }, {passive:true});
-  window.addEventListener('orientationchange',() => setTimeout(cssFit, 150), {passive:true});
+  window.addEventListener('resize',           scheduleFit, {passive:true});
+  window.addEventListener('orientationchange',() => setTimeout(scheduleFit, 150), {passive:true});
 
   if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', () => { bindLoadTriggers(); cssFit(); }, {once:true});
+    document.addEventListener('DOMContentLoaded', () => { bindLoadTriggers(); scheduleFit(); }, {once:true});
   } else {
-    bindLoadTriggers(); cssFit();
+    bindLoadTriggers(); scheduleFit();
   }
 
-  // Minimal CSS (mobile only) to make sure hidden gaps stay hidden
-  const s = document.createElement('style');
-  s.textContent = `
-    @media ${MQ} {
-      [data-ra-hidden-gap="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
-    }
-  `;
-  document.head.appendChild(s);
+  const styleId = 'ra-mobile-css-fit-v4-style';
+  if (!document.getElementById(styleId)){
+    const s = document.createElement('style');
+    s.id = styleId;
+    s.textContent = `
+      @media ${MQ} {
+        [data-ra-hidden-gap="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // Public disable if needed
+  window.__RA_DISABLE_MOBILE_CSS_FIT = function(){
+    mo.disconnect();
+    window.removeEventListener('resize', scheduleFit);
+    window.removeEventListener('orientationchange', scheduleFit);
+  };
 })();
 
 /* ==================== RA_AI_QUOTE_v1 — “✨ Inspire me” (motivational quotes) ====================
