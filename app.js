@@ -1,30 +1,35 @@
-/* ===== WM CONSOLIDATION PHASE 1 (AUTO-INJECT) =====
-   Unified finder + guard flags to neutralize duplicate watermark controllers.
-   Later phases will remove/comment the legacy blocks explicitly.
+/* ===== WM CONSOLIDATION PHASE 1 (LEGACY NEUTRALIZED) =====
+   Original purpose: block duplicate legacy watermark controllers.
+   Legacy centered watermark logic has been removed/stubbed (Phase 2 active).
+   This block now only provides a compatibility finder & placeholder flags
+   until final purge.
 */
 (function(){
   if (window.__RA_WM_CONSOLIDATION_P1__) return;
   window.__RA_WM_CONSOLIDATION_P1__ = true;
 
-  // Unified finder
+  // Compatibility finder: try Phase 2 ring first, else legacy center tag (now absent).
+  // Adjust selectors if Phase 2 uses different tagging.
   window.raFindWatermark = function raFindWatermark(){
     const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
     if (!c) return null;
-    return (c.getObjects()||[]).find(o => o && o._raWMCenter === true) || null;
+    const objs = (c.getObjects?.() || []);
+    // Phase 2 ring candidates: (example tags) _raWMRing or _raWatermark
+    return objs.find(o => o && (o._raWMRing === true || o._raWatermark === true || o._raWMCenter === true)) || null;
   };
 
-  // Pre-set initialization guards so legacy IIFEs early-return
+  // Retained guard flags (can delete once sure no other file tests them)
   window.__RA_WM_FOOTER_FIX_SHIM_v7r__ = true;
   window.__RA_WM_RULES_V9__            = true;
   window.__RA_WM_GLOBAL_SYNC_V3__      = true;
   window.__RA_WM_FOLLOW_EVENTS_V1__    = true;
   window.__RA_WM_SERVER_MASTER_V1__    = true;
 
-  // Neutralize legacy non-token ring creator if defined later
+  // Legacy non-token ring creator placeholder (kept to avoid ReferenceErrors)
   Object.defineProperty(window, 'ensureNonTokenRingWM', {
     configurable: true,
     writable: true,
-    value: function(){ /* disabled by consolidation phase 1 */ }
+    value: function(){ /* Phase 2: legacy ensureNonTokenRingWM disabled */ }
   });
 })();
 /* ===============================
