@@ -8391,7 +8391,7 @@ window.raDump = () => {
       if (footer.opacity !== 1) { footer.opacity = 1; dirty = true; }
       if (footer.originX !== 'right') { footer.originX = 'right'; dirty = true; }
       if (footer.originY !== 'bottom') { footer.originY = 'bottom'; dirty = true; }
-      const desiredLeft = c.getWidth() - 20;
+      const desiredLeft = c.getWidth() - 60;
       const desiredTop = c.getHeight() - 20;
       if (footer.left !== desiredLeft) { footer.left = desiredLeft; dirty = true; }
       if (footer.top !== desiredTop) { footer.top = desiredTop; dirty = true; }
