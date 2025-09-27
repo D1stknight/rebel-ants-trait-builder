@@ -3227,19 +3227,21 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
 /* ==========================================================
    RA_ANIMATE_UNIFIED_V2
-   (UI alignment + export download prompt update v2.0.1)
+   Version: 2.0.2  (Layout rollback + minimal button & auto-download fix)
 
-   Changes from 2.0.0 (ONLY these):
-     • Reworked panel layout into two rows (grid + actions) for aligned buttons.
-     • Added confirm() prompt on successful export to optionally auto-download.
-     • If user cancels prompt, persistent "Download animation" link remains (moved right under video with clearer spacing).
-     • No other behavior altered.
+   Changes from 2.0.0:
+     • Added tiny inline style so Preview / Export buttons align uniformly.
+     • Added config.autoDownloadOnExport (default true). When export completes,
+       it immediately triggers a download AND still shows the link.
+     • No other logic, layout, or behavior changed.
+     • Reverted any v2.0.1 structural/UI alterations (grid / title reposition).
 
+   Everything else (watermark modes, return modes, animation logic) untouched.
    ========================================================== */
 (() => {
-  if (window.raAnimateUnifiedV2 && window.raAnimateUnifiedV2.version === '2.0.1') return;
+  if (window.raAnimateUnifiedV2 && window.raAnimateUnifiedV2.version === '2.0.2') return;
 
-  const VERSION = '2.0.1';
+  const VERSION = '2.0.2';
   const CONFIG = {
     fps: 30,
     maxDurationSec: 30,
@@ -3255,9 +3257,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
     cameraMaxZoom: 2.0,
     wmSnapshotMultiplier: 1.0,
     wmOpacityFloor: 0.02,
-    exportHeaderPattern: /export/i
+    exportHeaderPattern: /export/i,
+    autoDownloadOnExport: true // NEW: auto-trigger download after export finishes
   };
 
+  /* -------------------- EASING -------------------- */
   const EASE = {
     linear: t=>t,
     ioQuad: t=>t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2,
@@ -3272,6 +3276,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     ioExpo: t=>t===0?0:t===1?1:(t<0.5?Math.pow(2,20*t-10)/2:(2-Math.pow(2,-20*t+10))/2)
   };
 
+  /* -------------------- PRESETS (unchanged) -------------------- */
   const PRESETS = [
     { id:'cam_kb_in_ur', name:'KB in ↗', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:+0.06}},
     { id:'cam_kb_in_dl', name:'KB in ↙', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:-0.06}},
@@ -3304,9 +3309,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
     { id:'ov_attention', name:'Overlay/Text attention',  kind:'overlay', ease:'ioSine',  from:{s:1.0},    to:{s:1.07}}
   ];
 
+  /* -------------------- DOM HELPERS -------------------- */
   const $  = (s,r=document)=>r.querySelector(s);
   const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
-
   function anchorPanel(){
     return $$('h3').find(h=> CONFIG.exportHeaderPattern.test((h.textContent||'').trim()))?.parentNode || document.body;
   }
@@ -3319,74 +3324,96 @@ document.addEventListener("DOMContentLoaded", ()=>{
     panel.style.cssText='margin:16px 0;padding:14px;border:1px solid #23262c;border-radius:12px;background:#0f1116;color:#e9eaed;font:12px system-ui;position:relative';
     panel.innerHTML=`
       <style>
-        #raAnimUnifiedV2Panel .ua-row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:8px}
-        #raAnimUnifiedV2Panel .ua-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;flex:1}
-        #raAnimUnifiedV2Panel label{display:flex;flex-direction:column;gap:4px;font-size:11px;opacity:.85}
-        #raAnimUnifiedV2Panel select,
-        #raAnimUnifiedV2Panel input[type=number]{background:#161a21;color:#e9eaed;border:1px solid #2c3138;border-radius:8px;padding:6px 8px;font:12px system-ui;min-height:32px}
-        #raAnimUnifiedV2Panel button.btn{background:#1d2229;color:#e9eaed;border:1px solid #2c3138;padding:8px 14px;border-radius:9px;cursor:pointer;font:12px system-ui;min-width:98px;font-weight:500;letter-spacing:.2px}
+        #raAnimUnifiedV2Panel button.btn{
+          background:#1d2229;
+          color:#e9eaed;
+          border:1px solid #2c3138;
+          padding:8px 18px;
+          border-radius:9px;
+          cursor:pointer;
+          font:12px system-ui;
+          font-weight:500;
+          letter-spacing:.2px;
+          min-height:36px;
+        }
         #raAnimUnifiedV2Panel button.btn:hover{background:#272d35}
+        #raAnimUnifiedV2Panel select,
+        #raAnimUnifiedV2Panel input[type=number]{
+          background:#161a21;
+          color:#e9eaed;
+          border:1px solid #2c3138;
+          border-radius:8px;
+          padding:7px 10px;
+          min-height:36px;
+          font:12px system-ui;
+        }
+        #raAnimUnifiedV2Panel label{display:flex;gap:6px;align-items:center}
+        #raAnimUnifiedV2Panel strong{font-size:13px}
         #raAnimUnifiedV2Panel #uaPreviewCanvas,
         #raAnimUnifiedV2Panel #uaVideoOut{box-shadow:0 0 0 1px #1d2025}
-        #raAnimUnifiedV2Panel .ua-actions{display:flex;gap:12px;align-items:center}
-        #raAnimUnifiedV2Panel .ua-download-link{margin-top:10px}
-        #raAnimUnifiedV2Panel .ua-download-link a{display:inline-block;background:#1d2229;padding:8px 14px;border-radius:9px;border:1px solid #2c3138;color:#d5d8dc;text-decoration:none;font:12px system-ui}
-        #raAnimUnifiedV2Panel .ua-download-link a:hover{background:#272d35}
-        #raAnimUnifiedV2Panel .ua-title{font-size:15px;font-weight:600;display:flex;align-items:center;gap:10px;margin-right:12px}
-        #raAnimUnifiedV2Panel .ua-title small{font-size:11px;font-weight:400;opacity:.6}
+        #raAnimUnifiedV2Panel #uaDL a{
+          display:inline-block;
+          margin-top:8px;
+          background:#1d2229;
+          padding:8px 14px;
+          border-radius:8px;
+          border:1px solid #2c3138;
+          text-decoration:none;
+          color:#d5d8dc;
+          font:12px system-ui;
+        }
+        #raAnimUnifiedV2Panel #uaDL a:hover{background:#272d35}
       </style>
-      <div class="ua-row">
-        <div class="ua-title">Unified Animate <small>v${VERSION}</small></div>
-        <div class="ua-fields">
-          <label>Scope:
-            <select id="uaScope">
-              <option value="camera">Camera</option>
-              <option value="base">Base only</option>
-              <option value="overlay">Overlays only</option>
-              <option value="text">Text only</option>
-            </select>
-          </label>
-          <label>Preset:
-            <select id="uaPreset"></select>
-          </label>
-          <label>Ease:
-            <select id="uaEase">
-              <option value="ioSine">ioSine</option>
-              <option value="ioQuad">ioQuad</option>
-              <option value="ioCubic">ioCubic</option>
-              <option value="ioBack">ioBack</option>
-              <option value="ioExpo">ioExpo</option>
-              <option value="linear">linear</option>
-            </select>
-          </label>
-          <label>Dur (s):
-            <input id="uaDur" type="number" min="2" max="${CONFIG.maxDurationSec}" value="6" step="0.1">
-          </label>
-          <label>Return:
-            <select id="uaReturn">
-              <option value="soft">soft</option>
-              <option value="reverse">reverse</option>
-              <option value="snap">snap</option>
-              <option value="hold">hold</option>
-              <option value="none">none</option>
-            </select>
-          </label>
-          <label>WM:
-            <select id="uaWMMode">
-              <option value="inherit">inherit</option>
-              <option value="lock">lock</option>
-            </select>
-          </label>
-        </div>
-        <div class="ua-actions">
-          <button id="uaPreview" class="btn">Preview</button>
-          <button id="uaExport" class="btn">Export</button>
-          <span id="uaMsg" style="opacity:.75;min-width:70px;"></span>
-        </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <strong>Unified Animate</strong>
+        <span style="opacity:.55">v${VERSION}</span>
+        <label>Scope:
+          <select id="uaScope">
+            <option value="camera">Camera</option>
+            <option value="base">Base only</option>
+            <option value="overlay">Overlays only</option>
+            <option value="text">Text only</option>
+          </select>
+        </label>
+        <label>Preset:
+          <select id="uaPreset"></select>
+        </label>
+        <label>Ease:
+          <select id="uaEase">
+            <option value="ioSine">ioSine</option>
+            <option value="ioQuad">ioQuad</option>
+            <option value="ioCubic">ioCubic</option>
+            <option value="ioBack">ioBack</option>
+            <option value="ioExpo">ioExpo</option>
+            <option value="linear">linear</option>
+          </select>
+        </label>
+        <label>Dur:
+          <input id="uaDur" type="number" min="2" max="${CONFIG.maxDurationSec}" value="6" step="0.1" style="width:60px">
+          s
+        </label>
+        <label>Return:
+          <select id="uaReturn">
+            <option value="soft">soft</option>
+            <option value="reverse">reverse</option>
+            <option value="snap">snap</option>
+            <option value="hold">hold</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <label>WM:
+          <select id="uaWMMode">
+            <option value="inherit">inherit</option>
+            <option value="lock">lock</option>
+          </select>
+        </label>
+        <button id="uaPreview" class="btn">Preview</button>
+        <button id="uaExport" class="btn">Export</button>
+        <span id="uaMsg" style="opacity:.7"></span>
       </div>
-      <canvas id="uaPreviewCanvas" style="display:none;max-width:100%;border-radius:10px;background:#000"></canvas>
-      <video id="uaVideoOut" style="display:none;max-width:100%;border-radius:10px;margin-top:10px" controls></video>
-      <div id="uaDL" class="ua-download-link"></div>
+      <canvas id="uaPreviewCanvas" style="display:none;margin-top:10px;max-width:100%;border-radius:8px;background:#000"></canvas>
+      <video id="uaVideoOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+      <div id="uaDL"></div>
     `;
     anchorPanel().appendChild(panel);
 
@@ -3423,7 +3450,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (t) setTimeout(()=>{ if(m.textContent===t) m.textContent=''; },2500);
   }
 
-  /* -------------------- Watermark Manager -------------------- */
+  /* -------------------- Watermark Manager (unchanged logic) -------------------- */
   const WM = {
     is(o){ return !!(o && (o._isWatermark||o._raWMRing||o._raWMCenter||o._raFooter)); },
     collect(){
@@ -3456,7 +3483,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
         restores.forEach(r=>{
           r.o.visible=r.vis;
           r.o.excludeFromExport=r.excl;
-          r.o.opacity=r.op;
+            r.o.opacity=r.op;
         });
       }
       WM.snapshot=null;
@@ -3470,7 +3497,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     }
   };
 
-  /* -------------------- Helpers -------------------- */
+  /* -------------------- Classifiers -------------------- */
   const isBg=o=>!!o?._isBgRect;
   const isBase=o=>!!(o?._isBase && !o._isBgRect);
   const isText=o=>{
@@ -3493,7 +3520,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (o.type==='image' && !o._isBase) return true;
     return false;
   };
-
   function pickTargets(scope){
     const c=window.canvas; if(!c) return [];
     const objs=(c.getObjects()||[]).filter(o=>!isBg(o));
@@ -3503,6 +3529,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return [];
   }
 
+  /* -------------------- Return Plan -------------------- */
   function planReturn(mode,durMs){
     if (mode==='none') return {mode,reverse:0,snap:0,hold:0,soft:0};
     if (mode==='reverse') return {mode,reverse:Math.round(durMs*CONFIG.reverseFraction),snap:0,hold:0,soft:0};
@@ -3515,15 +3542,16 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return {mode:'none',reverse:0,snap:0,hold:0,soft:0};
   }
 
+  /* -------------------- Animation Core -------------------- */
   let running=false, cancelFlag=false;
 
   function animate({scope,preset,easingFn,durationMs,record,returnMode,wmMode}){
     const c=window.canvas;
     const W=c.getWidth(), H=c.getHeight();
-
     const previewCanvas=$('#uaPreviewCanvas');
     const videoOut=$('#uaVideoOut');
     const dl=$('#uaDL');
+
     if (!record){
       previewCanvas.style.display='block';
       videoOut.style.display='none';
@@ -3563,7 +3591,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
     const ret=planReturn(returnMode,durationMs);
 
-    let rec=null, chunks=[];
+    let rec=null,chunks=[];
     if (record){
       try{
         const stream=surface.captureStream(CONFIG.fps);
@@ -3610,15 +3638,15 @@ document.addEventListener("DOMContentLoaded", ()=>{
       const xn=lerp(f.x,to.x, reverse?1-t:t);
       const yn=lerp(f.y,to.y, reverse?1-t:t);
       if (CONFIG.respectViewport){
-        const eCam=(1-z)*(W/2)+xn*W;
-        const fCam=(1-z)*(H/2)+yn*H;
+        const eCam=(1 - z)*(W/2) + xn*W;
+        const fCam=(1 - z)*(H/2) + yn*H;
         const finalScale=baseScale0*z;
         const finalE=baseE0 + eCam*baseScale0;
         const finalF=baseF0 + fCam*baseScale0;
         c.setViewportTransform([finalScale,0,0,finalScale,finalE,finalF]);
       } else {
-        const e=(1-z)*(W/2)+xn*W;
-        const f2=(1-z)*(H/2)+yn*H;
+        const e=(1 - z)*(W/2) + xn*W;
+        const f2=(1 - z)*(H/2) + yn*H;
         c.setViewportTransform([z,0,0,z,e,f2]);
       }
     }
@@ -3635,8 +3663,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
       const alpha=has('alpha')?val('alpha'):null;
       const dxN=val('dxN'), dyN=val('dyN');
       const dx=val('dx'), dy=val('dy');
-      const dpx=dx + dxN*W;
-      const dpy=dy + dyN*H;
+      const dpx= dx + dxN*W;
+      const dpy= dy + dyN*H;
 
       targets.forEach(o=>{
         const b=baselines.get(o); if(!b) return;
@@ -3668,7 +3696,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     function drawFrame(){
       c.requestRenderAll();
       ctx.clearRect(0,0,W,H);
-      ctx.drawImage(c.lowerCanvasEl||c.upperCanvasEl,0,0,W,H);
+      ctx.drawImage(c.lowerCanvasEl || c.upperCanvasEl,0,0,W,H);
       if (wmMode==='lock') WM.drawLocked(ctx,W,H);
     }
 
@@ -3707,31 +3735,31 @@ document.addEventListener("DOMContentLoaded", ()=>{
               const blob=new Blob(chunks,{type:mime});
               const url=URL.createObjectURL(blob);
               const ext=mime.includes('mp4')?'mp4':'webm';
-              // Prompt
-              let auto=false;
-              try {
-                auto = window.confirm('Animation ready. Download now?');
-              } catch(_){}
-              if (auto){
-                const aTemp=document.createElement('a');
-                aTemp.href=url;
-                aTemp.download=`anim_${Date.now()}.${ext}`;
-                document.body.appendChild(aTemp);
-                aTemp.click();
-                setTimeout(()=>aTemp.remove(),0);
-              } else {
-                const videoOut=$('#uaVideoOut');
-                videoOut.style.display='block';
-                videoOut.src=url;
-                videoOut.play?.().catch(()=>{});
-                const dl=$('#uaDL');
-                dl.innerHTML='';
-                const a=document.createElement('a');
-                a.href=url;
-                a.download=`anim_${Date.now()}.${ext}`;
-                a.textContent='Download animation';
-                a.className='btn small';
-                dl.appendChild(a);
+
+              // Always show video + link (original behavior)
+              const videoOut=$('#uaVideoOut');
+              videoOut.style.display='block';
+              videoOut.src=url;
+              videoOut.play?.().catch(()=>{});
+
+              const dl=$('#uaDL');
+              dl.innerHTML='';
+              const a=document.createElement('a');
+              a.href=url;
+              a.download=`anim_${Date.now()}.${ext}`;
+              a.textContent='Download animation';
+              dl.appendChild(a);
+
+              // Auto-download if enabled
+              if (CONFIG.autoDownloadOnExport){
+                try{
+                  const auto=document.createElement('a');
+                  auto.href=url;
+                  auto.download=`anim_${Date.now()}.${ext}`;
+                  document.body.appendChild(auto);
+                  auto.click();
+                  setTimeout(()=>auto.remove(),0);
+                }catch(_){}
               }
             }
             running=false; cancelFlag=false;
@@ -3751,6 +3779,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     step();
   }
 
+  /* -------------------- Utilities -------------------- */
   function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
   function lerp(a,b,t){ return a+(b-a)*t; }
   function pickMimeType(){
@@ -3798,7 +3827,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     config: CONFIG,
     version: VERSION
   };
-
   window.raAnimateUnifiedV2 = API;
 
   function init(){ buildPanel(); }
