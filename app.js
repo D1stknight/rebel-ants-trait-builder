@@ -3830,21 +3830,19 @@ const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' 
   }
 
   // ---------- strip corner-stamp children from a group ----------
- // Phase 2 cleanup: legacy stamp detector neutralized
+// Phase 2 cleanup: legacy stamp detector neutralized
 function isStamp(o){ return false; }
 
 // Phase 2 cleanup: legacy group stamp stripper neutralized
 function stripStampsFromGroup(g){ return false; }
 
-    // remove only the stamp children; keep the main image and group transform
-    kids.slice().forEach(k => { if (isStamp(k)) g.remove(k); });
-    try {
-      g._calcBounds && g._calcBounds();
-      g._updateObjectCoords && g._updateObjectCoords();
-      g.dirty = true; g.setCoords();
-    } catch(_){}
-    return true;
-  }
+function cleanCornerStamps(c){
+  if (!c) return;
+  (c.getObjects?.()||[]).forEach(o=>{
+    if (o?.type === 'group') stripStampsFromGroup(o);
+  });
+  try { c.requestRenderAll(); } catch(_){}
+}
 
   function cleanCornerStamps(c){
     if (!c) return;
