@@ -2979,46 +2979,23 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     } catch(_){}
   }
 
-  // ---------- Fabric helpers: add/remove TEMP watermark objects on the live canvas ----------
-  function baseIsToken(){
-    const c = window.canvas; if (!c) return false;
-    const base = (c.getObjects()||[]).find(o => o._isBase);
-    if (!base) return false;
-    // In your app: token base = plain Image; upload base = Group (image + 2 small stamps)
-    return (base.type === 'image');
-  }
+ // ---------- Fabric helpers (legacy TEMP watermark) ----------
+// Phase 2 cleanup: legacy temp watermark helpers neutralized.
 
-  function addTempFabricWM(){
-    const c = window.canvas;
-    if (!c || !window.fabric || !STATE.img) return null;
+// Keep ONLY if you still need a baseIsToken here; else remove this duplicate.
+// If another baseIsToken exists earlier, delete this one to avoid confusion.
+function baseIsToken(){
+  // (Phase 2) Retained helper or duplicate; adjust/remove if already defined elsewhere.
+  const c = window.canvas;
+  if (!c) return false;
+  const base = (c.getObjects?.()||[]).find(o => o && o._isBase);
+  return !!(base && base.type === 'image');
+}
 
-    const cw = c.getWidth(), ch = c.getHeight();
-    const { wmW, wmH, m } = wmBox(cw, ch);
-
-    // Create two watermark images
-    const tl = new fabric.Image(STATE.img, {
-      left: m, top: m, selectable: false, evented: false
-    });
-    const br = new fabric.Image(STATE.img, {
-      left: cw - m - wmW, top: ch - m - wmH, selectable: false, evented: false
-    });
-    const sX = wmW / STATE.img.width, sY = wmH / STATE.img.height;
-    tl.scaleX = sX; tl.scaleY = sY;
-    br.scaleX = sX; br.scaleY = sY;
-
-    // Tag them so we can cleanly remove later
-    tl._raTmpWM = br._raTmpWM = true;
-
-    c.add(tl); c.add(br); c.requestRenderAll();
-    return [tl, br];
-  }
-
-  function removeTempFabricWM(){
-    const c = window.canvas; if (!c) return;
-    (c.getObjects()||[]).filter(o => o._raTmpWM).forEach(o => c.remove(o));
-    c.requestRenderAll();
-  }
-
+// Neutralized legacy temp watermark add/remove (no-op stubs).
+function addTempFabricWM(){ /* no-op */ }
+function removeTempFabricWM(){ /* no-op */ }
+   
   // ---------- Gentle hook for "Make Video" button (no-op until you flip the switch) ----------
   function waitForVideoDone(timeoutMs=60000){
     return new Promise(resolve => {
