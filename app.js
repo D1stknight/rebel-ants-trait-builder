@@ -4000,46 +4000,49 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V4
-   • Presets for: Everything (viewport), Base only, Overlays only, Text only.
-   • Overlay presets still auto-scope when "Everything" is selected.
-   • Broader, safer target detection (text/overlay/base).
-   • Recording: robust MIME selection (VP9→VP8→WebM→MP4 if supported),
-     captureStream FPS, auto download link, and safe fallbacks.
-   • Preview-safe: state restored; undo/redo not spammed; no layout changes.
+   RA_ANIMATE_PREVIEW_VIDEO_V4b
+   (Upgraded from V4)
+   - High-DPI/retina recording via offscreen canvas (optional).
+   - More robust preset ↔ scope alignment.
+   - Public API: window.raAnimate.run({record}) / .isRunning() / .stop().
+   - Cleaner URL + resource cleanup and unload revoke.
+   - Optional post-finish layer / watermark ensures.
+   - Auto fallback logging for unsupported MIME types.
    ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V4__) return; window.__RA_ANIM_V4__ = true;
+  if (window.__RA_ANIM_V4B__) return; window.__RA_ANIM_V4B__ = true;
 
-  const VERSION = '4.0.0';
+  const VERSION = '4.0.1';
   const FPS = 30;
 
-  // ---------- Shortcuts ----------
+  /* ---------- CONFIG (tweak as needed) ---------- */
+  const CONFIG = {
+    captureScale: 1.5,         // >1 for sharper video (e.g. 2). More scale = more CPU.
+    useOffscreen: true,        // false → original element.captureStream path
+    maxDurationSec: 30,        // upper safety bound
+    postFinishLayerEnsure: true,
+    postFinishWatermarkEnsure: true
+  };
+
+  /* ---------- Helpers ---------- */
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const lerp=(a,b,t)=>a+(b-a)*t;
 
-  // ---------- Easings ----------
   const EASE = {
-    linear: t => t,
-    ioQuad: t => t<0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2,
-    ioSine: t => -(Math.cos(Math.PI*t)-1)/2,
-    ioCubic: t => t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2,
-    ioBack: t => { const c1=1.70158, c2=c1*1.525; return t<0.5
-      ? (Math.pow(2*t,2)*((c2+1)*2*t - c2))/2
-      : (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2; },
-    ioExpo: t => t===0?0 : t===1?1 : (t<0.5 ? Math.pow(2,20*t-10)/2 : (2 - Math.pow(2,-20*t+10))/2)
+    linear: t=>t,
+    ioQuad: t=>t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2,
+    ioSine: t=>-(Math.cos(Math.PI*t)-1)/2,
+    ioCubic: t=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,
+    ioBack: t=>{const c1=1.70158,c2=c1*1.525;return t<0.5?
+      (Math.pow(2*t,2)*((c2+1)*2*t-c2))/2:
+      (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2;},
+    ioExpo: t=>t===0?0:t===1?1:(t<0.5?Math.pow(2,20*t-10)/2:(2-Math.pow(2,-20*t+10))/2)
   };
 
-  // ---------- Presets ----------
-  // kind:'viewport' => whole scene via camera (Everything).
-  // kind:'overlays' => overlay items (stickers, shapes, images that are not base/text).
-  // kind:'text'     => text/token ID only.
-  // kind:'base'     => base image only.
-  // Viewport params: z (zoom), x/y (normalized pan: -0.1..+0.1).
-  // Object params (overlays/base/text): s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized W/H).
   const PRESETS = [
-    // — Viewport / Everything —
     {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:+0.06}},
     {id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
     {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
@@ -4051,8 +4054,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'pan_right', name:'Pan right (slow)',   kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:-0.06,y:0.00}, to:{z:1.00,x: 0.06,y:0.00}},
     {id:'zoom_in',   name:'Zoom in (gentle)',   kind:'viewport', ease:'ioCubic', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.15,x: 0.00,y: 0.00}},
     {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
-
-    // — Overlays only —
+    // Overlays + Text
     {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},     to:{s:1.00}},
     {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},   to:{dyN:0.00}},
     {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14},  to:{dyN:0.00}},
@@ -4061,21 +4063,20 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00}, to:{alpha:1.00}},
     {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},     to:{rot:0}},
     {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},     to:{s:1.00}},
-
-    // — Base only —
+    // Base only
     {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},     to:{s:1.06}},
     {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06},  to:{dxN:0.00}}
   ];
 
-  // ---------- UI dock ----------
+  /* ---------- UI Dock ---------- */
   function ensureDock(){
     let dock = $('#raAnimDock');
     if (dock) return dock;
-
     const host = $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode || document.body;
+
     dock = document.createElement('div');
-    dock.id = 'raAnimDock';
-    dock.style.cssText = 'margin:16px 0;padding:12px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea';
+    dock.id='raAnimDock';
+    dock.style.cssText='margin:16px 0;padding:12px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea';
     dock.innerHTML = `
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <strong>Animate</strong>
@@ -4105,7 +4106,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
           </select>
         </label>
         <label style="display:flex;gap:6px;align-items:center">
-          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" step="0.1" style="width:60px">s
+          Duration: <input id="raAnimDur" type="number" min="2" max="${CONFIG.maxDurationSec}" value="6" step="0.1" style="width:60px">s
         </label>
         <button id="raAnimPreview" class="btn small">Preview</button>
         <button id="raAnimExport"  class="btn small">Export video</button>
@@ -4116,157 +4117,204 @@ document.addEventListener("DOMContentLoaded", ()=>{
     `;
     host.appendChild(dock);
 
-    // Fill presets
     const sel = $('#raAnimPreset', dock);
-    PRESETS.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
+    PRESETS.forEach(p=>{
+      const o=document.createElement('option');
+      o.value=p.id; o.textContent=p.name;
+      sel.appendChild(o);
+    });
 
-    // Events
-    $('#raAnimPreview', dock).onclick = ()=> run(false);
-    $('#raAnimExport',  dock).onclick = ()=> run(true);
+    $('#raAnimPreview', dock).onclick = ()=> run({record:false});
+    $('#raAnimExport',  dock).onclick = ()=> run({record:true});
     $('#raAnimPreset',  dock).onchange = () => {
       const id = $('#raAnimPreset').value;
       const p  = PRESETS.find(x=>x.id===id);
       if (!p) return;
-      // If user has Everything/Base but picked an overlay preset, auto-scope to overlays.
       const scopeEl = $('#raAnimScope');
-      if (p.kind==='overlays' && scopeEl.value!=='overlays') {
-        scopeEl.value = 'overlays';
-        msg('Preset targets overlays → switched "What" to Overlays.');
+      if (p.kind!=='viewport' && scopeEl.value==='all'){
+        scopeEl.value = p.kind==='overlays' ? 'overlays' : p.kind;
+        msg(`Preset targets ${p.kind} → auto-switched scope.`);
       }
-      // Prefer preset’s ease if it has one
       if (p.ease) $('#raAnimEase').value = p.ease;
     };
-
     return dock;
   }
 
   function msg(t){
-    const m = $('#raAnimMsg'); if (!m) return;
+    const m = $('#raAnimMsg'); if(!m) return;
     m.textContent = t||'';
-    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2200);
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2500);
   }
 
-  // ---------- Helpers ----------
-  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-  const lerp=(a,b,t)=>a+(b-a)*t;
-
-  const isBg    = o => !!o._isBgRect;
-  const isBase  = o => !!(o._isBase && !o._isBgRect);
-  const isText  = o => {
-    const k = (o._kind||'').toLowerCase();
-    const t = (o.type||'').toLowerCase();
-    return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
+  /* ---------- Classification ---------- */
+  const isBg = o => !!o?._isBgRect;
+  const isBase = o => !!(o?._isBase && !o._isBgRect);
+  const isText = o => {
+    if (!o) return false;
+    const k=(o._kind||'').toLowerCase();
+    const t=(o.type||'').toLowerCase();
+    return k==='customtext'||k==='tokenid'||t==='textbox'||t==='i-text'||t==='text';
+  };
+  const isOverlay = o => {
+    if (!o) return false;
+    if (o._raSys || o._isWatermark || o._raWMCenter || o._isBgRect || o._isBase || o._raTokenId) return false;
+    const k=(o._kind||'').toLowerCase();
+    if (k==='overlay'||k==='sticker'||k==='icon') return true;
+    if (o.type==='group'){
+      const kids=(o.getObjects?.()||o._objects||[]);
+      return kids.some(ch=>{
+        const ck=(ch._kind||'').toLowerCase();
+        return ck==='overlay'||ck==='sticker'||ck==='icon';
+      });
+    }
+    // Fallback: image with no base flag treated as overlay
+    if (o.type==='image' && !o._isBase) return true;
+    return false;
   };
 
- // Overlay detector (no recursion bug)
-const isOverlay = (o) => {
-  if (!o) return false;
-  // Exclude system / watermark / bg / base / token label
-  if (o._raSys || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
-
-  const k = (o._kind || '').toLowerCase();
-  if (k === 'overlay' || k === 'sticker' || k === 'icon') return true;
-
-  // Groups: treat as overlay if ANY child is an overlay‑kind
-  if (o.type === 'group') {
-    const kids = (o.getObjects?.() || o._objects || []);
-    return kids.some(ch => {
-      const ck = (ch._kind || '').toLowerCase();
-      return ck === 'overlay' || ck === 'sticker' || ck === 'icon';
-    });
-  }
-  return false;
-};
-
   function pickTargets(c, scope){
-    const objs = (c.getObjects?.()||[]).filter(o => !isBg(o));
-    if (scope==='text')     return objs.filter(isText);
+    const objs=(c.getObjects?.()||[]).filter(o=>!isBg(o));
+    if (scope==='text') return objs.filter(isText);
     if (scope==='overlays') return objs.filter(isOverlay);
-    if (scope==='base')     return objs.filter(isBase);
-    return []; // 'all' uses viewport animation only
+    if (scope==='base') return objs.filter(isBase);
+    return []; // scope 'all' + viewport preset only
   }
 
-  // ---------- Core ----------
+  /* ---------- Recording Helpers ---------- */
+  function pickMimeType(){
+    const pref=[
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4'
+    ];
+    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported){
+      return pref[2];
+    }
+    for (const t of pref){
+      if (MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return pref[2];
+  }
+  function extFromMime(t){
+    if (!t) return 'webm';
+    if (t.includes('mp4')) return 'mp4';
+    return 'webm';
+  }
+
   let running=false;
+  let stopRequested=false;
   let lastURL=null;
 
-  async function run(record){
+  function revokeURL(){
+    if (lastURL){
+      try{ URL.revokeObjectURL(lastURL); }catch(_){}
+      lastURL=null;
+    }
+  }
+  window.addEventListener('beforeunload', revokeURL);
+
+  /* ---------- Core Run ---------- */
+  async function run(opts){
+    const record = !!opts.record;
     const c=C(); if(!c){ alert('Canvas not ready'); return; }
-    if (running) return;
+    if (running){ msg('Already running'); return; }
 
     ensureDock();
     const scopeEl = $('#raAnimScope');
     const presetEl= $('#raAnimPreset');
     const easeEl  = $('#raAnimEase');
-    const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
-    const dur     = Math.round(durSec*1000);
+    let durSec    = parseFloat($('#raAnimDur')?.value||'6');
+    if (!Number.isFinite(durSec)) durSec = 6;
+    durSec = clamp(durSec, 2, CONFIG.maxDurationSec);
+    const dur_ms  = Math.round(durSec*1000);
 
-    const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
-    const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
-    const scope   = scopeEl?.value || 'all';
+    let preset = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
+    const ease = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
+    let scope  = scopeEl?.value || 'all';
+
+    // If user left scope=all but chose a non-viewport preset, align scope
+    if (scope==='all' && preset.kind!=='viewport'){
+      scope = preset.kind==='overlays' ? 'overlays' : preset.kind;
+      scopeEl.value = scope;
+    }
 
     const W=c.getWidth?.()||0, H=c.getHeight?.()||0, cx=W/2, cy=H/2;
-
-    // Decide mode/targets strictly via the UI scope + pickTargets()
     const viewportOnly = (preset.kind==='viewport' && scope==='all');
     const targets = viewportOnly ? [] : pickTargets(c, scope);
 
-    // Guard rails for empty selections
     if (!viewportOnly && targets.length===0){
-      if (scope==='base'){      msg('Load an image first'); return; }
-      if (scope==='overlays'){  msg('Add an overlay first'); return; }
-      if (scope==='text'){      msg('Add custom text or token ID first'); return; }
+      if (scope==='base')     { msg('Load a base image first'); return; }
+      if (scope==='overlays') { msg('Add overlays first'); return; }
+      if (scope==='text')     { msg('Add text first'); return; }
     }
 
-    running=true; msg(record?'Recording…':'Playing…');
+    running=true; stopRequested=false;
+    msg(record?'Recording…':'Playing…');
 
     // Save state
     const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-    const active = c.getActiveObject?.(); c.discardActiveObject?.(); c.requestRenderAll?.();
+    const active = c.getActiveObject?.();
+    c.discardActiveObject?.(); c.requestRenderAll?.();
 
-    // Snapshots for object animations
-    const snap = new Map();
-    const store = o => snap.set(o, {
+    // Snapshot for object modes
+    const snap=new Map();
+    targets.forEach(o=> snap.set(o,{
       left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY,
       angle:o.angle, opacity:(o.opacity==null?1:o.opacity)
-    });
-    targets.forEach(store);
+    }));
 
-    // Clean previous URL if any
-    if (lastURL){ try{ URL.revokeObjectURL(lastURL); }catch(_){ } lastURL=null; }
+    revokeURL();
     $('#raAnimDL')?.replaceChildren?.();
-
-    // Optional recording
-    let rec, chunks=[];
     const vidEl = $('#raAnimOut');
+    if (vidEl){ vidEl.pause?.(); vidEl.removeAttribute('src'); vidEl.style.display='none'; }
+
+    // Recording pipeline
+    let rec=null, chunks=[];
+    let offCanvas=null, offCtx=null, streamCanvas=null;
+
+    const useOff = CONFIG.useOffscreen && record;
     if (record){
+      const mime = pickMimeType();
+      if (useOff){
+        offCanvas=document.createElement('canvas');
+        offCanvas.width = Math.round(W*CONFIG.captureScale);
+        offCanvas.height= Math.round(H*CONFIG.captureScale);
+        offCtx = offCanvas.getContext('2d',{alpha:false});
+        offCtx.imageSmoothingEnabled=true;
+        offCtx.imageSmoothingQuality='high';
+        streamCanvas=offCanvas;
+      } else {
+        // Fallback: capture underlying visible canvas (lowerCanvasEl often has the drawing)
+        streamCanvas = c.lowerCanvasEl || c.upperCanvasEl;
+      }
       try{
-        const el = (c.lowerCanvasEl || c.upperCanvasEl);
-        const stream = el?.captureStream ? el.captureStream(FPS) : null;
-        const type = pickMimeType();
-        if (stream && typeof MediaRecorder!=='undefined'){
-          const opts = type ? { mimeType:type } : undefined;
-          rec = new MediaRecorder(stream, opts);
-          rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
-          rec.start();
-        } else {
-          msg('Recording not supported in this browser');
-        }
-      }catch(_){ msg('Recording not supported'); }
+        const stream = streamCanvas.captureStream(FPS);
+        rec = new MediaRecorder(stream, { mimeType: mime });
+        rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
+        rec.start();
+      }catch(err){
+        console.warn('[Animate] MediaRecorder failed, fallback to preview only:', err);
+        rec=null;
+      }
     }
 
-    const t0 = performance.now(); let rafId=0;
+    const t0 = performance.now();
+    let rafId=0;
 
     function applyViewport(z,xN,yN){
-      // Center-aware transform: translation keeps origin stable while panning by normalized canvas units
       const e = (1 - z) * cx + xN * W;
       const f = (1 - z) * cy + yN * H;
       c.setViewportTransform?.([z,0,0,z, e, f]);
     }
 
     function step(now){
-      const raw = clamp((now - t0)/dur, 0, 1);
-      const t   = ease(raw);
+      if (stopRequested){
+        finish();
+        return;
+      }
+      const raw = clamp((now - t0)/dur_ms, 0, 1);
+      const t = ease(raw);
 
       if (viewportOnly){
         const z  = lerp(preset.from.z, preset.to.z, t);
@@ -4274,36 +4322,50 @@ const isOverlay = (o) => {
         const yn = lerp(preset.from.y, preset.to.y, t);
         applyViewport(z, xn, yn);
       } else {
-        const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
-        const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
-        const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
+        const hasScale=(preset.from?.s!=null && preset.to?.s!=null);
+        const hasRot  =(preset.from?.rot!=null && preset.to?.rot!=null);
+        const hasAlpha=(preset.from?.alpha!=null && preset.to?.alpha!=null);
 
-        const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
-        const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
-        const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
-        const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
+        const dx  = (preset.from?.dx!=null && preset.to?.dx!=null)? lerp(preset.from.dx,  preset.to.dx,  t):0;
+        const dy  = (preset.from?.dy!=null && preset.to?.dy!=null)? lerp(preset.from.dy,  preset.to.dy,  t):0;
+        const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t):0;
+        const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t):0;
 
         const dpx = dx + dxN*W;
         const dpy = dy + dyN*H;
-
-        const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
+        const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1;
         const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
         const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
 
         targets.forEach(o=>{
-          const o0 = snap.get(o); if(!o0) return;
+          const o0=snap.get(o); if(!o0) return;
           o.scaleX = o0.scaleX * s;
           o.scaleY = o0.scaleY * s;
           o.left   = o0.left + dpx;
           o.top    = o0.top  + dpy;
-          if (hasRot)   o.angle   = o0.angle + rot;
-          if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
+          if (hasRot) o.angle = o0.angle + rot;
+          if (a!=null) o.opacity = a * (o0.opacity==null?1:o0.opacity);
           o.setCoords?.();
         });
       }
 
       c.requestRenderAll?.();
-      if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
+
+      // High-DPI recording copy
+      if (rec && useOff){
+        try{
+          offCtx.save();
+          offCtx.scale(CONFIG.captureScale, CONFIG.captureScale);
+          offCtx.drawImage(c.lowerCanvasEl || c.upperCanvasEl, 0,0);
+          offCtx.restore();
+        }catch(_){}
+      }
+
+      if (raw < 1){
+        rafId=requestAnimationFrame(step);
+      } else {
+        finish();
+      }
     }
 
     function finish(){
@@ -4317,71 +4379,78 @@ const isOverlay = (o) => {
             const url  = URL.createObjectURL(blob);
             lastURL = url;
 
-            // Video element
             if (vidEl){
               vidEl.style.display='block';
               vidEl.src = url;
               vidEl.play?.().catch(()=>{});
             }
 
-            // Download link
             const dl = $('#raAnimDL');
             if (dl){
-              dl.innerHTML = '';
-              const a = document.createElement('a');
-              a.textContent = 'Download animation';
-              a.href = url;
-              a.download = `animation_${Date.now()}.${extFromMime(type)}`;
-              a.className = 'btn small';
+              dl.innerHTML='';
+              const a=document.createElement('a');
+              a.textContent='Download animation';
+              a.href=url;
+              a.download=`animation_${Date.now()}.${extFromMime(type)}`;
+              a.className='btn small';
               dl.appendChild(a);
             }
-
-            msg('Done. Preview above or use “Download animation”.');
+            msg('Done. Preview above.');
           };
           rec.stop();
-        }catch(_){ /* ignore */ }
+        }catch(_){}
       } else {
         msg('Done');
       }
 
-      // Restore state
+      // Restore
       try { c.setViewportTransform?.(vt0); } catch(_){}
       targets.forEach(o=>{
-        const s = snap.get(o); if(!s) return;
+        const s=snap.get(o); if(!s) return;
         o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
         o.setCoords?.();
       });
-      if (active) try{ c.setActiveObject?.(active); }catch(_){}
+      if (active) {
+        try{ c.setActiveObject?.(active); }catch(_){}
+      }
+
+      if (CONFIG.postFinishLayerEnsure) {
+        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+      }
+      if (CONFIG.postFinishWatermarkEnsure) {
+        try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
+      }
+
       c.requestRenderAll?.();
       running=false;
+      stopRequested=false;
     }
 
     requestAnimationFrame(step);
   }
 
-  // ---------- Utilities ----------
-  function pickMimeType(){
-    const pref = [
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm',
-      'video/mp4' // may be unsupported in many browsers for MediaRecorder
-    ];
-    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
-    for (const t of pref){ if (MediaRecorder.isTypeSupported(t)) return t; }
-    return '';
-  }
-  function extFromMime(t){
-    if (!t) return 'webm';
-    if (t.includes('mp4')) return 'mp4';
-    return 'webm';
+  function stop(){
+    if (running) stopRequested=true;
   }
 
-  // Build UI now/when ready
-  if (document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', ensureDock, {once:true});
-  } else {
+  function isRunning(){ return running; }
+
+  // Public API
+  window.raAnimate = Object.freeze({
+    run: (opts)=>run(opts||{record:false}),
+    preview: ()=>run({record:false}),
+    export:  ()=>run({record:true}),
+    stop,
+    isRunning
+  });
+
+  function init(){
     ensureDock();
+  }
+  if (document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', init, {once:true});
+  } else {
+    init();
   }
 })();
 
