@@ -2765,125 +2765,142 @@ document.addEventListener("DOMContentLoaded", ()=>{
   new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
 })();
 
-/* ============================ RA_WEBFONTS_LAZY_V1 ============================
-   Adds Google web fonts to the existing font picker (and keeps live preview).
-   - Injects a single Google Fonts CSS with many families (weights included).
-   - Appends a <optgroup label="Web fonts"> to #fontFamily / #idFontFamily.
-   - When you select a web font, waits for it to load, then re-renders Fabric.
-   ========================================================================= */
-(function RA_WEBFONTS_LAZY_V1(){
-  // Configure your web fonts here (Google "family=" spec on the right)
-  const WEB_FONTS = [
-    { name:'Inter',             google:'Inter:wght@400;600;700' },
-    { name:'Roboto',            google:'Roboto:wght@400;500;700' },
-    { name:'Poppins',           google:'Poppins:wght@400;600;700' },
-    { name:'Montserrat',        google:'Montserrat:wght@400;600;700' },
-    { name:'Lato',              google:'Lato:wght@400;700' },
-    { name:'Raleway',           google:'Raleway:wght@400;600;700' },
-    { name:'Oswald',            google:'Oswald:wght@400;600;700' },
-    { name:'Nunito',            google:'Nunito:wght@400;600;800' },
-    { name:'Source Sans 3',     google:'Source+Sans+3:wght@400;600;700' },
-    { name:'Merriweather',      google:'Merriweather:wght@400;700' },
-    { name:'Playfair Display',  google:'Playfair+Display:wght@400;700' },
-    { name:'Abril Fatface',     google:'Abril+Fatface' },
-    { name:'Bebas Neue',        google:'Bebas+Neue' },
-    { name:'Dancing Script',    google:'Dancing+Script:wght@400;600' },
-    { name:'Pacifico',          google:'Pacifico' },
-    { name:'Inconsolata',       google:'Inconsolata:wght@400;700' },
-    { name:'Fira Code',         google:'Fira+Code:wght@400;600' },
-    { name:'JetBrains Mono',    google:'JetBrains+Mono:wght@400;700' }
+(function RA_FONT_PICKER_PREVIEW_V2(){
+  const FONTS = [ /* (same array you already have) */ 
+    { name:'Impact',              stack:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
+    { name:'Arial Black',         stack:"'Arial Black', Gadget, sans-serif" },
+    { name:'Arial',               stack:"Arial, Helvetica, sans-serif" },
+    { name:'Helvetica Neue',      stack:"'Helvetica Neue', Helvetica, Arial, sans-serif" },
+    { name:'Verdana',             stack:"Verdana, Geneva, sans-serif" },
+    { name:'Tahoma',              stack:"Tahoma, Geneva, sans-serif" },
+    { name:'Trebuchet MS',        stack:"'Trebuchet MS', Helvetica, sans-serif" },
+    { name:'Segoe UI',            stack:"'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" },
+    { name:'Calibri',             stack:"Calibri, Candara, Segoe, 'Segoe UI', Optima, Arial, sans-serif" },
+    { name:'Optima',              stack:"Optima, Segoe, 'Segoe UI', Candara, Calibri, Arial, sans-serif" },
+    { name:'Avenir',              stack:"Avenir, 'Avenir Next', 'Segoe UI', sans-serif" },
+    { name:'Futura',              stack:"Futura, 'Century Gothic', 'Gill Sans', Arial, sans-serif" },
+    { name:'Gill Sans',           stack:"'Gill Sans', 'Gill Sans MT', Calibri, sans-serif" },
+    { name:'Century Gothic',      stack:"'Century Gothic', AppleGothic, sans-serif" },
+    { name:'Georgia',             stack:"Georgia, 'Times New Roman', serif" },
+    { name:'Times New Roman',     stack:"'Times New Roman', Times, serif" },
+    { name:'Baskerville',         stack:"Baskerville, 'Baskerville Old Face', Garamond, 'Times New Roman', serif" },
+    { name:'Garamond',            stack:"Garamond, Baskerville, 'Baskerville Old Face', 'Times New Roman', serif" },
+    { name:'Palatino',            stack:"Palatino, 'Palatino Linotype', 'Book Antiqua', serif" },
+    { name:'Didot',               stack:"Didot, 'Bodoni 72', 'Bodoni MT', 'Times New Roman', serif" },
+    { name:'Rockwell',            stack:"Rockwell, 'Courier New', Georgia, serif" },
+    { name:'Courier New',         stack:"'Courier New', Courier, monospace" },
+    { name:'Menlo',               stack:"Menlo, Monaco, Consolas, 'Courier New', monospace" },
+    { name:'Consolas',            stack:"Consolas, 'Lucida Console', Monaco, monospace" },
+    { name:'Lucida Console',      stack:"'Lucida Console', Monaco, monospace" },
+    { name:'Copperplate',         stack:"Copperplate, 'Copperplate Gothic Light', fantasy" },
+    { name:'Papyrus',             stack:"Papyrus, fantasy" },
+    { name:'Brush Script MT',     stack:"'Brush Script MT', cursive" },
+    { name:'Comic Sans MS',       stack:"'Comic Sans MS', 'Comic Sans', Chalkboard, cursive" },
+    { name:'System UI',           stack:"system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" }
   ];
+  const PICKER_IDS = ['fontFamily', 'idFontFamily'];
+  const LS_KEY = 'ra_last_font_stack';
+  const sample = window.__RA_FONT_PREVIEW_SAMPLE || 'AaBbCc 1234  #RebelAnts';
 
-  const PICKERS = ['fontFamily','idFontFamily'];  // #idFontFamily is optional in your UI
-
-  // -------- load Google Fonts CSS once
-  function injectCssOnce(){
-    if (document.getElementById('raWebFontsCSS')) return;
-    const fam = WEB_FONTS.map(f => 'family=' + f.google).join('&');
-    const href = 'https://fonts.googleapis.com/css2?' + fam + '&display=swap';
-
-    // Preconnect (nice to have)
-    if (!document.querySelector('link[rel="preconnect"][href*="fonts.gstatic"]')){
-      const pre1 = document.createElement('link');
-      pre1.rel = 'preconnect'; pre1.href = 'https://fonts.gstatic.com'; pre1.crossOrigin = 'anonymous';
-      document.head.appendChild(pre1);
+  function ensurePreviewBelow(picker, id){
+    const prevId = 'raPreview_' + id;
+    let box = document.getElementById(prevId);
+    if (!box) {
+      box = document.createElement('div');
+      box.id = prevId;
+      box.style.cssText = [
+        'margin-top:6px','padding:8px 10px','border:1px solid #2a2a2e',
+        'border-radius:8px','background:#111319','color:#e7e7ea',
+        'font-size:15px','line-height:1.35','letter-spacing:.1px'
+      ].join(';');
+      const label = document.createElement('div');
+      label.textContent = 'Preview';
+      label.style.cssText='font-size:11px;opacity:.65;margin-bottom:4px';
+      const text = document.createElement('div');
+      text.className='raPreviewText';
+      text.textContent = sample;
+      box.appendChild(label);
+      box.appendChild(text);
+      picker.parentNode.insertBefore(box, picker.nextSibling);
     }
-    if (!document.querySelector('link[rel="preconnect"][href*="fonts.googleapis"]')){
-      const pre2 = document.createElement('link');
-      pre2.rel = 'preconnect'; pre2.href = 'https://fonts.googleapis.com';
-      document.head.appendChild(pre2);
-    }
-
-    const link = document.createElement('link');
-    link.id = 'raWebFontsCSS';
-    link.rel = 'stylesheet';
-    link.href = href;
-    document.head.appendChild(link);
-
-    // After CSS parses & fonts load, nudge Fabric so metrics refresh
-    const nudge = () => { try { window.canvas && window.canvas.requestRenderAll(); } catch(_){} };
-    (document.fonts && document.fonts.ready ? document.fonts.ready.then(nudge) : Promise.resolve().then(nudge));
+    return box.querySelector('.raPreviewText');
   }
 
-  // Get a readable CSS stack for a given family (with sensible fallbacks)
-  function stackFor(family){
-    return `"${family}", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif`;
-  }
-
-  // Extract first family name from a stack (handles quotes)
-  function firstFamily(stack){
-    if (!stack) return '';
-    const m = stack.match(/^["']?([^"',]+(?:\s[^"',]+)?)["']?/);
-    return (m && m[1]) ? m[1].trim() : stack.split(',')[0].trim().replace(/^["']|["']$/g,'');
-  }
-
-  // Append an <optgroup> with all web fonts to a <select>
-  function extendPicker(select){
-    if (!select || select.tagName.toLowerCase() !== 'select') return;
-    if (select.querySelector('optgroup[label="Web fonts"]')) return; // already extended
-
-    const og = document.createElement('optgroup');
-    og.label = 'Web fonts';
-    WEB_FONTS.forEach(f => {
+  function repopulateSelect(selectEl, id){
+    const current = (selectEl.value || '').trim();
+    const stored  = localStorage.getItem(LS_KEY) || '';
+    selectEl.innerHTML = '';
+    FONTS.forEach(f=>{
       const opt = document.createElement('option');
+      opt.value = f.stack;
       opt.textContent = f.name;
-      opt.value = stackFor(f.name);
-      // style option with its own font (desktop browsers)
-      opt.style.fontFamily = opt.value;
+      opt.style.fontFamily = f.stack;
       opt.style.fontSize = '14px';
-      og.appendChild(opt);
+      selectEl.appendChild(opt);
     });
-    select.appendChild(og);
+    const targetVal = FONTS.find(f => f.stack === current)?.stack
+                   || FONTS.find(f => f.stack === stored)?.stack
+                   || FONTS[0].stack;
+    selectEl.value = targetVal;
 
-    // When a web font is chosen, wait for it to load then redraw Fabric
-    if (!select.__raWebFontsBound){
-      const onChange = async () => {
-        const fam = firstFamily(select.value);
-        try {
-          if (document.fonts && fam) { await document.fonts.load(`48px "${fam}"`); }
-        } catch(_){}
-        try { window.canvas && window.canvas.requestRenderAll(); } catch(_){}
-      };
-      select.addEventListener('change', onChange);
-      select.addEventListener('input', onChange);
-      select.__raWebFontsBound = true;
+    const previewText = ensurePreviewBelow(selectEl, id);
+
+    function applyToActive(){
+      if (!window.canvas) return;
+      const o = window.canvas.getActiveObject && window.canvas.getActiveObject();
+      if (o && o._kind === 'customText'){
+        o.set('fontFamily', selectEl.value);
+        window.canvas.requestRenderAll();
+      }
+      if (id === 'idFontFamily' && window.idLabel){
+        window.idLabel.set('fontFamily', selectEl.value);
+        window.canvas.requestRenderAll();
+      }
     }
+
+    const updatePreview = () => {
+      previewText.style.fontFamily = selectEl.value || FONTS[0].stack;
+      try { localStorage.setItem(LS_KEY, selectEl.value); } catch(_) {}
+      applyToActive();
+    };
+
+    if (!selectEl.__raFontPreviewBound){
+      selectEl.addEventListener('change', updatePreview);
+      selectEl.addEventListener('input',  updatePreview);
+      selectEl.__raFontPreviewBound = true;
+    }
+    updatePreview();
   }
 
   function apply(){
-    injectCssOnce();
-    PICKERS.forEach(id => {
+    PICKER_IDS.forEach(id=>{
       const el = document.getElementById(id);
-      if (el) extendPicker(el);
+      if (!el || el.__raFontPreviewV2) return;
+      el.__raFontPreviewV2 = true;
+      if (el.tagName.toLowerCase() === 'select'){
+        repopulateSelect(el, id);
+      } else {
+        const previewText = ensurePreviewBelow(el, id);
+        const upd = ()=>{
+          previewText.style.fontFamily = el.value || FONTS[0].stack;
+          try { localStorage.setItem(LS_KEY, el.value); } catch(_) {}
+        };
+        el.addEventListener('input', upd);
+        el.addEventListener('change', upd);
+        upd();
+      }
     });
   }
 
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', apply, {once:true});
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply, { once:true });
   } else {
     apply();
   }
-  new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
+  new MutationObserver(() => {
+    // Only run if new pickers appear
+    apply();
+  }).observe(document.documentElement, { childList:true, subtree:true });
 })();
 
 /* ==========================================================
