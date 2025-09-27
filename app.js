@@ -3830,13 +3830,11 @@ const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' 
   }
 
   // ---------- strip corner-stamp children from a group ----------
-  function isStamp(o){ return !!(o && (o._isWatermark || o.raWM || o.raPos)); }
+ // Phase 2 cleanup: legacy stamp detector neutralized
+function isStamp(o){ return false; }
 
-  function stripStampsFromGroup(g){
-    if (!g || g.type!=='group') return false;
-    const kids = (g._objects||[]);
-    const has = kids.some(isStamp);
-    if (!has) return false;
+// Phase 2 cleanup: legacy group stamp stripper neutralized
+function stripStampsFromGroup(g){ return false; }
 
     // remove only the stamp children; keep the main image and group transform
     kids.slice().forEach(k => { if (isStamp(k)) g.remove(k); });
