@@ -8328,27 +8328,49 @@ window.raDump = () => {
     wm.setCoords();
   }
 
-  // Create or restore the footer if missing and should be present
-  function ensureFooter(){
-    const c = C();
-    if (!c) return null;
-    let foot = (c.getObjects?.() || []).find(isFooter);
-    if (!foot) {
-      if (!window.fabric) return null;
-      foot = new fabric.Text('Powered by Rebel Studios', {
-        fontFamily:'Inter, system-ui, Arial, sans-serif',
-        fontSize:12, fill:'#cfcfcf', opacity:0.88,
-        originX:'right', originY:'bottom',
-        left: c.getWidth() - 10,
-        top:  c.getHeight() - 8,
-        selectable:false, evented:false,
-        _raBrandFooter:true, _raSys:true
-      });
-      c.add(foot);
-    }
-    quarantine(foot);
-    return foot;
+ function createPreferredFooter(c) {
+  // Remove any existing footers first
+  (c.getObjects?.() || []).filter(isFooter).forEach(f => { try { c.remove(f); } catch(_){ } });
+  // Create new preferred footer
+  const footer = new fabric.Text('Powered by Rebel Studios', {
+    fontFamily: 'Inter, system-ui, Arial, sans-serif',
+    fontSize: 16, // matches preferred look
+    fill: '#fff', // white text
+    opacity: 1,   // fully opaque
+    originX: 'right',
+    originY: 'bottom',
+    left: c.getWidth() - 20, // 20px from right edge
+    top: c.getHeight() - 20, // 20px from bottom edge
+    selectable: false,
+    evented: false,
+    shadow: new fabric.Shadow({
+      color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+    }),
+    _raBrandFooter: true,
+    _raSys: true
+  });
+  c.add(footer);
+  return footer;
+}
+
+function ensureFooter() {
+  const c = C();
+  if (!c) return null;
+  let footers = (c.getObjects?.() || []).filter(isFooter);
+  if (footers.length > 1) {
+    // Remove extras, keep last
+    footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch(_){ } });
+    footers = [footers[footers.length - 1]];
   }
+  let footer = footers[0];
+  // If missing or not styled as preferred, create preferred
+  if (!footer || footer.fontFamily !== 'Inter, system-ui, Arial, sans-serif' || footer.fontSize !== 16) {
+    footer = createPreferredFooter(c);
+  }
+  // Always quarantine footer
+  quarantine(footer);
+  return footer;
+}
 
   // Create or restore the ring if missing and should be present (for disconnected/manual upload)
   function ensureRing(){
