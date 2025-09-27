@@ -6309,19 +6309,20 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — history‑neutral; friend+manual only; black fill + white outline ========== */
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — always preferred footer style, deduped, consistent everywhere ========== */
 (() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
   const STYLE = {
-    fontFamily: 'Inter, Arial, sans-serif',
-    fontSize: 12,
-    fill: '#000000',            // black inside
-    stroke: '#ffffff',          // white outline
-    strokeWidth: 1.6,
-    strokeUniform: true,
-    opacity: 0.95
+    fontFamily: 'Inter, system-ui, Arial, sans-serif', // preferred font stack
+    fontSize: 16,                                      // preferred size
+    fill: '#fff',                                      // preferred color (white)
+    opacity: 1,                                        // preferred opacity (fully opaque)
+    // Remove stroke/strokeWidth for no outline, matching preferred look
+    shadow: new fabric.Shadow({
+      color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+    })
   };
-  const PAD = 10;
+  const PAD = 20; // match position to other blocks
   const toLower = s => (s || '').toLowerCase();
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
@@ -6344,26 +6345,33 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
     return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
   }
 
- function shouldShow(c){
-  const base = findBase(c);
-  if (!base) return true; // manual upload → show the footer
+  function shouldShow(c){
+    const base = findBase(c);
+    if (!base) return true; // manual upload → show the footer
 
-  // SAFE: read the contract tag we put on the base image, lower‑cased
-  const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : '');
+    // SAFE: read the contract tag we put on the base image, lower‑cased
+    const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : '');
 
-  if (!cc) return true;  // no contract info → treat as manual, show the footer
-  return (cc !== rebelContract()); // show on friends; hide on Rebel Ants
-}
+    if (!cc) return true;  // no contract info → treat as manual, show the footer
+    return (cc !== rebelContract()); // show on friends; hide on Rebel Ants
+  }
+
   // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
+    // Do not spawn or modify footer while a JSON restore is in progress
+    if (window.__RA_RESTORING__) return false;
 
-  // Do not spawn or modify footer while a JSON restore is in progress
-  if (window.__RA_RESTORING__) return false;
+    const c = C(); if (!c) return false;
+    let changed = false;
 
-  const c = C(); if (!c) return false;
-  let changed = false;
+    // Dedupe: remove any extra footers, keep only one
+    let footers = (c.getObjects?.() || []).filter(o => o && o._raBrandFooter);
+    if (footers.length > 1) {
+      footers.slice(0, -1).forEach(f => { try { c.remove(f); changed = true; } catch(_){ } });
+      footers = [footers[footers.length - 1]];
+    }
+    let footer = footers[0];
 
-    let footer = (c.getObjects?.() || []).find(o => o && o._raBrandFooter) || null;
     const show = shouldShow(c);
 
     if (!show){
@@ -6374,25 +6382,41 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
       return changed;
     }
 
-    if (!footer){
-      footer = new fabric.Textbox(FOOTER_TEXT, {
+    // If missing, create new preferred footer
+    if (!footer) {
+      footer = new fabric.Text(FOOTER_TEXT, {
         ...STYLE,
         selectable:false, evented:false, hasControls:false,
         lockMovementX:true, lockMovementY:true, hoverCursor:'default',
         _raBrandFooter:true, _raSys:true,
-        excludeFromExport:true          // keep out of JSON/history
+        excludeFromExport:true
       });
       c.add(footer);
       changed = true;
     } else {
+      // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
+      let dirty = false;
+      if (footer.fontFamily !== STYLE.fontFamily) { footer.fontFamily = STYLE.fontFamily; dirty = true; }
+      if (footer.fontSize !== STYLE.fontSize) { footer.fontSize = STYLE.fontSize; dirty = true; }
+      if (footer.fill !== STYLE.fill) { footer.set('fill', STYLE.fill); dirty = true; }
+      if (footer.opacity !== STYLE.opacity) { footer.opacity = STYLE.opacity; dirty = true; }
+      // Update shadow if needed
+      const shadow = footer.shadow;
+      if (!shadow || shadow.color !== STYLE.shadow.color || shadow.blur !== STYLE.shadow.blur || shadow.offsetX !== STYLE.shadow.offsetX || shadow.offsetY !== STYLE.shadow.offsetY) {
+        footer.shadow = new fabric.Shadow({
+          color: STYLE.shadow.color, blur: STYLE.shadow.blur, offsetX: STYLE.shadow.offsetX, offsetY: STYLE.shadow.offsetY
+        });
+        dirty = true;
+      }
       // Reassert non‑interactive + exclude from export
       footer.set({
         selectable:false, evented:false, hasControls:false,
         lockMovementX:true, lockMovementY:true, hoverCursor:'default',
         excludeFromExport:true
       });
-      // Style reapply is cheap; if identical it won’t dirty
-      footer.set(STYLE);
+      if (dirty) {
+        try { footer.setCoords(); } catch(_){}
+      }
     }
 
     // Position bottom‑right only if it actually moved
@@ -6440,7 +6464,6 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
 
     // App‑level events that can change what should show
     ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
-
       document.addEventListener(ev, (e) => {
         // For collection changes, only respond if there's a base image loaded
         if (ev === 'ra-collection-change') {
