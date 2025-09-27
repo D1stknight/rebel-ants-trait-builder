@@ -717,10 +717,14 @@ function toRoman(num){
   for (const [sym,val] of map){ while(num >= val){ out += sym; num -= val; } }
   return out;
 }
+
 // ===============================
 //  DOM READY
 // ===============================
 document.addEventListener("DOMContentLoaded", () => {
+  if (window.__RA_CANVAS_BOOTED__) return;
+  window.__RA_CANVAS_BOOTED__ = true;
+
   if (!window.fabric) {
     alert("fabric.js failed to load. Open via a local server or check internet.");
     return;
@@ -739,21 +743,34 @@ document.addEventListener("DOMContentLoaded", () => {
   // Background and initial size
   initBackgroundRect("#0d0e13");
   const sizeEl = $("canvasSize");
-  if (sizeEl) sizeEl.value = "700";
-  setCanvasSize(parseInt(sizeEl ? sizeEl.value : "700", 10));
+  const initialSize = parseInt(sizeEl ? sizeEl.value : "700", 10) || 700;
+  if (sizeEl) sizeEl.value = String(initialSize);
+  setCanvasSize(initialSize);
   setZoom(1);
 
-  // >>> NEW: run once right after initial layout
-  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+  // Ensure faint ring (will noop if not ready yet)
+  try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
 
-  // >>> NEW: keep layers sane after *any* canvas change
+  // When WM / ring asset resolves, re-ensure (first load scenario)
+  window.addEventListener('ra-wm-src-ready', () => {
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  }, { once:false });
+
+  // Layer order helper
+  function enforce(){
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+  }
+
+  // Run once right after initial layout
+  enforce();
+
+  // Keep layers sane after canvas changes
   try {
-    canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-    canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-    canvas.on('object:removed',  () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+    canvas.on('object:added',    enforce);
+    canvas.on('object:modified', enforce);
+    canvas.on('object:removed',  enforce);
   } catch(_) {}
 
-  // --- keep the rest of your existing boot code below this line ---
   // Permanents → embed to the grid
   overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name: m.name, src: m.src, perm: true }));
   renderOverlayGrid();
@@ -763,17 +780,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     const data = await fileToDataURL(f);
-    await loadBaseImage(data, false); // non-token => watermark
+    await loadBaseImage(data, false); // non-token => ring watermark
+    // Re-ensure ring (in case a token was previously loaded & removed it)
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
   safeAddListener("clearUpload", "click", () => {
     const inp = $("baseUpload"); if (inp) inp.value = "";
     clearBaseOnly();
+    // After clearing base we may still want a faint ring visible
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
   // ... any other startup listeners, buttons, etc. ...
-
-});   // <-- closes DOMContentLoaded
+});  // end DOMContentLoaded
 
 /* ===== RA_TOKEN_ID_WIRING — place/update on-canvas Token ID label ===== */
 ;(() => {
