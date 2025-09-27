@@ -8899,26 +8899,51 @@ document.addEventListener('ra-collection-change', (e) => {
     ) || null;
   }
 
-  function ensureFooter(){
-    const existing = footerObject();
-    if (existing) return existing;
-    const c=C(); if(!c) return null;
-    try {
-      if (!window.fabric) return null;
-      const t = new fabric.Text(CFG.footerText, {
-        fontFamily:'Inter, system-ui, Arial, sans-serif',
-        fontSize:12, fill:'#cfcfcf', opacity:0.88,
-        originX:'right', originY:'bottom',
-        left: c.getWidth() - 10,
-        top:  c.getHeight() - 8,
-        selectable:false, evented:false,
-        _raBrandFooter:true, _raSys:true
+ function ensureFooter(){
+  const existing = footerObject();
+  if (existing) {
+    // Restyle footer to preferred settings if needed
+    let dirty = false;
+    if (existing.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { existing.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
+    if (existing.fontSize !== 16) { existing.fontSize = 16; dirty = true; }
+    if (existing.fill !== '#fff') { existing.set('fill', '#fff'); dirty = true; }
+    if (existing.opacity !== 1) { existing.opacity = 1; dirty = true; }
+    if (existing.originX !== 'right') { existing.originX = 'right'; dirty = true; }
+    if (existing.originY !== 'bottom') { existing.originY = 'bottom'; dirty = true; }
+    const desiredLeft = C().getWidth() - 20;
+    const desiredTop = C().getHeight() - 20;
+    if (existing.left !== desiredLeft) { existing.left = desiredLeft; dirty = true; }
+    if (existing.top !== desiredTop) { existing.top = desiredTop; dirty = true; }
+    const shadow = existing.shadow;
+    if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
+      existing.shadow = new fabric.Shadow({
+        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
       });
-      c.add(t);
-      return t;
-    } catch(_){}
-    return null;
+      dirty = true;
+    }
+    if (dirty) { try { existing.setCoords(); } catch(_){} }
+    return existing;
   }
+  const c=C(); if(!c) return null;
+  try {
+    if (!window.fabric) return null;
+    const t = new fabric.Text(CFG.footerText, {
+      fontFamily:'Inter, system-ui, Arial, sans-serif',
+      fontSize:16, fill:'#fff', opacity:1,
+      originX:'right', originY:'bottom',
+      left: c.getWidth() - 20,
+      top:  c.getHeight() - 20,
+      selectable:false, evented:false,
+      shadow: new fabric.Shadow({
+        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+      }),
+      _raBrandFooter:true, _raSys:true
+    });
+    c.add(t);
+    return t;
+  } catch(_){}
+  return null;
+}
 
   function dedupeRing(){
     const rings = ringObjects();
