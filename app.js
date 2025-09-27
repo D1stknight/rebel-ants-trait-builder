@@ -8371,7 +8371,7 @@ window.raDump = () => {
         opacity: 1,
         originX: 'right',
         originY: 'bottom',
-        left: c.getWidth() - 16,
+        left: c.getWidth() - 40,
         top: c.getHeight() - 20,
         selectable: false,
         evented: false,
@@ -8931,7 +8931,7 @@ document.addEventListener('ra-collection-change', (e) => {
       fontFamily:'Inter, system-ui, Arial, sans-serif',
       fontSize:16, fill:'#fff', opacity:1,
       originX:'right', originY:'bottom',
-      left: c.getWidth() - 16,
+      left: c.getWidth() - 40,
       top:  c.getHeight() - 20,
       selectable:false, evented:false,
       shadow: new fabric.Shadow({
