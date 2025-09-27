@@ -3065,6 +3065,9 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
   // Boot
   hookMakeVideoButton();
 
+// Phase 2: legacy watermark loader stub so rest of file keeps working
+async function ensureWMReady(){ /* no-op */ }
+   
   // Expose tiny API for future use (optional)
   window.raWatermark = Object.freeze({
     options: CONFIG,
