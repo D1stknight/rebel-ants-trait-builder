@@ -2853,24 +2853,26 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_MAKE_VIDEO_TOKEN_ONLY_V1
-   - Adds a bottom "Video (token-only)" panel.
-   - Records a short WebM using an offscreen canvas (no layout changes).
-   - Works only when the base image is a token (no watermark group).
-   - Desktop & mobile safe. No changes to your Fabric canvas state.
+   RA_MAKE_VIDEO_TOKEN_ONLY_V1 (Enhanced)
+   - Token-only WebM Ken Burns / pan style video export.
+   - Improvements: robust token detection, deterministic frames,
+     progress reporting, cancel support, object URL cleanup, resource safety.
    ========================================================== */
 (() => {
-  // ---------- Small helpers ----------
   const $  = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
   const easeInOut = t => t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+
+  // Config: if false, we snapshot once (faster). If true, re-snapshot each frame (slower but live).
+  const SNAP_EACH_FRAME = false;
+
+  let lastObjectURL = null;
 
   function getFabricCanvas() {
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     const el = $('canvas.lower-canvas') || $('canvas.upper-canvas') || $('canvas');
     if (!el) return null;
-    // Try to find its Fabric instance
     for (const k in window) {
       try {
         const v = window[k];
@@ -2880,85 +2882,84 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return null;
   }
 
-  // Find the current base object and decide if it’s a token image (no corner stamps).
-  function baseIsToken() {
-    const c = getFabricCanvas();
-    if (!c) return false;
-    const base = (c.getObjects() || []).find(o => o && o._isBase === true);
-    if (!base) return false;
-    // Non-token path in your code builds a Group with two watermark children (raWM:true).
-    // Token path uses a plain Image (no watermark group).
-    if (base.type === 'image') return true;         // token (no watermarks)
-    if (base.type === 'group') {
-      const kids = (base._objects || []);
-      const hasStamp = kids.some(k => k && (k.raWM || k._isWatermark || k.raPos));
-      return !hasStamp; // if somehow no stamps, treat as token; but normally stamps exist
-    }
-    return false;
+  function detectBaseObject(c){
+    return (c.getObjects() || []).find(o => o && o._isBase);
   }
 
-  // Try to read a token id for naming (optional)
-  function currentTokenId() {
+  function baseIsToken(){
+    const c = getFabricCanvas(); if (!c) return false;
+    const base = detectBaseObject(c); if (!base) return false;
+    // Non-token mode typically has watermark elements or combined group.
+    if (base._raWMCenter || base._raWMRing || base._isWatermark) return false;
+    if (base.type === 'group') {
+      const kids = (base._objects || []);
+      const hasWM = kids.some(k => k && (k._raWMCenter || k._raWMRing || k._isWatermark || k.raWM || k.raPos));
+      return !hasWM;
+    }
+    // Plain image with no watermark flags => treat as token
+    return base.type === 'image';
+  }
+
+  function currentTokenId(){
     const box = $('#tokenIdDisplay') || $('#tokenIdInput');
     const raw = (box && (box.value || box.textContent) || '').trim();
     if (!raw) return '';
-    const n = parseInt(raw.replace(/[^0-9]/g,''), 10);
+    const n = parseInt(raw.replace(/[^0-9]/g,''),10);
     return Number.isFinite(n) ? String(n) : '';
   }
 
-  // Snapshot the Fabric canvas as a high-quality PNG DataURL.
-  // We upscale if needed to meet target size (multiplier capped to 3× for safety).
-  function snapshotCanvasPNG(targetSide=720) {
+  function snapshotCanvasPNG(targetSide=720){
     const c = getFabricCanvas();
     if (!c) throw new Error('Canvas not ready');
     const cw = c.getWidth(), ch = c.getHeight();
-    const side = Math.max(cw, ch) || 1024;
-    const mul = clamp(targetSide / side, 0.25, 3);
-    // toDataURL ignores selection handles; exports clean artwork
+    const side = Math.max(cw,ch) || 1024;
+    const mul = clamp(targetSide/side, 0.25, 3);
     return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
   }
 
-  function chooseMimeType() {
-    const candidates = [
+  function chooseMimeType(){
+    const cand = [
       'video/webm;codecs=vp9',
       'video/webm;codecs=vp8',
       'video/webm'
     ];
-    for (const m of candidates) {
-      if (MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+    for (const m of cand){
+      if (MediaRecorder?.isTypeSupported?.(m)) return m;
     }
-    return ''; // no support
+    return '';
   }
 
-  // Draw a Ken Burns style frame
+  // Profiles
+  const PROFILES = {
+    in:    { z0:1.05, z1:1.20, pan:'none'  },
+    out:   { z0:1.20, z1:1.05, pan:'none'  },
+    lr:    { z0:1.12, z1:1.12, pan:'lr'    },
+    tb:    { z0:1.12, z1:1.12, pan:'tb'    },
+    drift: { z0:1.10, z1:1.18, pan:'diag'  }
+  };
+
+  const STYLE_MAP = {
+    'Zoom In':'in', 'Zoom Out':'out',
+    'Pan L→R':'lr', 'Pan T→B':'tb', 'Drift':'drift'
+  };
+
   function drawKenBurns(ctx, img, tNorm, res, mode) {
-    const W = img.naturalWidth  || img.width;
+    const prof = PROFILES[mode] || PROFILES.in;
+    const W = img.naturalWidth || img.width;
     const H = img.naturalHeight || img.height;
-    // Base "cover" scale so the square video is fully covered
-    const cover = Math.max(res / W, res / H);
-
-    // Style profiles
-    const zoomIn  = { z0: 1.05, z1: 1.20, pan: 'none' };
-    const zoomOut = { z0: 1.20, z1: 1.05, pan: 'none' };
-    const panLR   = { z0: 1.12, z1: 1.12, pan: 'lr' };
-    const panTB   = { z0: 1.12, z1: 1.12, pan: 'tb' };
-    const drift   = { z0: 1.10, z1: 1.18, pan: 'diag' };
-
-    const prof = ({in:zoomIn,out:zoomOut,lr:panLR,tb:panTB,drift:drift})[mode] || zoomIn;
-
+    const cover = Math.max(res/W, res/H);
     const e = easeInOut(tNorm);
-    const zoom = prof.z0 + (prof.z1 - prof.z0) * e; // smooth zoom
+    const zoom = prof.z0 + (prof.z1 - prof.z0)*e;
 
-    // Allowed pan range to keep image covering the square after scaling
     const scaledW = W * cover * zoom;
     const scaledH = H * cover * zoom;
-    const maxX = Math.max(0, (scaledW - res) / 2);
-    const maxY = Math.max(0, (scaledH - res) / 2);
+    const maxX = Math.max(0, (scaledW - res)/2);
+    const maxY = Math.max(0, (scaledH - res)/2);
 
-    let shiftX = 0, shiftY = 0;
-    if (prof.pan === 'lr')   shiftX = -maxX + 2*maxX*e;
-    if (prof.pan === 'tb')   shiftY = -maxY + 2*maxY*e;
-    if (prof.pan === 'diag') { shiftX = -maxX + 2*maxX*e; shiftY =  maxY - 2*maxY*e; }
+    let shiftX=0, shiftY=0;
+    if (prof.pan==='lr')   shiftX = -maxX + 2*maxX*e;
+    if (prof.pan==='tb')   shiftY = -maxY + 2*maxY*e;
+    if (prof.pan==='diag'){ shiftX = -maxX + 2*maxX*e; shiftY =  maxY - 2*maxY*e; }
 
     ctx.save();
     ctx.clearRect(0,0,res,res);
@@ -2968,110 +2969,190 @@ document.addEventListener("DOMContentLoaded", ()=>{
     ctx.restore();
   }
 
-  async function makeVideo({style='in', seconds=5, size=720, statusEl, linkEl, buttonEl}) {
-    // Gate: token only
-    if (!baseIsToken()) {
-      if (statusEl) statusEl.textContent = 'Token-only: load a token image first.';
+  function bitrateFor(res){
+    if (res >= 1440) return 8_000_000;
+    if (res >= 1080) return 7_000_000;
+    if (res >= 1024) return 6_000_000;
+    if (res >= 720)  return 5_000_000;
+    if (res >= 512)  return 4_000_000;
+    return 3_000_000;
+  }
+
+  async function makeVideo({ style='in', seconds=5, size=720, statusEl, linkEl, buttonEl, cancelEl }) {
+    if (!baseIsToken()){
+      statusEl && (statusEl.textContent = 'Token-only: load a token image first.');
       return;
     }
 
-    // Snapshot once (clean export of canvas content)
-    let dataURL;
-    try {
-      if (statusEl) statusEl.textContent = 'Preparing snapshot…';
-      dataURL = snapshotCanvasPNG(size);
-    } catch (e) {
-      if (statusEl) statusEl.textContent = 'Snapshot blocked (CORS). Use images with CORS headers/same-origin.';
-      return;
+    // Cleanup prior object URL
+    if (lastObjectURL){
+      URL.revokeObjectURL(lastObjectURL);
+      lastObjectURL = null;
     }
 
-    // Build offscreen canvas for animation + recording
-    const res = parseInt(size, 10) || 720;
+    const res = clamp(parseInt(size,10)||720, 256, 2048);
     const fps = 30;
     const totalFrames = Math.max(10, Math.round(seconds * fps));
+    const modeKey = STYLE_MAP[style] || PROFILES[style] ? style : 'drift';
 
+    let aborted = false;
+    function abort(){
+      aborted = true;
+      statusEl && (statusEl.textContent = 'Canceled.');
+    }
+
+    if (cancelEl){
+      cancelEl.onclick = (e)=>{ e.preventDefault(); abort(); };
+      cancelEl.style.visibility = 'visible';
+    }
+
+    let baseDataURL = null;
+    if (SNAP_EACH_FRAME === false){
+      try {
+        statusEl && (statusEl.textContent = 'Snapshot…');
+        baseDataURL = snapshotCanvasPNG(res);
+      } catch(e){
+        statusEl && (statusEl.textContent = 'Snapshot failed (CORS).');
+        return;
+      }
+    }
+
+    // Offscreen
     const off = document.createElement('canvas');
     off.width = res; off.height = res;
-    const ctx = off.getContext('2d', { alpha: false });
+    const ctx = off.getContext('2d', { alpha:false });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    const img = new Image();
-    img.src = dataURL;
-    await new Promise((r, j) => { img.onload = r; img.onerror = j; });
+    let img = new Image();
+    if (baseDataURL){
+      img.src = baseDataURL;
+      try { await imgDecode(img); } catch(_) {}
+    }
 
-    // Setup MediaRecorder
+    function imgDecode(image){
+      return new Promise((resv,rej)=>{
+        if (image.complete && image.naturalWidth) return resv();
+        image.onload = ()=>resv();
+        image.onerror = e=>rej(e);
+      });
+    }
+
     const mime = chooseMimeType();
-    if (!mime) {
-      if (statusEl) statusEl.textContent = 'This browser cannot record WebM (try Chrome/Edge).';
+    if (!mime){
+      statusEl && (statusEl.textContent='No WebM support (try Chrome/Edge).');
       return;
     }
+
     const stream = off.captureStream(fps);
     const chunks = [];
-    const rec = new MediaRecorder(stream, {
-      mimeType: mime,
-      videoBitsPerSecond: res >= 1024 ? 7_000_000 : (res >= 720 ? 5_000_000 : 3_500_000)
-    });
-    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-    const doneP = new Promise(resolve => { rec.onstop = resolve; });
+    let rec;
+    try {
+      rec = new MediaRecorder(stream, {
+        mimeType: mime,
+        videoBitsPerSecond: bitrateFor(res)
+      });
+    } catch(e){
+      statusEl && (statusEl.textContent='Cannot start recorder.');
+      return;
+    }
+    rec.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+    const doneP = new Promise(r => { rec.onstop = r; });
 
-    // Animate & record
-    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = 'Rendering…'; }
-    if (statusEl) statusEl.textContent = 'Rendering video…';
+    if (buttonEl){ buttonEl.disabled = true; buttonEl.textContent='Rendering…'; }
+    statusEl && (statusEl.textContent='Rendering 0%');
 
     rec.start();
-    const t0 = performance.now();
-    let f = 0;
 
-    const modes = { 'Zoom In':'in', 'Zoom Out':'out', 'Pan L→R':'lr', 'Pan T→B':'tb', 'Drift':'drift' };
-    const modeKey = modes[style] || style;
+    let frameIndex = 0;
+    const c = getFabricCanvas();
 
-    // Frame loop
-    function frameLoop(now) {
-      const t = Math.min(1, (now - t0) / (seconds * 1000));
-      drawKenBurns(ctx, img, t, res, modeKey);
-      f++;
-      if (t < 1) {
-        requestAnimationFrame(frameLoop);
+    async function renderFrame(){
+      if (aborted){
+        try { rec.stop(); } catch(_) {}
+        return;
+      }
+
+      // Optionally re-snapshot each frame (dynamic updates) – very slow for bigger canvases
+      if (SNAP_EACH_FRAME){
+        try {
+          const d = snapshotCanvasPNG(res);
+          if (!img) img = new Image();
+          img.src = d;
+          await imgDecode(img);
+        } catch(_) {}
+      }
+
+      const tNorm = frameIndex / (totalFrames-1);
+      drawKenBurns(ctx, img, tNorm, res, modeKey);
+      frameIndex++;
+
+      if (statusEl && frameIndex % 5 === 0){
+        statusEl.textContent = `Rendering ${Math.min(100, Math.round((frameIndex/totalFrames)*100))}%`;
+      }
+
+      if (frameIndex < totalFrames){
+        requestAnimationFrame(renderFrame);
       } else {
-        // Pad a couple of frames at the end for encoders that like a tail
-        setTimeout(() => rec.stop(), 60);
+        // Tail frames (2) to let encoder flush
+        let tail = 2;
+        function tailLoop(){
+          if (tail-- > 0){
+            requestAnimationFrame(tailLoop);
+          } else {
+            try { rec.stop(); } catch(_) {}
+          }
+        }
+        tailLoop();
       }
     }
-    requestAnimationFrame(frameLoop);
+    requestAnimationFrame(renderFrame);
 
     await doneP;
 
-    // Build blob + link
+    if (aborted){
+      if (buttonEl){ buttonEl.disabled=false; buttonEl.textContent='Make Video (Token Only)'; }
+      cancelEl && (cancelEl.style.visibility='hidden');
+      return;
+    }
+
     const blob = new Blob(chunks, { type: mime });
     const url = URL.createObjectURL(blob);
+    lastObjectURL = url;
 
     const tid = currentTokenId();
     const niceName = `rebel-ant${tid?`-token-${tid}`:''}-${modeKey}-${res}.webm`;
 
-    if (linkEl) {
+    if (linkEl){
       linkEl.href = url;
       linkEl.download = niceName;
-      linkEl.style.display = 'inline-block';
-      linkEl.textContent = `Download ${niceName}`;
+      linkEl.style.display='inline-block';
+      linkEl.textContent=`Download ${niceName}`;
+      linkEl.onclick = () => {
+        // Revoke after short delay so download initiates
+        setTimeout(()=>{
+          if (lastObjectURL){
+            URL.revokeObjectURL(lastObjectURL);
+            lastObjectURL = null;
+          }
+        }, 1500);
+      };
     }
-    if (statusEl) statusEl.textContent = `Done (${Math.round(blob.size/1024)} KB).`;
-
-    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = 'Make Video (Token Only)'; }
+    statusEl && (statusEl.textContent = `Done (${(blob.size/1024|0)} KB).`);
+    if (buttonEl){ buttonEl.disabled=false; buttonEl.textContent='Make Video (Token Only)'; }
+    cancelEl && (cancelEl.style.visibility='hidden');
   }
 
-  // ---------- UI Panel ----------
-  function ensurePanel() {
+  function ensurePanel(){
     if ($('#raVideoPanel')) return $('#raVideoPanel');
 
-    // Try to place under an "Animate" or "Animation" section if it exists; else append to the main content.
     const anchorCard =
       $$('h3,h2').find(h => /animate|animation/i.test((h.textContent||'').toLowerCase()))?.parentElement
       || $('main') || $('.content') || document.body;
 
     const pane = document.createElement('section');
-    pane.id = 'raVideoPanel';
-    pane.style.cssText = 'margin:16px 0 28px 0;border:1px solid #222;border-radius:12px;background:#0d0e13;color:#e7e7ea;padding:12px';
+    pane.id='raVideoPanel';
+    pane.style.cssText='margin:16px 0 28px 0;border:1px solid #222;border-radius:12px;background:#0d0e13;color:#e7e7ea;padding:12px';
     pane.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <h3 style="margin:0;font:600 14px/1.2 -apple-system,Segoe UI,Roboto,Arial">Video (token‑only)</h3>
@@ -3102,44 +3183,42 @@ document.addEventListener("DOMContentLoaded", ()=>{
           </select> px
         </label>
         <button id="raVMake" class="btn" style="margin-left:auto;background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:8px 12px;cursor:pointer">Make Video (Token Only)</button>
+        <a id="raVCancel" href="#" style="visibility:hidden;margin-left:4px;font-size:12px;color:#f87171;text-decoration:none;">× Cancel</a>
         <a id="raVDown" href="#" download style="display:none;margin-left:8px;font-size:12px;text-decoration:underline">Download</a>
       </div>
-      <div style="margin-top:8px;font-size:11px;opacity:.65">Tip: Works when your base image was loaded by <em>Token</em>. PNG/URL uploads are blocked from video on purpose.</div>
+      <div style="margin-top:8px;font-size:11px;opacity:.65">
+        Tip: Works only if the loaded base is a token (no watermark group). Snapshot is static (canvas changes after start won’t appear).
+      </div>
     `;
     anchorCard.appendChild(pane);
 
-    // Wire button
     const makeBtn = $('#raVMake', pane);
     const msg     = $('#raVMsg', pane);
     const downLn  = $('#raVDown', pane);
+    const cancelL = $('#raVCancel', pane);
+
     makeBtn.addEventListener('click', async () => {
       downLn.style.display = 'none';
-      if (!baseIsToken()) {
-        msg.textContent = 'Token-only: load a token image first.';
-        return;
-      }
+      msg.textContent = '';
       const style = ($('#raVStyle', pane)?.value || 'Drift');
-      const secs  = parseInt(($('#raVDur', pane)?.value || '5'), 10);
-      const size  = parseInt(($('#raVRes', pane)?.value || '720'), 10);
-      await makeVideo({ style, seconds: secs, size, statusEl: msg, linkEl: downLn, buttonEl: makeBtn });
+      const secs  = parseInt(($('#raVDur',  pane)?.value || '5'), 10);
+      const size  = parseInt(($('#raVRes',  pane)?.value || '720'), 10);
+      await makeVideo({ style, seconds: secs, size, statusEl: msg, linkEl: downLn, buttonEl: makeBtn, cancelEl: cancelL });
     });
 
-    // Live gate hint: update the message whenever canvas mutates (cheap observer)
+    // Clear gate message as canvas changes
     const c = getFabricCanvas();
-    if (c && !c.__raVideoGateWired) {
+    if (c && !c.__raVideoGateWired){
       c.__raVideoGateWired = true;
-      c.on('object:added',   () => { if ($('#raVideoPanel')) $('#raVMsg').textContent = ''; });
-      c.on('object:removed', () => { if ($('#raVideoPanel')) $('#raVMsg').textContent = ''; });
+      c.on('object:added',   ()=>{ if ($('#raVideoPanel')) $('#raVMsg').textContent=''; });
+      c.on('object:removed', ()=>{ if ($('#raVideoPanel')) $('#raVMsg').textContent=''; });
     }
 
     return pane;
   }
 
-  // Boot after DOM is ready
-  function boot() {
-    try { ensurePanel(); } catch(_) {}
-  }
-  if (document.readyState === 'loading') {
+  function boot(){ try { ensurePanel(); } catch(_){} }
+  if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', boot, {once:true});
   } else {
     boot();
