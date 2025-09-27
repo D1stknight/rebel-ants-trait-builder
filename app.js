@@ -3020,8 +3020,6 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
   }
 
   // ---------- Gentle hook for "Make Video" button (no-op until you flip the switch) ----------
-  async function ensureWMReady(){ if (!STATE.img) await loadWatermark(); }
-
   function waitForVideoDone(timeoutMs=60000){
     return new Promise(resolve => {
       const obs = new MutationObserver(() => {
