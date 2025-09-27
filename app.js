@@ -8910,7 +8910,7 @@ document.addEventListener('ra-collection-change', (e) => {
     if (existing.opacity !== 1) { existing.opacity = 1; dirty = true; }
     if (existing.originX !== 'right') { existing.originX = 'right'; dirty = true; }
     if (existing.originY !== 'bottom') { existing.originY = 'bottom'; dirty = true; }
-    const desiredLeft = C().getWidth() - 20;
+    const desiredLeft = C().getWidth() - 60;
     const desiredTop = C().getHeight() - 20;
     if (existing.left !== desiredLeft) { existing.left = desiredLeft; dirty = true; }
     if (existing.top !== desiredTop) { existing.top = desiredTop; dirty = true; }
