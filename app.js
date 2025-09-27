@@ -1343,54 +1343,37 @@ safeAddListener("clearOverlayGrid","click", ()=>{
   renderOverlayGrid();
 });
 
- // -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
+// -------- Keyboard helpers (duplicate + nudge only; delete handled elsewhere) --------
 document.addEventListener("keydown", (e)=>{
-  // ignore when typing in inputs/textareas/contenteditable
   const tag = (e.target && e.target.tagName || "").toLowerCase();
   if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
 
   const c = window.canvas; if (!c) return;
   const o = c.getActiveObject && c.getActiveObject();
-
-  // Delete selection — robust (no sys/base delete, avoid Fabric draw crash)
-  if (e.key === "Delete" || e.key === "Backspace") {
-    if (!o) return;
-
-    // NEVER delete background, base, or system (footer/wm/label) from keyboard
-    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) {
-      e.preventDefault();
-      return;
-    }
-
-    // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
-    try { c.discardActiveObject(); } catch(_) {}
-
-    // Remove and render
-    try { c.remove(o); } catch(_) {}
-    try { c.requestRenderAll(); } catch(_) {}
-
-    e.preventDefault();
-    return;
-  }
+  if (!o) return;
 
   // Duplicate (Cmd/Ctrl + D)
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
-    if (!o) return;
+    // Never duplicate system/base/bg/token-id items
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId || o._isWatermark || o._raWMRing || o._raWMCenter) {
+      e.preventDefault();
+      return;
+    }
     try {
       o.clone(cl => {
         cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 });
-        
-        // Implementation C: recursively set _kind='overlay' on the clone and children
-        function setOverlayKind(obj) {
-          if (obj) {
-            obj._kind = 'overlay';
-            if (obj._objects && Array.isArray(obj._objects)) {
-              obj._objects.forEach(setOverlayKind);
+
+        function markAsOverlayDeep(node){
+          if (!node) return;
+            // Skip if system-ish
+            if (!(node._isBgRect || node._isBase || node._raSys || node._raTokenId || node._isWatermark || node._raWMRing || node._raWMCenter)) {
+              node._kind = 'overlay';
             }
-          }
+            const kids = (typeof node.getObjects === 'function' ? node.getObjects() : node._objects) || [];
+            kids.forEach(markAsOverlayDeep);
         }
-        setOverlayKind(cl);
-        
+        markAsOverlayDeep(cl);
+
         c.add(cl);
         c.setActiveObject(cl);
         c.requestRenderAll();
@@ -1400,9 +1383,13 @@ document.addEventListener("keydown", (e)=>{
     return;
   }
 
-  // Nudge with arrows (Shift = 10px)
-  const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
-  if (o && arrows.includes(e.key)) {
+  // Arrow key nudge (Shift = 10px)
+  if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) {
+    // Do not nudge system/base/bg/watermark/token-id objects
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId || o._isWatermark || o._raWMRing || o._raWMCenter) {
+      e.preventDefault();
+      return;
+    }
     const step = e.shiftKey ? 10 : 1;
     if (e.key === "ArrowLeft")  o.left -= step;
     if (e.key === "ArrowRight") o.left += step;
