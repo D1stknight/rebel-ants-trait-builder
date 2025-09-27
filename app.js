@@ -9155,6 +9155,52 @@ document.addEventListener('ra-collection-change', (e) => {
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
 ;
 
+/* ===== LEGACY WATERMARK NEUTRALIZER (Pre-Phase-2 code) =====
+   Turns obsolete watermark logic into no-ops so Phase 2 manager is sole authority.
+   Remove this once legacy code physically deleted.
+*/
+(function disableLegacyWM(){
+  const noop = ()=>{};
+  const kill = name => {
+    if (typeof window[name] === 'function'){
+      try { window[name] = noop; } catch(_){}
+    }
+  };
+
+  [
+    'ensureCenteredWM',
+    'applyToWM',
+    'ensureWMReady',
+    'seatAboveBase',
+    'scaleToCanvas',
+    'stripStampsFromGroup',
+    'relockAll',
+    'faintOpacity'
+  ].forEach(kill);
+
+  // Legacy isWM variants – overwrite with a narrow detector returning false so Phase 2 detection isn't shadowed
+  if (typeof window.isWM === 'function'){
+    try { window.isWM = ()=>false; } catch(_){}
+  }
+
+  // Prevent legacy "reapply" loops
+  if (typeof window.reapply === 'function'){
+    try { window.reapply = noop; } catch(_){}
+  }
+
+  // Optional: intercept dispatches of ra-wm-recalc outside Phase 2 if they are too spammy
+  const origDispatch = document.dispatchEvent.bind(document);
+  document.dispatchEvent = (evt)=>{
+    if (evt && evt.type === 'ra-wm-recalc' && !window.__RA_WM_PHASE2_BOOTED__){
+      // Let Phase 2 do first real creation; suppress redundant early spam
+      return true;
+    }
+    return origDispatch(evt);
+  };
+
+  window.__RA_LEGACY_WM_DISABLED__ = true;
+})();
+
 /* ===== PHASE 2 UNIFIED WATERMARK MANAGER (RAWatermark) =====
    Implements final 3-Rule System + large ring (≈89% width) + footer logic.
 
