@@ -4180,28 +4180,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
   window.addEventListener('orientationchange',() => setTimeout(run, 100), {passive:true});
 })();
 
-/* ================= RA_HIDE_TOKEN_VIDEO_PANEL_v1 ================= */
-(() => {
-  function hide() {
-    // Remove by ID if it exists
-    const el = document.getElementById('raVideoPanel');
-    if (el) el.remove();
-
-    // Fallback: hide any card whose heading says “Video (token‑only)”
-    Array.from(document.querySelectorAll('h2,h3')).forEach(h => {
-      const t = (h.textContent || '').toLowerCase();
-      if (t.includes('video') && t.includes('token')) {
-        const card = h.closest('section,div') || h.parentElement;
-        if (card) card.style.display = 'none';
-      }
-    });
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', hide, { once:true });
-  } else { hide(); }
-  new MutationObserver(hide).observe(document.documentElement, { childList:true, subtree:true });
-})();
-
 /* ==========================================================
    RA_WM_CENTER_ADMIN_NO_STAMPS_V2
    • Removes corner stamps from EVERY new/old base or overlay.
