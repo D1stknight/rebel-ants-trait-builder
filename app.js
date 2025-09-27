@@ -3226,104 +3226,62 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_ANIMATE_UNIFIED_V1
-   Single replacement for ALL previous animation + watermark
-   export / preview logic (supersedes V4* blocks and the old
-   watermark export fix wrapper).
+   RA_ANIMATE_UNIFIED_V2
+   Complete unified animation panel.
 
    Features:
-     • Scopes: Everything (camera), Base only, Overlays only, Text only.
-     • Watermark modes: 'inherit' (moves with scene) or 'lock' (static).
-     • Consistent preview + export (identical framing & watermark).
-     • Live object animation (no multi-snapshot layer duplication).
-     • Camera animation composes over existing viewport transform (no cropping).
-     • Safe reversible return: configurable end mode ensures final encoded frame
-       matches original layout (no harsh jump).
-     • History-safe: sets a global guard to avoid triggering external undo stacks.
-     • Single watermark inclusion wrapper (no dual race conditions).
-     • Tail flush frames guarantee the restored frame is encoded.
-
-   Return modes:
-     'soft' (default) – short eased mini reverse (smooth)
-     'reverse'        – longer full reverse (fraction of forward dur)
-     'snap'           – instant snap + brief hold frames
-     'hold'           – stay on final frame then snap back smoothly
-     'none'           – end on final animated frame (no revert)
+     • Scopes: Camera (viewport), Base only, Overlays only, Text only
+     • Presets: Expanded sets for camera, base, overlays/text
+     • Single preview canvas (non-destructive); export path matches preview exactly
+     • Return modes: soft | reverse | snap | hold | none
+     • Watermark modes: inherit | lock
+     • Live object + viewport mutation with automatic full restore
+     • Tail flush frames to guarantee final frame encoding
+     • Clean, single watermark manager (no size/opacity changes unless lock snapshot)
+     • Stable with custom watermark already set (scale 0.45, opacity 0.01)
 
    Public API:
-     window.raAnimateUnified.preview(opts?)
-     window.raAnimateUnified.export(opts?)
-     window.raAnimateUnified.stop()
-     window.raAnimateUnified.version
-     window.raAnimateUnified.config  (modifiable at runtime)
+     window.raAnimateUnifiedV2.preview()
+     window.raAnimateUnifiedV2.export()
+     window.raAnimateUnifiedV2.stop()
+     window.raAnimateUnifiedV2.config
+     window.raAnimateUnifiedV2.version
 
-   To migrate:
-     1. Remove old RA_MAKE_VIDEO_TOKEN_ONLY_V1* script.
-     2. Remove all V4* animation scripts.
-     3. Add this file after Fabric canvas has been created.
-     4. Hard refresh.
-
+   Version: 2.0.0
    ========================================================== */
 (() => {
-  if (window.raAnimateUnified) return;
+  if (window.raAnimateUnifiedV2) return;
 
-  const VERSION = '1.0.0';
-
+  const VERSION = '2.0.0';
   const CONFIG = {
     fps: 30,
-    // Canvas / preview
-    previewOnMainCanvas: false,          // true => mutate the actual Fabric canvas for preview (faster, but UI jumps)
-    previewCanvasId: 'raAnimUnifiedPreview',
-    panelAnchorH3Pattern: /export/i,
+    maxDurationSec: 30,
 
-    // Watermark control
-    wmMode: 'inherit',                   // 'inherit' | 'lock'
-    forceWatermarkInclude: true,         // always include watermark objects in export
-    watermarkOpacityFloor: 0.02,         // if something was at 0 opacity we lift it slightly
-    wmSnapshotDPR: 1.0,                  // multiplier for watermark snapshot (lock mode)
+    // Default modes
+    defaultReturnMode: 'soft',   // 'soft' | 'reverse' | 'snap' | 'hold' | 'none'
+    defaultWmMode: 'inherit',    // 'inherit' | 'lock'
 
-    // Animation return modes for both camera + object scopes
-    returnModeCamera: 'soft',            // 'soft' | 'reverse' | 'snap' | 'hold' | 'none'
-    returnModeObjects: 'soft',
-    softFraction: 0.18,                  // fraction of forward duration for 'soft'
+    // Return timing fractions
+    softFraction: 0.18,
     softMinMs: 140,
-    reverseFraction: 0.35,               // for 'reverse'
-    holdFraction: 0.25,                  // additional hold after snap if mode='hold'
-    snapFrames: 10,                      // frames to hold original when mode='snap'
+    reverseFraction: 0.35,
+    holdFraction: 0.25,
+    snapFrames: 10,
+    tailFlushFrames: 5,
 
-    // Camera composition
-    respectExistingViewport: true,
-    // A gentle clamp for zoom; camera presets can override
+    // Camera
+    respectViewport: true,
     cameraMaxZoom: 2.0,
 
-    // Global
-    maxDurationSec: 30,
-    tailFlushFrames: 4,                  // frames after we finish restore to ensure final frame is encoded
-    // Preset definitions
-    presets: [
-      // Camera (viewport)
-      { id:'cam_kb_in_ur', name:'Ken Burns in ↗',  kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:+0.06}},
-      { id:'cam_kb_in_dl', name:'Ken Burns in ↙',  kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:-0.06}},
-      { id:'cam_pan_up',   name:'Pan up',          kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:0.06}, to:{z:1,x:0,y:-0.06}},
-      { id:'cam_zoom_in',  name:'Zoom in',         kind:'camera', ease:'ioCubic',from:{z:1,x:0,y:0},    to:{z:1.15,x:0,y:0}},
-      { id:'cam_zoom_out', name:'Zoom out',        kind:'camera', ease:'ioCubic',from:{z:1.12,x:0,y:0}, to:{z:1.0,x:0,y:0}},
+    // Watermark snapshot (lock mode)
+    wmSnapshotMultiplier: 1.0,
+    wmOpacityFloor: 0.02,
 
-      // Base
-      { id:'base_nudge',   name:'Base nudge in',   kind:'base',   ease:'ioSine', from:{s:1.00}, to:{s:1.06}},
-      { id:'base_pulse',   name:'Base pulse',      kind:'base',   ease:'ioSine', from:{s:0.97}, to:{s:1.00}},
-      { id:'base_slide_r', name:'Base slide right',kind:'base',   ease:'ioSine', from:{dxN:-0.06},to:{dxN:0}},
-      { id:'base_tilt',    name:'Base tiny tilt',  kind:'base',   ease:'ioSine', from:{rot:-3}, to:{rot:0}},
-
-      // Overlays / Text (shared)
-      { id:'ov_pop',       name:'Overlays/Text pop',     kind:'overlay', ease:'ioBack',  from:{s:0.90},    to:{s:1.00}},
-      { id:'ov_slide_up',  name:'Overlays/Text slide ↑', kind:'overlay', ease:'ioSine',  from:{dyN:0.14},  to:{dyN:0}},
-      { id:'ov_slide_l',   name:'Overlays/Text slide ←', kind:'overlay', ease:'ioSine',  from:{dxN:-0.18}, to:{dxN:0}},
-      { id:'ov_fade',      name:'Overlays/Text fade in', kind:'overlay', ease:'ioCubic', from:{alpha:0},   to:{alpha:1}},
-      { id:'ov_wiggle',    name:'Overlays/Text wiggle',  kind:'overlay', ease:'ioSine',  from:{rot:-5},    to:{rot:0}}
-    ]
+    // Panel anchor detection
+    exportHeaderPattern: /export/i
   };
 
-  /* ---------- EASING TABLE ---------- */
+  /* -------------------- EASING -------------------- */
   const EASE = {
     linear: t=>t,
     ioQuad: t=>t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2,
@@ -3331,66 +3289,95 @@ document.addEventListener("DOMContentLoaded", ()=>{
     ioCubic: t=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,
     ioBack: t=>{
       const c1=1.70158,c2=c1*1.525;
-      return t<0.5
-        ? (Math.pow(2*t,2)*((c2+1)*2*t-c2))/2
-        : (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2;
+      return t<0.5?
+        (Math.pow(2*t,2)*((c2+1)*2*t-c2))/2:
+        (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2;
     },
     ioExpo: t=>t===0?0:t===1?1:(t<0.5?Math.pow(2,20*t-10)/2:(2-Math.pow(2,-20*t+10))/2)
   };
 
-  /* ---------- DOM SETUP ---------- */
-  function ensurePanel(){
-    let panel = document.getElementById('raAnimUnifiedPanel');
+  /* -------------------- PRESETS -------------------- */
+  const PRESETS = [
+    // Camera (Ken Burns, pans, zooms)
+    { id:'cam_kb_in_ur', name:'KB in ↗', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:+0.06}},
+    { id:'cam_kb_in_dl', name:'KB in ↙', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:-0.06}},
+    { id:'cam_kb_in_ul', name:'KB in ↖', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:+0.06}},
+    { id:'cam_kb_in_dr', name:'KB in ↘', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:-0.06}},
+    { id:'cam_kb_out',   name:'KB out',   kind:'camera', ease:'ioSine', from:{z:1.15,x:0,y:0}, to:{z:1.00,x:0,y:0}},
+    { id:'cam_pan_up',   name:'Pan up',   kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:0.06}, to:{z:1,x:0,y:-0.06}},
+    { id:'cam_pan_down', name:'Pan down', kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:-0.06},to:{z:1,x:0,y:0.06}},
+    { id:'cam_pan_left', name:'Pan left', kind:'camera', ease:'ioQuad', from:{z:1,x:0.06,y:0}, to:{z:1,x:-0.06,y:0}},
+    { id:'cam_pan_right',name:'Pan right',kind:'camera',ease:'ioQuad', from:{z:1,x:-0.06,y:0},to:{z:1,x:0.06,y:0}},
+    { id:'cam_zoom_in',  name:'Zoom in',  kind:'camera', ease:'ioCubic',from:{z:1,x:0,y:0},   to:{z:1.15,x:0,y:0}},
+    { id:'cam_zoom_out', name:'Zoom out', kind:'camera', ease:'ioCubic',from:{z:1.12,x:0,y:0}, to:{z:1.00,x:0,y:0}},
+
+    // Base (single object base animations)
+    { id:'base_nudge',    name:'Base nudge in', kind:'base', ease:'ioSine', from:{s:1.00}, to:{s:1.06}},
+    { id:'base_pulse',    name:'Base pulse',    kind:'base', ease:'ioSine', from:{s:0.97}, to:{s:1.00}},
+    { id:'base_zoom_in',  name:'Base zoom in',  kind:'base', ease:'ioCubic',from:{s:1.00}, to:{s:1.12}},
+    { id:'base_zoom_out', name:'Base zoom out', kind:'base', ease:'ioCubic',from:{s:1.08}, to:{s:1.00}},
+    { id:'base_slide_r',  name:'Base slide →',  kind:'base', ease:'ioSine', from:{dxN:-0.06}, to:{dxN:0}},
+    { id:'base_slide_l',  name:'Base slide ←',  kind:'base', ease:'ioSine', from:{dxN:0.06},  to:{dxN:0}},
+    { id:'base_tilt',     name:'Base tiny tilt',kind:'base', ease:'ioSine', from:{rot:-3},    to:{rot:0}},
+    { id:'base_drift',    name:'Base drift diag',kind:'base',ease:'ioSine', from:{dxN:0.04,dyN:-0.04}, to:{dxN:0,dyN:0}},
+
+    // Overlays/Text (shared interactions)
+    { id:'ov_pop',       name:'Overlay/Text pop',        kind:'overlay', ease:'ioBack',  from:{s:0.90},   to:{s:1.00}},
+    { id:'ov_pop_big',   name:'Overlay/Text pop big',    kind:'overlay', ease:'ioBack',  from:{s:0.85},   to:{s:1.00}},
+    { id:'ov_fade',      name:'Overlay/Text fade in',    kind:'overlay', ease:'ioCubic', from:{alpha:0},  to:{alpha:1}},
+    { id:'ov_slide_up',  name:'Overlay/Text slide ↑',    kind:'overlay', ease:'ioSine',  from:{dyN:0.14}, to:{dyN:0}},
+    { id:'ov_slide_dn',  name:'Overlay/Text slide ↓',    kind:'overlay', ease:'ioSine',  from:{dyN:-0.14},to:{dyN:0}},
+    { id:'ov_slide_l',   name:'Overlay/Text slide ←',    kind:'overlay', ease:'ioSine',  from:{dxN:-0.18},to:{dxN:0}},
+    { id:'ov_slide_r',   name:'Overlay/Text slide →',    kind:'overlay', ease:'ioSine',  from:{dxN:0.18}, to:{dxN:0}},
+    { id:'ov_wiggle',    name:'Overlay/Text wiggle',     kind:'overlay', ease:'ioSine',  from:{rot:-5},   to:{rot:0}},
+    { id:'ov_scale_in',  name:'Overlay/Text scale in',   kind:'overlay', ease:'ioCubic', from:{s:0.8},    to:{s:1.0}},
+    { id:'ov_attention', name:'Overlay/Text attention',  kind:'overlay', ease:'ioSine',  from:{s:1.0},    to:{s:1.07}}
+  ];
+
+  /* -------------------- DOM HELPERS -------------------- */
+  const $  = (s,r=document)=>r.querySelector(s);
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+
+  function anchorPanel(){
+    return $$('h3').find(h=> CONFIG.exportHeaderPattern.test((h.textContent||'').trim()))?.parentNode || document.body;
+  }
+
+  function buildPanel(){
+    let panel = $('#raAnimUnifiedV2Panel');
     if (panel) return panel;
-    const host = $$('h3').find(h=> CONFIG.panelAnchorH3Pattern.test((h.textContent||'').trim()))?.parentNode || document.body;
-
     panel = document.createElement('div');
-    panel.id = 'raAnimUnifiedPanel';
-    panel.style.cssText = 'margin:16px 0;padding:14px;border:1px solid #23242a;border-radius:12px;background:#0e1015;font:12px system-ui;color:#e8e8ec;';
-
+    panel.id='raAnimUnifiedV2Panel';
+    panel.style.cssText='margin:16px 0;padding:14px;border:1px solid #23262c;border-radius:12px;background:#0f1116;color:#e9eaed;font:12px system-ui;position:relative';
     panel.innerHTML = `
-      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:8px">
-        <strong style="font-size:13px">Animate (Unified)</strong>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <strong style="font-size:13px">Unified Animate</strong>
         <span style="opacity:.55">v${VERSION}</span>
-        <label style="display:flex;gap:4px;align-items:center">
-          What:
-          <select id="uAnimScope">
-            <option value="camera">Everything (camera)</option>
+        <label>Scope:
+          <select id="uaScope">
+            <option value="camera">Camera</option>
             <option value="base">Base only</option>
             <option value="overlay">Overlays only</option>
             <option value="text">Text only</option>
           </select>
         </label>
-        <label style="display:flex;gap:4px;align-items:center">
-          Preset:
-          <select id="uAnimPreset"></select>
+        <label>Preset:
+          <select id="uaPreset"></select>
         </label>
-        <label style="display:flex;gap:4px;align-items:center">
-          Easing:
-          <select id="uAnimEase">
-            <option value="ioSine">Smooth (Sine)</option>
-            <option value="ioQuad">Natural (Quad)</option>
-            <option value="ioCubic">Rounded (Cubic)</option>
-            <option value="ioBack">Bounce-back</option>
-            <option value="ioExpo">Snappy (Expo)</option>
-            <option value="linear">Linear</option>
+        <label>Ease:
+          <select id="uaEase">
+            <option value="ioSine">ioSine</option>
+            <option value="ioQuad">ioQuad</option>
+            <option value="ioCubic">ioCubic</option>
+            <option value="ioBack">ioBack</option>
+            <option value="ioExpo">ioExpo</option>
+            <option value="linear">linear</option>
           </select>
         </label>
-        <label style="display:flex;gap:4px;align-items:center">
-          Duration:
-          <input id="uAnimDur" type="number" min="2" max="${CONFIG.maxDurationSec}" value="6" step="0.1" style="width:56px">
-          s
+        <label>Dur:
+          <input id="uaDur" type="number" min="2" max="${CONFIG.maxDurationSec}" value="6" step="0.1" style="width:56px">s
         </label>
-        <label style="display:flex;gap:4px;align-items:center">
-          WM:
-          <select id="uAnimWMMode">
-            <option value="inherit">inherit</option>
-            <option value="lock">lock</option>
-          </select>
-        </label>
-        <label style="display:flex;gap:4px;align-items:center">
-          Return:
-          <select id="uAnimReturnMode">
+        <label>Return:
+          <select id="uaReturn">
             <option value="soft">soft</option>
             <option value="reverse">reverse</option>
             <option value="snap">snap</option>
@@ -3398,125 +3385,127 @@ document.addEventListener("DOMContentLoaded", ()=>{
             <option value="none">none</option>
           </select>
         </label>
-        <button id="uAnimPreviewBtn" class="btn small">Preview</button>
-        <button id="uAnimExportBtn" class="btn small">Export video</button>
-        <span id="uAnimMsg" style="opacity:.7"></span>
+        <label>WM:
+          <select id="uaWMMode">
+            <option value="inherit">inherit</option>
+            <option value="lock">lock</option>
+          </select>
+        </label>
+        <button id="uaPreview" class="btn small">Preview</button>
+        <button id="uaExport" class="btn small">Export</button>
+        <span id="uaMsg" style="opacity:.7"></span>
       </div>
-      <canvas id="${CONFIG.previewCanvasId}" style="display:none;max-width:100%;border-radius:8px;background:#000"></canvas>
-      <video id="uAnimVideoOut" style="display:none;max-width:100%;border-radius:8px;margin-top:8px" controls></video>
-      <div id="uAnimDL" style="margin-top:6px"></div>
+      <canvas id="uaPreviewCanvas" style="display:none;margin-top:10px;max-width:100%;border-radius:8px;background:#000"></canvas>
+      <video id="uaVideoOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+      <div id="uaDL" style="margin-top:6px"></div>
     `;
-    host.appendChild(panel);
+    anchorPanel().appendChild(panel);
 
-    // Fill preset select
-    const ps = document.getElementById('uAnimPreset');
-    CONFIG.presets.forEach(p=>{
+    const presetSel = $('#uaPreset');
+    PRESETS.forEach(p=>{
       const o=document.createElement('option');
       o.value=p.id; o.textContent=p.name;
-      ps.appendChild(o);
+      presetSel.appendChild(o);
     });
 
-    document.getElementById('uAnimWMMode').value = CONFIG.wmMode;
-    document.getElementById('uAnimReturnMode').value = 'soft';
+    $('#uaReturn').value = CONFIG.defaultReturnMode;
+    $('#uaWMMode').value = CONFIG.defaultWmMode;
 
-    document.getElementById('uAnimPreviewBtn').onclick = ()=> api.preview();
-    document.getElementById('uAnimExportBtn').onclick  = ()=> api.export();
+    $('#uaPreview').onclick = ()=> API.preview();
+    $('#uaExport').onclick  = ()=> API.export();
+
+    // Auto adjust preset list when scope changes (optional convenience)
+    $('#uaScope').addEventListener('change', ()=>{
+      const scope=$('#uaScope').value;
+      const first = PRESETS.find(p=>{
+        if (scope==='camera') return p.kind==='camera';
+        if (scope==='base') return p.kind==='base';
+        if (scope==='overlay') return p.kind==='overlay';
+        if (scope==='text') return p.kind==='overlay'; // reuse overlay presets for text
+        return false;
+      });
+      if (first) $('#uaPreset').value=first.id;
+    });
 
     return panel;
   }
 
-  function msg(t){
-    const m = document.getElementById('uAnimMsg');
-    if (!m) return;
-    m.textContent = t || '';
-    if (t) {
-      setTimeout(()=>{ if (m.textContent === t) m.textContent=''; }, 2500);
-    }
+  function showMsg(t){
+    const m=$('#uaMsg'); if(!m) return;
+    m.textContent=t||'';
+    if (t) setTimeout(()=>{ if(m.textContent===t) m.textContent=''; }, 2500);
   }
 
-  /* ---------- WATERMARK MANAGER ---------- */
-  const Wm = {
-    flags(o){
-      return o && (o._isWatermark || o._raWMRing || o._raWMCenter || o._raFooter);
-    },
+  /* -------------------- WATERMARK MANAGER -------------------- */
+  const WM = {
+    is(o){ return !!(o && (o._isWatermark||o._raWMRing||o._raWMCenter||o._raFooter)); },
     collect(){
-      const c=C(); if(!c) return [];
-      return (c.getObjects()||[]).filter(o=>Wm.flags(o));
+      const c=window.canvas; if(!c) return [];
+      return (c.getObjects()||[]).filter(WM.is);
     },
-    snapshot: null,  // Image element used for lock mode
-    prepareForExport(mode){
-      // mode: 'inherit' or 'lock'
-      const wmObjs = Wm.collect();
-      if (!CONFIG.forceWatermarkInclude) {
-        if (mode==='lock') Wm._makeSnapshot(wmObjs);
-        return { wmObjs, restores: [] };
+    snapshot:null,
+    prepare(mode){
+      const wmObjs = WM.collect();
+      if (mode==='inherit' || !wmObjs.length){
+        return { wmObjs, restores:[] };
       }
+      // lock: snapshot then hide originals
+      const c=window.canvas;
       const restores = wmObjs.map(o=>({
         o,
-        excl:o.excludeFromExport,
         vis:o.visible,
+        excl:o.excludeFromExport,
         op:o.opacity
       }));
+      // Ensure they are visible/exportable for snapshot
       wmObjs.forEach(o=>{
         if (o.excludeFromExport) o.excludeFromExport=false;
-        if (o.visible===false) o.visible=true;
-        if (o.opacity===0) o.opacity = CONFIG.watermarkOpacityFloor;
+        if (!o.visible) o.visible=true;
+        if (o.opacity===0) o.opacity=CONFIG.wmOpacityFloor;
       });
-      if (mode==='lock') {
-        Wm._makeSnapshot(wmObjs);
-        // Hide them for duration
-        wmObjs.forEach(o=> o.visible=false);
-      }
+      const data = c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier:CONFIG.wmSnapshotMultiplier });
+      const img=new Image(); img.src=data;
+      WM.snapshot=img;
+      // Hide originals during animation (lock effect)
+      wmObjs.forEach(o=> o.visible=false);
+      c.requestRenderAll();
       return { wmObjs, restores };
     },
     restore(restores, mode){
-      restores.forEach(r=>{
-        r.o.excludeFromExport = r.excl;
-        r.o.visible           = r.vis;
-        r.o.opacity           = r.op;
-      });
-      if (mode==='lock') {
-        // Re-show
-        Wm.collect().forEach(o=> { if (restores.find(r=>r.o===o)) o.visible = true; });
+      if (mode==='lock'){
+        restores.forEach(r=>{
+          r.o.visible = r.vis;
+          r.o.excludeFromExport = r.excl;
+          r.o.opacity = r.op;
+        });
       }
-      Wm.snapshot = null;
+      WM.snapshot=null;
     },
-    _makeSnapshot(wmObjs){
-      const c = C(); if(!c || wmObjs.length===0) return;
-      // Temporarily show, capture, then hide again (they are already visible after prepare)
-      const data = c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: CONFIG.wmSnapshotDPR });
-      const img = new Image(); img.src = data;
-      Wm.snapshot = img;
-    },
-    drawLocked(ctx, canvasW, canvasH){
-      if (!Wm.snapshot) return;
+    drawLocked(ctx,W,H){
+      if (!WM.snapshot) return;
       try {
         ctx.save();
-        // center static watermark (as seen at time of snapshot)
-        const iw = Wm.snapshot.width;
-        const ih = Wm.snapshot.height;
-        ctx.globalAlpha = 1;
-        // We draw it scaled to fit exactly over the base canvas
-        ctx.drawImage(Wm.snapshot, 0, 0, canvasW, canvasH);
+        ctx.globalAlpha=1;
+        ctx.drawImage(WM.snapshot,0,0,W,H);
         ctx.restore();
-      } catch(_){}
+      }catch(_){}
     }
   };
 
-  /* ---------- CLASSIFIERS ---------- */
-  const isBg = o=> !!o?._isBgRect;
-  const isBase = o=> !!(o?._isBase && !o._isBgRect);
-  const isText = o=>{
+  /* -------------------- CLASSIFIERS -------------------- */
+  const isBg=o=>!!o?._isBgRect;
+  const isBase=o=>!!(o?._isBase && !o._isBgRect);
+  const isText=o=>{
     if(!o) return false;
     const k=(o._kind||'').toLowerCase(), t=(o.type||'').toLowerCase();
     return k==='customtext'||k==='tokenid'||t==='textbox'||t==='i-text'||t==='text';
   };
-  const isOverlay = o=>{
+  const isOverlay=o=>{
     if(!o) return false;
-    if (o._raSys || o._isWatermark || o._raWMRing || o._raWMCenter || o._isBgRect || o._isBase || o._raTokenId) return false;
+    if (o._raSys || WM.is(o) || o._isBgRect || o._isBase || o._raTokenId) return false;
     const k=(o._kind||'').toLowerCase();
     if (k==='overlay'||k==='sticker'||k==='icon') return true;
-    if (o.type==='group') {
+    if (o.type==='group'){
       const kids=(o.getObjects?.()||o._objects||[]);
       return kids.some(ch=>{
         const ck=(ch._kind||'').toLowerCase();
@@ -3528,7 +3517,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   };
 
   function pickTargets(scope){
-    const c = C(); if(!c) return [];
+    const c=window.canvas; if(!c) return [];
     const objs=(c.getObjects()||[]).filter(o=>!isBg(o));
     if (scope==='base') return objs.filter(isBase);
     if (scope==='overlay') return objs.filter(isOverlay);
@@ -3536,170 +3525,183 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return [];
   }
 
-  /* ---------- RETURN SEGMENT PLANNING ---------- */
-  function planReturn(mode, durMs){
-    if (mode==='none') return { mode, reverse:0, snap:0, hold:0 };
-    if (mode==='reverse') return { mode, reverse: Math.round(durMs*CONFIG.reverseFraction), snap:0, hold:0 };
-    if (mode==='snap') return { mode, reverse:0, snap: CONFIG.snapFrames, hold:0 };
-    if (mode==='hold') return { mode, reverse:0, snap: CONFIG.snapFrames, hold: Math.round(durMs*CONFIG.holdFraction) };
-    if (mode==='soft') {
-      const soft = Math.max(CONFIG.softMinMs, Math.round(durMs*CONFIG.softFraction));
-      return { mode, reverse: soft, snap:0, hold:0, soft: soft };
+  /* -------------------- RETURN PLAN -------------------- */
+  function planReturn(mode, forwardMs){
+    if (mode==='none') return {mode, reverse:0, snap:0, hold:0, soft:0};
+    if (mode==='reverse') return {mode, reverse:Math.round(forwardMs*CONFIG.reverseFraction), snap:0, hold:0, soft:0};
+    if (mode==='snap') return {mode, reverse:0, snap:CONFIG.snapFrames, hold:0, soft:0};
+    if (mode==='hold') return {mode, reverse:0, snap:CONFIG.snapFrames, hold:Math.round(forwardMs*CONFIG.holdFraction), soft:0};
+    if (mode==='soft'){
+      const soft = Math.max(CONFIG.softMinMs, Math.round(forwardMs*CONFIG.softFraction));
+      return {mode, reverse:soft, snap:0, hold:0, soft};
     }
-    return { mode:'none', reverse:0, snap:0, hold:0 };
+    return {mode:'none', reverse:0, snap:0, hold:0, soft:0};
   }
 
-  /* ---------- ANIMATION STATE ---------- */
-  let running = false;
-  let cancelReq = false;
+  /* -------------------- CORE ANIMATION -------------------- */
+  let running=false;
+  let cancelFlag=false;
 
-  /* ---------- CORE ANIMATION ---------- */
   function animate(opts){
     const {
-      scope,
-      preset,
-      durationMs,
-      record,
-      wmMode,
-      returnMode,
-      easingFn
+      scope, preset, easingFn, durationMs, record,
+      returnMode, wmMode
     } = opts;
 
-    const c = C(); if(!c) throw new Error('Canvas not ready');
-    const fps = CONFIG.fps;
-    const previewCanvas = document.getElementById(CONFIG.previewCanvasId);
-    const videoOut = document.getElementById('uAnimVideoOut');
+    const c=window.canvas;
+    const W=c.getWidth(), H=c.getHeight();
 
-    // Setup surfaces
-    let surface, ctx;
-    if (!record) {
+    const previewCanvas=$('#uaPreviewCanvas');
+    const videoOut=$('#uaVideoOut');
+    const dl=$('#uaDL');
+
+    if (!record){
       previewCanvas.style.display='block';
       videoOut.style.display='none';
-      surface = previewCanvas;
+      dl.innerHTML='';
     } else {
       previewCanvas.style.display='none';
       videoOut.style.display='none';
-      surface = document.createElement('canvas');
+      dl.innerHTML='';
     }
 
-    const W = c.getWidth();
-    const H = c.getHeight();
-    surface.width = W;
-    surface.height= H;
-    ctx = surface.getContext('2d');
+    const surface = record? document.createElement('canvas') : previewCanvas;
+    surface.width=W; surface.height=H;
+    const ctx=surface.getContext('2d');
     ctx.imageSmoothingEnabled=true;
     ctx.imageSmoothingQuality='high';
 
-    // Watermark preparation
-    const wmPrep = Wm.prepareForExport(wmMode);
+    // Watermark prep
+    const wmState = WM.prepare(wmMode);
 
-    // Baselines
-    const viewport0 = (c.viewportTransform || [1,0,0,1,0,0]).slice();
-    const baseScale0 = viewport0[0];
-    const baseE0 = viewport0[4], baseF0 = viewport0[5];
+    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
+    const baseScale0 = vt0[0];
+    const baseE0 = vt0[4], baseF0 = vt0[5];
 
-    const targets = scope==='camera' ? [] : pickTargets(scope);
-    const baselines = new Map();
-    if (scope!=='camera'){
-      targets.forEach(o=>{
-        baselines.set(o,{
-          left:o.left, top:o.top,
-          scaleX:o.scaleX, scaleY:o.scaleY,
-          angle:o.angle||0, opacity: (o.opacity==null?1:o.opacity)
-        });
-      });
+    const targets = scope==='camera'? [] : pickTargets(scope);
+    if (scope!=='camera' && targets.length===0){
+      showMsg('No targets');
+      WM.restore(wmState.restores, wmMode);
+      return;
     }
 
-    // Return planning
-    const retPlan = planReturn(returnMode, durationMs);
+    // Baselines for objects
+    const baselines = new Map();
+    targets.forEach(o=>{
+      baselines.set(o,{
+        left:o.left, top:o.top,
+        scaleX:o.scaleX, scaleY:o.scaleY,
+        angle:o.angle||0, opacity:o.opacity==null?1:o.opacity
+      });
+    });
+
+    // Return plan
+    const ret = planReturn(returnMode, durationMs);
 
     // MediaRecorder
-    let rec=null, chunks=[];
+    let rec=null,chunks=[];
     if (record){
-      try{
-        const stream = surface.captureStream(fps);
-        const mime = pickMimeType();
-        rec = new MediaRecorder(stream,{ mimeType:mime });
-        rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      try {
+        const stream=surface.captureStream(CONFIG.fps);
+        const mime=pickMimeType();
+        rec=new MediaRecorder(stream,{mimeType:mime});
+        rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
         rec.start();
       }catch(_){}
     }
 
-    const startTime = performance.now();
-    let frameReq=0;
+    const start=performance.now();
+    running=true;
+    cancelFlag=false;
+    showMsg(record?'Recording…':'Animating…');
 
-    function applyCamera(tFrac, reversePhase=false){
-      // Interpolate
-      const f = preset.from, to=preset.to;
+    function phase(now){
+      const elapsed=now-start;
+      if (elapsed <= durationMs) return {ph:'forward', p:elapsed/durationMs};
+      let t=elapsed-durationMs;
+      if (ret.soft){
+        if (t<=ret.soft) return {ph:'reverse', p:t/ret.soft};
+        t-=ret.soft;
+      } else if (ret.reverse){
+        if (t<=ret.reverse) return {ph:'reverse', p:t/ret.reverse};
+        t-=ret.reverse;
+      }
+      if (ret.snap){
+        const span=ret.snap*(1000/CONFIG.fps);
+        if (t<=span) return {ph:'snap', p:0};
+        t-=span;
+      }
+      if (ret.hold){
+        if (t<=ret.hold) return {ph:'hold', p:0};
+        t-=ret.hold;
+      }
+      const tailSpan = CONFIG.tailFlushFrames*(1000/CONFIG.fps);
+      if (t<=tailSpan) return {ph:'tail', p:1};
+      return {ph:'done', p:1};
+    }
+
+    function applyCamera(tFrac, reverse){
+      const f=preset.from, to=preset.to;
       const t = easingFn(tFrac);
-      const z  = lerp(f.z, to.z, reversePhase? 1-t : t);
-      const xn = lerp(f.x, to.x, reversePhase? 1-t : t);
-      const yn = lerp(f.y, to.y, reversePhase? 1-t : t);
-
-      const finalZ = Math.min(CONFIG.cameraMaxZoom, z);
-      if (CONFIG.respectExistingViewport){
-        // Compose with existing transform
-        const eCam = (1 - finalZ) * (W/2) + xn * W;
-        const fCam = (1 - finalZ) * (H/2) + yn * H;
-        const finalScale = baseScale0 * finalZ;
-        const finalE = baseE0 + eCam * baseScale0;
-        const finalF = baseF0 + fCam * baseScale0;
+      const z  = clamp( lerp(f.z,to.z, reverse?1-t:t), 0.01, CONFIG.cameraMaxZoom);
+      const xn = lerp(f.x,to.x, reverse?1-t:t);
+      const yn = lerp(f.y,to.y, reverse?1-t:t);
+      if (CONFIG.respectViewport){
+        const eCam=(1-z)*(W/2)+xn*W;
+        const fCam=(1-z)*(H/2)+yn*H;
+        const finalScale = baseScale0*z;
+        const finalE = baseE0 + eCam*baseScale0;
+        const finalF = baseF0 + fCam*baseScale0;
         c.setViewportTransform([finalScale,0,0,finalScale,finalE,finalF]);
       } else {
-        const e = (1 - finalZ) * (W/2) + xn * W;
-        const f2 = (1 - finalZ) * (H/2) + yn * H;
-        c.setViewportTransform([finalZ,0,0,finalZ,e,f2]);
+        const e=(1-z)*(W/2)+xn*W;
+        const f2=(1-z)*(H/2)+yn*H;
+        c.setViewportTransform([z,0,0,z,e,f2]);
       }
     }
 
-    function applyObjects(tFrac, reversePhase=false){
-      const p = preset;
-      const has = key => p.from && p.to && p.from[key] != null && p.to[key] != null;
-      const fwd = (k)=> lerp(p.from[k], p.to[k], tFrac);
-      const rev = (k)=> lerp(p.to[k], p.from[k], tFrac);
+    function applyObjects(tFrac, reverse){
+      const p=preset;
+      const has=k=>p.from[k]!=null && p.to[k]!=null;
+      const lerpF = (a,b)=>a+(b-a)*tFrac;
+      const fwd = k=>lerpF(p.from[k],p.to[k]);
+      const rev = k=>lerpF(p.to[k],p.from[k]);
+      const pick=(k)=> has(k)? (reverse?rev(k):fwd(k)) : (k==='s'?1:0);
 
-      const sVal   = has('s')    ? (reversePhase? rev('s')   : fwd('s'))   : 1;
-      const rotVal = has('rot')  ? (reversePhase? rev('rot') : fwd('rot')) : 0;
-      const aVal   = has('alpha')? (reversePhase? rev('alpha'):fwd('alpha')):null;
-      const dxNVal = has('dxN')  ? (reversePhase? rev('dxN') : fwd('dxN')) : 0;
-      const dyNVal = has('dyN')  ? (reversePhase? rev('dyN') : fwd('dyN')) : 0;
-      const dxVal  = has('dx')   ? (reversePhase? rev('dx')  : fwd('dx'))  : 0;
-      const dyVal  = has('dy')   ? (reversePhase? rev('dy')  : fwd('dy'))  : 0;
-
-      const dpx = dxVal + dxNVal * W;
-      const dpy = dyVal + dyNVal * H;
+      const s=pick('s');
+      const rot=pick('rot');
+      const alpha= has('alpha')? pick('alpha'):null;
+      const dxN=pick('dxN'), dyN=pick('dyN');
+      const dx =pick('dx'),  dy =pick('dy');
+      const dpx = dx + dxN*W;
+      const dpy = dy + dyN*H;
 
       targets.forEach(o=>{
-        const base = baselines.get(o); if(!base) return;
-        // scale about center
-        const bw = o.getScaledWidth();
-        const bh = o.getScaledHeight();
-        const cx = base.left + bw/2;
-        const cy = base.top  + bh/2;
+        const b=baselines.get(o); if(!b) return;
+        const cw=o.getScaledWidth(), ch=o.getScaledHeight();
+        const cx=b.left+cw/2, cy=b.top+ch/2;
 
-        o.scaleX = base.scaleX * sVal;
-        o.scaleY = base.scaleY * sVal;
+        o.scaleX=b.scaleX*s;
+        o.scaleY=b.scaleY*s;
+        const nw=o.getScaledWidth(), nh=o.getScaledHeight();
+        o.left = cx - nw/2 + dpx;
+        o.top  = cy - nh/2 + dpy;
 
-        const newW = o.getScaledWidth();
-        const newH = o.getScaledHeight();
-        o.left = cx - newW/2 + dpx;
-        o.top  = cy - newH/2 + dpy;
-
-        if (rotVal) o.angle = base.angle + rotVal;
-        if (aVal!=null) o.opacity = aVal * base.opacity;
+        if (has('rot')) o.angle=b.angle + rot;
+        if (alpha!=null) o.opacity = alpha * b.opacity;
         o.setCoords?.();
       });
     }
 
     function restoreAll(){
       if (scope==='camera'){
-        c.setViewportTransform(viewport0.slice());
+        c.setViewportTransform(vt0.slice());
       } else {
         targets.forEach(o=>{
           const b=baselines.get(o); if(!b) return;
-            o.left=b.left; o.top=b.top;
-            o.scaleX=b.scaleX; o.scaleY=b.scaleY;
-            o.angle=b.angle; o.opacity=b.opacity;
+          o.left=b.left; o.top=b.top;
+          o.scaleX=b.scaleX; o.scaleY=b.scaleY;
+          o.angle=b.angle; o.opacity=b.opacity;
           o.setCoords?.();
         });
       }
@@ -3707,222 +3709,134 @@ document.addEventListener("DOMContentLoaded", ()=>{
     }
 
     function drawFrame(){
-      // Draw Fabric lower canvas (assumes objects already updated)
       c.requestRenderAll();
       ctx.clearRect(0,0,W,H);
-      ctx.drawImage(c.lowerCanvasEl || c.upperCanvasEl, 0,0, W,H);
-      if (wmMode==='lock') {
-        Wm.drawLocked(ctx, W, H);
-      }
-    }
-
-    function phase(now){
-      const elapsed = now - startTime;
-      const d = durationMs;
-      if (elapsed <= d) return {phase:'forward', t: elapsed/d};
-      let tRemain = elapsed - d;
-
-      // Return phases
-      if (retPlan.soft){
-        if (tRemain <= retPlan.soft) return {phase:'softReverse', t: tRemain/retPlan.soft};
-        tRemain -= retPlan.soft;
-      } else if (retPlan.reverse){
-        if (tRemain <= retPlan.reverse) return {phase:'reverse', t: tRemain/retPlan.reverse};
-        tRemain -= retPlan.reverse;
-      }
-      if (retPlan.snap){
-        const span = retPlan.snap * (1000 / fps);
-        if (tRemain <= span) return {phase:'snap', t:0};
-        tRemain -= span;
-      }
-      if (retPlan.hold){
-        if (tRemain <= retPlan.hold) return {phase:'hold', t:0};
-        tRemain -= retPlan.hold;
-      }
-      // Tail flush frames
-      const totalReturnMs =
-        (retPlan.soft||0) + (retPlan.reverse||0) +
-        (retPlan.snap? retPlan.snap*(1000/fps):0) +
-        (retPlan.hold||0);
-
-      const post = elapsed - (d + totalReturnMs);
-      if (post <= CONFIG.tailFlushFrames * (1000/fps))
-        return {phase:'tail', t:1};
-      return {phase:'done', t:1};
+      ctx.drawImage(c.lowerCanvasEl || c.upperCanvasEl,0,0,W,H);
+      if (wmMode==='lock') WM.drawLocked(ctx,W,H);
     }
 
     function step(){
-      if (cancelReq){
-        finalize(true);
+      if (cancelFlag){ finalize(true); return; }
+      const now=performance.now();
+      const ph=phase(now);
+      if (ph.ph==='forward'){
+        const e=easingFn(ph.p);
+        scope==='camera'? applyCamera(e,false): applyObjects(e,false);
+        drawFrame();
+      } else if (ph.ph==='reverse'){
+        const e=easingFn(ph.p);
+        scope==='camera'? applyCamera(e,true): applyObjects(e,true);
+        drawFrame();
+      } else if (ph.ph==='snap' || ph.ph==='hold' || ph.ph==='tail'){
+        restoreAll();
+        drawFrame();
+      } else {
+        restoreAll();
+        drawFrame();
+        finalize(false);
         return;
       }
-      const now = performance.now();
-      const ph = phase(now);
-
-      switch (ph.phase){
-        case 'forward':
-          if (scope==='camera') applyCamera(ph.t,false);
-          else applyObjects(ph.t,false);
-          drawFrame();
-          break;
-        case 'softReverse':
-        case 'reverse':
-          if (scope==='camera') applyCamera(ph.t,true);
-          else applyObjects(ph.t,true);
-          drawFrame();
-          break;
-        case 'snap':
-        case 'hold':
-          restoreAll();
-          drawFrame();
-          break;
-        case 'tail':
-          restoreAll();
-          drawFrame();
-          break;
-        case 'done':
-          restoreAll();
-          drawFrame();
-          finalize(false);
-          return;
-      }
-      frameReq = requestAnimationFrame(step);
+      requestAnimationFrame(step);
     }
 
     function finalize(aborted){
-      cancelAnimationFrame(frameReq);
       restoreAll();
-      // Restore watermark objects
-      Wm.restore(wmPrep.restores, wmMode);
-
+      WM.restore(wmState.restores, wmMode);
       if (rec){
         try{
           rec.onstop=()=>{
-            const mime=rec.mimeType || 'video/webm';
-            if (!aborted) {
-              const blob = new Blob(chunks,{type:mime});
-              const url = URL.createObjectURL(blob);
-              const videoEl = document.getElementById('uAnimVideoOut');
-              videoEl.style.display='block';
-              videoEl.src=url;
-              videoEl.play?.().catch(()=>{});
-              const dl = document.getElementById('uAnimDL');
-              if (dl){
-                dl.innerHTML='';
-                const a=document.createElement('a');
-                a.href=url;
-                a.download=`animation_${Date.now()}.${mime.includes('mp4')?'mp4':'webm'}`;
-                a.textContent='Download animation';
-                a.className='btn small';
-                dl.appendChild(a);
-              }
+            const mime=rec.mimeType||'video/webm';
+            if(!aborted){
+              const blob=new Blob(chunks,{type:mime});
+              const url=URL.createObjectURL(blob);
+              videoOut.style.display='block';
+              videoOut.src=url;
+              videoOut.play?.().catch(()=>{});
+              const a=document.createElement('a');
+              a.href=url;
+              a.download=`anim_${Date.now()}.${mime.includes('mp4')?'mp4':'webm'}`;
+              a.textContent='Download animation';
+              a.className='btn small';
+              dl.innerHTML='';
+              dl.appendChild(a);
             }
-            running=false;
-            cancelReq=false;
-            msg(aborted?'Canceled':'Done');
+            running=false; cancelFlag=false;
+            showMsg(aborted?'Canceled':'Done');
           };
           rec.stop();
         }catch(_){
-          running=false;
-          cancelReq=false;
-          msg(aborted?'Canceled':'Done');
+          running=false; cancelFlag=false;
+          showMsg(aborted?'Canceled':'Done');
         }
       } else {
-        running=false;
-        cancelReq=false;
-        msg(aborted?'Canceled':'Done');
+        running=false; cancelFlag=false;
+        showMsg(aborted?'Canceled':'Done');
       }
     }
 
-    // Kick off
-    running=true;
-    cancelReq=false;
     step();
   }
 
-  /* ---------- MIME PICKER ---------- */
+  /* -------------------- HELPERS -------------------- */
+  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
   function pickMimeType(){
-    const pref=[
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm',
-      'video/mp4'
-    ];
+    const pref=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
     if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
-    for (const p of pref){
-      if (MediaRecorder.isTypeSupported(p)) return p;
-    }
+    for (const p of pref){ if (MediaRecorder.isTypeSupported(p)) return p; }
     return pref[2];
   }
 
-  /* ---------- API ---------- */
-  function gatherInputs(){
-    ensurePanel();
-    const scopeMap = {
-      camera:'camera',
-      base:'base',
-      overlays:'overlay',
-      overlay:'overlay',
-      text:'text'
-    };
-    const scopeSel = document.getElementById('uAnimScope').value;
-    const scope = scopeMap[scopeSel] || 'camera';
-
-    const presetId = document.getElementById('uAnimPreset').value;
-    const preset = CONFIG.presets.find(p=>p.id===presetId) ||
-      CONFIG.presets.find(p=>p.kind === (scope==='camera'?'camera': scope==='base'?'base':'overlay')) ||
-      CONFIG.presets[0];
-
-    const easingSel = document.getElementById('uAnimEase').value;
-    const easingFn = EASE[easingSel] || EASE[preset.ease] || EASE.ioQuad;
-
-    let dur = parseFloat(document.getElementById('uAnimDur').value||'6');
-    if (!Number.isFinite(dur)) dur=6;
-    dur = clamp(dur,2,CONFIG.maxDurationSec);
-    const durationMs = Math.round(dur*1000);
-
-    const wmModeSel = document.getElementById('uAnimWMMode').value || CONFIG.wmMode;
-    const retModeSel = document.getElementById('uAnimReturnMode').value || 'soft';
-
-    return { scope, preset, easingFn, durationMs, wmMode: wmModeSel, returnMode: retModeSel };
+  /* -------------------- API -------------------- */
+  function gather(){
+    buildPanel();
+    const scope=$('#uaScope').value;
+    const presetId=$('#uaPreset').value;
+    const preset=PRESETS.find(p=>p.id===presetId) ||
+      PRESETS.find(p=> (scope==='camera'?p.kind==='camera': scope==='base'?p.kind==='base':'overlay')) ||
+      PRESETS[0];
+    const easeSel=$('#uaEase').value;
+    const easingFn = EASE[easeSel] || EASE[preset.ease] || EASE.ioSine;
+    let dur=parseFloat($('#uaDur').value||'6');
+    if(!Number.isFinite(dur)) dur=6;
+    dur=clamp(dur,2,CONFIG.maxDurationSec);
+    const durationMs=Math.round(dur*1000);
+    const returnMode=$('#uaReturn').value;
+    const wmMode=$('#uaWMMode').value;
+    return { scope, preset, easingFn, durationMs, returnMode, wmMode };
   }
 
-  function doPreview(){
-    if (running) { msg('Already running'); return; }
-    const inputs = gatherInputs();
-    animate({...inputs, record:false});
+  function preview(){
+    if (running){ showMsg('Busy'); return; }
+    const p=gather();
+    animate({ ...p, record:false });
   }
-
-  function doExport(){
-    if (running) { msg('Already running'); return; }
-    const inputs = gatherInputs();
-    animate({...inputs, record:true});
+  function exportAnim(){
+    if (running){ showMsg('Busy'); return; }
+    const p=gather();
+    animate({ ...p, record:true });
   }
-
   function stop(){
     if (!running) return;
-    cancelReq = true;
+    cancelFlag=true;
   }
 
-  const api = {
-    preview: doPreview,
-    export: doExport,
+  const API = {
+    preview,
+    export: exportAnim,
     stop,
-    version: VERSION,
-    config: CONFIG
+    config: CONFIG,
+    version: VERSION
   };
 
-  window.raAnimateUnified = api;
+  window.raAnimateUnifiedV2 = API;
 
-  function init(){
-    ensurePanel();
-  }
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', init, {once:true});
+  function init(){ buildPanel(); }
+  if (document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', init,{once:true});
   } else {
     init();
   }
-
 })();
 
 /* ==========================================================
