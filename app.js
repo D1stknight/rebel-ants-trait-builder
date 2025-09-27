@@ -4000,27 +4000,33 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V4b (Composed Viewport Patch)
-   - Same as V4b previously provided, plus:
-     * Proper composition with an existing Fabric viewport transform
-       (so prior user zoom/pan is preserved; animation layers on top).
-     * Config: respectExistingViewport.
-========================================================== */
+   RA_ANIMATE_PREVIEW_VIDEO_V4c
+   - Viewport (camera) presets now use a SNAPSHOT-BASED Ken Burns pipeline
+     (no reliance on the current Fabric viewportTransform or CSS scaling).
+   - Object (base / overlays / text) presets still animate live objects (with
+     previous composed-transform safeguards).
+   - Watermark / footer / overlays appear exactly as seen at snapshot time.
+   - Retains public API window.raAnimate (run/preview/export/stop/isRunning).
+   ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V4B_COMPOSED__) return; window.__RA_ANIM_V4B_COMPOSED__ = true;
+  if (window.__RA_ANIM_V4C__) return; window.__RA_ANIM_V4C__ = true;
 
-  const VERSION = '4.0.2';
+  const VERSION = '4.0.3';
   const FPS = 30;
 
   const CONFIG = {
-    captureScale: 1.5,
+    captureScale: 1.5,               // For live object animations (offscreen DPR)
     useOffscreen: true,
     maxDurationSec: 30,
     postFinishLayerEnsure: true,
     postFinishWatermarkEnsure: true,
-    respectExistingViewport: true     // <-- NEW
+    respectExistingViewport: true,   // For live object modes
+    cameraSnapshotForViewport: true, // <— NEW: snapshot path for viewport presets
+    cameraSnapshotScale: 1.0,        // Multiplier for snapshot (can set 2 for HQ)
+    cameraHiDPI: 1.5                 // Additional scale for recording canvas (Ken Burns)
   };
 
+  /* ---------- Utilities ---------- */
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -4050,6 +4056,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'pan_right', name:'Pan right (slow)',   kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:-0.06,y:0.00}, to:{z:1.00,x: 0.06,y:0.00}},
     {id:'zoom_in',   name:'Zoom in (gentle)',   kind:'viewport', ease:'ioCubic', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.15,x: 0.00,y: 0.00}},
     {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
+    // Overlays / text
     {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},     to:{s:1.00}},
     {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},   to:{dyN:0.00}},
     {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14},  to:{dyN:0.00}},
@@ -4058,10 +4065,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00}, to:{alpha:1.00}},
     {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},     to:{rot:0}},
     {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},     to:{s:1.00}},
+    // Base
     {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},     to:{s:1.06}},
     {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06},  to:{dxN:0.00}}
   ];
 
+  /* ---------- UI ---------- */
   function ensureDock(){
     let dock = $('#raAnimDock');
     if (dock) return dock;
@@ -4108,23 +4117,17 @@ document.addEventListener("DOMContentLoaded", ()=>{
       <div id="raAnimDL" style="margin-top:6px"></div>
     `;
     host.appendChild(dock);
-
     const sel = $('#raAnimPreset', dock);
-    PRESETS.forEach(p=>{
-      const o=document.createElement('option');
-      o.value=p.id; o.textContent=p.name;
-      sel.appendChild(o);
-    });
+    PRESETS.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
 
     $('#raAnimPreview').onclick = ()=> run({record:false});
     $('#raAnimExport').onclick  = ()=> run({record:true});
     $('#raAnimPreset').onchange = () => {
-      const id = $('#raAnimPreset').value;
-      const p  = PRESETS.find(x=>x.id===id);
+      const id=$('#raAnimPreset').value;
+      const p = PRESETS.find(x=>x.id===id);
       if (!p) return;
-      const scopeEl = $('#raAnimScope');
-      if (p.kind!=='viewport' && scopeEl.value==='all'){
-        scopeEl.value = p.kind==='overlays'? 'overlays' : p.kind;
+      if (p.kind!=='viewport' && $('#raAnimScope').value==='all'){
+        $('#raAnimScope').value = p.kind==='overlays' ? 'overlays' : p.kind;
         msg(`Preset targets ${p.kind} → auto-switched scope.`);
       }
       if (p.ease) $('#raAnimEase').value = p.ease;
@@ -4133,11 +4136,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
   }
 
   function msg(t){
-    const m = $('#raAnimMsg'); if(!m) return;
+    const m=$('#raAnimMsg'); if(!m) return;
     m.textContent = t||'';
-    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2400);
+    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2500);
   }
 
+  /* ---------- Classification ---------- */
   const isBg=o=>!!o?._isBgRect;
   const isBase=o=>!!(o?._isBase && !o._isBgRect);
   const isText=o=>{
@@ -4161,7 +4165,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (o.type==='image' && !o._isBase) return true;
     return false;
   };
-
   function pickTargets(c, scope){
     const objs=(c.getObjects?.()||[]).filter(o=>!isBg(o));
     if (scope==='text') return objs.filter(isText);
@@ -4170,6 +4173,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return [];
   }
 
+  /* ---------- Media helpers ---------- */
   function pickMimeType(){
     const pref=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
     if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
@@ -4178,46 +4182,206 @@ document.addEventListener("DOMContentLoaded", ()=>{
   }
   function extFromMime(t){
     if (!t) return 'webm';
-    if (t.includes('mp4')) return 'mp4';
-    return 'webm';
+    return t.includes('mp4') ? 'mp4' : 'webm';
   }
 
   let running=false, stopRequested=false, lastURL=null;
-  function revokeURL(){ if(lastURL){ try{ URL.revokeObjectURL(lastURL); }catch(_){ } lastURL=null; } }
+  function revokeURL(){ if(lastURL){ try{ URL.revokeObjectURL(lastURL);}catch(_){ } lastURL=null; } }
   window.addEventListener('beforeunload', revokeURL);
 
+  /* ---------- Snapshot Ken Burns (viewport only) ---------- */
+  async function snapshotCanvasPNG(targetSide=1024, multiplier=1){
+    const c=C(); if(!c) throw new Error('Canvas not ready');
+    // We assume you already force watermark inclusion in a higher-level export helper.
+    const side = Math.max(c.getWidth(), c.getHeight()) || 1024;
+    const mul = Math.min(3, Math.max(.25, (targetSide/side)*multiplier));
+    return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
+  }
+
+  function animateSnapshot({img, preset, ease, dur_ms, record, scaleFactor, finishCb, msgCb}){
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+
+    // Offscreen canvas (square = max dimension for uniform camera movement)
+    const side = Math.max(w,h);
+    const outSide = Math.round(side * scaleFactor);
+
+    const off = document.createElement('canvas');
+    off.width = off.height = outSide;
+    const ctx = off.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // MediaRecorder
+    let rec=null, chunks=[];
+    if (record){
+      try{
+        const mime=pickMimeType();
+        const stream=off.captureStream(FPS);
+        rec=new MediaRecorder(stream, { mimeType:mime });
+        rec.ondataavailable = e=>{ if(e.data && e.data.size) chunks.push(e.data); };
+        rec.start();
+      }catch(e){
+        msgCb && msgCb('Recording not supported');
+      }
+    }
+
+    const t0 = performance.now();
+    let rafId=0;
+
+    function drawFrame(tRaw){
+      // Interpolate camera
+      const z  = lerp(preset.from.z, preset.to.z, tRaw);
+      const xn = lerp(preset.from.x, preset.to.x, tRaw);
+      const yn = lerp(preset.from.y, preset.to.y, tRaw);
+
+      // Base cover: keep entire image visible; treat (x,y) as normalized pan offsets of side
+      // We mimic your earlier Ken Burns math: translate relative to square center
+      ctx.clearRect(0,0,outSide,outSide);
+      ctx.save();
+      ctx.translate(outSide/2, outSide/2);
+      ctx.scale(z, z);
+
+      const coverScale = Math.max(side / w, side / h); // scale image so the bigger dimension fits 'side'
+      ctx.scale(coverScale, coverScale);
+
+      // Pan: offsets in normalized (-0.5..0.5) side terms -> use xn, yn scaled by side * some factor
+      const panX = xn * side;
+      const panY = yn * side;
+      ctx.translate(panX / coverScale, panY / coverScale);
+
+      ctx.drawImage(img, -w/2, -h/2);
+      ctx.restore();
+    }
+
+    function loop(){
+      const now = performance.now();
+      const raw = clamp((now - t0)/dur_ms, 0, 1);
+      const t = ease(raw);
+      drawFrame(t);
+      if (raw < 1){
+        rafId = requestAnimationFrame(loop);
+      } else {
+        // Tail frames for encoder flush
+        let tail=2;
+        (function tailLoop(){
+          if (tail-- > 0){
+            requestAnimationFrame(tailLoop);
+          } else {
+            if (rec){
+              rec.onstop = () => finishCb && finishCb({ chunks, mime: rec.mimeType || 'video/webm', canvas: off });
+              rec.stop();
+            } else {
+              finishCb && finishCb({ chunks:[], mime:'', canvas: off });
+            }
+          }
+        })();
+      }
+    }
+    loop();
+
+    return { stop: () => { cancelAnimationFrame(rafId); try{ rec && rec.stop(); }catch(_){} } };
+  }
+
+  /* ---------- Main run ---------- */
   async function run(opts){
-    const record=!!opts.record;
+    const record = !!opts.record;
     const c=C(); if(!c){ alert('Canvas not ready'); return; }
     if (running){ msg('Already running'); return; }
 
     ensureDock();
-    const scopeEl=$('#raAnimScope');
-    const presetEl=$('#raAnimPreset');
-    const easeEl=$('#raAnimEase');
-    let durSec=parseFloat($('#raAnimDur')?.value||'6');
+    let scope = $('#raAnimScope')?.value || 'all';
+    let preset = PRESETS.find(p=>p.id===$('#raAnimPreset')?.value) || PRESETS[0];
+    const easeFn = EASE[$('#raAnimEase')?.value] || EASE[preset.ease] || EASE.ioQuad;
+    let durSec = parseFloat($('#raAnimDur')?.value||'6');
     if(!Number.isFinite(durSec)) durSec=6;
-    durSec=clamp(durSec,2,CONFIG.maxDurationSec);
-    const dur_ms=Math.round(durSec*1000);
+    durSec = clamp(durSec, 2, CONFIG.maxDurationSec);
+    const dur_ms = Math.round(durSec*1000);
 
-    let preset=PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
-    const ease=EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
-    let scope=scopeEl?.value || 'all';
     if (scope==='all' && preset.kind!=='viewport'){
       scope = preset.kind==='overlays' ? 'overlays' : preset.kind;
-      scopeEl.value = scope;
+      $('#raAnimScope').value = scope;
     }
-
-    const W=c.getWidth?.()||0, H=c.getHeight?.()||0, cx=W/2, cy=H/2;
     const viewportOnly = (preset.kind==='viewport' && scope==='all');
-    const targets = viewportOnly? [] : pickTargets(c, scope);
-    if (!viewportOnly && targets.length===0){
-      msg(scope==='base'?'Load a base image first': scope==='overlays'?'Add overlays first':'Add text first');
+
+    running=true; stopRequested=false;
+    msg(record?'Recording…':'Playing…');
+
+    if (viewportOnly && CONFIG.cameraSnapshotForViewport){
+      // Snapshot path
+      let dataURL;
+      try{
+        const canvasSide = Math.max(c.getWidth(), c.getHeight());
+        dataURL = await snapshotCanvasPNG(canvasSide * CONFIG.cameraSnapshotScale, 1);
+      } catch(e){
+        msg('Snapshot failed; falling back');
+        running=false;
+        return;
+      }
+
+      const img = new Image();
+      img.src = dataURL;
+      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; });
+
+      const vidEl = $('#raAnimOut');
+      revokeURL();
+      $('#raAnimDL')?.replaceChildren?.();
+      if (vidEl){ vidEl.style.display='none'; vidEl.pause?.(); vidEl.removeAttribute('src'); }
+
+      const controller = animateSnapshot({
+        img,
+        preset,
+        ease: easeFn,
+        dur_ms,
+        record,
+        scaleFactor: CONFIG.cameraHiDPI,
+        msgCb: msg,
+        finishCb: ({chunks,mime,canvas})=>{
+          if (stopRequested){
+            running=false; stopRequested=false; msg('Canceled');
+            return;
+          }
+          if (record){
+            const blob = new Blob(chunks, { type: mime });
+            const url = URL.createObjectURL(blob);
+            lastURL = url;
+            if (vidEl){
+              vidEl.style.display='block';
+              vidEl.src = url;
+              vidEl.play?.().catch(()=>{});
+            }
+            const dl=$('#raAnimDL');
+            if (dl){
+              dl.innerHTML='';
+              const a=document.createElement('a');
+              a.textContent='Download animation';
+              a.href=url;
+              a.download=`animation_${Date.now()}.${extFromMime(mime)}`;
+              a.className='btn small';
+              dl.appendChild(a);
+            }
+            msg('Done');
+          } else {
+            // For preview without recording, still produce an in-memory recording for consistency (optional).
+            // Simpler: convert last frame to a Blob so video element can show it (simulate playback).
+            const frameURL = canvas.toDataURL('image/png');
+            if (vidEl){
+              vidEl.style.display='block';
+              vidEl.src = frameURL;
+            }
+            msg('Done');
+          }
+          running=false; stopRequested=false;
+        }
+      });
+
+      // Expose controller if needed
+      window.__raAnimController = controller;
       return;
     }
 
-    running=true; stopRequested=false; msg(record?'Recording…':'Playing…');
-
+    // ---- Live object / (fallback) viewport path ----
+    const W=c.getWidth(), H=c.getHeight(), cx=W/2, cy=H/2;
     const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
     const baseHasSkew = (vt0[1]!==0 || vt0[2]!==0);
     const baseScale = vt0[0];
@@ -4225,8 +4389,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const active = c.getActiveObject?.();
     c.discardActiveObject?.(); c.requestRenderAll?.();
 
+    const targets = viewportOnly ? [] : pickTargets(c, scope);
+    if (!viewportOnly && targets.length===0){
+      msg(scope==='base'?'Load a base image first': scope==='overlays'?'Add overlays first':'Add text first');
+      running=false; return;
+    }
+
     const snap=new Map();
-    targets.forEach(o=> snap.set(o,{
+    targets.forEach(o=>snap.set(o,{
       left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY,
       angle:o.angle, opacity:(o.opacity==null?1:o.opacity)
     }));
@@ -4239,7 +4409,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     let rec=null, chunks=[];
     let offCanvas=null, offCtx=null, streamCanvas=null;
     const useOff = CONFIG.useOffscreen && record;
-
     if(record){
       const mime=pickMimeType();
       if(useOff){
@@ -4264,19 +4433,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
       }
     }
 
-    const t0=performance.now();
-    let rafId=0;
-
     function applyViewport(zCam,xN,yN){
       if (!CONFIG.respectExistingViewport || baseHasSkew){
-        // Original behavior (overwrite)
         const e = (1 - zCam) * cx + xN * W;
         const f = (1 - zCam) * cy + yN * H;
         c.setViewportTransform?.([zCam,0,0,zCam,e,f]);
         return;
       }
-      // Compose with existing simple scale+translate
-      // Camera transform relative to identity:
       const eCam = (1 - zCam) * cx + xN * W;
       const fCam = (1 - zCam) * cy + yN * H;
       const finalScale = baseScale * zCam;
@@ -4285,10 +4448,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
       c.setViewportTransform?.([finalScale,0,0,finalScale,finalE,finalF]);
     }
 
+    const t0=performance.now(); let rafId=0;
     function step(now){
       if (stopRequested){ finish(); return; }
       const raw=clamp((now - t0)/dur_ms,0,1);
-      const t=ease(raw);
+      const t=easeFn(raw);
 
       if (viewportOnly){
         const z  = lerp(preset.from.z, preset.to.z, t);
@@ -4305,16 +4469,16 @@ document.addEventListener("DOMContentLoaded", ()=>{
         const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN,preset.to.dyN,t):0;
         const dpx = dx + dxN*W;
         const dpy = dy + dyN*H;
-        const s   = hasScale? lerp(preset.from.s,preset.to.s,t):1;
-        const rot = hasRot?   lerp(preset.from.rot,preset.to.rot,t):0;
-        const a   = hasAlpha? lerp(preset.from.alpha,preset.to.alpha,t):null;
+        const s   = hasScale?lerp(preset.from.s,preset.to.s,t):1;
+        const rot = hasRot?  lerp(preset.from.rot,preset.to.rot,t):0;
+        const a   = hasAlpha?lerp(preset.from.alpha,preset.to.alpha,t):null;
 
         targets.forEach(o=>{
           const o0=snap.get(o); if(!o0) return;
           o.scaleX=o0.scaleX*s;
           o.scaleY=o0.scaleY*s;
-            o.left=o0.left + dpx;
-            o.top =o0.top  + dpy;
+          o.left=o0.left + dpx;
+          o.top =o0.top  + dpy;
           if (hasRot) o.angle=o0.angle+rot;
           if (a!=null) o.opacity=a*(o0.opacity==null?1:o0.opacity);
           o.setCoords?.();
@@ -4364,10 +4528,10 @@ document.addEventListener("DOMContentLoaded", ()=>{
               a.className='btn small';
               dl.appendChild(a);
             }
-            msg('Done. Preview above.');
+            msg('Done');
           };
           rec.stop();
-        }catch(_){}
+        }catch(_){ msg('Done (no recorder)'); }
       } else {
         msg('Done');
       }
@@ -4378,7 +4542,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
         o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
         o.setCoords?.();
       });
-      if(active){ try{ c.setActiveObject?.(active); }catch(_){ } }
+      if (active) { try{ c.setActiveObject?.(active); }catch(_){ } }
 
       if (CONFIG.postFinishLayerEnsure){ try{ window.raEnforceLayerOrder && window.raEnforceLayerOrder(); }catch(_){ } }
       if (CONFIG.postFinishWatermarkEnsure){ try{ window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); }catch(_){ } }
@@ -4394,11 +4558,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
   function isRunning(){ return running; }
 
   window.raAnimate = Object.freeze({
-    run: (opts)=>run(opts||{record:false}),
-    preview: ()=>run({record:false}),
-    export: ()=>run({record:true}),
+    run:(opts)=>run(opts||{record:false}),
+    preview:()=>run({record:false}),
+    export:()=>run({record:true}),
     stop,
-    isRunning
+    isRunning,
+    version: VERSION
   });
 
   function init(){ ensureDock(); }
