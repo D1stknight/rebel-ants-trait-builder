@@ -9226,3 +9226,85 @@ document.addEventListener('ra-collection-change', (e) => {
   }
 
 })();
+
+/* ===== RA_FOOTER_FORCE_OVERRIDE_v1 — always enforce footer position bottom-right ===== */
+(() => {
+  function C() {
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+  function footerObj() {
+    const c = C();
+    return c && (c.getObjects?.() || []).find(o => o._raBrandFooter ||
+      o._raFooterId === 'footer-group' ||
+      (typeof o.text === 'string' && /powered\s+by/i.test(o.text)));
+  }
+
+  function forceFooterPosition() {
+    const c = C();
+    if (!c) return;
+    const footer = footerObj();
+    if (!footer) return;
+    const desiredLeft = c.getWidth() - 60;
+    const desiredTop = c.getHeight() - 20;
+    let dirty = false;
+
+    if (footer.left !== desiredLeft) { footer.left = desiredLeft; dirty = true; }
+    if (footer.top !== desiredTop) { footer.top = desiredTop; dirty = true; }
+    if (footer.originX !== 'right') { footer.originX = 'right'; dirty = true; }
+    if (footer.originY !== 'bottom') { footer.originY = 'bottom'; dirty = true; }
+    if (footer.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { footer.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
+    if (footer.fontSize !== 16) { footer.fontSize = 16; dirty = true; }
+    if (footer.fill !== '#fff') { footer.set('fill', '#fff'); dirty = true; }
+    if (footer.opacity !== 1) { footer.opacity = 1; dirty = true; }
+    const shadow = footer.shadow;
+    if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
+      footer.shadow = new fabric.Shadow({
+        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+      });
+      dirty = true;
+    }
+
+    footer.selectable = false;
+    footer.evented = false;
+    footer.hasControls = false;
+    footer.lockMovementX = true;
+    footer.lockMovementY = true;
+    footer.excludeFromExport = true;
+
+    if (dirty) {
+      try { footer.setCoords(); } catch(_){}
+    }
+    try { c.bringToFront(footer); } catch(_){}
+    c.requestRenderAll?.();
+  }
+
+  function wireFooterOverride() {
+    const c = C();
+    if (!c) { setTimeout(wireFooterOverride, 100); return; }
+    // Run after every render
+    if (!c.__footerForceOverrideBound) {
+      c.__footerForceOverrideBound = true;
+      c.on('after:render', forceFooterPosition);
+      c.on('object:added', forceFooterPosition);
+      c.on('object:removed', forceFooterPosition);
+      c.on('object:modified', forceFooterPosition);
+      // Also on canvas resize
+      try {
+        const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+        new ResizeObserver(forceFooterPosition).observe(el);
+      } catch(_) {}
+      // Also on key app events
+      ['ra-wm-recalc', 'ra-holder-update', 'ra-collection-change'].forEach(ev =>
+        document.addEventListener(ev, forceFooterPosition)
+      );
+      // Initial pass
+      forceFooterPosition();
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireFooterOverride, { once:true });
+  } else {
+    wireFooterOverride();
+  }
+})();
