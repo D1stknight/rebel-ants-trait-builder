@@ -3226,170 +3226,378 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_WATERMARK_SWITCH_FOUNDATION_V1  — add-only, safe no-op
-   What this gives you:
-   • One switch to turn ON watermarking for the "Make Video" flow (later).
-   • Safe preloading of the watermark as a dataURL (avoids CORS issues).
-   • Works with your existing token‑gated video flow.
-   • Does nothing until you flip enableVideoWM to true.
-
-   How to enable later (ONE change):
-   1) In CONFIG below, change enableVideoWM: false  →  true
-   2) Done. No other code edits needed.
-
-   Optional: override watermark via ?wm=https://…/your.png (same as images)
+   RA_MAKE_VIDEO_TOKEN_ONLY_V1 (Enhanced)
+   - Token-only WebM Ken Burns / pan style video export.
+   - Improvements: robust token detection, deterministic frames,
+     progress reporting, cancel support, object URL cleanup, resource safety.
    ========================================================== */
 (() => {
-  if (window.__RA_WM_BOOTED__) return;
-  window.__RA_WM_BOOTED__ = true;
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const easeInOut = t => t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
 
-  // ---------- CONFIG (flip these later if you want the watermark) ----------
-  const CONFIG = {
-    enableVideoWM: false,       // ← flip to true when you want watermark in videos
-    wmWidthRatio: 0.12,         // each corner stamp is 12% of the canvas width
-    marginRatio:  0.02          // ~2% margin from edges
-  };
+  // Config: if false, we snapshot once (faster). If true, re-snapshot each frame (slower but live).
+  const SNAP_EACH_FRAME = false;
 
-  // ---------- Watermark loader (robust + CORS-safe) ----------
-  const queryWM = new URLSearchParams(location.search).get('wm');
-  const candidates = [
-    queryWM,                             // highest priority if provided
-    '/assets/watermark.png?v=wm10',      // your current primary
-    '/watermark.png?v=wm10'              // fallback
-  ].filter(Boolean);
+  let lastObjectURL = null;
 
-  const STATE = {
-    url: null,
-    img: null,        // HTMLImageElement (decoded from dataURL)
-    dataURL: null     // dataURL of the watermark (same-origin safe)
-  };
-
-  async function fetchAsDataURL(url){
-    const r = await fetch(url, { cache:'no-store', mode:'cors' });
-    if (!r.ok) throw new Error('fetch failed');
-    const b = await r.blob();
-    return await new Promise(res => {
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result);
-      fr.readAsDataURL(b);
-    });
-  }
-
-  async function loadWatermark(){
-    for (const u of candidates){
-      try{
-        const data = await fetchAsDataURL(u);
-        const img  = await new Promise((res, rej) => {
-          const im = new Image();
-          im.onload = () => res(im);
-          im.onerror = rej;
-          im.crossOrigin = 'anonymous';
-          im.src = data;
-        });
-        STATE.url = u; STATE.img = img; STATE.dataURL = data;
-        return true;
-      }catch(_){/* try next */}
+  function getFabricCanvas() {
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = $('canvas.lower-canvas') || $('canvas.upper-canvas') || $('canvas');
+    if (!el) return null;
+    for (const k in window) {
+      try {
+        const v = window[k];
+        if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') return v;
+      } catch(_) {}
     }
-    return false;
+    return null;
   }
 
-  function wmBox(w, h){
-    const wmW = Math.max(16, Math.round(w * CONFIG.wmWidthRatio));
-    const wmH = Math.round(STATE.img.height * (wmW / STATE.img.width));
-    const m   = Math.max(6,  Math.round(w * CONFIG.marginRatio));
-    return { wmW, wmH, m };
+  function detectBaseObject(c){
+    return (c.getObjects() || []).find(o => o && o._isBase);
   }
 
-  // Expose a tiny helper if we ever need to paint on a 2D canvas directly (not used today)
-  function paintWMOnCtx(ctx, w, h){
-    if (!STATE.img) return;
-    const { wmW, wmH, m } = wmBox(w, h);
-    try {
-      // TL
-      ctx.drawImage(STATE.img, m, m, wmW, wmH);
-      // BR
-      ctx.drawImage(STATE.img, w - m - wmW, h - m - wmH, wmW, wmH);
-    } catch(_){}
+  function baseIsToken(){
+    const c = getFabricCanvas(); if (!c) return false;
+    const base = detectBaseObject(c); if (!base) return false;
+    // Non-token mode typically has watermark elements or combined group.
+    if (base._raWMCenter || base._raWMRing || base._isWatermark) return false;
+    if (base.type === 'group') {
+      const kids = (base._objects || []);
+      const hasWM = kids.some(k => k && (k._raWMCenter || k._raWMRing || k._isWatermark || k.raWM || k.raPos));
+      return !hasWM;
+    }
+    // Plain image with no watermark flags => treat as token
+    return base.type === 'image';
   }
 
- // ---------- Fabric helpers (legacy TEMP watermark) ----------
-// Phase 2 cleanup: legacy temp watermark helpers neutralized.
+  function currentTokenId(){
+    const box = $('#tokenIdDisplay') || $('#tokenIdInput');
+    const raw = (box && (box.value || box.textContent) || '').trim();
+    if (!raw) return '';
+    const n = parseInt(raw.replace(/[^0-9]/g,''),10);
+    return Number.isFinite(n) ? String(n) : '';
+  }
 
-// Keep ONLY if you still need a baseIsToken here; else remove this duplicate.
-// If another baseIsToken exists earlier, delete this one to avoid confusion.
-function baseIsToken(){
-  // (Phase 2) Retained helper or duplicate; adjust/remove if already defined elsewhere.
-  const c = window.canvas;
-  if (!c) return false;
-  const base = (c.getObjects?.()||[]).find(o => o && o._isBase);
-  return !!(base && base.type === 'image');
-}
+  function snapshotCanvasPNG(targetSide=720){
+    const c = getFabricCanvas();
+    if (!c) throw new Error('Canvas not ready');
+    const cw = c.getWidth(), ch = c.getHeight();
+    const side = Math.max(cw,ch) || 1024;
+    const mul = clamp(targetSide/side, 0.25, 3);
+    return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
+  }
 
-// Neutralized legacy temp watermark add/remove (no-op stubs).
-function addTempFabricWM(){ /* no-op */ }
-function removeTempFabricWM(){ /* no-op */ }
-   
-  // ---------- Gentle hook for "Make Video" button (no-op until you flip the switch) ----------
-  function waitForVideoDone(timeoutMs=60000){
-    return new Promise(resolve => {
-      const obs = new MutationObserver(() => {
-        // heuristic: look for a .webm download link or a status that says done
-        const link = document.querySelector('a[download$=".webm"], a[href$=".webm"]');
-        const stat = document.getElementById('raAnimStatus');
-        if (link || /done|saved|complete/i.test((stat?.textContent||'').toLowerCase())){
-          try{ obs.disconnect(); }catch(_){}
-          resolve();
-        }
+  function chooseMimeType(){
+    const cand = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ];
+    for (const m of cand){
+      if (MediaRecorder?.isTypeSupported?.(m)) return m;
+    }
+    return '';
+  }
+
+  // Profiles
+  const PROFILES = {
+    in:    { z0:1.05, z1:1.20, pan:'none'  },
+    out:   { z0:1.20, z1:1.05, pan:'none'  },
+    lr:    { z0:1.12, z1:1.12, pan:'lr'    },
+    tb:    { z0:1.12, z1:1.12, pan:'tb'    },
+    drift: { z0:1.10, z1:1.18, pan:'diag'  }
+  };
+
+  const STYLE_MAP = {
+    'Zoom In':'in', 'Zoom Out':'out',
+    'Pan L→R':'lr', 'Pan T→B':'tb', 'Drift':'drift'
+  };
+
+  function drawKenBurns(ctx, img, tNorm, res, mode) {
+    const prof = PROFILES[mode] || PROFILES.in;
+    const W = img.naturalWidth || img.width;
+    const H = img.naturalHeight || img.height;
+    const cover = Math.max(res/W, res/H);
+    const e = easeInOut(tNorm);
+    const zoom = prof.z0 + (prof.z1 - prof.z0)*e;
+
+    const scaledW = W * cover * zoom;
+    const scaledH = H * cover * zoom;
+    const maxX = Math.max(0, (scaledW - res)/2);
+    const maxY = Math.max(0, (scaledH - res)/2);
+
+    let shiftX=0, shiftY=0;
+    if (prof.pan==='lr')   shiftX = -maxX + 2*maxX*e;
+    if (prof.pan==='tb')   shiftY = -maxY + 2*maxY*e;
+    if (prof.pan==='diag'){ shiftX = -maxX + 2*maxX*e; shiftY =  maxY - 2*maxY*e; }
+
+    ctx.save();
+    ctx.clearRect(0,0,res,res);
+    ctx.translate(res/2 + shiftX, res/2 + shiftY);
+    ctx.scale(cover*zoom, cover*zoom);
+    ctx.drawImage(img, -W/2, -H/2);
+    ctx.restore();
+  }
+
+  function bitrateFor(res){
+    if (res >= 1440) return 8_000_000;
+    if (res >= 1080) return 7_000_000;
+    if (res >= 1024) return 6_000_000;
+    if (res >= 720)  return 5_000_000;
+    if (res >= 512)  return 4_000_000;
+    return 3_000_000;
+  }
+
+  async function makeVideo({ style='in', seconds=5, size=720, statusEl, linkEl, buttonEl, cancelEl }) {
+    if (!baseIsToken()){
+      statusEl && (statusEl.textContent = 'Token-only: load a token image first.');
+      return;
+    }
+
+    // Cleanup prior object URL
+    if (lastObjectURL){
+      URL.revokeObjectURL(lastObjectURL);
+      lastObjectURL = null;
+    }
+
+    const res = clamp(parseInt(size,10)||720, 256, 2048);
+    const fps = 30;
+    const totalFrames = Math.max(10, Math.round(seconds * fps));
+    const modeKey = STYLE_MAP[style] || PROFILES[style] ? style : 'drift';
+
+    let aborted = false;
+    function abort(){
+      aborted = true;
+      statusEl && (statusEl.textContent = 'Canceled.');
+    }
+
+    if (cancelEl){
+      cancelEl.onclick = (e)=>{ e.preventDefault(); abort(); };
+      cancelEl.style.visibility = 'visible';
+    }
+
+    let baseDataURL = null;
+    if (SNAP_EACH_FRAME === false){
+      try {
+        statusEl && (statusEl.textContent = 'Snapshot…');
+        baseDataURL = snapshotCanvasPNG(res);
+      } catch(e){
+        statusEl && (statusEl.textContent = 'Snapshot failed (CORS).');
+        return;
+      }
+    }
+
+    // Offscreen
+    const off = document.createElement('canvas');
+    off.width = res; off.height = res;
+    const ctx = off.getContext('2d', { alpha:false });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    let img = new Image();
+    if (baseDataURL){
+      img.src = baseDataURL;
+      try { await imgDecode(img); } catch(_) {}
+    }
+
+    function imgDecode(image){
+      return new Promise((resv,rej)=>{
+        if (image.complete && image.naturalWidth) return resv();
+        image.onload = ()=>resv();
+        image.onerror = e=>rej(e);
       });
-      obs.observe(document.body, { childList:true, subtree:true, characterData:true });
-      setTimeout(() => { try{ obs.disconnect(); }catch(_){}
-        resolve();
-      }, timeoutMs);
+    }
+
+    const mime = chooseMimeType();
+    if (!mime){
+      statusEl && (statusEl.textContent='No WebM support (try Chrome/Edge).');
+      return;
+    }
+
+    const stream = off.captureStream(fps);
+    const chunks = [];
+    let rec;
+    try {
+      rec = new MediaRecorder(stream, {
+        mimeType: mime,
+        videoBitsPerSecond: bitrateFor(res)
+      });
+    } catch(e){
+      statusEl && (statusEl.textContent='Cannot start recorder.');
+      return;
+    }
+    rec.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+    const doneP = new Promise(r => { rec.onstop = r; });
+
+    if (buttonEl){ buttonEl.disabled = true; buttonEl.textContent='Rendering…'; }
+    statusEl && (statusEl.textContent='Rendering 0%');
+
+    rec.start();
+
+    let frameIndex = 0;
+    const c = getFabricCanvas();
+
+    async function renderFrame(){
+      if (aborted){
+        try { rec.stop(); } catch(_) {}
+        return;
+      }
+
+      // Optionally re-snapshot each frame (dynamic updates) – very slow for bigger canvases
+      if (SNAP_EACH_FRAME){
+        try {
+          const d = snapshotCanvasPNG(res);
+          if (!img) img = new Image();
+          img.src = d;
+          await imgDecode(img);
+        } catch(_) {}
+      }
+
+      const tNorm = frameIndex / (totalFrames-1);
+      drawKenBurns(ctx, img, tNorm, res, modeKey);
+      frameIndex++;
+
+      if (statusEl && frameIndex % 5 === 0){
+        statusEl.textContent = `Rendering ${Math.min(100, Math.round((frameIndex/totalFrames)*100))}%`;
+      }
+
+      if (frameIndex < totalFrames){
+        requestAnimationFrame(renderFrame);
+      } else {
+        // Tail frames (2) to let encoder flush
+        let tail = 2;
+        function tailLoop(){
+          if (tail-- > 0){
+            requestAnimationFrame(tailLoop);
+          } else {
+            try { rec.stop(); } catch(_) {}
+          }
+        }
+        tailLoop();
+      }
+    }
+    requestAnimationFrame(renderFrame);
+
+    await doneP;
+
+    if (aborted){
+      if (buttonEl){ buttonEl.disabled=false; buttonEl.textContent='Make Video (Token Only)'; }
+      cancelEl && (cancelEl.style.visibility='hidden');
+      return;
+    }
+
+    const blob = new Blob(chunks, { type: mime });
+    const url = URL.createObjectURL(blob);
+    lastObjectURL = url;
+
+    const tid = currentTokenId();
+    const niceName = `rebel-ant${tid?`-token-${tid}`:''}-${modeKey}-${res}.webm`;
+
+    if (linkEl){
+      linkEl.href = url;
+      linkEl.download = niceName;
+      linkEl.style.display='inline-block';
+      linkEl.textContent=`Download ${niceName}`;
+      linkEl.onclick = () => {
+        // Revoke after short delay so download initiates
+        setTimeout(()=>{
+          if (lastObjectURL){
+            URL.revokeObjectURL(lastObjectURL);
+            lastObjectURL = null;
+          }
+        }, 1500);
+      };
+    }
+    statusEl && (statusEl.textContent = `Done (${(blob.size/1024|0)} KB).`);
+    if (buttonEl){ buttonEl.disabled=false; buttonEl.textContent='Make Video (Token Only)'; }
+    cancelEl && (cancelEl.style.visibility='hidden');
+  }
+
+  function ensurePanel(){
+    if ($('#raVideoPanel')) return $('#raVideoPanel');
+
+    const anchorCard =
+      $$('h3,h2').find(h => /animate|animation/i.test((h.textContent||'').toLowerCase()))?.parentElement
+      || $('main') || $('.content') || document.body;
+
+    const pane = document.createElement('section');
+    pane.id='raVideoPanel';
+    pane.style.cssText='margin:16px 0 28px 0;border:1px solid #222;border-radius:12px;background:#0d0e13;color:#e7e7ea;padding:12px';
+    pane.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <h3 style="margin:0;font:600 14px/1.2 -apple-system,Segoe UI,Roboto,Arial">Video (token‑only)</h3>
+        <span id="raVMsg" style="font:12px/1.2 -apple-system,Segoe UI,Roboto,Arial;opacity:.75"></span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <label style="font-size:12px;opacity:.9">Style
+          <select id="raVStyle" class="input" style="margin-left:6px">
+            <option>Zoom In</option>
+            <option>Zoom Out</option>
+            <option>Pan L→R</option>
+            <option>Pan T→B</option>
+            <option selected>Drift</option>
+          </select>
+        </label>
+        <label style="font-size:12px;opacity:.9">Duration
+          <select id="raVDur" class="input" style="margin-left:6px">
+            <option>3</option>
+            <option selected>5</option>
+            <option>8</option>
+          </select> s
+        </label>
+        <label style="font-size:12px;opacity:.9">Size
+          <select id="raVRes" class="input" style="margin-left:6px">
+            <option>512</option>
+            <option selected>720</option>
+            <option>1024</option>
+          </select> px
+        </label>
+        <button id="raVMake" class="btn" style="margin-left:auto;background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:8px 12px;cursor:pointer">Make Video (Token Only)</button>
+        <a id="raVCancel" href="#" style="visibility:hidden;margin-left:4px;font-size:12px;color:#f87171;text-decoration:none;">× Cancel</a>
+        <a id="raVDown" href="#" download style="display:none;margin-left:8px;font-size:12px;text-decoration:underline">Download</a>
+      </div>
+      <div style="margin-top:8px;font-size:11px;opacity:.65">
+        Tip: Works only if the loaded base is a token (no watermark group). Snapshot is static (canvas changes after start won’t appear).
+      </div>
+    `;
+    anchorCard.appendChild(pane);
+
+    const makeBtn = $('#raVMake', pane);
+    const msg     = $('#raVMsg', pane);
+    const downLn  = $('#raVDown', pane);
+    const cancelL = $('#raVCancel', pane);
+
+    makeBtn.addEventListener('click', async () => {
+      downLn.style.display = 'none';
+      msg.textContent = '';
+      const style = ($('#raVStyle', pane)?.value || 'Drift');
+      const secs  = parseInt(($('#raVDur',  pane)?.value || '5'), 10);
+      const size  = parseInt(($('#raVRes',  pane)?.value || '720'), 10);
+      await makeVideo({ style, seconds: secs, size, statusEl: msg, linkEl: downLn, buttonEl: makeBtn, cancelEl: cancelL });
     });
+
+    // Clear gate message as canvas changes
+    const c = getFabricCanvas();
+    if (c && !c.__raVideoGateWired){
+      c.__raVideoGateWired = true;
+      c.on('object:added',   ()=>{ if ($('#raVideoPanel')) $('#raVMsg').textContent=''; });
+      c.on('object:removed', ()=>{ if ($('#raVideoPanel')) $('#raVMsg').textContent=''; });
+    }
+
+    return pane;
   }
 
-  function hookMakeVideoButton(){
-    if (!CONFIG.enableVideoWM) return; // ← stays dormant until you flip the switch
-
-    // Intercept clicks on any button/link that looks like "Make Video"
-    const labels = ['make video','render video','animate','make preview','create video'];
-    document.addEventListener('click', async (e) => {
-      const el = e.target && e.target.closest && e.target.closest('button, a');
-      if (!el) return;
-
-      const t = (el.textContent || el.value || '').toLowerCase().trim();
-      if (!labels.some(k => t.includes(k))) return;   // not our button
-      if (!window.canvas) return;
-      if (!baseIsToken()) return;                      // keep token‑gated semantics
-
-      // Prepare watermark image
-      await ensureWMReady();
-      if (!STATE.img) return; // nothing to add
-
-      // Add temp WM objects, let the app's own handler run, then remove when done
-      addTempFabricWM();          // we do NOT preventDefault; original click proceeds
-      waitForVideoDone(60000).then(removeTempFabricWM);
-    }, true); // capture=true so we add WM before the app starts recording frames
+  function boot(){ try { ensurePanel(); } catch(_){} }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', boot, {once:true});
+  } else {
+    boot();
   }
-
-  // Boot
-  hookMakeVideoButton();
-
-// Phase 2: legacy watermark loader stub so rest of file keeps working
-async function ensureWMReady(){ /* no-op */ }
-   
-  // Expose tiny API for future use (optional)
-  window.raWatermark = Object.freeze({
-    options: CONFIG,
-    url: () => STATE.url,
-    dataURL: () => STATE.dataURL,
-    img: () => STATE.img,
-    ready: ensureWMReady,
-    paintOnCtx: paintWMOnCtx,
-    addTempFabricWM,
-    removeTempFabricWM
-  });
 })();
+
 /* ==========================================================
    RA_UNDO_REDO_SAFE_MINI_V1
    • Super‑safe: never restores anything unless you click Undo/Redo.
