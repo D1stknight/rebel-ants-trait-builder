@@ -8297,7 +8297,7 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — improved for undo/overlay/stacking stability ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — improved for undo/overlay/stacking stability, with preferred footer ===== */
 ;(() => {
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
   window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
@@ -8328,49 +8328,73 @@ window.raDump = () => {
     wm.setCoords();
   }
 
- function createPreferredFooter(c) {
-  // Remove any existing footers first
-  (c.getObjects?.() || []).filter(isFooter).forEach(f => { try { c.remove(f); } catch(_){ } });
-  // Create new preferred footer
-  const footer = new fabric.Text('Powered by Rebel Studios', {
-    fontFamily: 'Inter, system-ui, Arial, sans-serif',
-    fontSize: 16, // matches preferred look
-    fill: '#fff', // white text
-    opacity: 1,   // fully opaque
-    originX: 'right',
-    originY: 'bottom',
-    left: c.getWidth() - 20, // 20px from right edge
-    top: c.getHeight() - 20, // 20px from bottom edge
-    selectable: false,
-    evented: false,
-    shadow: new fabric.Shadow({
-      color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
-    }),
-    _raBrandFooter: true,
-    _raSys: true
-  });
-  c.add(footer);
-  return footer;
-}
+  // Create the preferred footer if missing
+  function createPreferredFooter(c) {
+    const footer = new fabric.Text('Powered by Rebel Studios', {
+      fontFamily: 'Inter, system-ui, Arial, sans-serif',
+      fontSize: 16, // preferred look
+      fill: '#fff', // white text
+      opacity: 1,   // fully opaque
+      originX: 'right',
+      originY: 'bottom',
+      left: c.getWidth() - 20, // 20px from right edge
+      top: c.getHeight() - 20, // 20px from bottom edge
+      selectable: false,
+      evented: false,
+      shadow: new fabric.Shadow({
+        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+      }),
+      _raBrandFooter: true,
+      _raSys: true
+    });
+    c.add(footer);
+    return footer;
+  }
 
-function ensureFooter() {
-  const c = C();
-  if (!c) return null;
-  let footers = (c.getObjects?.() || []).filter(isFooter);
-  if (footers.length > 1) {
-    // Remove extras, keep last
-    footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch(_){ } });
-    footers = [footers[footers.length - 1]];
+  // Dedupe and restore preferred footer, only update if necessary
+  function ensureFooter() {
+    const c = C();
+    if (!c) return null;
+    let footers = (c.getObjects?.() || []).filter(isFooter);
+    // Dedupe: if multiple, remove extras
+    if (footers.length > 1) {
+      footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch(_){ } });
+      footers = [footers[footers.length - 1]];
+    }
+    let footer = footers[0];
+    // If missing, create one
+    if (!footer) {
+      if (!window.fabric) return null;
+      footer = createPreferredFooter(c);
+    } else {
+      // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
+      let dirty = false;
+      if (footer.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { footer.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
+      if (footer.fontSize !== 16) { footer.fontSize = 16; dirty = true; }
+      if (footer.fill !== '#fff') { footer.set('fill', '#fff'); dirty = true; }
+      if (footer.opacity !== 1) { footer.opacity = 1; dirty = true; }
+      if (footer.originX !== 'right') { footer.originX = 'right'; dirty = true; }
+      if (footer.originY !== 'bottom') { footer.originY = 'bottom'; dirty = true; }
+      const desiredLeft = c.getWidth() - 20;
+      const desiredTop = c.getHeight() - 20;
+      if (footer.left !== desiredLeft) { footer.left = desiredLeft; dirty = true; }
+      if (footer.top !== desiredTop) { footer.top = desiredTop; dirty = true; }
+      // Update shadow if needed
+      const shadow = footer.shadow;
+      if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
+        footer.shadow = new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        });
+        dirty = true;
+      }
+      if (dirty) {
+        try { footer.setCoords(); } catch(_){}
+        quarantine(footer);
+      }
+    }
+    quarantine(footer);
+    return footer;
   }
-  let footer = footers[0];
-  // If missing or not styled as preferred, create preferred
-  if (!footer || footer.fontFamily !== 'Inter, system-ui, Arial, sans-serif' || footer.fontSize !== 16) {
-    footer = createPreferredFooter(c);
-  }
-  // Always quarantine footer
-  quarantine(footer);
-  return footer;
-}
 
   // Create or restore the ring if missing and should be present (for disconnected/manual upload)
   function ensureRing(){
@@ -8411,7 +8435,6 @@ function ensureFooter() {
     const base = all.find(isBase);
 
     // Always restore ring and footer if they should be present
-    // Disconnected/manual upload: both should be present
     if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
       const desired = RAWatermark.debug().desired;
       if (desired.ring) ensureRing();
