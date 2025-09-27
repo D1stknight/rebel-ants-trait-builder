@@ -8297,45 +8297,19 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — center-ring only; make/show on uploads; no overlay interference ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — improved for undo/overlay/stacking stability ===== */
 ;(() => {
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
   window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // RAF-based watermark evaluation to prevent Safari timer races
-  let WM_EVAL_SCHEDULED = false;
-  let WM_READY = false;
-  let LOAD_TOKEN_SESSION = null;
-
-  function scheduleWMEval(reason) {
-    if (WM_EVAL_SCHEDULED || window.__RA_RESTORING__) return;
-    WM_EVAL_SCHEDULED = true;
-    requestAnimationFrame(() => {
-      WM_EVAL_SCHEDULED = false;
-      if (!window.__RA_RESTORING__) {
-        ensureRingPresent();
-      }
-    });
-  }
-
-  // Rebel contract (lowercase)
-  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
-
-  // Recognizers (STRICT ring match — do NOT treat corner stamps as watermark)
+  // Recognizers
   const isFooter = o => !!(o && (o._raBrandFooter || o._raFooterId === 'footer-group' || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isRing   = o => !!(o && (o._raWMCenter === true || o._raWMCenterId === 'center-ring'));      // <— only the center ring
+  const isRing   = o => !!(o && (o._raWMCenter === true || o._raWMCenterId === 'center-ring'));
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
-
-  // Small “restore” window to avoid one-frame flashes
-  let lastRestoreSeen = 0;
-  const restoring = () => {
-    if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
-    return (Date.now() - lastRestoreSeen) < 400;
-  };
 
   function quarantine(o){
     if (!o) return;
@@ -8354,33 +8328,102 @@ window.raDump = () => {
     wm.setCoords();
   }
 
+  // Create or restore the footer if missing and should be present
+  function ensureFooter(){
+    const c = C();
+    if (!c) return null;
+    let foot = (c.getObjects?.() || []).find(isFooter);
+    if (!foot) {
+      if (!window.fabric) return null;
+      foot = new fabric.Text('Powered by Rebel Studios', {
+        fontFamily:'Inter, system-ui, Arial, sans-serif',
+        fontSize:12, fill:'#cfcfcf', opacity:0.88,
+        originX:'right', originY:'bottom',
+        left: c.getWidth() - 10,
+        top:  c.getHeight() - 8,
+        selectable:false, evented:false,
+        _raBrandFooter:true, _raSys:true
+      });
+      c.add(foot);
+    }
+    quarantine(foot);
+    return foot;
+  }
+
+  // Create or restore the ring if missing and should be present (for disconnected/manual upload)
+  function ensureRing(){
+    const c = C();
+    if (!c) return null;
+    let ring = (c.getObjects?.() || []).find(isRing);
+    if (!ring) {
+      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+      if (!window.fabric) return null;
+      fabric.Image.fromURL(src, img => {
+        if (!img) return;
+        img.set({
+          originX:'center', originY:'center',
+          selectable:false, evented:false, hasControls:false,
+          objectCaching:false,
+          opacity: 0.18
+        });
+        img._raWMCenter = true;
+        img._raSys = true;
+        img.excludeFromExport = true;
+        centerRing(img);
+        c.add(img);
+        quarantine(img);
+        try { c.requestRenderAll(); } catch(_){}
+      }, { crossOrigin:'anonymous' });
+    } else {
+      quarantine(ring);
+      centerRing(ring);
+      ring.visible = true;
+    }
+    return ring;
+  }
+
   function assertTopNow(){
     const c = C(); if (!c) return;
     const all  = c.getObjects?.() || [];
     const bg   = all.find(isBg);
     const base = all.find(isBase);
 
+    // Always restore ring and footer if they should be present
+    // Disconnected/manual upload: both should be present
+    if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
+      const desired = RAWatermark.debug().desired;
+      if (desired.ring) ensureRing();
+      else {
+        const ring = all.find(isRing);
+        if (ring) ring.visible = false;
+      }
+      if (desired.footer) ensureFooter();
+      else {
+        const foot = all.find(isFooter);
+        if (foot) foot.visible = false;
+      }
+    } else {
+      // Fallback: always show both for disconnected/manual upload
+      ensureRing();
+      ensureFooter();
+    }
+
+    // Stacking logic
     if (bg){
       bg.selectable=false; bg.evented=false; bg.hasControls=false;
       try { c.moveTo(bg, 0); } catch(_){}
     }
 
-    // Footer: hidden on Rebel or while restoring
     const foot = all.find(isFooter);
-    const cc = String(base?._tokenContract || '').toLowerCase();
-    if (foot){
-      quarantine(foot);
-      if (restoring() || (cc && cc === REBEL_CONTRACT)) foot.visible = false;
-    }
+    if (foot) quarantine(foot);
 
-    // Single center ring, always seated right above base and centered
-    const wm = all.find(isRing);
-    if (wm){
-      quarantine(wm);
-      centerRing(wm);
+    const ring = all.find(isRing);
+    if (ring) {
+      quarantine(ring);
+      centerRing(ring);
       if (base){
         const baseZ = all.indexOf(base);
-        try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
+        try { c.moveTo(ring, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
       }
     }
 
@@ -8390,248 +8433,44 @@ window.raDump = () => {
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
     } catch(_){}
-  }
-
-  // Helper functions for singleton ring and footer management
-  function getOrCreateRing() {
-    const c = C(); 
-    if (!c) return null;
-    
-    // Guard against operations during restore
-    if (window.__RA_RESTORING__) return null;
-    
-    // Find existing ring by stable id
-    let wm = (c.getObjects?.() || []).find(o => o && o._raWMCenterId === 'center-ring');
-    return wm;
-  }
-
-  function getOrCreateFooter() {
-    const c = C(); 
-    if (!c) return null;
-    
-    const all = c.getObjects?.() || [];
-    
-    // Remove any duplicate footers before proceeding
-    const footers = all.filter(isFooter);
-    if (footers.length > 1) {
-      // Keep the last one, remove extras
-      const keep = footers[footers.length - 1];
-      footers.slice(0, -1).forEach(f => {
-        try { c.remove(f); } catch(_) {}
-      });
-      return keep;
-    }
-    
-    return footers[0] || null;
-  }
-
-  function onBaseLoaded(base) {
-    // Generate unique token for this load session
-    LOAD_TOKEN_SESSION = Date.now() + '_' + Math.random().toString(36).substring(2);
-    
-    // Set WM_READY when base exists and has non-zero dimensions
-    if (base && base.width && base.height && base.width > 0 && base.height > 0) {
-      WM_READY = true;
-      scheduleWMEval('base-loaded');
-    }
-  }
-
-  function onBaseResized(base) {
-    // If ring exists, rescale once; no visibility toggle here
-    if (base && WM_READY) {
-      const wm = getOrCreateRing();
-      if (wm) {
-        centerRing(wm);
-        try { window.canvas && window.canvas.requestRenderAll(); } catch(_) {}
-      }
-    }
-  }
-
-  // Create or show the center ring watermark when rules say it should be visible.
-  function ensureRingPresent(){
-    // Implementation H: Guard any watermark creation/visibility changes when window.__RA_RESTORING__ is true
-    if (window.__RA_RESTORING__) return;
-    
-    const c = C(); if (!c) return;
-    
-    // Guard against watermark changes during restore operations
-    if (window.__RA_RESTORING__) return;
-    
-    const all  = c.getObjects?.() || [];
-    const base = all.find(isBase);
-    
-    // Implementation B: if no base image is present yet, do not create/resize a ring; hide any existing _raWMCenter
-    if (!base) {
-      const existingRing = all.find(isRing);
-      if (existingRing) {
-        existingRing.visible = false;
-        try { c.requestRenderAll(); } catch(_) {}
-      }
-      return;
-    }
-
-    const cc = String(base._tokenContract || '').toLowerCase();
-    const hs = (window.RA_HOLDER_STATE || {});
-    
-    // Implementation G: Build RA_HOLDER_STATE.matches by exact contract across all configured chains
-    const matches = hs.matches || [];
-    const rebelMatch = matches.find(m => m.holds && m.tag === 'rebel' && m.address && m.address.toLowerCase() === cc);
-    const chumpzMatch = matches.find(m => m.holds && m.tag === 'friend' && 
-                                     m.address && m.address.toLowerCase() === '0xa9a1d086623475595a02991664742e4a1cbafcb8' &&
-                                     cc === '0xa9a1d086623475595a02991664742e4a1cbafcb8');
-    
-    // Implementation G: For Rebel base: if holder matches Rebel contract, do not create the center ring at all
-    if (cc === REBEL_CONTRACT && rebelMatch) {
-      let wm = all.find(isRing);
-      if (wm) {
-        c.remove(wm);
-        try { c.requestRenderAll(); } catch(_) {}
-      }
-      return;
-    }
-    
-    // Implementation G: For Chumpz base: if holder matches Chumpz on Ape RPC, hide ring and keep footer
-    if (cc === '0xa9a1d086623475595a02991664742e4a1cbafcb8' && chumpzMatch) {
-      let wm = all.find(isRing);
-      if (wm) {
-        c.remove(wm);
-        try { c.requestRenderAll(); } catch(_) {}
-      }
-      return; // footer will be handled separately
-    }
-
-    // Legacy holder logic for other cases
-    const isHolder = !!(hs.hasRebel || hs.hasFriend);
-
-    // show ring for: manual uploads (no contract) and Friend tokens (non‑Rebel),
-    // hide ring for: Rebel tokens and any holder (unless overridden by admin)
-    // Implementation G: respect holder override (window.__raWMForce.off) to prevent re-enabling ring
-    const force = window.__raWMForce;
-    const shouldShow = (force && force.off) ? false :
-                      (force && force.on) ? true :
-                      ((!cc || cc !== REBEL_CONTRACT) && !isHolder);
-
-    let wm = getOrCreateRing();
-    if (!wm && shouldShow){
-      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
-      fabric.Image.fromURL(src, img => {
-        if (!img) return;
-        img.set({
-          originX:'center', originY:'center',
-          selectable:false, evented:false, hasControls:false,
-          objectCaching:false,
-          opacity: (typeof window.__RA_WM_ADMIN_OPACITY === 'number'
-                    ? window.__RA_WM_ADMIN_OPACITY : 0.18)
-        });
-        img._raWMCenter = true;          // tag as “the ring WM”
-        img._raSys = true; img.excludeFromExport = true;
-
-        centerRing(img);
-        c.add(img);
-        assertTopNow();
-        try { c.requestRenderAll(); } catch(_){}
-      }, { crossOrigin:'anonymous' });
-    } else if (wm){
-      wm.visible = shouldShow;
-      centerRing(wm);
-      assertTopNow();
-      try { c.requestRenderAll(); } catch(_){}
-    }
+    c.requestRenderAll();
   }
 
   function wire(){
-    const c = C(); if (!c) { scheduleWMEval('retry-wire'); return setTimeout(wire, 120); }
+    const c = C(); if (!c) { setTimeout(wire, 120); return; }
     if (c.__raWmFooterFixShimV7rBound) return;
     c.__raWmFooterFixShimV7rBound = true;
 
-    // Prevent one‑frame footer flash during restores
-    c.on?.('before:render', () => {
-      if (!restoring()) return;
-      (c.getObjects?.() || []).forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
-    });
-
-    // Keep order/centering stable at all times
-    c.on?.('after:render',    assertTopNow);
-    c.on?.('object:modified', (e) => {
-      // Don't trigger WM changes on overlay/text object moves 
+    // Prevent watermark logic on overlays/text
+    const skipOverlayEvent = e => {
       const obj = e?.target;
       if (obj && (obj._kind === 'overlay' || obj._kind === 'text')) return;
       assertTopNow();
-    });
-    c.on?.('object:removed',  assertTopNow);
+    };
 
-    // Block object:moving events from triggering WM changes
-    c.on?.('object:moving', (e) => {
-      // Never react to object:moving for overlays/text - prevents blink on drag
-      return;
-    });
+    // Listen for canvas events, but skip overlays/text
+    c.on('object:added', skipOverlayEvent);
+    c.on('object:removed', skipOverlayEvent);
+    c.on('object:modified', skipOverlayEvent);
 
-    // When a new Base is added (manual upload / token load), ensure ring state
-    c.on?.('object:added', (e) => {
-      if (e && e.target && e.target._isBase) {
-        const base = e.target;
-        // Only fire onBaseLoaded once per load with token guard
-        const currentToken = LOAD_TOKEN_SESSION;
-        onBaseLoaded(base);
-        // Ignore subsequent fabric object:added for the same image if token matches
-        if (LOAD_TOKEN_SESSION === currentToken) {
-          scheduleWMEval('base-added');
-        }
-      }
-      assertTopNow();
-    });
+    // Support undo: if you're using a custom undo event, wire here
+    if (c.onUndo) c.onUndo(assertTopNow);
 
-// Helpers
-function hasBaseLoaded() {
-  try {
-    const c = typeof C === 'function' ? C() : null;
-    if (!c || typeof c.getObjects !== 'function') return false;
-    return !!(c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
-  } catch {
-    return false;
-  }
-}
+    // Listen for watermark/collection/holder changes
+    ['ra-wm-recalc', 'ra-holder-update', 'ra-collection-change'].forEach(ev =>
+      document.addEventListener(ev, assertTopNow)
+    );
 
-// React to admin/wallet changes (active)
-['ra-wm-recalc', 'ra-holder-update'].forEach(ev =>
-  document.addEventListener(ev, () => {
-    if (typeof ensureRingPresent === 'function') ensureRingPresent();
-    if (typeof scheduleWMEval === 'function') scheduleWMEval(ev);
-  })
-);
-
-// Collection change handler — passive unless a base is already loaded
-document.addEventListener('ra-collection-change', (e) => {
-  if (!hasBaseLoaded()) return; // skip until base is present
-  if (typeof ensureRingPresent === 'function') ensureRingPresent();
-  if (typeof scheduleWMEval === 'function') scheduleWMEval('ra-collection-change');
-});
-
-// Handle base loaded events — now safe to evaluate watermark/ring
-document.addEventListener('ra-base-loaded', (e) => {
-  const base = e.detail?.base;
-  if (base && typeof onBaseLoaded === 'function') onBaseLoaded(base);
-  if (typeof ensureRingPresent === 'function') ensureRingPresent();
-  if (typeof scheduleWMEval === 'function') scheduleWMEval('ra-base-loaded');
-});
-
-    // Keep ring centered on canvas size changes
+    // Canvas resize (keep ring/footer centered)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmCenterResizeObs){
         c.__raWmCenterResizeObs = true;
-        new ResizeObserver(() => {
-          const wm = getOrCreateRing();
-          if (wm){ 
-            centerRing(wm); 
-            try { c.requestRenderAll(); } catch(_) {} 
-          }
-        }).observe(el);
+        new ResizeObserver(assertTopNow).observe(el);
       }
     } catch(_){}
 
-    // First pass
-    scheduleWMEval('initial');
+    // Initial pass
     assertTopNow();
   }
 
