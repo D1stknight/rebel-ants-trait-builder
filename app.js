@@ -3226,10 +3226,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_MAKE_VIDEO_TOKEN_ONLY_V1 (Enhanced + Watermark Behavior Switch)
+   RA_MAKE_VIDEO_TOKEN_ONLY_V1 (Enhanced + Watermark Behavior Switch + Export Fix)
    wmBehavior:
-     'inherit' (default) - watermark/footers animate WITH artwork (current behavior)
+     'inherit' (default) - watermark/footers animate WITH artwork (snapshot includes them)
      'lock'               - watermark rendered as a static overlay pinned to video frame
+   Watermark export fix:
+     Forces any visible watermark objects (excludeFromExport:true) to be included in snapshots,
+     then restores their original flags.
    ========================================================== */
 (() => {
   const $  = (s, r=document) => r.querySelector(s);
@@ -3237,18 +3240,26 @@ document.addEventListener("DOMContentLoaded", ()=>{
   const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
   const easeInOut = t => t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
 
-  // -------- CONFIG --------
-  const SNAP_EACH_FRAME = false;          // (Ken Burns) re-snapshot each frame (expensive)
+  // -------- MAIN CONFIG --------
+  const SNAP_EACH_FRAME = false;    // (Ken Burns) re-snapshot each frame (expensive)
   const CONFIG = {
-    wmBehavior: 'inherit',                // 'inherit' | 'lock'
-    requireToken: true,                   // token gating
-    lockOverlayOpacity: 0.9,              // opacity when wmBehavior = 'lock'
-    lockOverlayScaleMode: 'fit',          // 'fit' or 'natural' (fit scales overlay snapshot to video edges)
-    letterboxColor: '#0b0c10'             // only affects 'lock' if overlay smaller
+    wmBehavior: 'inherit',          // 'inherit' | 'lock'
+    requireToken: true,
+    lockOverlayOpacity: 0.9,
+    lockOverlayScaleMode: 'fit',    // 'fit' or 'natural'
+    letterboxColor: '#0b0c10'
+  };
+
+  // Watermark export patch config
+  const WM_EXPORT_FIX = {
+    forceInclude: true,             // turn off to revert to original behavior
+    includeHiddenFooter: false,     // if true, will temporarily show hidden footer (_raFooter text) too
+    log: false
   };
 
   let lastObjectURL = null;
 
+  /* ---------- Fabric Helpers ---------- */
   function getFabricCanvas(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
     return null;
@@ -3278,21 +3289,118 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return Number.isFinite(n) ? String(n) : '';
   }
 
-  function snapshotCanvasPNG(targetSide=720){
+  /* ---------- Watermark Object Detection ---------- */
+  function isWMObject(o){
+    return !!(o && (o._isWatermark || o._raWMRing || o._raWMCenter || o._raFooter));
+  }
+
+  /* ---------- Snapshot (Async, WM export aware) ---------- */
+  async function snapshotCanvasPNG(targetSide=720){
     const c = getFabricCanvas();
     if (!c) throw new Error('Canvas not ready');
+
     const cw = c.getWidth(), ch = c.getHeight();
     const side = Math.max(cw, ch) || 1024;
-    const mul = clamp(targetSide/side, 0.25, 3);
-    return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
+    const mul = clamp(targetSide / side, 0.25, 3);
+
+    if (!WM_EXPORT_FIX.forceInclude){
+      return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
+    }
+
+    const objs = c.getObjects() || [];
+    const wmObjs = objs.filter(isWMObject);
+
+    // If we only include visible watermark objects, filter them now; optionally include hidden footer.
+    const targets = wmObjs.filter(o => {
+      if (o.visible === false && !(WM_EXPORT_FIX.includeHiddenFooter && o._raFooter)) return false;
+      return true;
+    });
+
+    // Store original flags
+    const restores = targets.map(o => ({
+      o,
+      exclude: o.excludeFromExport,
+      visible: o.visible,
+      opacity: o.opacity
+    }));
+
+    // Force inclusion
+    targets.forEach(o => {
+      if (o.excludeFromExport) o.excludeFromExport = false;
+      if (o.visible === false) o.visible = true;
+      // We keep original faint opacity (designer intent), but if fully transparent:
+      if (o.opacity === 0) o.opacity = 0.02; // tiny nudge so it's not zeroed out
+    });
+
+    let data;
+    try {
+      data = c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
+    } finally {
+      // Restore original flags
+      restores.forEach(r => {
+        r.o.excludeFromExport = r.exclude;
+        r.o.visible = r.visible;
+        r.o.opacity = r.opacity;
+      });
+      if (WM_EXPORT_FIX.log) console.log('[WM-EXPORT-FIX] Snapshot complete; flags restored.');
+    }
+    return data;
   }
 
-  function chooseMimeType(){
-    const cand = ['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
-    for (const m of cand){ if (MediaRecorder?.isTypeSupported?.(m)) return m; }
-    return '';
+  /* Split snapshots for wmBehavior 'lock' (base vs watermark) */
+  async function splitSnapshots(targetSide){
+    const c = getFabricCanvas();
+    if (!c) throw new Error('Canvas not ready');
+    const objs = c.getObjects() || [];
+
+    // 1) Hide watermark objects -> base snapshot
+    const wmObjs = objs.filter(isWMObject);
+    const storedWM = wmObjs.map(o => ({ o, vis:o.visible }));
+    wmObjs.forEach(o => o.visible = false);
+
+    const basePNG = await snapshotCanvasPNG(targetSide);
+
+    // 2) Show watermark only (and force them exportable), hide others
+    const others = objs.filter(o => !isWMObject(o));
+    const storedOthers = others.map(o => ({ o, vis:o.visible }));
+
+    others.forEach(o => o.visible = false);
+    wmObjs.forEach(o => o.visible = storedWM.find(s => s.o===o)?.vis ?? true);
+
+    // For watermark-only snapshot we also need to force include them (same logic)
+    let wmPNG;
+    if (wmObjs.length){
+      // Temporarily mark excludeFromExport false for watermark-only pass
+      const tempRestores = wmObjs.map(o => ({
+        o,
+        excl: o.excludeFromExport,
+        op: o.opacity
+      }));
+      wmObjs.forEach(o => {
+        if (o.excludeFromExport) o.excludeFromExport = false;
+        if (o.opacity === 0) o.opacity = 0.02;
+      });
+      try {
+        wmPNG = c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: clamp(targetSide/Math.max(c.getWidth(),c.getHeight()),0.25,3) });
+      } finally {
+        tempRestores.forEach(r => {
+          r.o.excludeFromExport = r.excl;
+          r.o.opacity = r.op;
+        });
+      }
+    } else {
+      wmPNG = null;
+    }
+
+    // 3) Restore everything
+    storedWM.forEach(s => s.o.visible = s.vis);
+    storedOthers.forEach(s => s.o.visible = s.vis);
+    c.requestRenderAll();
+
+    return { basePNG, wmPNG };
   }
 
+  /* ---------- Ken Burns ---------- */
   const PROFILES = {
     in:    { z0:1.05, z1:1.20, pan:'none'  },
     out:   { z0:1.20, z1:1.05, pan:'none'  },
@@ -3338,56 +3446,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return 3_000_000;
   }
 
-  /* -------- Watermark Detection & Split Snapshot (for 'lock') -------- */
-  function isWMObject(o){
-    return !!(o && (o._isWatermark || o._raWMRing || o._raWMCenter || o._raFooter || o._raVideoTempWM));
-  }
-
-  function splitSnapshots(targetSide){
-    const c = getFabricCanvas();
-    if (!c) throw new Error('Canvas not ready');
-    const objs = c.getObjects() || [];
-    const hidden = [];
-
-    // 1. Snapshot base WITHOUT watermark objects
-    objs.forEach(o=>{
-      if (isWMObject(o)){
-        hidden.push(o);
-        o.__origVis = o.visible;
-        o.visible = false;
-      }
-    });
-    const basePNG = snapshotCanvasPNG(targetSide);
-
-    // 2. Hide non-watermark, show only watermark objects
-    objs.forEach(o=>{
-      if (!isWMObject(o)){
-        hidden.push(o);
-        o.__origVis = o.visible;
-        o.visible = false;
-      }
-    });
-    // restore watermark objects we hid earlier
-    objs.forEach(o=>{
-      if (isWMObject(o) && o.__origVis !== undefined){
-        o.visible = true;
-      }
-    });
-
-    const wmPNG = snapshotCanvasPNG(targetSide);
-
-    // 3. Restore visibility
-    hidden.forEach(o => {
-      if (o.__origVis !== undefined){
-        o.visible = o.__origVis;
-        delete o.__origVis;
-      }
-    });
-    c.requestRenderAll();
-
-    return { basePNG, wmPNG };
-  }
-
+  /* ---------- Main Video Maker ---------- */
   async function makeVideo({ style='in', seconds=5, size=720, statusEl, linkEl, buttonEl, cancelEl }) {
     if (CONFIG.requireToken && !baseIsToken()){
       statusEl && (statusEl.textContent = 'Token-only: load a token image first.');
@@ -3417,13 +3476,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
     try{
       statusEl && (statusEl.textContent='Snapshot…');
       if (wmLock){
-        // Two-pass snapshot
-        const { basePNG, wmPNG } = splitSnapshots(res);
+        const { basePNG, wmPNG } = await splitSnapshots(res);
         baseDataURL = basePNG;
         wmOverlayDataURL = wmPNG;
       } else {
-        // Single snapshot (includes watermark if present)
-        baseDataURL = snapshotCanvasPNG(res);
+        baseDataURL = await snapshotCanvasPNG(res);
       }
     }catch(e){
       statusEl && (statusEl.textContent='Snapshot failed (CORS).');
@@ -3485,18 +3542,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
     async function renderFrame(){
       if (aborted){ try{ rec.stop(); }catch(_){} return; }
 
-      if (!wmLock && !SNAP_EACH_FRAME){
-        // no-op (we already have baseDataURL)
-      } else if (!wmLock && SNAP_EACH_FRAME){
+      if (!wmLock && SNAP_EACH_FRAME){
         try {
-          const fresh = snapshotCanvasPNG(res);
-          img.src = fresh;
-          await imgDecode(img);
-        } catch(_) {}
-      } else if (wmLock && SNAP_EACH_FRAME){
-        // Rare case: you want a live base but locked overlay stays static
-        try {
-          const fresh = snapshotCanvasPNG(res);
+          const fresh = await snapshotCanvasPNG(res);
           img.src = fresh;
           await imgDecode(img);
         } catch(_) {}
@@ -3507,13 +3555,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
       if (wmLock && wmImg){
         ctx.save();
+        ctx.globalAlpha = CONFIG.lockOverlayOpacity;
         if (CONFIG.lockOverlayScaleMode === 'fit'){
-          // Fit overlay snapshot (which is full canvas dims) to full res
-          ctx.globalAlpha = CONFIG.lockOverlayOpacity;
           ctx.drawImage(wmImg, 0, 0, res, res);
         } else {
-            ctx.globalAlpha = CONFIG.lockOverlayOpacity;
-            ctx.drawImage(wmImg, 0, 0);
+          ctx.drawImage(wmImg, 0, 0);
         }
         ctx.restore();
       }
@@ -3526,14 +3572,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
       if (frameIndex < totalFrames){
         requestAnimationFrame(renderFrame);
       } else {
-        // Tail frames to flush
+        // Tail frames
         let tail=2;
         (function tailLoop(){
-          if (tail-- > 0){
-            requestAnimationFrame(tailLoop);
-          } else {
-            try { rec.stop(); } catch(_) {}
-          }
+          if (tail-- > 0) requestAnimationFrame(tailLoop);
+          else { try { rec.stop(); } catch(_) {} }
         })();
       }
     }
@@ -3572,7 +3615,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     cancelEl && (cancelEl.style.visibility='hidden');
   }
 
-  /* ---------- UI Panel (unchanged except Style list) ---------- */
   function ensurePanel(){
     if ($('#raVideoPanel')) return $('#raVideoPanel');
 
@@ -3591,22 +3633,25 @@ document.addEventListener("DOMContentLoaded", ()=>{
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
         <label style="font-size:12px;opacity:.9">Style
           <select id="raVStyle" class="input" style="margin-left:6px">
-            <option ${CONFIG.DEFAULT_STYLE==='Exact (no motion)'?'selected':''}>Exact (no motion)</option>
-            <option ${CONFIG.DEFAULT_STYLE==='Zoom In'?'selected':''}>Zoom In</option>
-            <option ${CONFIG.DEFAULT_STYLE==='Zoom Out'?'selected':''}>Zoom Out</option>
-            <option ${CONFIG.DEFAULT_STYLE==='Pan L→R'?'selected':''}>Pan L→R</option>
-            <option ${CONFIG.DEFAULT_STYLE==='Pan T→B'?'selected':''}>Pan T→B</option>
-            <option ${CONFIG.DEFAULT_STYLE==='Drift'?'selected':''}>Drift</option>
+            <option>Zoom In</option>
+            <option>Zoom Out</option>
+            <option>Pan L→R</option>
+            <option>Pan T→B</option>
+            <option selected>Drift</option>
           </select>
         </label>
         <label style="font-size:12px;opacity:.9">Duration
           <select id="raVDur" class="input" style="margin-left:6px">
-            <option>3</option><option selected>5</option><option>8</option>
+            <option>3</option>
+            <option selected>5</option>
+            <option>8</option>
           </select> s
         </label>
         <label style="font-size:12px;opacity:.9">Size
           <select id="raVRes" class="input" style="margin-left:6px">
-            <option>512</option><option selected>720</option><option>1024</option>
+            <option>512</option>
+            <option selected>720</option>
+            <option>1024</option>
           </select> px
         </label>
         <button id="raVMake" class="btn" style="margin-left:auto;background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:8px 12px;cursor:pointer">Make Video (Token Only)</button>
@@ -3614,7 +3659,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
         <a id="raVDown" href="#" download style="display:none;margin-left:8px;font-size:12px;text-decoration:underline">Download</a>
       </div>
       <div style="margin-top:8px;font-size:11px;opacity:.65">
-        Inherit watermark/footer as you see it. Set wmBehavior='lock' in code to pin watermark while animating base.
+        Watermark/footers present on canvas will now be included (excludeFromExport override).
+        Set CONFIG.wmBehavior='lock' to pin watermark instead of animating it.
       </div>
     `;
     anchorCard.appendChild(pane);
@@ -3627,8 +3673,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
     makeBtn.addEventListener('click', async () => {
       downLn.style.display='none';
       msg.textContent='';
-      const styleLabel = ($('#raVStyle', pane)?.value || CONFIG.DEFAULT_STYLE);
-      const styleKey = STYLE_MAP[styleLabel] || 'in';
+      const styleLabel = ($('#raVStyle', pane)?.value || 'Drift');
+      const styleKey = STYLE_MAP[styleLabel] || styleLabel;
       const secs  = parseInt(($('#raVDur',  pane)?.value || '5'),10);
       const size  = parseInt(($('#raVRes',  pane)?.value || '720'),10);
       await makeVideo({ style: styleKey, seconds: secs, size, statusEl: msg, linkEl: downLn, buttonEl: makeBtn, cancelEl: cancelL });
@@ -3650,7 +3696,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     boot();
   }
 })();
-
 /* ==========================================================
    RA_UNDO_REDO_SAFE_MINI_V1
    • Super‑safe: never restores anything unless you click Undo/Redo.
