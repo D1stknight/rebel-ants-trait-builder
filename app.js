@@ -9243,7 +9243,8 @@ document.addEventListener('ra-collection-change', (e) => {
     ringEdgeMarginPx: 16,
     clampAdminSizePct: true,
     useAdminSizePct: true,
-
+   ringImageSrc: '/watermark.png?v=wm10',   // ADDED: path to ring image
+     
     // Rule toggles (from final system)
     showFooterOnRebelConnected: false,  // Owned Rebel stays fully clean
     friendOnlySuppressesRing: true,     // Friend (no Rebel) => ring OFF globally
@@ -9366,6 +9367,36 @@ document.addEventListener('ra-collection-change', (e) => {
     return (obj.width||0) * (obj.scaleX||1);
   }
 
+     // Helper: create the ring image if we need one and none exists yet
+  function createRingIfMissing(){
+    const c = C();
+    if (!c) return;
+    if (ringObjects()[0]) return; // already there
+
+    const src = CFG.ringImageSrc || '/watermark.png';
+    if (!window.fabric || !fabric.Image) return;
+
+    try {
+      fabric.Image.fromURL(src, (img) => {
+        if (!img) return;
+        img._raWMCenter = true;
+        img._raSys = true;
+        img.selectable = false;
+        img.evented = false;
+
+        const c2 = C();
+        if (!c2) return;
+        // Place roughly center (Phase 2 scaling will size it)
+        img.left = (c2.getWidth()  / 2) - (img.width  / 2);
+        img.top  = (c2.getHeight() / 2) - (img.height / 2);
+        c2.add(img);
+        scaleRing(img);
+        try { c2.bringToFront(img); } catch(_){}
+        try { c2.requestRenderAll(); } catch(_){}
+      }, { crossOrigin: 'anonymous' });
+    } catch(_){}
+  }
+   
   function desired(){
     // Force override (debug) takes precedence if present
     if (STATE.forceOverride){
@@ -9462,12 +9493,16 @@ document.addEventListener('ra-collection-change', (e) => {
 
     let ring = ringObjects()[0];
 
-    if (!need.ring && ring){
+       if (!need.ring && ring){
       try { c.remove(ring); } catch(_){}
       ring = null;
     } else if (need.ring && !ring){
       try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
       scheduleScaleRetry();
+      // NEW: if nothing else makes the ring quickly, make it ourselves
+      setTimeout(() => {
+        if (!ringObjects()[0]) createRingIfMissing();
+      }, 180);
     }
 
     if (need.footer){
