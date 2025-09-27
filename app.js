@@ -396,7 +396,7 @@ function raSafeClear(keepBg=true){
   }
 }
 
-  // ——— Security helpers ———
+// ——— Security helpers ———
 function isAllowedAssetURL(u){
   if (!u) return false;
   // Hard-block dangerous schemes up front
@@ -410,35 +410,36 @@ function isAllowedAssetURL(u){
     return !/^[a-z][a-z0-9+\-.]*:/i.test(String(u));
   }
 }
-  
-  async function fetchImageByTokenId(contract, tokenId){
-    const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
-    const r = await fetch(u,{headers:{'accept':'application/json'}, cache:'no-store'});
-    if(!r.ok) return null;
-    const j = await r.json();
-    const t = j.tokens && j.tokens[0] && j.tokens[0].token;
-    if(!t) return null;
-    const m = t.media || {};
-    const candidates = [
-      (m.original && (m.original.url || m.original.mediaUrl)),
-      t.imageLarge, t.image, t.imageUrl, t.imageSmall
-    ].filter(Boolean).map(normalize);
-    return candidates[0] || null;
-  }
-  async function fabricFromURL(url){
-    return await new Promise((res)=>{
-      const opts = /^data:|^blob:/i.test(url) ? {} : { crossOrigin:"anonymous" };
-      fabric.Image.fromURL(url, img=>res(img), opts);
-    });
-  }
 
-  function bringInterfaceToFront(){
-    if (idLabel) canvas.bringToFront(idLabel);
-  }
+async function fetchImageByTokenId(contract, tokenId){
+  const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
+  const r = await fetch(u,{headers:{'accept':'application/json'}, cache:'no-store'});
+  if(!r.ok) return null;
+  const j = await r.json();
+  const t = j.tokens && j.tokens[0] && j.tokens[0].token;
+  if(!t) return null;
+  const m = t.media || {};
+  const candidates = [
+    (m.original && (m.original.url || m.original.mediaUrl)),
+    t.imageLarge, t.image, t.imageUrl, t.imageSmall
+  ].filter(Boolean).map(normalize);
+  return candidates[0] || null;
+}
 
-/* (tiny helper used below — keep label above other UI if present) */
+async function fabricFromURL(url){
+  return await new Promise((res)=>{
+    const opts = /^data:|^blob:/i.test(url) ? {} : { crossOrigin:"anonymous" };
+    fabric.Image.fromURL(url, img=>res(img), opts);
+  });
+}
+
+// (single consolidated helper) keep label above other UI if present
 function bringInterfaceToFront(){
-  try { if (typeof idLabel !== 'undefined' && idLabel) canvas.bringToFront(idLabel); } catch(_){}
+  try {
+    if (typeof idLabel !== 'undefined' && idLabel && canvas) {
+      canvas.bringToFront(idLabel);
+    }
+  } catch(_){}
 }
 
 function initBackgroundRect(fill){
@@ -455,14 +456,20 @@ function setCanvasSize(size){
   const prevW = canvas.getWidth() || size, prevH = canvas.getHeight() || size;
   const sx = size / prevW, sy = size / prevH;
   canvas.setWidth(size); canvas.setHeight(size);
-  if (backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
+  if (backgroundRect){
+    backgroundRect.set({ width:size, height:size });
+    canvas.sendToBack(backgroundRect);
+  }
   canvas.getObjects().forEach(o=>{
     if (o === backgroundRect) return;
     o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
   });
   canvas.setViewportTransform([1,0,0,1,0,0]);
   canvas.requestRenderAll();
-  try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
+
+  // Phase 2: legacy 'ra-wm-recalc' event removed. Ring resizing handled by ResizeObserver.
+  // Optional: ensure ring watermark stays centered if present
+  try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
 }
 
 function setZoom(v){
@@ -487,10 +494,9 @@ function clearBaseOnly(){
   baseGroup = null; canvas.requestRenderAll();
 }
 
-// Return only the main image (no corner stamps) globally
-async function makeStampedGroup(img, bw, bh, wmWidthRatio){
-  // Implementation A: Eliminate all corner-stamp code paths 
-  // Return only the main image to prevent duplicate watermarks
+// Return only the main image globally (no corner stamps)
+async function makeStampedGroup(img /*, bw, bh, wmWidthRatio */){
+  // Phase 2: corner-stamp logic removed – just center origin
   img.set({ originX:"center", originY:"center" });
   return img;
 }
@@ -498,17 +504,15 @@ async function makeStampedGroup(img, bw, bh, wmWidthRatio){
 async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
 
-  // Implementation A: When switching to token mode, pre-hide/remove any _raWMCenter or _isWatermark elements
-  // and cancel any WM timers before render
+  // Phase 2: Strip any legacy watermark objects before loading new base (especially token mode)
   if (isToken) {
     try {
       const os = canvas.getObjects() || [];
-      os.forEach(o => { 
-        if (o && (o._raWMCenter === true || o._isWatermark === true)) {
+      os.forEach(o => {
+        if (o && (o._raWMCenter === true || o._isWatermark === true || o._raWMRing === true)) {
           canvas.remove(o);
         }
       });
-      // Cancel any pending watermark timers
       if (window.__raWMTimer) {
         clearTimeout(window.__raWMTimer);
         window.__raWMTimer = null;
@@ -524,22 +528,21 @@ async function loadBaseImage(dataUrl, isToken){
   const sc = Math.min(cw / img.width, ch / img.height, 1);
   img.scale(sc);
 
-  const bw = img.width * sc, bh = img.height * sc;
-
   let obj;
   if (isToken) {
-    // Token = RA (real asset) => NO ring watermark, only main image
     img._isBase = true;
     lockBaseObject(img);
     img.set({ left:cw/2, top:ch/2 }); img.setCoords();
     obj = img;
   } else {
-    // Non-token => use makeStampedGroup (which now returns only main image)
-    const group = await makeStampedGroup(img, bw, bh, 0.15);
+    const group = await makeStampedGroup(img, img.width*sc, img.height*sc, 0.15);
     group._isBase = true;
     lockBaseObject(group);
     group.set({ left:cw/2, top:ch/2 }); group.setCoords();
     obj = group;
+
+    // Optional: auto-ensure faint ring for non-token load
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   }
 
   canvas.add(obj);
@@ -548,7 +551,6 @@ async function loadBaseImage(dataUrl, isToken){
   canvas.requestRenderAll();
 }
 
-// Add overlay (with small corner stamps unless permanent)
 async function addOverlayToCanvas(src, isPermanent){
   const img = await fabricFromURL(src);
   img.set({ originX:"center", originY:"center" });
