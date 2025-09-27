@@ -4001,14 +4001,24 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
 /* ==========================================================
    RA_ANIMATE_PREVIEW_VIDEO_V4j
-   Fix: Non-camera (Base / Overlays / Text) previews were black
-        because composite animation never drew into the visible
-        preview canvas. Now it does.
-   - Uses preview canvas for live previews (record = false)
-   - Uses dedicated offscreen hiDPI canvas for recording (record = true)
-   - Retains softSnap return behavior & expanded base presets
+   Fix release:
+     • Non‑camera (Base / Overlays / Text) previews were black because
+       composite animation rendered off‑DOM. Now it draws into the visible
+       preview canvas (raAnimPreviewCanvas) when record=false.
+     • Export path still uses an offscreen hiDPI canvas for sharp encoding.
+     • Soft “return” (softSnap) supported plus other return modes.
+     • Watermark/footer forced into snapshots (camera + composite base).
+     • Expanded Base presets list.
+
+   Return modes:
+     'softSnap' (default) – short eased reverse (dur * returnSoftFraction, min returnSoftMinMs)
+     'reverse'            – full-length eased reverse (dur * returnReverseFraction)
+     'snap'               – immediate snap back for N frames (returnSnapFrames)
+     'hold'               – snap then hold extra (returnHoldFraction of dur)
+     'none'               – end on final frame, no return
+
    Version: 4.1.0
-   Public API: window.raAnimate
+   Public API: window.raAnimate (preview / export / config / version)
    ========================================================== */
 (() => {
   if (window.__RA_ANIM_V4J__) return; window.__RA_ANIM_V4J__ = true;
@@ -4017,16 +4027,19 @@ document.addEventListener("DOMContentLoaded", ()=>{
   const FPS = 30;
 
   const CONFIG = {
+    /* Camera (Everything) */
     cameraSnapshotScale: 1.0,
     cameraHiDPI: 1.5,
     cameraAspect: 'native',      // 'native' | 'square'
     cameraFit: 'native',         // 'native' | 'cover' | 'safeCover'
     cameraExtraSafePad: 0.12,
 
-    objectPipelineMode: 'composite', // keep 'composite' (preview consistency)
+    /* Object composite pipeline */
+    objectPipelineMode: 'composite', // 'composite' | 'live'  (we use composite for unified preview)
     objectHiDPI: 1.5,
     objectMaxTargets: 160,
 
+    /* Return behavior */
     returnModeViewport: 'softSnap',  // 'softSnap' | 'reverse' | 'snap' | 'hold' | 'none'
     returnModeObjects:  'softSnap',
     returnSoftFraction: 0.18,
@@ -4038,6 +4051,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     maxDurationSec: 30,
     previewUseRecorder: false,
 
+    /* Watermark forcing */
     wm: {
       forceInclude: true,
       includeHiddenFooter: false,
@@ -4141,14 +4155,17 @@ document.addEventListener("DOMContentLoaded", ()=>{
       <div id="raAnimDL" style="margin-top:6px"></div>
     `;
     host.appendChild(dock);
+
     const presetSel=$('#raAnimPreset');
     PRESETS.forEach(p=>{
       const opt=document.createElement('option');
       opt.value=p.id; opt.textContent=p.name;
       presetSel.appendChild(opt);
     });
+
     $('#raAnimPreview').onclick = ()=>run({record:false});
     $('#raAnimExport').onclick  = ()=>run({record:true});
+
     presetSel.onchange=()=>{
       const id=presetSel.value;
       const p=PRESETS.find(x=>x.id===id);
@@ -4161,6 +4178,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     };
     return dock;
   }
+
   function msg(t){
     const el=$('#raAnimMsg');
     if(!el) return;
@@ -4345,19 +4363,19 @@ document.addEventListener("DOMContentLoaded", ()=>{
           rec.onstop=()=>{
             const mime=rec.mimeType||'video/webm';
             const blob=aborted?null:new Blob(chunks,{type:mime});
-            finishCb && finishCb({blob,mime,aborted});
+            finishCb && finishCb({ blob, mime, aborted });
           };
           rec.stop();
         }catch(_){
-          finishCb && finishCb({blob:null,mime:'',aborted:true});
+          finishCb && finishCb({ blob:null, mime:'', aborted:true });
         }
-      } else finishCb && finishCb({blob:null,mime:'',aborted:false});
+      } else finishCb && finishCb({ blob:null, mime:'', aborted:false });
     }
 
     loop();
   }
 
-  /* ---------- Composite Object Animation (fixed preview) ---------- */
+  /* ---------- Composite Object Animation ---------- */
   async function buildComposite(targets){
     const c=C(); if(!c) throw new Error('Canvas not ready');
     const hidden=[];
@@ -4413,12 +4431,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return { baseImg, layers };
   }
 
+  function planObjectReturn(mode, dur_ms){ return planReturn(mode, dur_ms); }
+
   function animateCompositeObjects({
     baseImg, layers, preset, ease, dur_ms, record, W, H, returnMode,
     previewCanvas, finishCb
   }){
     if (!layers.length){
-      finishCb && finishCb({blob:null,mime:'',aborted:true});
+      finishCb && finishCb({ blob:null, mime:'', aborted:true });
       return;
     }
     const hi = record?CONFIG.objectHiDPI:1;
@@ -4435,8 +4455,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
     const li = layers.map(l=>{ const im=new Image(); im.src=l.dataURL; return {layer:l,img:im}; });
 
-    const ret=planReturn(returnMode, dur_ms);
-
+    const ret=planObjectReturn(returnMode, dur_ms);
     let rec=null,chunks=[];
     if (record){
       try{
@@ -4511,9 +4530,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
       const now=performance.now();
       const ph=phase(now,start);
       if (ph.ph==='fwd'){
-        drawFrame(paramsAt(EASE[preset.ease||'ioQuad']?EASE[preset.ease||'ioQuad'](clamp(ph.p,0,1)):EASE.ioQuad(clamp(ph.p,0,1)), false));
+        const t=EASE[preset.ease||'ioQuad'](clamp(ph.p,0,1));
+        drawFrame(paramsAt(t,false));
       } else if (ph.ph==='rev'){
-        drawFrame(paramsAt(EASE[preset.ease||'ioQuad']?EASE[preset.ease||'ioQuad'](clamp(ph.p,0,1)):EASE.ioQuad(clamp(ph.p,0,1)), true));
+        const t=EASE[preset.ease||'ioQuad'](clamp(ph.p,0,1));
+        drawFrame(paramsAt(t,true));
       } else if (ph.ph==='snap' || ph.ph==='hold'){
         drawFrame(paramsAt(0,false));
       } else if (ph.ph==='done'){
@@ -4531,14 +4552,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
           rec.onstop=()=>{
             const mime=rec.mimeType||'video/webm';
             const blob=aborted?null:new Blob(chunks,{type:mime});
-            finishCb && finishCb({blob,mime,aborted,canvas:renderCanvas});
+            finishCb && finishCb({ blob, mime, aborted, canvas:renderCanvas });
           };
           rec.stop();
         }catch(_){
-          finishCb && finishCb({blob:null,mime:'',aborted:true,canvas:renderCanvas});
+            finishCb && finishCb({ blob:null, mime:'', aborted:true, canvas:renderCanvas });
         }
       } else {
-        finishCb && finishCb({blob:null,mime:'',aborted,false,canvas:renderCanvas});
+        finishCb && finishCb({ blob:null, mime:'', aborted:false, canvas:renderCanvas });
       }
     }
 
@@ -4561,14 +4582,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
     let scope=$('#raAnimScope')?.value || 'all';
     const preset=PRESETS.find(p=>p.id===$('#raAnimPreset')?.value) || PRESETS[0];
-    const easeFun=EASE[$('#raAnimEase')?.value] || EASE[preset.ease] || EASE.ioQuad;
+    const easeFn=EASE[$('#raAnimEase')?.value] || EASE[preset.ease] || EASE.ioQuad;
     let durSec=parseFloat($('#raAnimDur')?.value||'6');
     if(!Number.isFinite(durSec)) durSec=6;
     durSec=clamp(durSec,2,CONFIG.maxDurationSec);
     const dur_ms=Math.round(durSec*1000);
 
     if (scope==='all' && preset.kind!=='viewport'){
-      scope=preset.kind==='overlays'?'overlays':preset.kind;
+      scope = preset.kind==='overlays'? 'overlays':preset.kind;
       $('#raAnimScope').value=scope;
     }
     const viewportOnly = (preset.kind==='viewport' && scope==='all');
@@ -4584,6 +4605,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     prevCanvas.style.display='none';
     const W=c.getWidth(), H=c.getHeight();
 
+    // CAMERA PATH
     if (viewportOnly){
       let snap;
       try { snap = await snapshotCanvasWithWatermark(CONFIG.cameraSnapshotScale); }
@@ -4595,7 +4617,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
       animateCameraSnapshot({
         img,
         preset,
-        ease:easeFun,
+        ease:easeFn,
         dur_ms,
         record,
         previewCanvas: prevCanvas,
@@ -4624,7 +4646,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
       return;
     }
 
-    // Object scopes
+    // OBJECT PATH
     const targets=pickTargets(c, scope);
     if (!targets.length){
       msg(scope==='base'?'Load a base first':scope==='overlays'?'Add overlays first':'Add text first');
@@ -4648,7 +4670,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
       baseImg: composite.baseImg,
       layers: composite.layers,
       preset,
-      ease: easeFun,
+      ease: easeFn,
       dur_ms,
       record,
       W,
