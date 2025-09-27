@@ -8297,7 +8297,7 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — improved for undo/overlay/stacking stability, with preferred footer ===== */
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — always preferred footer everywhere ===== */
 ;(() => {
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
   window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
@@ -8328,30 +8328,6 @@ window.raDump = () => {
     wm.setCoords();
   }
 
-  // Create the preferred footer if missing
-  function createPreferredFooter(c) {
-    const footer = new fabric.Text('Powered by Rebel Studios', {
-      fontFamily: 'Inter, system-ui, Arial, sans-serif',
-      fontSize: 16, // preferred look
-      fill: '#fff', // white text
-      opacity: 1,   // fully opaque
-      originX: 'right',
-      originY: 'bottom',
-      left: c.getWidth() - 20, // 20px from right edge
-      top: c.getHeight() - 20, // 20px from bottom edge
-      selectable: false,
-      evented: false,
-      shadow: new fabric.Shadow({
-        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
-      }),
-      _raBrandFooter: true,
-      _raSys: true
-    });
-    c.add(footer);
-    return footer;
-  }
-
-  // Dedupe and restore preferred footer, only update if necessary
   function ensureFooter() {
     const c = C();
     if (!c) return null;
@@ -8365,7 +8341,24 @@ window.raDump = () => {
     // If missing, create one
     if (!footer) {
       if (!window.fabric) return null;
-      footer = createPreferredFooter(c);
+      footer = new fabric.Text('Powered by Rebel Studios', {
+        fontFamily: 'Inter, system-ui, Arial, sans-serif',
+        fontSize: 16,
+        fill: '#fff',
+        opacity: 1,
+        originX: 'right',
+        originY: 'bottom',
+        left: c.getWidth() - 20,
+        top: c.getHeight() - 20,
+        selectable: false,
+        evented: false,
+        shadow: new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        }),
+        _raBrandFooter: true,
+        _raSys: true
+      });
+      c.add(footer);
     } else {
       // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
       let dirty = false;
@@ -8396,7 +8389,7 @@ window.raDump = () => {
     return footer;
   }
 
-  // Create or restore the ring if missing and should be present (for disconnected/manual upload)
+  // Ring logic unchanged (from prior block)
   function ensureRing(){
     const c = C();
     if (!c) return null;
