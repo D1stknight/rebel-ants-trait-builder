@@ -884,7 +884,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }, true);
 })();
   
- /* ===== RA_JSON_RESTORE_GUARD ===== */
+/* ===== RA_JSON_RESTORE_GUARD (Phase 2 aware) ===== */
 (function RA_JSON_RESTORE_GUARD(){
   if (window.__RA_JSON_RESTORE_GUARD__) return;
   window.__RA_JSON_RESTORE_GUARD__ = true;
@@ -896,22 +896,40 @@ document.addEventListener("DOMContentLoaded", () => {
     const orig = c.loadFromJSON.bind(c);
 
     c.loadFromJSON = function(json, cb, reviver){
-      const next = (typeof cb === 'function') ? cb : function(){};
+      const userCb = (typeof cb === 'function') ? cb : function(){};
+      // Set both legacy + Phase 2 restore guards
       window.__raLoadingJSON = true;
-      const done = ()=>{
+      window.__RA_RESTORING__ = true;
+      try {
+        document.dispatchEvent(new CustomEvent('ra-json-restore-start'));
+        return orig(json, () => {
+          try {
+            window.__raLoadingJSON = false;
+            window.__RA_RESTORING__ = false;
+            try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+            try { C()?.requestRenderAll(); } catch(_){}
+            document.dispatchEvent(new CustomEvent('ra-json-restore-end'));
+            // Re-ensure faint ring (will no-op if hidden for holder)
+            try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
+          } finally {
+            userCb();
+          }
+        }, reviver);
+      } catch(e){
         window.__raLoadingJSON = false;
-        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-        try { c.requestRenderAll(); } catch(_){}
-        next();
-      };
-      try { return orig(json, done, reviver); }
-      catch(e){ window.__raLoadingJSON = false; throw e; }
+        window.__RA_RESTORING__ = false;
+        throw e;
+      }
     };
 
     c.__raPatchedLoadJSON = true;
   }
 
-  (function wait(){ const c=C(); if (!c) return setTimeout(wait,120); patch(c); })();
+  (function wait(){
+    const c = C();
+    if (!c) return setTimeout(wait,120);
+    patch(c);
+  })();
 })();
 
 /* -------- Base image: load by token (multi-collection) --------
