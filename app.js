@@ -1138,27 +1138,27 @@ safeAddListener("duplicate","click", ()=>{
   o.clone(c=>{
     c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
     
-// Preserve permanence flag from original
-if (typeof o?._isPermanent !== 'undefined') {
-  c._isPermanent = o._isPermanent;
-}
+    // Preserve permanence flag from original
+    if (typeof o?._isPermanent !== 'undefined') {
+      c._isPermanent = o._isPermanent;
+    }
 
-// Force the clone and its children to be treated as overlays
-function setOverlayKindDeep(obj) {
-  if (!obj) return;
+    // Force the clone and its children to be treated as overlays
+    function setOverlayKindDeep(obj) {
+      if (!obj) return;
 
-  // Skip system/base/watermark/bg/token-id elements
-  const isSystem =
-    obj._raSys || obj._isWatermark || obj._isBgRect || obj._isBase || obj._raWMCenter || obj._raTokenId;
+      // Skip system/base/watermark/bg/token-id elements
+      const isSystem =
+        obj._raSys || obj._isWatermark || obj._raWMRing || obj._isBgRect || obj._isBase || obj._raWMCenter || obj._raTokenId;
 
-  if (!isSystem) {
-    obj._kind = 'overlay';
-  }
+      if (!isSystem) {
+        obj._kind = 'overlay';
+      }
 
-  const children = (typeof obj.getObjects === 'function' ? obj.getObjects() : obj._objects) || [];
-  children.forEach(setOverlayKindDeep);
-}
-setOverlayKindDeep(c);
+      const children = (typeof obj.getObjects === 'function' ? obj.getObjects() : obj._objects) || [];
+      children.forEach(setOverlayKindDeep);
+    }
+    setOverlayKindDeep(c);
     
     canvas.add(c).setActiveObject(c);
     canvas.requestRenderAll();
@@ -1177,17 +1177,13 @@ safeAddListener("delete","click", ()=>{
   // If it’s the Token-ID label, clear the pointer so it won’t come back
   try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
 
-  // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
   try { c.discardActiveObject(); } catch(_) {}
-
-  // Remove and render
   try { c.remove(o); } catch(_) {}
   try { c.requestRenderAll(); } catch(_) {}
 });
 
 // -------- Keyboard Delete/Backspace (same rules as Selection → Delete)
 document.addEventListener('keydown', (e)=>{
-  // ignore when typing in inputs/textareas or contenteditable
   const tag = (e.target && e.target.tagName || '').toLowerCase();
   if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
 
@@ -1199,20 +1195,15 @@ document.addEventListener('keydown', (e)=>{
   const o = c.getActiveObject && c.getActiveObject();
   if (!o) return;
 
-  // Never delete background, base, or system items from keyboard
   if (o._isBgRect || o._isBase || o._raSys) { e.preventDefault(); return; }
 
-  // If it’s the Token-ID label, clear the pointer so it won’t come back
   try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
 
-  // Drop selection first to avoid Fabric drawControls/getRetinaScaling crash
   try { c.discardActiveObject(); } catch(_) {}
-
-  // Remove and render
   try { c.remove(o); } catch(_) {}
   try { c.requestRenderAll(); } catch(_) {}
 
-  e.preventDefault();  // consume the key so browser doesn’t do anything else
+  e.preventDefault();
 }, true);
 
 safeAddListener("opacity","input", (e)=>{
@@ -1256,7 +1247,6 @@ safeAddListener("unlockAll","click", ()=>{
   const c = window.canvas; if (!c) return;
   const objs = c.getObjects() || [];
 
-  // Keep background RECT locked & at index 0 (prevents "ghost box")
   const bg = objs.find(o => o && o._isBgRect);
   if (bg) {
     bg.selectable = false; bg.evented = false; bg.hasControls = false;
@@ -1264,13 +1254,11 @@ safeAddListener("unlockAll","click", ()=>{
     try { c.moveTo(bg, 0); } catch(_) {}
   }
 
-  // If background was selected, drop selection to avoid Fabric control glitches
   const active = c.getActiveObject && c.getActiveObject();
   if (active && active._isBgRect) {
     try { c.discardActiveObject(); } catch(_) {}
   }
 
-  // Unlock only user layers (never bg, base, or any system: footer/WM/label)
   objs.forEach(o => {
     if (!o) return;
     if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
@@ -1287,22 +1275,19 @@ safeAddListener("unlockAll","click", ()=>{
 
 safeAddListener("clearAllOverlays", "click", () => {
   const isSystem = (o) =>
-    o?._raSys || o?._isWatermark || o?._isBgRect || o?._isBase || o?._raWMCenter || o?._raTokenId;
+    o?._raSys || o?._isWatermark || o?._raWMRing || o?._isBgRect || o?._isBase || o?._raWMCenter || o?._raTokenId;
 
   const isRemovableOverlay = (o) =>
     o && o._kind === "overlay" && !o._isPermanent && !isSystem(o);
 
   function removeChildFromGroup(group, child) {
-    // Prefer Fabric APIs when available
     if (typeof group.removeWithUpdate === "function") {
       group.removeWithUpdate(child);
     } else if (typeof group.remove === "function") {
       group.remove(child);
-      // best-effort bounds update
       group._calcBounds?.();
       group.setCoords?.();
     } else if (Array.isArray(group._objects)) {
-      // Fallback: mutate internal array
       group._objects = group._objects.filter((o) => o !== child);
       group._calcBounds?.();
       group.setCoords?.();
@@ -1311,8 +1296,6 @@ safeAddListener("clearAllOverlays", "click", () => {
 
   function pruneGroupRecursive(obj) {
     if (!obj || typeof obj.getObjects !== "function") return;
-
-    // Copy to avoid mutation during iteration
     const children = (obj.getObjects?.() || obj._objects || []).slice();
 
     children.forEach((child) => {
@@ -1328,7 +1311,6 @@ safeAddListener("clearAllOverlays", "click", () => {
     });
   }
 
-  // Pass 1: remove top-level removable overlays; prune groups recursively
   (canvas.getObjects?.() || []).slice().forEach((o) => {
     if (isRemovableOverlay(o)) {
       canvas.remove(o);
