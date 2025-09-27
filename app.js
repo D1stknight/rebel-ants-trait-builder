@@ -4000,49 +4000,44 @@ document.addEventListener("DOMContentLoaded", ()=>{
 })();
 
 /* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V4i
-   Unified preview/export (all scopes use the panel preview).
-   Camera (Everything) -> Ken Burns snapshot (watermark enforced)
-   Base / Overlays / Text -> Composite pipeline (base snapshot +
-                               isolated object layers) so no duplication,
-                               no canvas mutation, no cropping.
-   Smooth return via 'softSnap' (short eased reverse) by default.
-
-   Version: 4.0.9
+   RA_ANIMATE_PREVIEW_VIDEO_V4j
+   Fix: Non-camera (Base / Overlays / Text) previews were black
+        because composite animation never drew into the visible
+        preview canvas. Now it does.
+   - Uses preview canvas for live previews (record = false)
+   - Uses dedicated offscreen hiDPI canvas for recording (record = true)
+   - Retains softSnap return behavior & expanded base presets
+   Version: 4.1.0
    Public API: window.raAnimate
    ========================================================== */
 (() => {
-  if (window.__RA_ANIM_V4I__) return; window.__RA_ANIM_V4I__ = true;
+  if (window.__RA_ANIM_V4J__) return; window.__RA_ANIM_V4J__ = true;
 
-  const VERSION = '4.0.9';
+  const VERSION = '4.1.0';
   const FPS = 30;
 
   const CONFIG = {
-    /* Camera (Everything) */
     cameraSnapshotScale: 1.0,
     cameraHiDPI: 1.5,
     cameraAspect: 'native',      // 'native' | 'square'
     cameraFit: 'native',         // 'native' | 'cover' | 'safeCover'
     cameraExtraSafePad: 0.12,
 
-    /* Object composite pipeline */
-    objectPipelineMode: 'composite', // 'composite' | 'live' (composite = unified preview, recommended)
+    objectPipelineMode: 'composite', // keep 'composite' (preview consistency)
     objectHiDPI: 1.5,
     objectMaxTargets: 160,
 
-    /* Return behavior */
     returnModeViewport: 'softSnap',  // 'softSnap' | 'reverse' | 'snap' | 'hold' | 'none'
     returnModeObjects:  'softSnap',
-    returnSoftFraction: 0.18,        // fraction of forward duration for softSnap reverse
+    returnSoftFraction: 0.18,
+    returnSoftMinMs: 140,
     returnSnapFrames: 10,
-    returnReverseFraction: 0.35,     // used when mode==='reverse'
-    returnHoldFraction: 0.25,        // for hold mode
-    returnSoftMinMs: 140,            // minimum ms for softSnap reverse
+    returnReverseFraction: 0.35,
+    returnHoldFraction: 0.25,
 
     maxDurationSec: 30,
-    previewUseRecorder: false,       // true => preview also encodes (slower)
+    previewUseRecorder: false,
 
-    /* Watermark forcing */
     wm: {
       forceInclude: true,
       includeHiddenFooter: false,
@@ -4059,7 +4054,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   const EASE = {
     linear: t=>t,
-    ioQuad: t=>t<0.5? 2*t*t : 1 - Math.pow(-2*t+2,2)/2,
+    ioQuad: t=>t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2,
     ioSine: t=>-(Math.cos(Math.PI*t)-1)/2,
     ioCubic: t=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,
     ioBack: t=>{const c1=1.70158,c2=c1*1.525;return t<0.5?(Math.pow(2*t,2)*((c2+1)*2*t-c2))/2:(Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2;},
@@ -4073,13 +4068,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1,x:0,y:0},  to:{z:1.18,x:-0.06,y:-0.06}},
     {id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1,x:0,y:0},  to:{z:1.18,x:+0.06,y:-0.06}},
     {id:'kb_out',   name:'Ken Burns — out',  kind:'viewport', ease:'ioSine', from:{z:1.15,x:0,y:0},to:{z:1.00,x:0,y:0}},
-    {id:'pan_up',    name:'Pan up (slow)',   kind:'viewport', ease:'ioQuad', from:{z:1,x:0,y:0.06}, to:{z:1,x:0,y:-0.06}},
-    {id:'pan_down',  name:'Pan down (slow)', kind:'viewport', ease:'ioQuad', from:{z:1,x:0,y:-0.06},to:{z:1,x:0,y:0.06}},
-    {id:'pan_left',  name:'Pan left (slow)', kind:'viewport', ease:'ioQuad', from:{z:1,x:0.06,y:0}, to:{z:1,x:-0.06,y:0}},
-    {id:'pan_right', name:'Pan right (slow)',kind:'viewport', ease:'ioQuad', from:{z:1,x:-0.06,y:0},to:{z:1,x:0.06,y:0}},
-    {id:'zoom_in',   name:'Zoom in (gentle)',kind:'viewport', ease:'ioCubic',from:{z:1,x:0,y:0},   to:{z:1.15,x:0,y:0}},
-    {id:'zoom_out',  name:'Zoom out (gentle)',kind:'viewport',ease:'ioCubic',from:{z:1.12,x:0,y:0},to:{z:1,x:0,y:0}},
-    /* Overlays/Text shared */
+    {id:'pan_up',   name:'Pan up (slow)',    kind:'viewport', ease:'ioQuad', from:{z:1,x:0,y:0.06}, to:{z:1,x:0,y:-0.06}},
+    {id:'pan_down', name:'Pan down (slow)',  kind:'viewport', ease:'ioQuad', from:{z:1,x:0,y:-0.06},to:{z:1,x:0,y:0.06}},
+    {id:'pan_left', name:'Pan left (slow)',  kind:'viewport', ease:'ioQuad', from:{z:1,x:0.06,y:0}, to:{z:1,x:-0.06,y:0}},
+    {id:'pan_right',name:'Pan right (slow)', kind:'viewport', ease:'ioQuad', from:{z:1,x:-0.06,y:0},to:{z:1,x:0.06,y:0}},
+    {id:'zoom_in',  name:'Zoom in (gentle)', kind:'viewport', ease:'ioCubic',from:{z:1,x:0,y:0},   to:{z:1.15,x:0,y:0}},
+    {id:'zoom_out', name:'Zoom out (gentle)',kind:'viewport', ease:'ioCubic',from:{z:1.12,x:0,y:0},to:{z:1,x:0,y:0}},
+    /* Overlays/Text */
     {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},    to:{s:1.00}},
     {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},  to:{dyN:0.00}},
     {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14}, to:{dyN:0.00}},
@@ -4088,15 +4083,15 @@ document.addEventListener("DOMContentLoaded", ()=>{
     {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00},to:{alpha:1.00}},
     {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},    to:{rot:0}},
     {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},    to:{s:1.00}},
-    /* Base (expanded set) */
-    {id:'base_nudge',     name:'Base nudge (gentle zoom in)',    kind:'base', ease:'ioSine',  from:{s:1.00},    to:{s:1.06}},
-    {id:'base_zoom_out',  name:'Base ease zoom out',             kind:'base', ease:'ioCubic', from:{s:1.08},    to:{s:1.00}},
-    {id:'base_zoom_in2',  name:'Base zoom in (stronger)',        kind:'base', ease:'ioCubic', from:{s:1.00},    to:{s:1.12}},
-    {id:'base_drift_diag',name:'Base drift diag',                kind:'base', ease:'ioSine',  from:{dxN:0.04,dyN:-0.04}, to:{dxN:0,dyN:0}},
-    {id:'base_slide_left',name:'Base slide left a bit',          kind:'base', ease:'ioSine',  from:{dxN:0.06},  to:{dxN:0}},
-    {id:'base_slide_right',name:'Base slide right a bit',        kind:'base', ease:'ioSine',  from:{dxN:-0.06}, to:{dxN:0}},
-    {id:'base_tilt',      name:'Base tiny tilt',                 kind:'base', ease:'ioSine',  from:{rot:-3},    to:{rot:0}},
-    {id:'base_pulse',     name:'Base subtle pulse',              kind:'base', ease:'ioSine',  from:{s:0.97},    to:{s:1.00}}
+    /* Base (expanded) */
+    {id:'base_nudge',       name:'Base nudge (gentle zoom in)',  kind:'base', ease:'ioSine',  from:{s:1.00},    to:{s:1.06}},
+    {id:'base_zoom_out',    name:'Base ease zoom out',           kind:'base', ease:'ioCubic', from:{s:1.08},    to:{s:1.00}},
+    {id:'base_zoom_in2',    name:'Base zoom in (stronger)',      kind:'base', ease:'ioCubic', from:{s:1.00},    to:{s:1.12}},
+    {id:'base_drift_diag',  name:'Base drift diagonal',          kind:'base', ease:'ioSine',  from:{dxN:0.04,dyN:-0.04}, to:{dxN:0,dyN:0}},
+    {id:'base_slide_left',  name:'Base slide left',              kind:'base', ease:'ioSine',  from:{dxN:0.06},  to:{dxN:0}},
+    {id:'base_slide_right', name:'Base slide right',             kind:'base', ease:'ioSine',  from:{dxN:-0.06}, to:{dxN:0}},
+    {id:'base_tilt',        name:'Base tiny tilt',               kind:'base', ease:'ioSine',  from:{rot:-3},    to:{rot:0}},
+    {id:'base_pulse',       name:'Base subtle pulse',            kind:'base', ease:'ioSine',  from:{s:0.97},    to:{s:1.00}}
   ];
 
   /* ---------- UI ---------- */
@@ -4146,13 +4141,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
       <div id="raAnimDL" style="margin-top:6px"></div>
     `;
     host.appendChild(dock);
-
     const presetSel=$('#raAnimPreset');
-    PRESETS.forEach(p=>{ const opt=document.createElement('option'); opt.value=p.id; opt.textContent=p.name; presetSel.appendChild(opt); });
-
+    PRESETS.forEach(p=>{
+      const opt=document.createElement('option');
+      opt.value=p.id; opt.textContent=p.name;
+      presetSel.appendChild(opt);
+    });
     $('#raAnimPreview').onclick = ()=>run({record:false});
     $('#raAnimExport').onclick  = ()=>run({record:true});
-
     presetSel.onchange=()=>{
       const id=presetSel.value;
       const p=PRESETS.find(x=>x.id===id);
@@ -4204,18 +4200,18 @@ document.addEventListener("DOMContentLoaded", ()=>{
   }
   function isWMObject(o){ return !!(o && (o._isWatermark || o._raWMRing || o._raWMCenter || o._raFooter)); }
 
-  /* ---------- Snapshot with watermark (for camera & base composite) ---------- */
+  /* ---------- Watermark snapshot ---------- */
   async function snapshotCanvasWithWatermark(multiplier=1){
     const c=C(); if(!c) throw new Error('Canvas not ready');
     const W=c.getWidth(), H=c.getHeight();
-    const side=Math.max(W,H) || 1024;
+    const side=Math.max(W,H)||1024;
     const mul=Math.min(3, Math.max(.25, multiplier * (side/side)));
     if (!CONFIG.wm.forceInclude){
       return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
     }
-    const all=c.getObjects()||[];
-    const wms=all.filter(isWMObject);
-    const restore=wms.map(o=>({o,ex:o.excludeFromExport, v:o.visible, op:o.opacity}));
+    const objs=c.getObjects()||[];
+    const wms=objs.filter(isWMObject);
+    const restores=wms.map(o=>({o,ex:o.excludeFromExport,v:o.visible,op:o.opacity}));
     wms.forEach(o=>{
       if (o.excludeFromExport) o.excludeFromExport=false;
       if (o.visible===false && (CONFIG.wm.includeHiddenFooter || !o._raFooter)) o.visible=true;
@@ -4225,35 +4221,36 @@ document.addEventListener("DOMContentLoaded", ()=>{
     try {
       data=c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
     } finally {
-      restore.forEach(r=>{
+      restores.forEach(r=>{
         r.o.excludeFromExport=r.ex;
         r.o.visible=r.v;
         r.o.opacity=r.op;
       });
-      if (CONFIG.wm.log) console.log('[WM snapshot] done');
     }
     return data;
   }
 
-  /* ---------- Camera (Ken Burns) Animation ---------- */
+  /* ---------- Return planning ---------- */
+  function planReturn(mode, dur_ms){
+    if (mode==='none') return {reverse:0,snap:0,hold:0,soft:0};
+    if (mode==='reverse') return {reverse: Math.round(dur_ms*CONFIG.returnReverseFraction),snap:0,hold:0,soft:0};
+    if (mode==='snap') return {reverse:0,snap: CONFIG.returnSnapFrames,hold:0,soft:0};
+    if (mode==='hold') return {reverse:0,snap: CONFIG.returnSnapFrames,hold: Math.round(dur_ms*CONFIG.returnHoldFraction),soft:0};
+    if (mode==='softSnap'){
+      const soft=Math.max(CONFIG.returnSoftMinMs, Math.round(dur_ms*CONFIG.returnSoftFraction));
+      return {reverse: soft,snap:0,hold:0,soft};
+    }
+    return {reverse:0,snap:0,hold:0,soft:0};
+  }
+
   function computeFitScale(mode,w,h,maxZ,panX,panY){
     if (mode==='native') return 1;
     if (mode==='cover') return Math.max(w,h)/Math.min(w,h);
     if (mode==='safeCover') return 1 + CONFIG.cameraExtraSafePad + Math.max(Math.abs(panX),Math.abs(panY))*1.2 + (maxZ-1)*0.5;
     return 1;
   }
-  function planReturnSegments(mode, dur_ms){
-    if (mode==='none') return {reverse:0,snap:0,hold:0,soft:0};
-    if (mode==='reverse') return {reverse: Math.round(dur_ms*CONFIG.returnReverseFraction),snap:0,hold:0,soft:0};
-    if (mode==='snap') return {reverse:0,snap: CONFIG.returnSnapFrames,hold:0,soft:0};
-    if (mode==='hold') return {reverse:0,snap: CONFIG.returnSnapFrames,hold: Math.round(dur_ms*CONFIG.returnHoldFraction),soft:0};
-    if (mode==='softSnap'){
-      const softMs=Math.max(CONFIG.returnSoftMinMs, Math.round(dur_ms*CONFIG.returnSoftFraction));
-      return {reverse: softMs, snap:0, hold:0, soft:softMs};
-    }
-    return {reverse:0,snap:0,hold:0,soft:0};
-  }
 
+  /* ---------- Camera Animation ---------- */
   function animateCameraSnapshot({img,preset,ease,dur_ms,record,previewCanvas,finishCb,returnMode}){
     const iw=img.naturalWidth, ih=img.naturalHeight;
     const hi=record?CONFIG.cameraHiDPI:1;
@@ -4261,10 +4258,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (CONFIG.cameraAspect==='square'){
       const s=Math.max(iw,ih); outW=outH=Math.round(s*hi);
     } else { outW=Math.round(iw*hi); outH=Math.round(ih*hi); }
+    previewCanvas.width=outW; previewCanvas.height=outH;
 
-    const ctxCanvas = previewCanvas || document.createElement('canvas');
-    ctxCanvas.width=outW; ctxCanvas.height=outH;
-    const ctx=ctxCanvas.getContext('2d');
+    const ctx=previewCanvas.getContext('2d');
     ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
 
     const z0=preset.from.z, z1=preset.to.z;
@@ -4273,13 +4269,11 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const panYMax=Math.max(Math.abs(preset.from.y),Math.abs(preset.to.y));
     const fitScale=computeFitScale(CONFIG.cameraFit, iw, ih, maxZ, panXMax, panYMax);
 
-    const ret=planReturnSegments(returnMode, dur_ms);
-    const total_ms = dur_ms + ret.reverse + ret.hold + (ret.snap? (ret.snap * (1000/FPS)) : 0);
-
+    const ret=planReturn(returnMode, dur_ms);
     let rec=null,chunks=[];
     if (record){
       try{
-        const stream=ctxCanvas.captureStream(FPS);
+        const stream=previewCanvas.captureStream(FPS);
         const mime=pickMimeType();
         rec=new MediaRecorder(stream,{mimeType:mime});
         rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
@@ -4290,64 +4284,58 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const start=performance.now();
     let rafId=0;
 
+    function phase(now){
+      const elapsed=now-start;
+      if (elapsed<=dur_ms) return {ph:'fwd',p:elapsed/dur_ms};
+      let t=elapsed-dur_ms;
+      if (ret.soft){
+        if (t<=ret.soft) return {ph:'rev',p:t/ret.soft};
+        t-=ret.soft;
+      } else if (ret.reverse){
+        if (t<=ret.reverse) return {ph:'rev',p:t/ret.reverse};
+        t-=ret.reverse;
+      }
+      if (ret.snap){
+        const span=ret.snap*(1000/FPS);
+        if (t<=span) return {ph:'snap',p:0};
+        t-=span;
+      }
+      if (ret.hold){
+        if (t<=ret.hold) return {ph:'hold',p:0};
+      }
+      return {ph:'done',p:1};
+    }
+
     function draw(z,xn,yn){
       ctx.clearRect(0,0,outW,outH);
       ctx.save();
       ctx.scale(hi,hi);
       const vw=CONFIG.cameraAspect==='square'?Math.max(iw,ih):iw;
       const vh=CONFIG.cameraAspect==='square'?Math.max(iw,ih):ih;
-      ctx.translate(vw/2, vh/2);
+      ctx.translate(vw/2,vh/2);
       ctx.scale(fitScale*z, fitScale*z);
       ctx.translate(xn*vw, yn*vh);
       ctx.drawImage(img,-iw/2,-ih/2);
       ctx.restore();
     }
 
-    function phaseCalc(now){
-      const elapsed = now - start;
-      if (elapsed <= dur_ms) return {phase:'fwd', p:elapsed/dur_ms};
-      let t=elapsed - dur_ms;
-      if (ret.soft){ // treat soft as reverse variant
-        if (t <= ret.soft) return {phase:'softReverse', p:t/ret.soft};
-        t -= ret.soft;
-      } else if (ret.reverse){
-        if (t <= ret.reverse) return {phase:'reverse', p:t/ret.reverse};
-        t -= ret.reverse;
-      }
-      if (ret.snap){
-        const snapTotal = ret.snap * (1000/FPS);
-        if (t <= snapTotal) return {phase:'snap', p:0};
-        t -= snapTotal;
-      }
-      if (ret.hold){
-        if (t <= ret.hold) return {phase:'hold', p:0};
-        t -= ret.hold;
-      }
-      return {phase:'done', p:1};
-    }
-
-    function step(){
+    function loop(){
       const now=performance.now();
-      const ph=phaseCalc(now);
-
-      if (ph.phase==='fwd'){
+      const ph=phase(now);
+      if (ph.ph==='fwd'){
         const t=ease(clamp(ph.p,0,1));
         draw(lerp(z0,z1,t), lerp(preset.from.x,preset.to.x,t), lerp(preset.from.y,preset.to.y,t));
-      } else if (ph.phase==='reverse' || ph.phase==='softReverse'){
-        // ease back
+      } else if (ph.ph==='rev'){
         const t=ease(clamp(ph.p,0,1));
-        const z=lerp(z1,z0,t);
-        const xn=lerp(preset.to.x,preset.from.x,t);
-        const yn=lerp(preset.to.y,preset.from.y,t);
-        draw(z,xn,yn);
-      } else if (ph.phase==='snap' || ph.phase==='hold'){
+        draw(lerp(z1,z0,t), lerp(preset.to.x,preset.from.x,t), lerp(preset.to.y,preset.from.y,t));
+      } else if (ph.ph==='snap' || ph.ph==='hold'){
         draw(z0,preset.from.x,preset.from.y);
-      } else if (ph.phase==='done'){
+      } else if (ph.ph==='done'){
         draw(z0,preset.from.x,preset.from.y);
         finalize(false);
         return;
       }
-      rafId=requestAnimationFrame(step);
+      rafId=requestAnimationFrame(loop);
     }
 
     function finalize(aborted){
@@ -4357,70 +4345,60 @@ document.addEventListener("DOMContentLoaded", ()=>{
           rec.onstop=()=>{
             const mime=rec.mimeType||'video/webm';
             const blob=aborted?null:new Blob(chunks,{type:mime});
-            finishCb && finishCb({ blob, mime, aborted, canvas:ctxCanvas });
+            finishCb && finishCb({blob,mime,aborted});
           };
           rec.stop();
         }catch(_){
-          finishCb && finishCb({ blob:null, mime:'', aborted:true, canvas:ctxCanvas });
+          finishCb && finishCb({blob:null,mime:'',aborted:true});
         }
-      } else {
-        finishCb && finishCb({ blob:null, mime:'', aborted, canvas:ctxCanvas });
-      }
+      } else finishCb && finishCb({blob:null,mime:'',aborted:false});
     }
-    step();
+
+    loop();
   }
 
-  /* ---------- Composite for objects ---------- */
+  /* ---------- Composite Object Animation (fixed preview) ---------- */
   async function buildComposite(targets){
     const c=C(); if(!c) throw new Error('Canvas not ready');
-    // Hide targets to produce base snapshot without them
-    const hiddenTargets=[];
+    const hidden=[];
     targets.forEach(o=>{
-      if (o.visible){
-        hiddenTargets.push(o);
-        o.visible=false;
-      }
+      if (o.visible){ hidden.push(o); o.visible=false;}
     });
     c.requestRenderAll();
     let baseData;
-    try {
-      baseData = await snapshotCanvasWithWatermark(1);
-    } finally {
-      hiddenTargets.forEach(o=>o.visible=true);
+    try { baseData = await snapshotCanvasWithWatermark(1); }
+    finally {
+      hidden.forEach(o=>o.visible=true);
       c.requestRenderAll();
     }
-
-    const baseImg = new Image(); baseImg.src=baseData;
+    const baseImg=new Image(); baseImg.src=baseData;
     await new Promise((res,rej)=>{ baseImg.onload=res; baseImg.onerror=rej; });
 
-    // Per-object layers
     const layers=[];
     for (const o of targets){
       const all=c.getObjects();
-      const toRestore=[];
+      const tmpHidden=[];
       all.forEach(x=>{
         if (x!==o && !isWMObject(x)){
-          if (x.visible){
-            x.visible=false; toRestore.push(x);
-          }
+          if (x.visible){ tmpHidden.push(x); x.visible=false; }
         }
       });
       c.requestRenderAll();
       const bbox=o.getBoundingRect(true,true);
       const pad=Math.ceil(Math.max(2,bbox.width*0.02));
       let layerData;
-      try {
+      try{
         layerData = c.toDataURL({
           format:'png',
-            left: bbox.left - pad,
-            top:  bbox.top  - pad,
-            width: bbox.width + pad*2,
-            height:bbox.height+ pad*2,
-            enableRetinaScaling:true,
-            multiplier:1
+          left: bbox.left - pad,
+          top:  bbox.top  - pad,
+          width: bbox.width + pad*2,
+          height:bbox.height+ pad*2,
+          enableRetinaScaling:true,
+          multiplier:1
         });
       } finally {
-        toRestore.forEach(x=>x.visible=true);
+        tmpHidden.forEach(x=>x.visible=true);
         c.requestRenderAll();
       }
       layers.push({
@@ -4435,28 +4413,34 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return { baseImg, layers };
   }
 
-  function planObjectReturn(mode, dur_ms){
-    return planReturnSegments(mode, dur_ms); // reuse camera logic
-  }
-
-  function animateCompositeObjects({ baseImg, layers, preset, ease, dur_ms, record, W, H, returnMode, finishCb }){
+  function animateCompositeObjects({
+    baseImg, layers, preset, ease, dur_ms, record, W, H, returnMode,
+    previewCanvas, finishCb
+  }){
+    if (!layers.length){
+      finishCb && finishCb({blob:null,mime:'',aborted:true});
+      return;
+    }
     const hi = record?CONFIG.objectHiDPI:1;
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(W*hi);
-    canvas.height= Math.round(H*hi);
-    const ctx=canvas.getContext('2d');
+    const renderCanvas = record ? document.createElement('canvas') : previewCanvas;
+    renderCanvas.width = Math.round(W*hi);
+    renderCanvas.height= Math.round(H*hi);
+    if (!record){
+      previewCanvas.getContext('2d').clearRect(0,0,renderCanvas.width,renderCanvas.height);
+      previewCanvas.style.display='block';
+    }
+
+    const ctx=renderCanvas.getContext('2d');
     ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
 
-    // Preload layer images
-    const layerImgs = layers.map(l=>{ const im=new Image(); im.src=l.dataURL; return {layer:l,img:im}; });
+    const li = layers.map(l=>{ const im=new Image(); im.src=l.dataURL; return {layer:l,img:im}; });
 
-    const ret=planObjectReturn(returnMode, dur_ms);
-    const total_ms = dur_ms + ret.reverse + ret.hold + (ret.snap? ret.snap*(1000/FPS):0);
+    const ret=planReturn(returnMode, dur_ms);
 
-    let rec=null, chunks=[];
+    let rec=null,chunks=[];
     if (record){
       try{
-        const stream=canvas.captureStream(FPS);
+        const stream=renderCanvas.captureStream(FPS);
         const mime=pickMimeType();
         rec=new MediaRecorder(stream,{mimeType:mime});
         rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
@@ -4464,83 +4448,80 @@ document.addEventListener("DOMContentLoaded", ()=>{
       }catch(_){}
     }
 
-    function paramsAt(t, reverse){
-      const fwd = k => lerp(preset.from[k]||0, preset.to[k]||0, t);
-      const rev = k => lerp(preset.to[k]||0, preset.from[k]||0, t);
-      const pick=(flag,k)=> (preset.from?.[k]!=null && preset.to?.[k]!=null)? (reverse? rev(k): fwd(k)): 0;
-      const sHas=(preset.from?.s!=null && preset.to?.s!=null);
-      const sc  = sHas ? (reverse? lerp(preset.to.s,preset.from.s,t) : lerp(preset.from.s,preset.to.s,t)) : 1;
-      const rotHas=(preset.from?.rot!=null && preset.to?.rot!=null);
-      const rot = rotHas ? (reverse? lerp(preset.to.rot,preset.from.rot,t) : lerp(preset.from.rot,preset.to.rot,t)) : 0;
-      const alphaHas=(preset.from?.alpha!=null && preset.to?.alpha!=null);
-      const alpha = alphaHas ? (reverse? lerp(preset.to.alpha,preset.from.alpha,t) : lerp(preset.from.alpha,preset.to.alpha,t)) : null;
-      const dx  = pick(true,'dx');
-      const dy  = pick(true,'dy');
-      const dxN = pick(true,'dxN') * W;
-      const dyN = pick(true,'dyN') * H;
-      return { scale: sc, rot, alpha, tx: dx + dxN, ty: dy + dyN };
+    function phase(now,start){
+      const elapsed=now-start;
+      if (elapsed<=dur_ms) return {ph:'fwd',p:elapsed/dur_ms};
+      let t=elapsed-dur_ms;
+      if (ret.soft){
+        if (t<=ret.soft) return {ph:'rev',p:t/ret.soft};
+        t-=ret.soft;
+      } else if (ret.reverse){
+        if (t<=ret.reverse) return {ph:'rev',p:t/ret.reverse};
+        t-=ret.reverse;
+      }
+      if (ret.snap){
+        const span=ret.snap*(1000/FPS);
+        if (t<=span) return {ph:'snap',p:0};
+        t-=span;
+      }
+      if (ret.hold){
+        if (t<=ret.hold) return {ph:'hold',p:0};
+      }
+      return {ph:'done',p:1};
+    }
+
+    function paramsAt(t,reverse){
+      const fwd=k=>lerp(preset.from[k]||0,preset.to[k]||0,t);
+      const rev=k=>lerp(preset.to[k]||0,preset.from[k]||0,t);
+      const val=(k)=> (preset.from?.[k]!=null && preset.to?.[k]!=null) ? (reverse?rev(k):fwd(k)) : 0;
+      const hasS=(preset.from?.s!=null && preset.to?.s!=null);
+      const s=hasS?(reverse? lerp(preset.to.s,preset.from.s,t): lerp(preset.from.s,preset.to.s,t)):1;
+      const hasRot=(preset.from?.rot!=null && preset.to?.rot!=null);
+      const rot=hasRot?(reverse? lerp(preset.to.rot,preset.from.rot,t): lerp(preset.from.rot,preset.to.rot,t)):0;
+      const hasAlpha=(preset.from?.alpha!=null && preset.to?.alpha!=null);
+      const a=hasAlpha?(reverse? lerp(preset.to.alpha,preset.from.alpha,t): lerp(preset.from.alpha,preset.to.alpha,t)):null;
+      const dx  = val('dx'); const dy  = val('dy');
+      const dxN = val('dxN') * W;      const dyN = val('dyN') * H;
+      return {scale:s, rot, alpha:a, tx:dx+dxN, ty:dy+dyN};
     }
 
     function drawFrame(p){
-      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.clearRect(0,0,renderCanvas.width,renderCanvas.height);
       ctx.save();
       ctx.scale(hi,hi);
       ctx.drawImage(baseImg,0,0,W,H);
-      layerImgs.forEach(o=>{
+      li.forEach(o=>{
         const L=o.layer;
         ctx.save();
-        const cx = L.x + L.w/2;
-        const cy = L.y + L.h/2;
-        ctx.translate(cx + p.tx, cy + p.ty);
-        ctx.scale(p.scale, p.scale);
+        const cx=L.x+L.w/2, cy=L.y+L.h/2;
+        ctx.translate((cx+p.tx),(cy+p.ty));
+        ctx.scale(p.scale,p.scale);
         if (p.rot) ctx.rotate(p.rot*Math.PI/180);
-        ctx.globalAlpha = (p.alpha!=null ? p.alpha : 1) * L.opacity;
-        ctx.drawImage(o.img, -L.w/2, -L.h/2, L.w, L.h);
+        ctx.globalAlpha = (p.alpha!=null? p.alpha:1) * L.opacity;
+        ctx.drawImage(o.img,-L.w/2,-L.h/2,L.w,L.h);
         ctx.restore();
       });
       ctx.restore();
     }
 
-    function phaseAt(elapsed){
-      if (elapsed <= dur_ms) return {phase:'fwd', p:elapsed/dur_ms};
-      let t=elapsed - dur_ms;
-      if (ret.soft){
-        if (t <= ret.soft) return {phase:'softReverse', p:t/ret.soft};
-        t -= ret.soft;
-      } else if (ret.reverse){
-        if (t <= ret.reverse) return {phase:'reverse', p:t/ret.reverse};
-        t -= ret.reverse;
-      }
-      if (ret.snap){
-        const snapLen= ret.snap*(1000/FPS);
-        if (t <= snapLen) return {phase:'snap', p:0};
-        t -= snapLen;
-      }
-      if (ret.hold){
-        if (t <= ret.hold) return {phase:'hold', p:0};
-        t -= ret.hold;
-      }
-      return {phase:'done', p:1};
-    }
-
     const start=performance.now();
     let rafId=0;
 
-    function step(){
+    function loop(){
       const now=performance.now();
-      const ph=phaseAt(now-start);
-      if (ph.phase==='fwd'){
-        drawFrame(paramsAt(ease(ph.p), false));
-      } else if (ph.phase==='reverse' || ph.phase==='softReverse'){
-        drawFrame(paramsAt(ease(ph.p), true));
-      } else if (ph.phase==='snap' || ph.phase==='hold'){
+      const ph=phase(now,start);
+      if (ph.ph==='fwd'){
+        drawFrame(paramsAt(EASE[preset.ease||'ioQuad']?EASE[preset.ease||'ioQuad'](clamp(ph.p,0,1)):EASE.ioQuad(clamp(ph.p,0,1)), false));
+      } else if (ph.ph==='rev'){
+        drawFrame(paramsAt(EASE[preset.ease||'ioQuad']?EASE[preset.ease||'ioQuad'](clamp(ph.p,0,1)):EASE.ioQuad(clamp(ph.p,0,1)), true));
+      } else if (ph.ph==='snap' || ph.ph==='hold'){
         drawFrame(paramsAt(0,false));
-      } else if (ph.phase==='done'){
+      } else if (ph.ph==='done'){
         drawFrame(paramsAt(0,false));
         finalize(false);
         return;
       }
-      rafId=requestAnimationFrame(step);
+      rafId=requestAnimationFrame(loop);
     }
 
     function finalize(aborted){
@@ -4550,49 +4531,49 @@ document.addEventListener("DOMContentLoaded", ()=>{
           rec.onstop=()=>{
             const mime=rec.mimeType||'video/webm';
             const blob=aborted?null:new Blob(chunks,{type:mime});
-            finishCb && finishCb({ blob, mime, aborted, canvas });
+            finishCb && finishCb({blob,mime,aborted,canvas:renderCanvas});
           };
           rec.stop();
         }catch(_){
-          finishCb && finishCb({ blob:null, mime:'', aborted:true, canvas });
+          finishCb && finishCb({blob:null,mime:'',aborted:true,canvas:renderCanvas});
         }
       } else {
-        finishCb && finishCb({ blob:null, mime:'', aborted, canvas });
+        finishCb && finishCb({blob:null,mime:'',aborted,false,canvas:renderCanvas});
       }
     }
 
-    Promise.all(layerImgs.map(li=> new Promise(res => {
-      if (li.img.complete) return res();
-      li.img.onload=res; li.img.onerror=res;
-    }))).then(()=>step());
+    Promise.all(li.map(o=>new Promise(res=>{
+      if (o.img.complete) return res();
+      o.img.onload=res; o.img.onerror=res;
+    }))).then(()=>loop());
   }
 
   /* ---------- Orchestrator ---------- */
-  let running=false, stopRequested=false, lastURL=null;
+  let running=false, lastURL=null;
   function revokeURL(){ if(lastURL){ try{URL.revokeObjectURL(lastURL);}catch(_){ } lastURL=null; } }
   window.addEventListener('beforeunload', revokeURL);
 
   async function run(opts){
     const record=!!opts.record;
-    const c=C(); if(!c){ alert('Canvas not ready'); return; }
-    if (running){ msg('Already running'); return; }
-
+    const c=C(); if(!c){ alert('Canvas not ready'); return;}
+    if (running){ msg('Already running'); return;}
     ensureDock();
+
     let scope=$('#raAnimScope')?.value || 'all';
     const preset=PRESETS.find(p=>p.id===$('#raAnimPreset')?.value) || PRESETS[0];
-    const ease= EASE[$('#raAnimEase')?.value] || EASE[preset.ease] || EASE.ioQuad;
+    const easeFun=EASE[$('#raAnimEase')?.value] || EASE[preset.ease] || EASE.ioQuad;
     let durSec=parseFloat($('#raAnimDur')?.value||'6');
-    if (!Number.isFinite(durSec)) durSec=6;
+    if(!Number.isFinite(durSec)) durSec=6;
     durSec=clamp(durSec,2,CONFIG.maxDurationSec);
     const dur_ms=Math.round(durSec*1000);
 
     if (scope==='all' && preset.kind!=='viewport'){
-      scope = preset.kind==='overlays'? 'overlays':preset.kind;
+      scope=preset.kind==='overlays'?'overlays':preset.kind;
       $('#raAnimScope').value=scope;
     }
     const viewportOnly = (preset.kind==='viewport' && scope==='all');
 
-    running=true; stopRequested=false;
+    running=true;
     msg(record?'Recording…':'Playing…');
 
     revokeURL();
@@ -4600,28 +4581,21 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const vidEl=$('#raAnimOut');
     const prevCanvas=$('#raAnimPreviewCanvas');
     if (vidEl){ vidEl.style.display='none'; vidEl.pause?.(); vidEl.removeAttribute('src'); }
-    if (prevCanvas){ prevCanvas.style.display='none'; }
-
+    prevCanvas.style.display='none';
     const W=c.getWidth(), H=c.getHeight();
 
-    // CAMERA PATH
     if (viewportOnly){
-      let data;
-      try { data = await snapshotCanvasWithWatermark(CONFIG.cameraSnapshotScale); }
-      catch(e){ msg('Snapshot failed'); running=false; return; }
-
-      const img=new Image(); img.src=data;
+      let snap;
+      try { snap = await snapshotCanvasWithWatermark(CONFIG.cameraSnapshotScale); }
+      catch(e){ msg('Camera snapshot failed'); running=false; return; }
+      const img=new Image(); img.src=snap;
       await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; });
 
-      // Prepare preview canvas
-      prevCanvas.width = Math.round(W * (record?CONFIG.cameraHiDPI:1));
-      prevCanvas.height= Math.round(H * (record?CONFIG.cameraHiDPI:1));
       prevCanvas.style.display='block';
-
       animateCameraSnapshot({
         img,
         preset,
-        ease,
+        ease:easeFun,
         dur_ms,
         record,
         previewCanvas: prevCanvas,
@@ -4643,52 +4617,50 @@ document.addEventListener("DOMContentLoaded", ()=>{
               dl.appendChild(a);
             }
           }
-          running=false; stopRequested=false;
+          running=false;
           msg('Done');
         }
       });
       return;
     }
 
-    // OBJECT PATH
+    // Object scopes
     const targets=pickTargets(c, scope);
     if (!targets.length){
-      msg(scope==='base'?'Load a base first': scope==='overlays'?'Add overlays first':'Add text first');
+      msg(scope==='base'?'Load a base first':scope==='overlays'?'Add overlays first':'Add text first');
       running=false; return;
     }
     if (targets.length > CONFIG.objectMaxTargets){
-      msg('Too many objects for animation');
+      msg('Too many objects to animate');
       running=false; return;
     }
 
-    // Composite pipeline (consistent)
     let composite;
-    try {
-      composite = await buildComposite(targets);
-    } catch(e){
-      msg('Composite build failed');
-      running=false; return;
-    }
+    try { composite = await buildComposite(targets); }
+    catch(e){ msg('Composite build failed'); running=false; return; }
 
-    prevCanvas.width = Math.round(W * (record?CONFIG.objectHiDPI:1));
-    prevCanvas.height= Math.round(H * (record?CONFIG.objectHiDPI:1));
+    prevCanvas.width=Math.round(W * (record?CONFIG.objectHiDPI:1));
+    prevCanvas.height=Math.round(H * (record?CONFIG.objectHiDPI:1));
+    prevCanvas.getContext('2d').clearRect(0,0,prevCanvas.width,prevCanvas.height);
     prevCanvas.style.display='block';
 
     animateCompositeObjects({
       baseImg: composite.baseImg,
       layers: composite.layers,
       preset,
-      ease,
+      ease: easeFun,
       dur_ms,
       record,
       W,
       H,
       returnMode: CONFIG.returnModeObjects,
+      previewCanvas: prevCanvas,
       finishCb: ({blob,mime})=>{
         if (record && blob){
           const url=URL.createObjectURL(blob);
           lastURL=url;
-          vidEl.style.display='block'; vidEl.src=url; vidEl.play?.().catch(()=>{});
+          vidEl.style.display='block';
+          vidEl.src=url; vidEl.play?.().catch(()=>{});
           prevCanvas.style.display='none';
           const dl=$('#raAnimDL');
           if (dl){
@@ -4696,12 +4668,12 @@ document.addEventListener("DOMContentLoaded", ()=>{
             const a=document.createElement('a');
             a.textContent='Download animation';
             a.href=url;
-            a.download=`animation_${Date.now()}.${mime.includes('mp4')?'mp4':'webm'}`;
+            a.download=`animation_${Date.now()}.${mime&&mime.includes('mp4')?'mp4':'webm'}`;
             a.className='btn small';
             dl.appendChild(a);
           }
         }
-        running=false; stopRequested=false;
+        running=false;
         msg('Done');
       }
     });
@@ -4714,15 +4686,10 @@ document.addEventListener("DOMContentLoaded", ()=>{
     return pref[2];
   }
 
-  function stop(){ /* future: add abort logic */ }
-  function isRunning(){ return running; }
-
   window.raAnimate = Object.freeze({
-    run:(opts)=>run(opts||{record:false}),
+    run:(o)=>run(o||{record:false}),
     preview:()=>run({record:false}),
     export:()=>run({record:true}),
-    stop,
-    isRunning,
     version: VERSION,
     config: CONFIG
   });
