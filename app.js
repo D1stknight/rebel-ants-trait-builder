@@ -992,13 +992,24 @@ safeAddListener("zoomReset","click", ()=>{
   setZoom(1);
   canvas.setViewportTransform([1,0,0,1,0,0]);
 });
-safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
+
+safeAddListener("canvasSize","change", (e)=>{
+  const v = parseInt(e.target.value, 10);
+  if (!isNaN(v)) setCanvasSize(v);
+});
+
 safeAddListener("clearBase","click", clearBaseOnly);
+
 safeAddListener("clearCanvas","click", ()=>{
   raSafeClear(true);          // keep backgroundRect, clear everything else
-  idLabel = null; baseGroup = null;
-  // After UI clears, re-enforce order on idle so Undo/Restore isn't racing our redraw
-  setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 60);
+  idLabel = null; 
+  baseGroup = null;
+  // Re-create faint ring (non-token mode) if appropriate
+  try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  // Re-enforce layer order after a short delay so undo/restore ops aren't racing
+  setTimeout(()=>{
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+  }, 60);
 });
 
 /* -------- Token ID style live controls (if present) -------- */
