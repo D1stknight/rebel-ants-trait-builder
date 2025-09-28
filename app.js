@@ -725,16 +725,16 @@ document.addEventListener("DOMContentLoaded", () => {
           try {
             window.__raLoadingJSON = false;
             window.__RA_RESTORING__ = false;
-            try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-            try { C()?.requestRenderAll(); } catch(_){}
+            try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch (_){}
+            try { var cc = C(); cc && cc.requestRenderAll && cc.requestRenderAll(); } catch (_){}
             document.dispatchEvent(new CustomEvent('ra-json-restore-end'));
-            // Re-ensure faint ring (will no-op if hidden for holder)
-            try { window.ensureNonTokenRingWM &&  } catch(_){}
+            // Re-ensure faint ring (legacy hook removed)
+            try { /* no-op */ } catch (_){}
           } finally {
-            userCb();
+            try { userCb(); } catch (_){}
           }
         }, reviver);
-      } catch(e){
+      } catch (e){
         window.__raLoadingJSON = false;
         window.__RA_RESTORING__ = false;
         throw e;
@@ -746,7 +746,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   (function wait(){
     const c = C();
-    if (!c) return setTimeout(wait,120);
+    if (!c) return setTimeout(wait, 120);
     patch(c);
   })();
 })();
