@@ -9226,3 +9226,296 @@ document.addEventListener('ra-collection-change', (e) => {
   }
 
 })();
+
+/* ===== RA_WM_CTRL_V11 — single source of truth (3‑rule system, no after:render loops) ===== */
+;(() => {
+  if (window.__RA_WM_CTRL_V11__) return;
+  window.__RA_WM_CTRL_V11__ = true;
+
+  // ---- Canvas helper
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // ---- Collections (lowercase checks)
+  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
+  const FRIENDS = new Set([
+    '0xbed2470ded2519c13eaaf3bd970015ef404d3d20', // Saints of LA
+    '0xa9a1d086623475595a02991664742e4a1cbafcb8'  // Chumpz (ApeChain)
+  ]);
+
+  // ---- Tags / finders
+  const isBg      = o => !!(o && o._isBgRect);
+  const isBase    = o => !!(o && o._isBase && !o._isBgRect);
+  const isRingWM  = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
+  const isFooter  = o => !!(o && (o._raBrandFooter === true ||
+                        (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+
+  const objs = () => { const c = C(); return c ? (c.getObjects?.() || []) : []; };
+  const findBase = () => objs().find(isBase) || null;
+  const findRing = () => objs().filter(isRingWM);
+  const findFoot = () => objs().filter(isFooter);
+
+  // ---- Admin knobs (back-compat with your previous names)
+  function getOpacity() {
+    if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return window.__RA_WM_ADMIN_OPACITY;
+    const ls = localStorage.getItem('ra_wm_opacity');
+    return (ls != null) ? Math.max(0, Math.min(1, +ls)) : 0.18; // faint default
+  }
+  function getPct() {
+    if (typeof window.__RA_WM_TARGET_PCT === 'number') return Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT));
+    const ls = localStorage.getItem('ra_wm_pct');
+    return (ls != null) ? Math.max(0.05, Math.min(1, +ls)) : 0.28; // default ~28% of canvas width
+  }
+  function setOpacity(v){ try{ localStorage.setItem('ra_wm_opacity', String(v)); window.__RA_WM_ADMIN_OPACITY = +v; }catch(_){} }
+  function setPct(v){ try{ localStorage.setItem('ra_wm_pct', String(v)); window.__RA_WM_TARGET_PCT = +v; }catch(_){} }
+
+  // Expose a tiny admin API (your Admin UI can call these)
+  window.RA_WM_ADMIN = {
+    get state(){ return { opacity:getOpacity(), pct:getPct() }; },
+    setOpacity(v){ setOpacity(v); applyRules(); },
+    setPct(v){ setPct(v); applyRules(); },
+    refresh(){ applyRules(); }
+  };
+
+  // ---- Wallet / holdings state
+  function getHoldings(){
+    const s = (window.RA_HOLDER_STATE || {});
+    // We’ll treat “connected” as “checked === true” (your code already sets this)
+    const connected = !!s.checked;
+    return {
+      connected,
+      hasRebel : !!s.hasRebel,
+      hasFriend: !!s.hasFriend
+    };
+  }
+
+  // ---- Classify current base
+  function classifyBase(){
+    const base = findBase();
+    if (!base) return { base:null, kind:'empty' };
+
+    const c = (base._tokenContract || '').toLowerCase();
+    if (!c) return { base, kind:'upload' };
+    if (c === REBEL) return { base, kind:'rebel' };
+    if (FRIENDS.has(c)) return { base, kind:'friend' };
+    return { base, kind:'other' }; // any other token contract
+  }
+
+  // ---- Desired visibility per your 3‑rule system
+  function desiredVisibility(){
+    const { connected, hasRebel, hasFriend } = getHoldings();
+    const { base, kind } = classifyBase();
+
+    // Empty canvas → nothing at all
+    if (!base) return { showRing:false, showFoot:false, base:null };
+
+    // 1) Wallet NOT connected → ring + footer everywhere
+    if (!connected) return { showRing:true, showFoot:true, base };
+
+    // 2) Connected and owns a Rebel
+    if (hasRebel){
+      if (kind === 'rebel') return { showRing:false, showFoot:false, base };
+      // friends / uploads / other tokens → no ring, footer YES
+      return { showRing:false, showFoot:true, base };
+    }
+
+    // 3) Connected but NO Rebel
+    if (hasFriend){
+      // friend perk: ring OFF globally, footer ON everywhere (uploads too)
+      return { showRing:false, showFoot:true, base };
+    }
+
+    // Connected, no Rebel and no Friend:
+    if (kind === 'rebel') return { showRing:true, showFoot:false, base }; // ring only on Rebel
+    return { showRing:true, showFoot:true, base }; // ring + footer elsewhere
+  }
+
+  // ---- Utilities
+  function seatAboveBase(o, base){
+    const c = C(); if (!c || !o || !base) return false;
+    const arr = objs();
+    const iBase = arr.indexOf(base);
+    const target = Math.min(arr.length - 1, iBase + 1);
+    if (arr.indexOf(o) !== target){ try{ c.moveTo(o, target); }catch(_){ return false; } return true; }
+    return false;
+  }
+
+  function resizeRingToCanvas(ring){
+    const c = C(); if (!c || !ring) return false;
+    const cw = c.getWidth();
+    const pct = getPct();
+    const nat = Math.max(1, ring.width || 1);
+    const sc  = (cw * pct) / nat;
+    let changed = false;
+    if (ring.scaleX !== sc){ ring.scaleX = sc; changed = true; }
+    if (ring.scaleY !== sc){ ring.scaleY = sc; changed = true; }
+    const cx = cw / 2, cy = c.getHeight() / 2;
+    if (ring.left !== cx){ ring.left = cx; changed = true; }
+    if (ring.top  !== cy){ ring.top  = cy; changed = true; }
+    ring.setCoords();
+    return changed;
+  }
+
+  function ensureSingle(arr){
+    // Keep first, remove the rest
+    const c = C(); if (!c) return false;
+    let changed = false;
+    if (arr.length > 1){
+      arr.slice(1).forEach(o => { try{ c.remove(o); changed = true; }catch(_){} });
+    }
+    return changed;
+  }
+
+  function ensureFooterPosition(foot){
+    const c = C(); if (!c || !foot) return false;
+    // Pin bottom-right with consistent margins
+    const marginX = 12, marginY = 10;
+    let changed = false;
+
+    if (foot.originX !== 'right'){ foot.originX = 'right'; changed = true; }
+    if (foot.originY !== 'bottom'){ foot.originY = 'bottom'; changed = true; }
+
+    const nx = c.getWidth()  - marginX;
+    const ny = c.getHeight() - marginY;
+    if (foot.left !== nx){ foot.left = nx; changed = true; }
+    if (foot.top  !== ny){ foot.top  = ny; changed = true; }
+
+    // Lock / sys tag to avoid user edits and undo clutter
+    if (!foot._raSys){ foot._raSys = true; changed = true; }
+    if (foot.excludeFromExport !== true){ foot.excludeFromExport = true; changed = true; }
+    if (foot.selectable !== false){ foot.selectable = false; changed = true; }
+    if (foot.evented !== false){ foot.evented = false; changed = true; }
+    if (foot.hasControls !== false){ foot.hasControls = false; changed = true; }
+
+    foot.setCoords();
+    return changed;
+  }
+
+  // Create a ring image if none exists
+  let __creatingRing = false;
+  function createRing(cb){
+    const c = C(); if (!c || __creatingRing) return;
+    __creatingRing = true;
+    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+    fabric.Image.fromURL(src, img => {
+      __creatingRing = false;
+      if (!img) return;
+      img.set({
+        originX:'center', originY:'center',
+        selectable:false, evented:false, hasControls:false,
+        objectCaching:false, opacity:getOpacity()
+      });
+      img._raWMCenter = true;
+      img._isWatermark = true;
+      img._raSys = true;
+      img.excludeFromExport = true;
+      try{ c.add(img); }catch(_){}
+      if (typeof cb === 'function') cb(img);
+    }, { crossOrigin:'anonymous' });
+  }
+
+  // ---- Core apply
+  function applyRules(){
+    const c = C(); if (!c) return;
+    const { showRing, showFoot, base } = desiredVisibility();
+
+    let changed = false;
+
+    // RING
+    const rings = findRing();
+    changed = ensureSingle(rings) || changed;
+    let ring = rings[0] || null;
+
+    if (showRing){
+      if (!ring){
+        createRing(newRing => {
+          // On next tick: seat/scale/opacity then render once
+          const arr = objs(); const b = base || findBase();
+          let ch = false;
+          ch = resizeRingToCanvas(newRing) || ch;
+          if (b) ch = seatAboveBase(newRing, b) || ch;
+          if (newRing.opacity !== getOpacity()){ newRing.opacity = getOpacity(); ch = true; }
+          if (newRing.visible === false){ newRing.visible = true; ch = true; }
+          if (ch) try{ c.requestRenderAll(); }catch(_){}
+        });
+      } else {
+        // Ensure size/seat/opacity/visible
+        changed = resizeRingToCanvas(ring) || changed;
+        if (base) changed = seatAboveBase(ring, base) || changed;
+        const op = getOpacity();
+        if (ring.opacity !== op){ ring.opacity = op; changed = true; }
+        if (ring.visible === false){ ring.visible = true; changed = true; }
+      }
+    } else {
+      if (ring && ring.visible !== false){ ring.visible = false; changed = true; }
+    }
+
+    // FOOTER
+    const foots = findFoot();
+    changed = ensureSingle(foots) || changed;
+    const foot = foots[0] || null;
+
+    if (foot){
+      changed = ensureFooterPosition(foot) || changed;
+      if (foot.visible !== !!showFoot){ foot.visible = !!showFoot; changed = true; }
+    } else {
+      // If rule demands footer and none present, create a small one
+      if (showFoot){
+        const text = new fabric.Text('Powered by Rebel Studios', {
+          originX:'right', originY:'bottom',
+          left:(c.getWidth()-12), top:(c.getHeight()-10),
+          fontFamily:'Inter, Arial, sans-serif',
+          fontSize:12, fill:'#000000',
+          stroke:'#ffffff', strokeWidth:1.6, strokeUniform:true,
+          opacity:0.95, selectable:false, evented:false, hasControls:false
+        });
+        text._raBrandFooter = true;
+        text._raSys = true; text.excludeFromExport = true;
+        try{ c.add(text); changed = true; }catch(_){}
+      }
+    }
+
+    // Hide everything if canvas is empty (no base)
+    if (!base){
+      if (ring && ring.visible !== false){ ring.visible = false; changed = true; }
+      if (foot && foot.visible !== false){ foot.visible = false; changed = true; }
+    }
+
+    if (changed) try{ c.requestRenderAll(); }catch(_){}
+  }
+
+  // ---- Wiring (no after:render loops)
+  function wire(){
+    const c = C(); if (!c) return setTimeout(wire, 120);
+    if (c.__raWmCtrlV11) return; c.__raWmCtrlV11 = true;
+
+    // Re‑apply on meaningful events only
+    c.on('object:added',    applyRules);
+    c.on('object:removed',  applyRules);
+    c.on('object:modified', applyRules);
+    c.on('selection:created', applyRules);
+    c.on('selection:updated', applyRules);
+
+    // Wallet / collection signals (your code already fires these)
+    document.addEventListener('ra-holder-update',    applyRules);
+    document.addEventListener('ra-collection-change',applyRules);
+    document.addEventListener('ra-wm-recalc',        applyRules);
+
+    // Keep footer placement + ring size on canvas resizes
+    try{
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmCtrlV11Resize){
+        c.__raWmCtrlV11Resize = true;
+        new ResizeObserver(applyRules).observe(el);
+      }
+    }catch(_){}
+
+    // First pass
+    applyRules();
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
