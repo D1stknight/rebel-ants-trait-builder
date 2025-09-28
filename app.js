@@ -358,14 +358,16 @@ async function loadBaseImage(dataUrl, isToken){
     group.set({ left:cw/2, top:ch/2 }); group.setCoords();
     obj = group;
 
-    // Optional: auto-ensure faint ring for non-token load
-    try { window.ensureNonTokenRingWM &&  } catch(_) {}
-  }
+  // Optional: legacy hook removed
+try {
+  /* no-op */
+} catch (_) {}
+}
 
-  canvas.add(obj);
-  baseGroup = obj;
-  bringInterfaceToFront();
-  canvas.requestRenderAll();
+canvas.add(obj);
+baseGroup = obj;
+bringInterfaceToFront();
+canvas.requestRenderAll();
 }
 
 async function addOverlayToCanvas(src, isPermanent){
