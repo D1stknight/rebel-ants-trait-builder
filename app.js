@@ -537,6 +537,18 @@ function toRoman(num){
   return out;
 }
 
+// (… earlier helpers / config / functions …)
+
+/* Cleanup: remove any lingering HTML references to the legacy overlay asset */
+;(() => {
+  const kill = sel => document.querySelectorAll(sel).forEach(n => n.remove());
+  document.addEventListener('DOMContentLoaded', () => {
+    kill('img[src*="assets/overlay.png"]');
+    kill('link[rel="preload"][href*="assets/overlay.png"]');
+    kill('meta[content*="assets/overlay.png"]');
+  }, { once: true });
+})();
+
 // ===============================
 //  DOM READY
 // ===============================
