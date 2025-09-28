@@ -318,9 +318,9 @@ function clearBaseOnly(){
 }
 // Return only the main image globally (no corner stamps)
 async function makeStampedGroup(img /*, bw, bh, wmWidthRatio */){
-  // Phase 2: corner-stamp logic removed – just center origin
-  img.set({ originX:"center", originY:"center" });
-  return img;
+ // Phase 2: corner-stamp logic removed – just center origin
+img.set({ originX:"center", originY:"center" });
+return img;
 }
 
 async function loadBaseImage(dataUrl, isToken){
@@ -334,7 +334,6 @@ async function loadBaseImage(dataUrl, isToken){
           canvas.remove(o);
         }
       });
-      }
     } catch (_) {}
   }
 
