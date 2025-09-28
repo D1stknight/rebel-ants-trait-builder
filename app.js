@@ -568,17 +568,16 @@ document.addEventListener("DOMContentLoaded", () => {
   setZoom(1);
 
   // Ensure faint ring (legacy hook removed)
-try { /* no-op */ } catch(_) {}
+  try { /* no-op */ } catch (_) {}
 
- // When WM / ring asset resolves, re-ensure (first load scenario)
-window.addEventListener('ra-wm-src-ready', () => {
-  try {
-    /* no-op (legacy hook removed) */
-  } catch (_) {}
-}, { once: false });
+  // When WM / ring asset resolves, re-ensure (first load scenario)
+  window.addEventListener('ra-wm-src-ready', () => {
+    try { /* no-op (legacy hook removed) */ } catch (_) {}
+  }, { once: false });
+
   // Layer order helper
   function enforce(){
-    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch (_) {}
   }
 
   // Run once right after initial layout
@@ -589,7 +588,7 @@ window.addEventListener('ra-wm-src-ready', () => {
     canvas.on('object:added',    enforce);
     canvas.on('object:modified', enforce);
     canvas.on('object:removed',  enforce);
-  } catch(_) {}
+  } catch (_) {}
 
   // Permanents → embed to the grid
   overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name: m.name, src: m.src, perm: true }));
@@ -602,14 +601,14 @@ window.addEventListener('ra-wm-src-ready', () => {
     const data = await fileToDataURL(f);
     await loadBaseImage(data, false); // non-token => ring overlay
     // Re-ensure ring (in case a token was previously loaded & removed it)
-    try { window.ensureNonTokenRingWM &&  } catch(_) {}
+    try { /* no-op (legacy hook removed) */ } catch (_) {}
   });
 
   safeAddListener("clearUpload", "click", () => {
     const inp = $("baseUpload"); if (inp) inp.value = "";
     clearBaseOnly();
     // After clearing base we may still want a faint ring visible
-    try { window.ensureNonTokenRingWM &&  } catch(_) {}
+    try { /* no-op (legacy hook removed) */ } catch (_) {}
   });
 
   // ... any other startup listeners, buttons, etc. ...
