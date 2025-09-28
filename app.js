@@ -7660,35 +7660,56 @@ async function loadTokenFromCollection(tokenId, col){
     const win = window.open('about:blank','_blank');
     if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
 
-    // Lightweight viewer shell
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Export</title>
-      <style>
-        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
-        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
-        img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
-            box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
-        .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
-             color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-             background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
-      </style></head><body>
-        <div class="viewer"><img id="raImg" alt="export"></div>
-        <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
-        <script>
-          (function(){
-            var img = document.getElementById('raImg'), fit = true;
-            function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
-                              else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
-            img.addEventListener('click', function(){ fit=!fit; apply(); });
-            apply();
-            window.addEventListener('message', function(ev){
-              if (ev && ev.data && ev.data.type==='ra-img') { img.src = ev.data.url; }
-            }, false);
-            setTimeout(function(){
-              if (!img.src) {
-                document.body.);
-        if (A >= cw * ch * 0.25 || stamps) looksLikeBase = true;
+   // Lightweight viewer shell
+const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Export</title>
+  <style>
+    html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+    .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+    img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
+        box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
+    .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+         color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none;}
+  </style>
+</head>
+<body>
+  <div class="viewer"><img id="raImg" alt="export"></div>
+  <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+  <script>
+    (function(){
+      var img = document.getElementById('raImg'), fit = true;
+      function apply(){
+        if (fit){
+          img.style.maxWidth  = 'calc(100vw - 32px)';
+          img.style.maxHeight = 'calc(100vh - 32px)';
+        } else {
+          img.style.maxWidth  = 'none';
+          img.style.maxHeight = 'none';
+        }
       }
-    }
+      img.addEventListener('click', function(){ fit = !fit; apply(); });
+      apply();
+
+      window.addEventListener('message', function(ev){
+        if (ev && ev.data && ev.data.type === 'ra-img') { img.src = ev.data.url; }
+      }, false);
+
+      setTimeout(function(){
+        if (!img.src){
+          document.body.insertAdjacentHTML(
+            'beforeend',
+            '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">No image received.</div>'
+          );
+        }
+      }, 2000);
+    })();
+  <\/script>
+</body>
+</html>`;
 
     if (looksLikeBase) {
       try { c.remove(o); } catch(_) {}
