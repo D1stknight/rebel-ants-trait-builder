@@ -7955,35 +7955,58 @@ function applyRing(pol){
     applyFooter(pol);
   }
 
-  function bind(){
-    if (window.__RA_UI_WM_BIND__) return;
-    window.__RA_UI_WM_BIND__ = true;
+ function bind(){
+  if (window.__RA_UI_WM_BIND__) return;
+  window.__RA_UI_WM_BIND__ = true;
 
-    // wallet/holder + collection change signals
-    try { document.addEventListener('ra-holder-update', recompute); } catch(_){}
-    try { document.addEventListener('ra-collection-change', recompute); } catch(_){}
-    try { document.addEventListener('ra-wm-recalc', recompute); } catch(_){}
+  // wallet/holder + collection change signals
+  try { document.addEventListener('ra-holder-update',     recompute); } catch (_){}
+  try { document.addEventListener('ra-collection-change', recompute); } catch (_){}
+  try { document.addEventListener('ra-wm-recalc',         recompute); } catch (_){}
 
-    // Fabric object changes & viewport resize
-    const c = C();
-    if (c && c.on){
-      c.on('object:added', recompute);
-      c.on('object:removed', recompute);
-      window.addEventListener('resize', recompute);
-    } else {
-      const iv = setInterval(()=>{
-        const cc = C();
-        if (cc && cc.upperCanvasEl){
-          clearInterval(iv);
-          recompute();
-          bind();
-        }
-      }, 500);
+  // Fabric object changes & viewport resize
+  const c = C();
+  if (c && c.on){
+    c.on('object:added',   recompute);
+    c.on('object:removed', recompute);
+    window.addEventListener('resize', recompute);
+
+    // Re-layout watermark precisely when the canvas element itself resizes
+    if ('ResizeObserver' in window) {
+      try {
+        if (c.__wmRO) c.__wmRO.disconnect();         // avoid duplicates
+        const ro = new ResizeObserver(() => recompute());
+        ro.observe(c.upperCanvasEl);
+        c.__wmRO = ro;                                // keep a reference
+      } catch (_){}
     }
+  } else {
+    // Canvas not ready yet — wait, then wire listeners without rebinding the whole block
+    const iv = setInterval(()=>{
+      const cc = C();
+      if (cc && cc.upperCanvasEl){
+        clearInterval(iv);
+        recompute();
 
-    // initial
-    setTimeout(recompute, 0);
+        try { cc.on && cc.on('object:added',   recompute); } catch (_){}
+        try { cc.on && cc.on('object:removed', recompute); } catch (_){}
+        try { window.addEventListener('resize', recompute); } catch (_){}
+
+        if ('ResizeObserver' in window) {
+          try {
+            if (cc.__wmRO) cc.__wmRO.disconnect();
+            const ro = new ResizeObserver(() => recompute());
+            ro.observe(cc.upperCanvasEl);
+            cc.__wmRO = ro;
+          } catch (_){}
+        }
+      }
+    }, 500);
   }
 
-  bind();
+  // initial
+  setTimeout(recompute, 0);
+}
+
+bind();
 })();
