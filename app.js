@@ -289,9 +289,10 @@ function setCanvasSize(size){
   canvas.setViewportTransform([1,0,0,1,0,0]);
   canvas.requestRenderAll();
 
-  // Phase 2: legacy 'ra-wm-recalc' event removed. Ring resizing handled by ResizeObserver.
-
-  try { window.ensureNonTokenRingWM &&  } catch(_){}
+// Phase 2: legacy 'ra-wm-recalc' event removed. Ring resizing handled by ResizeObserver.
+try {
+  /* no-op (legacy hook removed) */
+} catch (_) {}
 }
 
 function setZoom(v){
@@ -315,7 +316,6 @@ function clearBaseOnly(){
   canvas.getObjects().slice().forEach(o=>{ if (o._isBase) canvas.remove(o); });
   baseGroup = null; canvas.requestRenderAll();
 }
-
 // Return only the main image globally (no corner stamps)
 async function makeStampedGroup(img /*, bw, bh, wmWidthRatio */){
   // Phase 2: corner-stamp logic removed – just center origin
