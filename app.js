@@ -8008,7 +8008,7 @@ window.raDump = () => {
       (o._isBase   ? '[BASE]' : '     '),
       (o._raSys    ? '[SYS]'  : '    '),
       (o._raTokenId? '[ID]'   : '   '),
-      (o._kind ? (`[${o._kind}]`).padEnd(10) : '          '),
+      String(o._kind || '').padEnd(10),
       (o._raBaseSig === 'BASE_V1' ? '(fingerprinted)' : ''),
       (o._tokenContract ? '(token)' : '')
     );
