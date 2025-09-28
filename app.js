@@ -9220,12 +9220,11 @@ document.addEventListener('ra-collection-change', (e) => {
 
 })();
 
-/* ===== WM_ENGINE_V12 — single controller (final 3-Rule System, no loops) ===== */
+/* ===== WM_ENGINE_V12 — single controller (final 3-Rule System, empty-canvas guard, no loops) ===== */
 ;(() => {
   if (window.__WM_ENGINE_V12__) return;
   window.__WM_ENGINE_V12__ = true;
 
-  // Canvas helper
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Contracts (lowercase)
@@ -9235,7 +9234,7 @@ document.addEventListener('ra-collection-change', (e) => {
     '0xa9a1d086623475595a02991664742e4a1cbafcb8'  // Chumpz (ApeChain)
   ]);
 
-  // Tags / finders
+  // Object tag helpers
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase && !o._isBgRect);
   const isRing   = o => !!(o && (o._wmEngine === 'v12_ring' || o._raWMCenter === true || o._isWatermark === true));
@@ -9247,22 +9246,13 @@ document.addEventListener('ra-collection-change', (e) => {
   const rings    = () => objs().filter(isRing);
   const footers  = () => objs().filter(isFooter);
 
-  // Admin knobs (default: ring = 85% width, opacity = 0.18)
-  function getPct() {
-    if (typeof window.__RA_WM_TARGET_PCT === 'number') return clamp(window.__RA_WM_TARGET_PCT, 0.05, 1);
-    const ls = localStorage.getItem('ra_wm_pct');
-    return ls != null ? clamp(+ls, 0.05, 1) : 0.85;
-  }
-  function getOpacity() {
-    if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return clamp(window.__RA_WM_ADMIN_OPACITY, 0, 1);
-    const ls = localStorage.getItem('ra_wm_opacity');
-    return ls != null ? clamp(+ls, 0, 1) : 0.18;
-  }
-  function setPct(v){ try{ localStorage.setItem('ra_wm_pct', String(v)); window.__RA_WM_TARGET_PCT = +v; }catch(_){} }
-  function setOpacity(v){ try{ localStorage.setItem('ra_wm_opacity', String(v)); window.__RA_WM_ADMIN_OPACITY = +v; }catch(_){} }
+  // Admin knobs (persisted); defaults: ring 85% width, opacity 0.18
   const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  function getPct()      { const ls = localStorage.getItem('ra_wm_pct');      if (typeof window.__RA_WM_TARGET_PCT === 'number') return clamp(window.__RA_WM_TARGET_PCT, 0.05,1); return ls!=null?clamp(+ls,0.05,1):0.85; }
+  function getOpacity()  { const ls = localStorage.getItem('ra_wm_opacity');  if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return clamp(window.__RA_WM_ADMIN_OPACITY,0,1); return ls!=null?clamp(+ls,0,1):0.18; }
+  function setPct(v)     { try{ localStorage.setItem('ra_wm_pct', String(v));      window.__RA_WM_TARGET_PCT = +v; }catch(_){} }
+  function setOpacity(v) { try{ localStorage.setItem('ra_wm_opacity', String(v));  window.__RA_WM_ADMIN_OPACITY = +v; }catch(_){} }
 
-  // Admin API
   window.RA_WM_ADMIN = {
     get state(){ return { pct:getPct(), opacity:getOpacity() }; },
     setPct(v){ setPct(v); applyRules('admin'); },
@@ -9270,13 +9260,13 @@ document.addEventListener('ra-collection-change', (e) => {
     refresh(){ applyRules('admin'); }
   };
 
-  // Holdings (your RA_HOLDER_STATE sets checked/hasRebel/hasFriend)
+  // Holdings (provided elsewhere in your app)
   function holdings(){
     const s = window.RA_HOLDER_STATE || {};
     return { connected: !!s.checked, hasRebel: !!s.hasRebel, hasFriend: !!s.hasFriend };
   }
 
-  // Base classification
+  // Classify current base
   function classify(){
     const base = findBase();
     if (!base) return { base:null, kind:'empty' };
@@ -9287,27 +9277,28 @@ document.addEventListener('ra-collection-change', (e) => {
     return { base, kind:'other' };
   }
 
-  // Your Final 3-Rule System
+  // Final 3-Rule System
   function visibilityRules(){
     const { connected, hasRebel, hasFriend } = holdings();
     const { base, kind } = classify();
 
-    if (!base) return { base:null, showRing:false, showFoot:false }; // empty canvas
+    // EARLY GUARD: empty canvas → show nothing
+    if (!base) return { base:null, showRing:false, showFoot:false };
 
-    if (!connected) return { base, showRing:true, showFoot:true };   // default ring+footer
+    if (!connected) return { base, showRing:true,  showFoot:true  }; // default (ring+footer)
 
     if (hasRebel){
-      if (kind === 'rebel') return { base, showRing:false, showFoot:false };               // Rebel clean
-      return { base, showRing:false, showFoot:true };                                      // friends/uploads footer only
+      if (kind === 'rebel') return { base, showRing:false, showFoot:false };   // Rebels clean
+      return { base, showRing:false, showFoot:true  };                         // friends/uploads footer only
     }
 
     if (hasFriend){
-      return { base, showRing:false, showFoot:true };                                      // footer only everywhere
+      return { base, showRing:false, showFoot:true };                          // footer only everywhere
     }
 
     // Connected but no Rebel & no Friend
-    if (kind === 'rebel') return { base, showRing:true, showFoot:false };                  // ring only on Rebel
-    return { base, showRing:true, showFoot:true };                                         // others: ring+footer
+    if (kind === 'rebel') return { base, showRing:true,  showFoot:false };     // ring only on Rebels
+    return                     { base, showRing:true,  showFoot:true  };       // others: ring+footer
   }
 
   // Seat ring just above base (under overlays)
@@ -9340,7 +9331,6 @@ document.addEventListener('ra-collection-change', (e) => {
     const c=C(); if (!c) return false;
     let changed=false;
     if (list.length>1){
-      // keep the one with our tag first; otherwise keep first
       list.sort((a,b)=> (b._wmEngine===keepTag) - (a._wmEngine===keepTag));
       list.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){} });
     }
@@ -9351,7 +9341,7 @@ document.addEventListener('ra-collection-change', (e) => {
     const c=C(); if (!c || !foot) return false;
     const marginX=14, marginY=12; let ch=false;
 
-    // prefer Textbox to avoid clipping
+    // use Textbox to avoid clipping
     if (foot.type!=='textbox'){
       const tb = new fabric.Textbox(foot.text || 'Powered by Rebel Studios', {
         originX:'right', originY:'bottom',
@@ -9379,7 +9369,7 @@ document.addEventListener('ra-collection-change', (e) => {
     return ch;
   }
 
-  // Create ring if needed
+  // Create ring on demand
   let _creating=false;
   function createRing(cb){
     const c=C(); if (!c || _creating) return;
@@ -9402,18 +9392,25 @@ document.addEventListener('ra-collection-change', (e) => {
   // Core apply
   function applyRules(reason=''){
     const c=C(); if (!c) return;
-    const { base, showRing, showFoot } = visibilityRules();
 
     // De-dupe foreign copies first
-    let changed = false;
-    changed = ensureSingle(rings(), 'v12_ring') || changed;
+    let changed=false;
+    changed = ensureSingle(rings(), 'v12_ring')   || changed;
     changed = ensureSingle(footers(), 'v12_footer') || changed;
+
+    const { base, showRing, showFoot } = visibilityRules();
+
+    // If no base (empty canvas) — hide everything and bail
+    if (!base){
+      rings().forEach(r => { if (r.visible!==false){ r.visible=false; changed=true; } });
+      footers().forEach(f => { if (f.visible!==false){ f.visible=false; changed=true; } });
+      if (changed) try{ c.requestRenderAll(); }catch(_){}
+      return;
+    }
 
     // RING
     let ring = rings()[0] || null;
-    if (!base){
-      if (ring && ring.visible!==false){ ring.visible=false; changed=true; }
-    } else if (showRing){
+    if (showRing){
       if (!ring){
         createRing(newRing => {
           let ch=false;
@@ -9436,9 +9433,7 @@ document.addEventListener('ra-collection-change', (e) => {
 
     // FOOTER
     let foot = footers()[0] || null;
-    if (!base || !showFoot){
-      if (foot && foot.visible!==false){ foot.visible=false; changed=true; }
-    } else {
+    if (showFoot){
       if (!foot){
         const tb = new fabric.Textbox('Powered by Rebel Studios', {
           originX:'right', originY:'bottom',
@@ -9454,17 +9449,19 @@ document.addEventListener('ra-collection-change', (e) => {
         if (foot.visible===false){ foot.visible=true; changed=true; }
         if (!foot._wmEngine){ foot._wmEngine='v12_footer'; changed=true; }
       }
+    } else {
+      if (foot && foot.visible!==false){ foot.visible=false; changed=true; }
     }
 
     if (changed) try{ c.requestRenderAll(); }catch(_){}
   }
 
-  // Wire (no after:render)
+  // Wire (no after:render loops)
   function wire(){
-    const c=C(); if (!c) return setTimeout(wire,120);
+    const c=C(); if (!c) return setTimeout(wire, 120);
     if (c.__wmEngineV12Bound) return; c.__wmEngineV12Bound = true;
 
-    // Re-apply on meaningful events only
+    // Meaningful events only
     c.on('object:added',    ()=>applyRules('add'));
     c.on('object:removed',  ()=>applyRules('rem'));
     c.on('object:modified', ()=>applyRules('mod'));
@@ -9472,12 +9469,10 @@ document.addEventListener('ra-collection-change', (e) => {
     c.on('selection:updated', ()=>applyRules('selu'));
     c.on('mouse:up', ()=>applyRules('up'));
 
-    // Wallet / collection signals
     document.addEventListener('ra-holder-update',    ()=>applyRules('holder'));
     document.addEventListener('ra-collection-change',()=>applyRules('col'));
     document.addEventListener('ra-wm-recalc',        ()=>applyRules('recalc'));
 
-    // Keep in place on canvas resizes
     try{
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__wmEngineV12Resize){
@@ -9486,20 +9481,20 @@ document.addEventListener('ra-collection-change', (e) => {
       }
     }catch(_){}
 
-    // Patch loadFromJSON so Undo/Restore finishes with correct seat/size/vis
+    // Ensure Undo/Restore settles to correct state
     if (!c.__wmEngineV12LFJ){
       c.__wmEngineV12LFJ = true;
       const orig = c.loadFromJSON.bind(c);
-      c.loadFromJSON = function(json, cb, rev){
+      c.loadFromJSON = function(json, cb, reviver){
         const done = ()=>{ try{ applyRules('restore'); } finally { cb && cb(); } };
-        try{ return orig(json, done, rev); } catch(e){ try{ applyRules('restore-e'); }catch(_){} throw e; }
+        try{ return orig(json, done, reviver); } catch(e){ try{ applyRules('restore-e'); }catch(_){} throw e; }
       };
     }
 
     applyRules('boot');
   }
 
-  if (document.readyState === 'loading'){
+  if (document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded', wire, { once:true });
   } else {
     wire();
