@@ -590,9 +590,12 @@ document.addEventListener("DOMContentLoaded", () => {
     canvas.on('object:removed',  enforce);
   } catch (_) {}
 
-  // Permanents → embed to the grid
-  overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name: m.name, src: m.src, perm: true }));
-  renderOverlayGrid();
+  // Permanents → embed to the grid (filter out the legacy overlay.png asset)
+overlayList = (window.__EMBED_OVERLAYS__ || [])
+  .filter(m => m && !/(^|\/)overlay\.png(?:$|\?)/i.test(String(m.src || '')))
+  .map(m => ({ name: m.name, src: m.src, perm: true }));
+
+renderOverlayGrid();
 
   // -------- Base image: local upload
   safeAddListener("baseUpload", "change", async (e) => {
