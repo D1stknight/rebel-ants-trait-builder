@@ -110,6 +110,7 @@ async function fetchAsDataURL(url){
     });
   } finally {
     clearTimeout(t);
+
   }
 }
 
@@ -155,6 +156,8 @@ function normalize(u){
     }
     return '';
   }
+}
+
 
   // Ensure label exists, is non-interactive, and sits at the very top
   function ensureLabelOnTop(idStr){
@@ -230,8 +233,10 @@ function isAllowedAssetURL(u){
   }catch(_){
     // If URL() fails, treat as a relative path (allowed) unless it *looks* like a scheme
     return !/^[a-z][a-z0-9+\-.]*:/i.test(String(u));
+
   }
 }
+
 
 async function fetchImageByTokenId(contract, tokenId){
   const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
@@ -322,6 +327,7 @@ async function makeStampedGroup(img /*, bw, bh, wmWidthRatio */){
 img.set({ originX:"center", originY:"center" });
 return img;
 }
+
 
 async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
@@ -556,6 +562,7 @@ function toRoman(num){
     l.rel = 'icon';
     l.href = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="#0d0e13"/></svg>';
     document.head.appendChild(l);
+
   }
 })();
 
@@ -677,7 +684,9 @@ renderOverlayGrid();
     const mem = (window.__raTokenMemory || '').trim();
 
     return digitsDisp || digitsFB || mem || '';
+
   }
+}
 
   function placeLabelOnTop(idStr){
     try {
@@ -767,7 +776,15 @@ renderOverlayGrid();
     };
 
     c.__raPatchedLoadJSON = true;
+
   }
+  canvas.getObjects().forEach(o=>{
+    if (o === backgroundRect) return;
+    o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
+  });
+  canvas.setViewportTransform([1,0,0,1,0,0]);
+  canvas.requestRenderAll();
+
 
   (function wait(){
     const c = C();
@@ -921,11 +938,33 @@ safeAddListener("addCustomText","click", ()=>{
   if (txt.initDimensions) txt.initDimensions();
   txt.setCoords();
 
-  txt._kind = 'customText';
-  canvas.add(txt);
-  canvas.setActiveObject(txt);
+  // fit to canvas (no upscaling)
+  const cw = canvas.getWidth(), ch = canvas.getHeight();
+  const sc = Math.min(cw / img.width, ch / img.height, 1);
+  img.scale(sc);
+
+  let obj;
+  if (isToken) {
+    img._isBase = true;
+    lockBaseObject(img);
+    img.set({ left:cw/2, top:ch/2 }); img.setCoords();
+    obj = img;
+  } else {
+    const group = await makeStampedGroup(img, img.width*sc, img.height*sc, 0.15);
+    group._isBase = true;
+    lockBaseObject(group);
+    group.set({ left:cw/2, top:ch/2 }); group.setCoords();
+    obj = group;
+
+    // Optional: auto-ensure faint ring for non-token load
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  }
+
+  canvas.add(obj);
+  baseGroup = obj;
   bringInterfaceToFront();
   canvas.requestRenderAll();
+
 });
 
 ["change","input"].forEach(ev=>{
@@ -1501,17 +1540,13 @@ function renderPublishedShelf(){
   draw();
 }
 
-// ===============================
-//  EXPORT (optional UI IDs: exportPng / openNewTab)
-//  — self-contained: includes the New Tab viewer (fit ↔ actual size)
-// ===============================
-document.addEventListener("DOMContentLoaded", ()=>{
-  // Make sure the UI button can’t submit a surrounding <form>
-  const openBtn = $("openNewTab");
-  if (openBtn && openBtn.tagName === "BUTTON") openBtn.setAttribute("type","button");
 
-  // Regular PNG download
-  safeAddListener("exportPng","click",()=> doExport(false));
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function patch(c){
+    if (!c || c.__raPatchedLoadJSON) return;
+    const orig = c.loadFromJSON.bind(c);
+
 
   // New-tab viewer (Safari/Chrome safe)
 safeAddListener("openNewTab", "click", (e) => {
@@ -1536,9 +1571,13 @@ safeAddListener("openNewTab", "click", (e) => {
     }
     const prev = $("exportPreview"); if (prev) prev.src = dataURL;
 
-    // Manual “save last export” link (if present in UI)
-    const manual = $("manualLink");
-    if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
+
+  (function wait(){
+    const c = C();
+    if (!c) return setTimeout(wait,120);
+    patch(c);
+  })();
+})();
 
     if (openTab) {
       fetch(dataURL).then(r => r.blob()).then(blob => {
@@ -1625,6 +1664,10 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
 });  // <-- closes DOMContentLoaded
 
 
+/* -------- Custom text (optional UI) -------- */
+safeAddListener("addCustomText","click", ()=>{
+  const val = (($("customText")||{}).value||"").trim(); if (!val) return;
+
 (function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
   if (window.__RA_RESIZE_V8_INIT__) return;
   window.__RA_RESIZE_V8_INIT__ = true;
@@ -1669,7 +1712,10 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
       try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
       try { c.requestRenderAll(); } catch(_) {}
       return;
+
     }
+  });
+});
 
     const s = target / oldW; // square assumption
     const oldCenter = new fabric.Point(oldW/2, oldH/2);
@@ -1699,7 +1745,14 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
         c.sendToBack(bgRect);
         bgRect.setCoords();
       } catch(_) {}
+
     }
+    setOverlayKindDeep(c);
+    
+    canvas.add(c).setActiveObject(c);
+    canvas.requestRenderAll();
+  });
+});
 
     // Transform eligible objects
     info.forEach(({o, ctr, sx, sy, doScale}) => {
@@ -1923,12 +1976,10 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
     place();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', install);
-  } else {
-    install();
-  }
-})();
+safeAddListener("flipX","click", ()=>{
+  const o=canvas.getActiveObject(); if(!o) return;
+  o.toggle && o.toggle('flipX'); canvas.requestRenderAll();
+});
 
 /* =========================================
    RA_MOBILE_FLOW_v29  — MOBILE ONLY (≤900px)
@@ -1979,8 +2030,10 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
   let styleEl, host, frame, checker, live, origRoot, origRootDisplay, mo;
   let rafPending = false;
 
-  function $(q){ return document.querySelector(q); }
-  function $$(q){ return Array.from(document.querySelectorAll(q)); }
+// ---- FIXED: do not unlock backgroundRect or _isBase objects ----
+safeAddListener("unlockAll","click", ()=>{
+  const c = window.canvas; if (!c) return;
+  const objs = c.getObjects() || [];
 
   function findKonvaContent(){
     // Prefer window.stage.getContent if stage exists
@@ -2073,7 +2126,9 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
 
     fitStageIntoFrame();
     applied = true;
+
   }
+});
 
   function cleanup(){
     if (!applied) return;
@@ -2146,8 +2201,9 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
     return;
   }
 
-  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
-  const  $ = (s, r=document)=>r.querySelector(s);
+    // Center lines
+    if (Math.abs(centerX - cw/2) <= tol) dx += (cw/2 - centerX);
+    if (Math.abs(centerY - ch/2) <= tol) dy += (ch/2 - centerY);
 
   function isLikelyOffscreenUtilityCanvas(c){
     // Heuristic: extremely small or 0-sized logical canvases used for measurement
@@ -2218,7 +2274,9 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
       maxWidth: '100%',
       margin: '0 auto 16px auto',
       position: 'relative'
+
     });
+  }
 
     $$('canvas', wrap).forEach(c => {
       c.style.width    = dW + 'px';
@@ -2227,8 +2285,42 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
       c.style.display  = 'block';
     });
 
-    hideGhostsAndStrips(wrap);
+/* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
+(function adminDock(){
+  const isAdmin = /\badmin=1\b/i.test(location.search);
+  if (!isAdmin) { renderPublishedShelf(); return; }
+
+  if ($("raAdminDock2")) { renderPublishedShelf(); return; }
+
+  function fileToDataURL2(file){
+    return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
   }
+  function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+  function setShelf(arr){ try{ (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(arr||[])); }catch(_){} }
+  function setMsg(t){ const el=$("ra2Msg"); if (el) el.textContent=t||''; }
+
+  const dock = document.createElement('div');
+  dock.id = 'raAdminDock2';
+  dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
+  dock.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #222">
+      <strong>Admin Overlays</strong>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="ra2Export"  style="background:#10b981;border:0;border-radius:8px;color:#08130e;padding:6px 10px;cursor:pointer">Export pack</button>
+        <button id="ra2Hide"    style="background:#1b1c22;border:1px solid #2a2a2e;border-radius:6px;color:#e7e7ea;padding:4px 8px;cursor:pointer">Hide</button>
+      </div>
+    </div>
+    <div id="ra2Body" style="padding:10px 12px;">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <button id="ra2Add"   style="background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer">Add PNGs</button>
+        <button id="ra2Clear" style="background:#2a2a2e;border:0;border-radius:8px;color:#ccc;padding:6px 10px;cursor:pointer">Clear</button>
+        <div id="ra2Msg" style="opacity:.75;min-height:18px"></div>
+      </div>
+      <div id="ra2Grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow:auto;"></div>
+      <div style="opacity:.55;margin-top:8px">Use <em>Publish</em> to add items to the shelf below for everyone.</div>
+    </div>
+  `;
+  document.body.appendChild(dock);
 
   function scheduleFit(){
     if (rafPending) return;
@@ -2255,8 +2347,11 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
       if (file && !file.__raFitBound){
         file.__raFitBound = true;
         file.addEventListener('change', () => setTimeout(scheduleFit, 60), {passive:true});
+
       }
+      if (act==="add"){ addOverlayToCanvas(item.dataURL,false); setMsg(`Added: ${item.name}`); setTimeout(()=>setMsg(''), 800); }
     });
+    grid.appendChild(tile);
   }
 
   // MutationObserver to refit on dynamic UI changes
@@ -2298,153 +2393,151 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
   };
 })();
 
-/* ==================== RA_AI_QUOTE_v1 — “✨ Inspire me” (motivational quotes) ====================
-   What this adds:
-   • A button “✨ Inspire me” near your Custom Text controls
-   • Each click adds (or replaces) a motivational quote on the canvas
-   • Quotes are varied and avoid recent repeats (remembers 40 recent in localStorage)
-   • Text is centered, wrapped to 80% of canvas width, with a readable outline
-   • Uses your existing text controls (font, size, color, stroke) after insertion
-   ============================================================================================== */
-(() => {
-  const RECENT_KEY = 'ra_ai_quotes_recent_v1';
-
-  // ——— Small helpers ———
-  const $  = (sel, r=document) => r.querySelector(sel);
-  const $$ = (sel, r=document) => Array.from(r.querySelectorAll(sel));
-
-  function getRecent() {
-    try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch (_) { return []; }
+      tile.appendChild(frame);
+      tile.appendChild(cap);
+      tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
+      grid.appendChild(tile);
+    });
   }
-  function pushRecent(q) {
-    const arr = getRecent();
-    arr.unshift(String(q).trim());
-    // keep only the latest 40 unique
-    const seen = new Set();
-    const dedup = [];
-    for (const s of arr) { if (!seen.has(s)) { seen.add(s); dedup.push(s); } }
-    dedup.length = Math.min(dedup.length, 40);
-    try { localStorage.setItem(RECENT_KEY, JSON.stringify(dedup)); } catch (_) {}
-  }
+  draw();
+}
 
-  // ——— Quote generator (lightweight, but varied) ———
-  const COMMANDS = [
-    "Keep going", "Stay hungry", "Trust the process", "Outwork yesterday",
-    "Start before you're ready", "Consistency compounds", "Progress over perfection",
-    "Ship it", "Make it simple", "Play the long game", "No zero days",
-    "Bet on yourself", "Stay curious", "Do the hard things", "Win the morning",
-    "Keep showing up", "Build in public", "One brick at a time", "Move with purpose",
-    "Be relentlessly resourceful", "Protect your momentum", "Take the stairs",
-    "Create then iterate", "Make it a habit", "Focus beats talent",
-    "Earn it daily", "Start now", "Prove it", "Own your time", "Small steps, big moves"
-  ];
-  const TAILS = [
-    "small steps add up", "momentum beats perfect", "discipline is freedom",
-    "tiny wins compound", "results love consistency", "courage over comfort",
-    "1% better every day", "clarity comes from action", "done beats perfect",
-    "practice makes progress", "keep the promise to yourself", "get uncomfortable",
-    "dreams need deadlines", "start messy", "execute loudly",
-    "be patient and persistent", "aim for better, not easy", "work the plan",
-    "prove it with work", "show up for yourself", "stack your wins",
-    "build the streak", "trust your future self", "act like it matters",
-    "make room for greatness", "keep it moving", "focus and finish",
-    "make today count", "finish strong", "do one more rep"
-  ];
-  const SEPS = [" — ", " · ", " — ", ": "]; // weighted toward em‑dash
+ // ===============================
+//  EXPORT (optional UI IDs: exportPng / openNewTab)
+//  — self-contained: includes the New Tab viewer (fit ↔ actual size)
+// ===============================
+document.addEventListener("DOMContentLoaded", ()=>{
+  // Make sure the UI button can’t submit a surrounding <form>
+  const openBtn = $("openNewTab");
+  if (openBtn && openBtn.tagName === "BUTTON") openBtn.setAttribute("type","button");
 
-  function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+  // Regular PNG download
+  safeAddListener("exportPng","click",()=> doExport(false));
 
-  function makeQuote(attempt=0){
-    const q = `${pick(COMMANDS)}${pick(SEPS)}${pick(TAILS)}.`;
-    const recent = getRecent();
-    if (!recent.includes(q)) return q;
-    // Try a few times to avoid an immediate repeat
-    return attempt < 60 ? makeQuote(attempt+1) : q;
-  }
+  // New-tab viewer (prevents Chrome navigating the current tab)
+  safeAddListener("openNewTab", "click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Open the viewer
+    raOpenNewTabViewer();
+  });
 
-  // ——— Drop (or replace) quote on Fabric canvas ———
-  function addOrReplaceQuote(){
-    const c = window.canvas;
-    if (!c || !window.fabric) { alert('Canvas not ready'); return; }
+  // High-quality PNG export used by both paths
+  function doExport(openTab){
+    if (!window.canvas) return;
+    const rawMult = parseInt((($("exportMultiplier")||{}).value) || "2", 10);
+    const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
 
-    const quote = makeQuote();
-    const cw = c.getWidth(), ch = c.getHeight();
-    const width = Math.round(cw * 0.84);
-
-    // Size scales with canvas (feels right across 700/900/1024/1200)
-    const defaultSize = Math.round(Math.max(28, Math.min(64, cw * 0.055)));
-
-    // Prefer the current UI controls if present (so user style is respected)
-    const family = ($('#fontFamily')||{}).value || "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif";
-    const size   = parseInt(($('#fontSize')||{}).value||defaultSize, 10);
-    const fill   = ($('#fontColor')||{}).value || "#ffffff";
-    const stroke = ($('#strokeColor')||{}).value || "#000000";
-    const swidth = parseInt(($('#strokeWidth')||{}).value||"2", 10);
-
-    // If a custom text is selected, replace its contents; otherwise add a new one
-    const active = c.getActiveObject();
-    if (active && active._kind === 'customText') {
-      active.text = quote;
-      active.setCoords();
-      c.requestRenderAll();
-      pushRecent(quote);
+    let dataURL;
+    try{
+      dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
+    }catch(_){
+      alert("Export blocked (CORS). Use images with CORS headers or same-origin.");
       return;
     }
+    const prev = $("exportPreview"); if (prev) prev.src = dataURL;
 
-    const tb = new fabric.Textbox(quote, {
-      left: cw/2, top: ch/2,
-      originX: "center", originY: "center",
-      width, textAlign: "center",
-      fontFamily: family,
-      fontSize: size,
-      fill, stroke, strokeWidth: swidth,
-      editable: true
-    });
-    tb._kind = 'customText';
-    tb._raAiQuote = true;
+    // Manual “save last export” link (if present in UI)
+    const manual = $("manualLink");
+    if (manual){ manual.href = dataURL; manual.textContent = "Open last export (manual save)"; }
 
-    c.add(tb).setActiveObject(tb);
-    // Keep token ID label on top if you use it
-    try { if (typeof window.bringInterfaceToFront === 'function') window.bringInterfaceToFront(); } catch(_){}
-    c.requestRenderAll();
-    pushRecent(quote);
-  }
-
-  // ——— Inject the “✨ Inspire me” button into your existing UI ———
-  function injectButton(){
-    if (document.getElementById('raAiQuoteBtn')) return;
-
-    // Try to place it next to your existing "Add" custom text button if present
-    let anchor = document.getElementById('addCustomText');
-    if (!anchor) {
-      // Fall back to placing after the custom text input/textarea or in the same panel
-      anchor = document.getElementById('customText') ||
-               $$('input,textarea,button').find(b => /custom\s*text/i.test((b.id||b.textContent||'')));
+    if (openTab) {
+      fetch(dataURL).then(r => r.blob()).then(blob => {
+        const url = URL.createObjectURL(blob);
+        const w = window.open(url, "_blank", "noopener");
+        if (!w) {
+          // Popup blocked → trigger a download instead of navigating away
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "rebel-ant-overlay.png";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+        }
+      });
+    } else {
+      const a = document.createElement("a");
+      a.href = dataURL; a.download = "rebel-ant-overlay.png";
+      document.body.appendChild(a); a.click(); a.remove();
     }
-    if (!anchor) { setTimeout(injectButton, 300); return; }
-
-    const btn = document.createElement('button');
-    btn.id = 'raAiQuoteBtn';
-    btn.textContent = '✨ Inspire me';
-    btn.className = 'btn';
-    btn.style.marginLeft = '8px';
-    btn.style.cursor = 'pointer';
-
-    // If your buttons use a "small" variant, mirror it
-    if (anchor.classList.contains('small')) btn.classList.add('small');
-
-    btn.addEventListener('click', addOrReplaceQuote);
-    // Insert right after the anchor button/input
-    anchor.parentNode.insertBefore(btn, anchor.nextSibling);
   }
 
-  // Boot once DOM is ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', injectButton, { once:true });
-  } else {
-    injectButton();
-  }
-})();
+  // ---- Inline, popup-safe viewer that fits to the browser tab ----
+  // Exposed globally so other code can reuse: window.raOpenNewTabViewer()
+  window.raOpenNewTabViewer = function raOpenNewTabViewer(){
+    if (!window.canvas){ alert("Canvas not ready"); return; }
+
+    // Open a blank tab synchronously (avoids popup blockers)
+    const win = window.open("", "_blank", "noopener");
+    if (!win){ alert("Popup blocked. Allow popups for this site."); return; }
+
+    // Minimal head+styles
+    win.document.title = "Export";
+    win.document.head.innerHTML = `
+      <meta charset="utf-8">
+      <title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img#raImg{
+          display:block;
+          max-width:calc(100vw - 32px);
+          max-height:calc(100vh - 32px);
+          width:auto;height:auto;
+          box-shadow:0 8px 24px rgba(0,0,0,.5);
+          border-radius:8px;
+          image-rendering:auto;
+        }
+        .hud{
+          position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+          color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none
+        }
+      </style>
+    `;
+    win.document.body.innerHTML = `
+      <div class="viewer"><img id="raImg" alt="export"/></div>
+      <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+    `;
+
+    // Read export multiplier from UI (1..8), default 2
+    const multEl = document.getElementById("exportMultiplier") || document.getElementById("exportQuality");
+    let mult = 2;
+    if (multEl){
+      const v = parseInt((multEl.value||multEl.textContent||"").replace(/\D+/g,""),10);
+      if (v && v>=1 && v<=8) mult = v;
+    }
+
+    try{
+      const dataUrl = canvas.toDataURL({ format:"png", multiplier: mult, enableRetinaScaling:true });
+      const img = win.document.getElementById("raImg");
+      img.src = dataUrl;
+
+      // Fit ↔ Actual size toggle
+      let fit = true;
+      function applyFit(){
+        if (fit){
+          img.style.maxWidth  = "calc(100vw - 32px)";
+          img.style.maxHeight = "calc(100vh - 32px)";
+          img.style.width = "auto";
+          img.style.height = "auto";
+        } else {
+          img.style.maxWidth  = "none";
+          img.style.maxHeight = "none";
+          img.style.width = "auto";  // natural size
+          img.style.height = "auto";
+        }
+      }
+      img.addEventListener("click", ()=>{ fit = !fit; applyFit(); });
+      applyFit();
+    }catch(e){
+      win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">' +
+        'Export failed (CORS/security). Try a different image or use a CORS-enabled host.' +
+        '</div>';
+    }
+  };
+});  // <-- closes DOMContentLoaded
 
 /* ==============================================================
    RA_FONT_PICKER_UNIFIED_V1
@@ -2574,9 +2667,8 @@ window.raOpenNewTabViewer = function raOpenNewTabViewer(){
       txt.textContent=PREVIEW_SAMPLE;
       box.appendChild(label); box.appendChild(txt);
       picker.parentNode.insertBefore(box, picker.nextSibling);
+
     }
-    return box.querySelector('.raPreviewText');
-  }
 
   function applySelectionToCanvas(stack, pickerId){
     const c=window.canvas;
@@ -3457,9 +3549,8 @@ else init();
       $$('h3').find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode
       || document.body;
 
-    const row = document.createElement('div');
-    row.id = 'raHistoryRow';
-    row.style.cssText = 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
+  kick();
+})();
 
     const mk = (id, txt)=>{ const b=document.createElement('button'); b.id=id; b.textContent=txt; b.className='btn small'; return b; };
     const undoB = mk('raUndoBtn','Undo (0)');
@@ -3530,9 +3621,9 @@ else init();
     return true;
   }
 
-  function wire(){
-    c = C(); if (!c) return defer(wire, 120);
-    ensureUI();
+    const stage = findStageCanvas();
+    if (!stage) return;
+    const wrap = stage.parentElement || stage;
 
     // Baseline snapshot after initial asynchronous setup
     defer(()=>{ push('Init'); }, 180);
@@ -3564,15 +3655,17 @@ else init();
       sizeEl.addEventListener('change', ()=> schedulePush('Resize'));
     }
 
-    refresh('Ready');
+    hideGhostsAndStrips(wrap);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, {once:true});
-  } else {
-    wire();
+  function scheduleFit(){
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      cssFit();
+    });
   }
-})();
 
 /* ================= RA_DISABLE_FIXED_CANVAS_ON_MOBILE_v1 =================
    Neutralizes RA_FIXED_CENTER_CANVAS_V1 on mobile only.
@@ -3584,39 +3677,97 @@ else init();
   const MQ = '(max-width: 920px)';
   if (!window.matchMedia(MQ).matches) return;
 
-  function getCanvasCard(){
-    const c = document.getElementById('c');
-    if (!c) return null;
-    return c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper') || c.parentElement;
+
+/* ==========================================================
+   RA_ANIMATE_UNIFIED_V2
+   Version: 2.0.2  (Layout rollback + minimal button & auto-download fix)
+
+   Changes from 2.0.0:
+     • Added tiny inline style so Preview / Export buttons align uniformly.
+     • Added config.autoDownloadOnExport (default true). When export completes,
+       it immediately triggers a download AND still shows the link.
+     • No other logic, layout, or behavior changed.
+     • Reverted any v2.0.1 structural/UI alterations (grid / title reposition).
+
+   Everything else (watermark modes, return modes, animation logic) untouched.
+   ========================================================== */
+(() => {
+  if (window.raAnimateUnifiedV2 && window.raAnimateUnifiedV2.version === '2.0.2') return;
+
+  const VERSION = '2.0.2';
+  const CONFIG = {
+    fps: 30,
+    maxDurationSec: 30,
+    defaultReturnMode: 'soft',
+    defaultWmMode: 'inherit',
+    softFraction: 0.18,
+    softMinMs: 140,
+    reverseFraction: 0.35,
+    holdFraction: 0.25,
+    snapFrames: 10,
+    tailFlushFrames: 5,
+    respectViewport: true,
+    cameraMaxZoom: 2.0,
+    wmSnapshotMultiplier: 1.0,
+    wmOpacityFloor: 0.02,
+    exportHeaderPattern: /export/i,
+    autoDownloadOnExport: true // NEW: auto-trigger download after export finishes
+  };
+
+  /* -------------------- EASING -------------------- */
+  const EASE = {
+    linear: t=>t,
+    ioQuad: t=>t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2,
+    ioSine: t=>-(Math.cos(Math.PI*t)-1)/2,
+    ioCubic: t=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,
+    ioBack: t=>{
+      const c1=1.70158,c2=c1*1.525;
+      return t<0.5?
+        (Math.pow(2*t,2)*((c2+1)*2*t-c2))/2:
+        (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2;
+    },
+    ioExpo: t=>t===0?0:t===1?1:(t<0.5?Math.pow(2,20*t-10)/2:(2-Math.pow(2,-20*t+10))/2)
+  };
+
+  /* -------------------- PRESETS (unchanged) -------------------- */
+  const PRESETS = [
+    { id:'cam_kb_in_ur', name:'KB in ↗', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:+0.06}},
+    { id:'cam_kb_in_dl', name:'KB in ↙', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:-0.06}},
+    { id:'cam_kb_in_ul', name:'KB in ↖', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:+0.06}},
+    { id:'cam_kb_in_dr', name:'KB in ↘', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:-0.06}},
+    { id:'cam_kb_out',   name:'KB out',   kind:'camera', ease:'ioSine', from:{z:1.15,x:0,y:0}, to:{z:1.00,x:0,y:0}},
+    { id:'cam_pan_up',   name:'Pan up',   kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:0.06}, to:{z:1,x:0,y:-0.06}},
+    { id:'cam_pan_down', name:'Pan down', kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:-0.06},to:{z:1,x:0,y:0.06}},
+    { id:'cam_pan_left', name:'Pan left', kind:'camera', ease:'ioQuad', from:{z:1,x:0.06,y:0}, to:{z:1,x:-0.06,y:0}},
+    { id:'cam_pan_right',name:'Pan right',kind:'camera', ease:'ioQuad', from:{z:1,x:-0.06,y:0},to:{z:1,x:0.06,y:0}},
+    { id:'cam_zoom_in',  name:'Zoom in',  kind:'camera', ease:'ioCubic',from:{z:1,x:0,y:0},   to:{z:1.15,x:0,y:0}},
+    { id:'cam_zoom_out', name:'Zoom out', kind:'camera', ease:'ioCubic',from:{z:1.12,x:0,y:0}, to:{z:1.00,x:0,y:0}},
+    { id:'base_nudge',    name:'Base nudge in', kind:'base', ease:'ioSine', from:{s:1.00}, to:{s:1.06}},
+    { id:'base_pulse',    name:'Base pulse',    kind:'base', ease:'ioSine', from:{s:0.97}, to:{s:1.00}},
+    { id:'base_zoom_in',  name:'Base zoom in',  kind:'base', ease:'ioCubic',from:{s:1.00}, to:{s:1.12}},
+    { id:'base_zoom_out', name:'Base zoom out', kind:'base', ease:'ioCubic',from:{s:1.08}, to:{s:1.00}},
+    { id:'base_slide_r',  name:'Base slide →',  kind:'base', ease:'ioSine', from:{dxN:-0.06}, to:{dxN:0}},
+    { id:'base_slide_l',  name:'Base slide ←',  kind:'base', ease:'ioSine', from:{dxN:0.06},  to:{dxN:0}},
+    { id:'base_tilt',     name:'Base tiny tilt',kind:'base', ease:'ioSine', from:{rot:-3},    to:{rot:0}},
+    { id:'base_drift',    name:'Base drift diag',kind:'base',ease:'ioSine', from:{dxN:0.04,dyN:-0.04}, to:{dxN:0,dyN:0}},
+    { id:'ov_pop',       name:'Overlay/Text pop',        kind:'overlay', ease:'ioBack',  from:{s:0.90},   to:{s:1.00}},
+    { id:'ov_pop_big',   name:'Overlay/Text pop big',    kind:'overlay', ease:'ioBack',  from:{s:0.85},   to:{s:1.00}},
+    { id:'ov_fade',      name:'Overlay/Text fade in',    kind:'overlay', ease:'ioCubic', from:{alpha:0},  to:{alpha:1}},
+    { id:'ov_slide_up',  name:'Overlay/Text slide ↑',    kind:'overlay', ease:'ioSine',  from:{dyN:0.14}, to:{dyN:0}},
+    { id:'ov_slide_dn',  name:'Overlay/Text slide ↓',    kind:'overlay', ease:'ioSine',  from:{dyN:-0.14},to:{dyN:0}},
+    { id:'ov_slide_l',   name:'Overlay/Text slide ←',    kind:'overlay', ease:'ioSine',  from:{dxN:-0.18},to:{dxN:0}},
+    { id:'ov_slide_r',   name:'Overlay/Text slide →',    kind:'overlay', ease:'ioSine',  from:{dxN:0.18}, to:{dxN:0}},
+    { id:'ov_wiggle',    name:'Overlay/Text wiggle',     kind:'overlay', ease:'ioSine',  from:{rot:-5},   to:{rot:0}},
+    { id:'ov_scale_in',  name:'Overlay/Text scale in',   kind:'overlay', ease:'ioCubic', from:{s:0.8},    to:{s:1.0}},
+    { id:'ov_attention', name:'Overlay/Text attention',  kind:'overlay', ease:'ioSine',  from:{s:1.0},    to:{s:1.07}}
+  ];
+
+  /* -------------------- DOM HELPERS -------------------- */
+  const $  = (s,r=document)=>r.querySelector(s);
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  function anchorPanel(){
+    return $$('h3').find(h=> CONFIG.exportHeaderPattern.test((h.textContent||'').trim()))?.parentNode || document.body;
   }
-
-  function unfix(){
-    const card  = getCanvasCard();
-    const ghost = document.getElementById('raCanvasGhost');
-
-    if (ghost){
-      ghost.remove(); // this is the big blank spacer
-    }
-    if (card){
-      Object.assign(card.style, {
-        position:'', zIndex:'', margin:'', left:'', top:'', right:'', transform:'', width:''
-      });
-      // mark so the desktop fixer (if any) won’t reapply while on mobile
-      card.setAttribute('data-ra-mobile-inflow','1');
-    }
-  }
-
-  function run(){ if (window.matchMedia(MQ).matches) unfix(); }
-
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', run, {once:true});
-  } else {
-    run();
-  }
-  window.addEventListener('resize',           run, {passive:true});
-  window.addEventListener('orientationchange',() => setTimeout(run, 100), {passive:true});
-})();
-
 
 (() => {
   if (window.__RA_FIX_RECENTER_V1__) return;
@@ -5950,12 +6101,13 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   }
   function disconnect(){
     // Soft disconnect: clear our UI/state. For a full revoke, user disconnects in wallet UI.
-
+    // Reset holder state and re-evaluate watermarks for non-holders
     window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
-    window.__raWMForce = null; // Remove any holder-based overlay override
+    window.__raWMForce = null; // Remove any holder-based watermark override
     
     setDisconnected('Disconnected in app. (Use the wallet menu to fully disconnect this site.)');
-
+    
+    // Trigger watermark re-evaluation for non-holder state
     try { 
       document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
     } catch(_) {}
@@ -5978,7 +6130,7 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
     
     // Reset holder state when disconnected
     window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
-    window.__raWMForce = null; // Remove any holder-based overlay override
+    window.__raWMForce = null; // Remove any holder-based watermark override
     
     qs('#raW_connect', box).style.display  = '';
     btnRefresh.style.display = 'none';
@@ -5986,7 +6138,8 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
     row1.style.display       = 'none';
     actions.style.display    = 'none';
     out.textContent          = msg || '';
-
+    
+    // Trigger watermark re-evaluation for non-holder state
     try { 
       document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
     } catch(_) {}
@@ -6055,6 +6208,203 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
 
   // optional: try a silent refresh on load
   (async ()=>{ try{ await refresh(); }catch(_){} })();
+})();
+
+/* ========== RA_WM_HOLDER_GATING_v2 — wallet → watermark behavior (no loops) ========== */
+(()=>{
+  function apply(detail){
+    // keep last known state around for other bits if needed
+    window.RA_HOLDER_STATE = detail || window.RA_HOLDER_STATE || {};
+
+    // Rebel holders: locally force watermark OFF (doesn't change admin toggles)
+    if (detail && detail.hasRebel) {
+      window.__raWMForce = { off: true };
+    } else {
+      window.__raWMForce = null; // obey admin toggles again
+    }
+
+    // Tell the watermark block to recompute using the new flag
+    try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
+    try { window.canvas && window.canvas.requestRenderAll(); } catch(_) {}
+  }
+
+  // Wallet checker emits 'ra-holder-update' with detail: { hasRebel, hasFriend, ... }
+  document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
+})();
+
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — always preferred footer style, deduped, consistent everywhere ========== */
+(() => {
+  const FOOTER_TEXT = 'Powered by Rebel Studios';
+  const STYLE = {
+    fontFamily: 'Inter, system-ui, Arial, sans-serif', // preferred font stack
+    fontSize: 16,                                      // preferred size
+    fill: '#fff',                                      // preferred color (white)
+    opacity: 1,                                        // preferred opacity (fully opaque)
+    // Remove stroke/strokeWidth for no outline, matching preferred look
+    shadow: new fabric.Shadow({
+      color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+    })
+  };
+  const PAD = 60; // moved footer further in from edge (fixes cut-off)
+  const toLower = s => (s || '').toLowerCase();
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // Prefer a tagged base; otherwise use the last image on canvas (manual upload case)
+  function findBase(c){
+    const objs = c.getObjects?.() || [];
+    let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+    if (base) return base;
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o?._raBrandFooter);
+    return imgs.length ? imgs[imgs.length - 1] : null;
+  }
+
+  function rebelContract(){
+    if (typeof CONTRACT === 'string' && CONTRACT) return toLower(CONTRACT);
+    const list = Array.isArray(window.RA_COLLECTIONS) ? window.RA_COLLECTIONS : [];
+    const r = list.find(x => (x.tag === 'rebel') && (x.address || x.contract));
+    if (r) return toLower(r.address || r.contract);
+    // Safe default: Rebel Ants mainnet
+    return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
+  }
+
+  function shouldShow(c){
+    const base = findBase(c);
+    if (!base) return true; // manual upload → show the footer
+
+    // SAFE: read the contract tag we put on the base image, lower‑cased
+    const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : '');
+
+    if (!cc) return true;  // no contract info → treat as manual, show the footer
+    return (cc !== rebelContract()); // show on friends; hide on Rebel Ants
+  }
+
+  // Returns true only if we actually changed something (keeps history clean)
+  function ensure(){
+    // Do not spawn or modify footer while a JSON restore is in progress
+    if (window.__RA_RESTORING__) return false;
+
+    const c = C(); if (!c) return false;
+    let changed = false;
+
+    // Dedupe: remove any extra footers, keep only one
+    let footers = (c.getObjects?.() || []).filter(o => o && o._raBrandFooter);
+    if (footers.length > 1) {
+      footers.slice(0, -1).forEach(f => { try { c.remove(f); changed = true; } catch(_){ } });
+      footers = [footers[footers.length - 1]];
+    }
+    let footer = footers[0];
+
+    const show = shouldShow(c);
+
+    if (!show){
+      if (footer){
+        try { c.remove(footer); changed = true; } catch(_){}
+      }
+      if (changed) try { c.requestRenderAll(); } catch(_){}
+      return changed;
+    }
+
+    // If missing, create new preferred footer
+    if (!footer) {
+      footer = new fabric.Text(FOOTER_TEXT, {
+        ...STYLE,
+        selectable:false, evented:false, hasControls:false,
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+        _raBrandFooter:true, _raSys:true,
+        excludeFromExport:true
+      });
+      c.add(footer);
+      changed = true;
+    } else {
+      // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
+      let dirty = false;
+      if (footer.fontFamily !== STYLE.fontFamily) { footer.fontFamily = STYLE.fontFamily; dirty = true; }
+      if (footer.fontSize !== STYLE.fontSize) { footer.fontSize = STYLE.fontSize; dirty = true; }
+      if (footer.fill !== STYLE.fill) { footer.set('fill', STYLE.fill); dirty = true; }
+      if (footer.opacity !== STYLE.opacity) { footer.opacity = STYLE.opacity; dirty = true; }
+      // Update shadow if needed
+      const shadow = footer.shadow;
+      if (!shadow || shadow.color !== STYLE.shadow.color || shadow.blur !== STYLE.shadow.blur || shadow.offsetX !== STYLE.shadow.offsetX || shadow.offsetY !== STYLE.shadow.offsetY) {
+        footer.shadow = new fabric.Shadow({
+          color: STYLE.shadow.color, blur: STYLE.shadow.blur, offsetX: STYLE.shadow.offsetX, offsetY: STYLE.shadow.offsetY
+        });
+        dirty = true;
+      }
+      // Reassert non‑interactive + exclude from export
+      footer.set({
+        selectable:false, evented:false, hasControls:false,
+        lockMovementX:true, lockMovementY:true, hoverCursor:'default',
+        excludeFromExport:true
+      });
+      if (dirty) {
+        try { footer.setCoords(); } catch(_){}
+      }
+    }
+
+    // Position bottom‑right only if it actually moved
+    const wantLeft = c.getWidth() - PAD;
+    const wantTop  = c.getHeight() - PAD;
+    if (footer.originX !== 'right' || footer.originY !== 'bottom' ||
+        Math.round(footer.left) !== Math.round(wantLeft) ||
+        Math.round(footer.top)  !== Math.round(wantTop)) {
+      footer.set({ originX:'right', originY:'bottom', left:wantLeft, top:wantTop });
+      footer.setCoords();
+      changed = true;
+    }
+
+    // Keep truly topmost, but only if not already there
+    const objs = c.getObjects?.() || [];
+    if (objs[objs.length - 1] !== footer){
+      try { c.bringToFront(footer); changed = true; } catch(_){}
+    }
+
+    if (changed) try { c.requestRenderAll(); } catch(_){}
+    return changed;
+  }
+
+  function boot(){
+    const c = C(); if (!c) return setTimeout(boot, 120);
+    ensure();
+
+    // Refit on canvas resize
+    try {
+      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
+      new ResizeObserver(() => { ensure(); }).observe(el);
+    } catch(_){}
+
+    // Minimal, history‑friendly triggers:
+    c.on?.('object:added',   e => { if (!e?.target?._raBrandFooter) ensure(); });
+    c.on?.('object:removed', e => { if (!e?.target?._raBrandFooter) ensure(); });
+
+    // If something is brought to front, we’ll catch it next frame without spamming history
+    let rafScheduled = false;
+    c.on?.('after:render', () => {
+      if (rafScheduled) return;
+      rafScheduled = true;
+      requestAnimationFrame(() => { rafScheduled = false; ensure(); });
+    });
+
+    // App‑level events that can change what should show
+    ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
+      document.addEventListener(ev, (e) => {
+        // For collection changes, only respond if there's a base image loaded
+        if (ev === 'ra-collection-change') {
+          const c = C();
+          if (!c) return;
+          const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+          if (!base) return; // No base loaded yet, skip watermark evaluation
+        }
+        ensure();
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
 })();
 
 /* ========== RA_COLLECTIONS_RESET_v1 — single dropdown + clean CSS + multi-collection loader ========== */
@@ -6232,7 +6582,7 @@ function annotateBase(meta){
   let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
   if (!base){
     // Fallback: last image on canvas
-    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !false);
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !o._raBrandFooter);
     base = imgs[imgs.length-1] || null;
   }
   if (!base) return;
@@ -6242,6 +6592,501 @@ function annotateBase(meta){
   try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
   try { c.requestRenderAll(); } catch(_){}
 }
+
+// Robust token media resolver with fallback to tokenURI
+async function resolveTokenMedia(contract, tokenId, col) {
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
+  const tokenKey = `${contract}:${tokenId}`;
+  
+  // Step A: Try Reservoir first
+  const reservoirUrl = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
+  
+  try {
+    const r = await fetch(reservoirUrl, { headers: { 'accept': 'application/json' }, cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      const t = j?.tokens?.[0]?.token || {};
+      const media = t.media || {};
+      const img = normalizeUrl(
+        (media.original && (media.original.url || media.original.mediaUrl)) ||
+        t.imageLarge || t.image || t.imageSmall
+      );
+      if (img) return img; // Success with Reservoir
+    }
+  } catch (err) {
+    console.warn('Reservoir lookup failed:', err);
+  }
+
+  // Step B: Fallback to tokenURI via RPC
+  try {
+    const rpcUrl = col.rpcUrl || getRpcForChain(col.chainId);
+    if (!rpcUrl) throw new Error('No RPC URL available for chain');
+
+    // Call tokenURI(tokenId) on the contract
+    const tokenUriResult = await callTokenURI(contract, tokenId, rpcUrl);
+    if (!tokenUriResult) throw new Error('No tokenURI returned');
+
+    // Step C: Resolve metadata URL schemes and extract image
+    const metadataUrl = normalizeMetadataUrl(tokenUriResult);
+    const metadata = await fetchMetadataWithTimeout(metadataUrl);
+    
+    const imageUrl = normalizeUrl(
+      metadata.image || metadata.image_url || metadata.imageURI
+    );
+    
+    if (imageUrl) return imageUrl;
+    
+  } catch (err) {
+    console.warn('TokenURI fallback failed:', err);
+  }
+
+  throw new Error('No image found via Reservoir or tokenURI fallback');
+}
+
+// Get RPC URL for chain ID
+function getRpcForChain(chainId) {
+  const normalizedChainId = normalizeChainId(chainId);
+  if (normalizedChainId === '0x1') return 'https://rpc.ankr.com/eth';
+  if (normalizedChainId === '0x8173') return window.__APECHAIN_RPC || 'https://rpc.apecoinchain.org';
+  if (normalizedChainId === '0x2105') return 'https://mainnet.base.org';
+  return null;
+}
+
+// Call tokenURI via RPC with timeout
+async function callTokenURI(contract, tokenId, rpcUrl) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+  try {
+    // ERC-721 tokenURI function signature: 0xc87b56dd
+    const data = '0xc87b56dd' + parseInt(tokenId, 10).toString(16).padStart(64, '0');
+    
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_call',
+        params: [{ to: contract, data }, 'latest'],
+        id: 1
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) throw new Error(`RPC call failed: ${response.status}`);
+    
+    const result = await response.json();
+    if (result.error) throw new Error(`RPC error: ${result.error.message}`);
+    
+    // Decode hex string result (skip first 64 chars for offset, next 64 for length)
+    const hexResult = result.result;
+    if (!hexResult || hexResult === '0x') return null;
+    
+    const dataStart = 2 + 64 + 64; // Skip 0x + offset + length  
+    const hexData = hexResult.slice(dataStart);
+    return hexData ? Buffer.from(hexData, 'hex').toString('utf8').replace(/\0/g, '') : null;
+    
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Normalize metadata URL schemes
+function normalizeMetadataUrl(uri) {
+  if (!uri) return null;
+  
+  // Handle data URLs (base64 JSON)
+  if (uri.startsWith('data:')) return uri;
+  
+  // Handle IPFS
+  if (uri.startsWith('ipfs://')) {
+    return 'https://cloudflare-ipfs.com/ipfs/' + uri.replace('ipfs://', '').replace(/^ipfs\//, '');
+  }
+  
+  // Handle Arweave
+  if (uri.startsWith('ar://')) {
+    return 'https://arweave.net/' + uri.replace('ar://', '');
+  }
+  
+  // Handle HTTP/HTTPS
+  if (uri.startsWith('http://') || uri.startsWith('https://')) {
+    return uri;
+  }
+  
+  return uri;
+}
+
+// Fetch metadata with timeout and parse JSON
+async function fetchMetadataWithTimeout(url) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+
+  try {
+    // Handle data URLs
+    if (url.startsWith('data:')) {
+      const base64Data = url.split(',')[1];
+      const jsonStr = Buffer.from(base64Data, 'base64').toString('utf8');
+      return JSON.parse(jsonStr);
+    }
+
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal
+    });
+
+    if (!response.ok) throw new Error(`Metadata fetch failed: ${response.status}`);
+    
+    return await response.json();
+    
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function loadTokenFromCollection(tokenId, col){
+  const contract = (col && col.address) || '';
+  if (!contract){ alert('No contract for selected collection.'); return; }
+
+  try {
+    const img = await resolveTokenMedia(contract, tokenId, col);
+    if (!img) { 
+      alert('No image found for that token.'); 
+      return; 
+    }
+
+    // Use your existing base loader
+    if (typeof window.loadBaseImage === 'function') {
+      await window.loadBaseImage(img, /*isToken*/ true);
+    } else if (typeof window.loadBase === 'function') {
+      await window.loadBase(img);
+    } else {
+      // very safe fallback
+      const i = new Image();
+      i.crossOrigin = 'anonymous';
+      await new Promise((res,rej)=>{ i.onload=res; i.onerror=rej; i.src=img; });
+      const base = new fabric.Image(i, { selectable:false, evented:false, _isBase:true });
+      const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+    }
+  
+  } catch (error) {
+    console.error('Token loading failed:', error);
+    alert(error.message || 'Failed to load token image');
+    return;
+  }
+
+  function autoFitBase(){
+    const c = window.canvas; if (!c) return;
+    const base = (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect);
+    if (!base || !base.width || !base.height) return;
+
+    const maxW = c.getWidth(), maxH = c.getHeight();
+    const scale = Math.min(maxW / base.width, maxH / base.height);
+
+    base.set({
+      scaleX: scale, scaleY: scale,
+      left: (maxW - base.width * scale) / 2,
+      top:  (maxH - base.height * scale) / 2
+    });
+    base.setCoords();
+    try{ c.requestRenderAll(); }catch(_){}
+  }
+  
+  // Tag the base so the footer/watermark can react
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
+  annotateBase({ contract, chain: slug, name: col.name });
+  autoFitBase();
+}
+
+  function hookLoadByToken(){
+    // Button
+    const btn = $('loadByToken') ||
+                Array.from(document.querySelectorAll('button')).find(b=>/load by token/i.test(b.textContent||''));
+    if (!btn) return;
+
+  const handler = async (e)=>{
+  try{ e.preventDefault(); e.stopImmediatePropagation(); }catch(_){}
+  const inp = findTokenIdInput();
+  const tokenId = (inp && inp.value || '').trim();
+  if (!tokenId){ alert('Enter a token ID first.'); return; }
+  const col = currentCol();
+  if (!col){ alert('Pick a collection first.'); return; }
+
+  const st = document.getElementById('raColStatus');
+  if (st) st.textContent = `Fetching ${col.name} #${tokenId}…`;
+
+  try{
+    await loadTokenFromCollection(tokenId, col);
+    if (st) st.textContent = `Loaded ${col.name} #${tokenId}`;
+  }catch(_){
+    if (st) st.textContent = `Failed to load ${col.name} #${tokenId}`;
+  }
+};
+    // Bind in capture mode so we override earlier listeners that hard‑coded Rebels
+    btn.addEventListener('click', handler, true);
+
+  // --- Connect / Refresh / Disconnect
+
+  // Implementation F: Wallet connect reentrancy guard
+  let CONNECTING = false;
+
+  async function connect(){
+    const eth = window.ethereum;
+    if (!eth){ out.textContent='No wallet detected (MetaMask/Coinbase).'; return; }
+    
+// Reentrancy guard (supports legacy and new flags)
+if (window.__walletConnecting || (typeof CONNECTING !== 'undefined' && CONNECTING)) {
+  if (out) out.textContent = 'Connection in progress...';
+  return;
+}
+window.__walletConnecting = true;
+if (typeof CONNECTING !== 'undefined') CONNECTING = true;
+    try{
+      out.textContent = 'Connecting...';
+      const accounts = await eth.request({ method:'eth_requestAccounts' });
+      const chainId  = await eth.request({ method:'eth_chainId' });
+      const address  = accounts?.[0] || null;
+      setConnected(!!address, address, chainId, eth, 'Connected. Click “Check holdings”.');
+} catch (err) {
+  // Handle user cancellation (error code 4001) more gracefully
+  if (err && err.code === 4001) {
+    if (out) out.textContent = 'Request cancelled';
+    // Clear the message after a short delay for next attempt
+    setTimeout(() => {
+      if (out && out.textContent === 'Request cancelled') out.textContent = '';
+    }, 2000);
+  } else {
+    console.error('Wallet connect error:', err);
+    if (out) out.textContent = 'Connection failed. Please try again.';
+    // Clear error message after delay
+    setTimeout(() => {
+      if (out && (out.textContent === 'Connection failed' || out.textContent === 'Connection failed. Please try again.')) {
+        out.textContent = '';
+      }
+    }, 3000);
+  }
+} finally {
+  // Clear both reentrancy flags
+  window.__walletConnecting = false;
+  if (typeof CONNECTING !== 'undefined') CONNECTING = false;
+}
+  }
+  
+  async function refresh(){
+    const eth = window.ethereum;
+    if (!eth){ out.textContent='No wallet detected.'; return; }
+    try{
+      const accounts = await eth.request({ method:'eth_accounts' }); // no popup
+      const chainId  = await eth.request({ method:'eth_chainId' });
+      const address  = accounts?.[0] || null;
+      if (!address){
+        setDisconnected('No active account. Click Connect.');
+      } else {
+        setConnected(true, address, chainId, eth, 'Refreshed. Click “Check holdings”.');
+      }
+    }catch(_){ out.textContent='Refresh failed.'; }
+  }
+  function disconnect(){
+    // Soft disconnect: clear our UI/state. For a full revoke, user disconnects in wallet UI.
+
+    window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
+    window.__raWMForce = null; // Remove any holder-based overlay override
+    
+    setDisconnected('Disconnected in app. (Use the wallet menu to fully disconnect this site.)');
+
+    try { 
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
+    } catch(_) {}
+  }
+
+  const STATE = { id:null, text:null, ui:null };
+  const C = ()=> window.canvas || null;
+
+  // --- find the Token ID Styles card by its heading
+  function findCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /token id styles/i.test(el.textContent||''));
+    if (h) return h.closest('.card') || h.parentElement;
+    return Array.from(document.querySelectorAll('.card,section,div'))
+      .find(el => /token id styles/i.test(el.textContent||'')) || null;
+  }
+
+  function setDisconnected(msg){
+    window.RA_WALLET_STATE = { connected:false, address:null, chainId:null, provider:null };
+    
+    // Reset holder state when disconnected
+    window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
+    window.__raWMForce = null; // Remove any holder-based overlay override
+    
+    qs('#raW_connect', box).style.display  = '';
+    btnRefresh.style.display = 'none';
+    btnDisc.style.display    = 'none';
+    row1.style.display       = 'none';
+    actions.style.display    = 'none';
+    out.textContent          = msg || '';
+
+    try { 
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
+    } catch(_) {}
+  }
+
+  // --- locate your existing small "#—" field; add only the Load button
+  function ensureUI(card){
+    if (!card) return null;
+
+    // Reuse your existing small display if present (input or output)
+    let readout =
+      card.querySelector('#raTokenIdDisplay') ||
+      Array.from(card.querySelectorAll('input[type="text"],input:not([type]),output')).find(el=>{
+        const t = ((el.value ?? el.textContent ?? el.placeholder) || '').toString().trim();
+        return t.startsWith('#') || (el.placeholder||'').toString().trim().startsWith('#');
+      }) || null;
+
+    // If it’s an input, make it read‑only and tag it
+    if (readout && readout.tagName && readout.tagName.toLowerCase()==='input'){
+      readout.readOnly = true;
+      if (!readout.id) readout.id = 'raTokenIdDisplay';
+    }
+
+    // Remove any stray extra output we might have made before (prevents the second box)
+    Array.from(card.querySelectorAll('output#raTokenIdDisplay')).forEach(o=>{
+      if (o !== readout) o.remove();
+    });
+
+    // Ensure the Load button exists, placed right after the readout if possible
+    let loadBtn = card.querySelector('#raLoadTokenIdBtn') ||
+      Array.from(card.querySelectorAll('button')).find(b=>/load token id/i.test(b.textContent||''));
+    if (!loadBtn){
+      loadBtn = document.createElement('button');
+      loadBtn.id = 'raLoadTokenIdBtn';
+      loadBtn.className = 'btn danger';
+      loadBtn.textContent = 'Load Token ID';
+      if (readout && readout.parentElement){
+        readout.parentElement.insertBefore(loadBtn, readout.nextSibling);
+      } else {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.style.gap = '10px';
+        row.appendChild(loadBtn);
+        card.insertBefore(row, card.firstElementChild?.nextSibling || card.firstChild);
+      }
+    }
+
+    // Use the existing Delete button on the card (we never add a second one)
+    const delBtn = Array.from(card.querySelectorAll('button'))
+      .find(b => /delete token id/i.test(b.textContent||''));
+
+    return { card, loadBtn, delBtn, readout };
+  }
+
+  // --- find the style controls already on this card
+  function findStyleCtrls(card){
+    const fmt = Array.from(card.querySelectorAll('select')).find(s=>{
+      const txt = Array.from(s.options||[]).map(o => (o.textContent||'').toLowerCase()).join('|');
+      return /roman|hex|binary|leading|standard/.test(txt);
+    }) || null;
+
+  // update on wallet events
+  if (window.ethereum){
+    ethereum.on?.('accountsChanged', ()=>{ 
+      out.textContent = ''; // Clear status on account change
+      hintEl.textContent='Account changed — click Refresh.'; 
+    });
+    ethereum.on?.('chainChanged',   cid=>{ 
+      out.textContent = ''; // Clear status on chain change
+      chainEl.textContent = netNameFromChainId(cid); hintEl.textContent='Network changed — click Refresh.'; 
+
+    });
+
+  // optional: try a silent refresh on load
+  (async ()=>{ try{ await refresh(); }catch(_){} })();
+})();
+
+    return true;
+  }
+
+  function boot(){
+    if (!wire()){
+      // if the card appears late, try briefly
+      let tries = 0;
+      const iv = setInterval(()=>{ if (wire() || (++tries>40)) clearInterval(iv); }, 200);
+    }
+  }
+
+ onReady(boot);
+})();
+
+/* ========== RA_SAFE_SCRUB_v1 — stop the Custom Text box from mirroring the Token‑ID text ========== */
+(()=>{
+  function C(){ return window.canvas || null; }
+
+  function findCustomBox(){
+    const t = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el=>/custom text/i.test(el.textContent||''));
+    const card = t ? (t.closest('.card')||t.parentElement) : null;
+    return card ? (card.querySelector('textarea, input[type="text"], input:not([type])')||null) : null;
+  }
+
+  function scrubIfToken(){
+    const c = C(); if (!c) return;
+    const a = c.getActiveObject && c.getActiveObject();
+    if (!a || !a._raTokenId) return;             // only react to the Token‑ID object
+    const box = findCustomBox(); if (!box) return;
+    const val = (box.value||'').trim();
+    if (val && /^#\S+/.test(val)) {               // if it shows "#1111" etc, clear it
+      box.value = '';
+      try{ box.dispatchEvent(new Event('input',{bubbles:true})); }catch(_){}
+      try{ box.dispatchEvent(new Event('change',{bubbles:true})); }catch(_){}
+    }
+  }
+
+  function boot(){
+    const c = C(); if (!c){ setTimeout(boot,200); return; }
+    c.on('selection:created', ()=> setTimeout(scrubIfToken,0));
+    c.on('selection:updated', ()=> setTimeout(scrubIfToken,0));
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+})();
+
+/* ========== RA_FRONT_GUARD_SAFE_v3 — only on selection change (safe for Curved) ========== */
+(()=>{
+  const C = ()=> window.canvas || null;
+  const isSys = o => !!(o && (o._isBase || o._raBrandFooter || o._raSys));
+  const hasText = o => {
+    if (!o) return false;
+    const t = (o.type||'').toLowerCase();
+    if (t.includes('text')) return true;
+    if (typeof o.getObjects === 'function'){
+      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
+      catch(_){}
+    }
+    return false;
+  };
+
+  function bumpSelected(){
+    const c = C(); if (!c) return;
+    const a = c.getActiveObject && c.getActiveObject();
+    if (!a || isSys(a) || !hasText(a)) return;
+    try { c.bringToFront(a); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  // Use Reservoir tokens API (same one you already use for Rebels) but with the selected contract
+  function normalizeUrl(u){
+  if (!u) return null;
+  if (u.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + u.slice(7);
+  return u;
+}
+function annotateBase(meta){
+  const c = window.canvas; if (!c) return;
+  // Try to find the base image/group
+  const objs = c.getObjects ? c.getObjects() : [];
+  let base = objs.find(o => o && o._isBase && !o._isBgRect) || null;
+  if (!base){
+    // Fallback: last image on canvas
+    const imgs = objs.filter(o => (o.type === 'image' || o._element) && !false);
+    base = imgs[imgs.length-1] || null;
+  }
 
 // Robust token media resolver with fallback to tokenURI
 async function resolveTokenMedia(contract, tokenId, col) {
@@ -6463,461 +7308,6 @@ async function loadTokenFromCollection(tokenId, col){
   const st = document.getElementById('raColStatus');
   if (st) st.textContent = `Fetching ${col.name} #${tokenId}…`;
 
-  try{
-    await loadTokenFromCollection(tokenId, col);
-    if (st) st.textContent = `Loaded ${col.name} #${tokenId}`;
-  }catch(_){
-    if (st) st.textContent = `Failed to load ${col.name} #${tokenId}`;
-  }
-};
-    // Bind in capture mode so we override earlier listeners that hard‑coded Rebels
-    btn.addEventListener('click', handler, true);
-
-    // Also bind Enter on the token id input
-    const inp = findTokenIdInput();
-    if (inp){
-      inp.addEventListener('keydown', (e)=>{ if (e.key === 'Enter'){ handler(e); }});
-    }
-  }
-
-  async function boot(){
-    S.list = await fetchCollections();
-    await ensureUI();
-    hookLoadByToken();
-  }
-
-  // kick off
-  boot();
-})();
-
-/* ========== RA_TOKEN_ID_LOAD_v5 — Load button (reuse your display) + keep Custom Text clean ========== */
-(()=>{
-  function onReady(fn){
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
-    else fn();
-  }
-
-  const STATE = { id:null, text:null, ui:null };
-  const C = ()=> window.canvas || null;
-
-  // --- find the Token ID Styles card by its heading
-  function findCard(){
-    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el => /token id styles/i.test(el.textContent||''));
-    if (h) return h.closest('.card') || h.parentElement;
-    return Array.from(document.querySelectorAll('.card,section,div'))
-      .find(el => /token id styles/i.test(el.textContent||'')) || null;
-  }
-
-  // --- the main Token ID input (in the Upload area)
-  function mainTokenInput(){
-    return document.getElementById('tokenId')
-        || document.querySelector('input#token')
-        || document.querySelector('input[name="token"]')
-        || document.querySelector('input[placeholder*="Token"]');
-  }
-  function readMainToken(){
-    const el = mainTokenInput(); if (!el) return null;
-    const n = parseInt((el.value||'').trim(),10);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  // --- locate your existing small "#—" field; add only the Load button
-  function ensureUI(card){
-    if (!card) return null;
-
-    // Reuse your existing small display if present (input or output)
-    let readout =
-      card.querySelector('#raTokenIdDisplay') ||
-      Array.from(card.querySelectorAll('input[type="text"],input:not([type]),output')).find(el=>{
-        const t = ((el.value ?? el.textContent ?? el.placeholder) || '').toString().trim();
-        return t.startsWith('#') || (el.placeholder||'').toString().trim().startsWith('#');
-      }) || null;
-
-    // If it’s an input, make it read‑only and tag it
-    if (readout && readout.tagName && readout.tagName.toLowerCase()==='input'){
-      readout.readOnly = true;
-      if (!readout.id) readout.id = 'raTokenIdDisplay';
-    }
-
-    // Remove any stray extra output we might have made before (prevents the second box)
-    Array.from(card.querySelectorAll('output#raTokenIdDisplay')).forEach(o=>{
-      if (o !== readout) o.remove();
-    });
-
-    // Ensure the Load button exists, placed right after the readout if possible
-    let loadBtn = card.querySelector('#raLoadTokenIdBtn') ||
-      Array.from(card.querySelectorAll('button')).find(b=>/load token id/i.test(b.textContent||''));
-    if (!loadBtn){
-      loadBtn = document.createElement('button');
-      loadBtn.id = 'raLoadTokenIdBtn';
-      loadBtn.className = 'btn danger';
-      loadBtn.textContent = 'Load Token ID';
-      if (readout && readout.parentElement){
-        readout.parentElement.insertBefore(loadBtn, readout.nextSibling);
-      } else {
-        const row = document.createElement('div');
-        row.className = 'row';
-        row.style.gap = '10px';
-        row.appendChild(loadBtn);
-        card.insertBefore(row, card.firstElementChild?.nextSibling || card.firstChild);
-      }
-    }
-
-    // Use the existing Delete button on the card (we never add a second one)
-    const delBtn = Array.from(card.querySelectorAll('button'))
-      .find(b => /delete token id/i.test(b.textContent||''));
-
-    return { card, loadBtn, delBtn, readout };
-  }
-
-  // --- find the style controls already on this card
-  function findStyleCtrls(card){
-    const fmt = Array.from(card.querySelectorAll('select')).find(s=>{
-      const txt = Array.from(s.options||[]).map(o => (o.textContent||'').toLowerCase()).join('|');
-      return /roman|hex|binary|leading|standard/.test(txt);
-    }) || null;
-
-    let size = null;
-    const sizeLabel = Array.from(card.querySelectorAll('label')).find(l=>/size/i.test(l.textContent||''));
-    if (sizeLabel){
-      const wrap = sizeLabel.parentElement;
-      size = wrap && (wrap.querySelector('input[type="number"]') || wrap.querySelector('input'));
-    }
-    if (!size){
-      const nums = Array.from(card.querySelectorAll('input[type="number"]'));
-      size = nums[0] || null;
-    }
-
-    const colors = Array.from(card.querySelectorAll('input[type="color"]')); // [fill, stroke]
-    const fill   = colors[0] || null;
-    const stroke = colors[1] || null;
-
-    const width  = card.querySelector('input[type="range"]') || null;
-
-    return { fmt, size, fill, stroke, width };
-  }
-
-  // --- helpers to format the number
-  function roman(n){
-    if (!Number.isFinite(n) || n<=0) return String(n);
-    const map = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
-    let out='', x=Math.floor(n);
-    for (const [v,s] of map){ while (x>=v){ out+=s; x-=v; } }
-    return out;
-  }
-  const toBinary = n => (n>>>0).toString(2);
-  const toHex    = n => '0x'+(n>>>0).toString(16).toUpperCase();
-  const pad4     = n => String(Math.max(0,Math.floor(n))).padStart(4,'0');
-  function formatId(n, sel){
-    const f = (sel && sel.value || '').toLowerCase();
-    if (f.includes('roman'))  return roman(n);
-    if (f.includes('hex'))    return toHex(n);
-    if (f.includes('binary')) return toBinary(n);
-    if (f.includes('leading') || f.includes('zeros')) return pad4(n);
-    return String(n); // Standard
-  }
-
-  // --- create a single token‑ID Fabric text (marked so other UI can ignore it)
-  function ensureTokenText(){
-    const c = C(); if (!c || typeof fabric==='undefined') return null;
-
-    if (STATE.text && STATE.text.canvas) return STATE.text;
-
-    // remove any stale token‑id texts made by older code
-    (c.getObjects?.()||[]).forEach(o=>{
-      if (o && o._raTokenId && o !== STATE.text){ try{ c.remove(o); }catch(_){} }
-    });
-
-    const t = new fabric.Text('#', {
-      left:24, top:24, originX:'left', originY:'top',
-      fontFamily:'Impact, system-ui, Arial, Helvetica, sans-serif',
-      fontWeight:'bold', lineHeight:1, charSpacing:0, padding:0,
-      fill:'#ffffff', stroke:'#000000', strokeWidth:2, strokeUniform:true,
-      selectable:true, evented:true, hasControls:true,
-      _raTokenId:true, _raSys:true
-    });
-    const ccv = C(); ccv.add(t); STATE.text=t;
-    try{ ccv.bringToFront(t);}catch(_){}
-    ccv.requestRenderAll();
-    return t;
-  }
-
-  // --- find the “Custom Text → Type your message” box
-  function findCustomTextInput(){
-    const cardTitle = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el=>/custom text/i.test(el.textContent||''));
-    const card = cardTitle ? (cardTitle.closest('.card') || cardTitle.parentElement) : null;
-    if (!card) return null;
-    // textarea or large input for message
-    return card.querySelector('textarea, input[type="text"], input:not([type])');
-  }
-
-  // --- if that box shows our token string, blank it (so the token id never “moves into” Custom Text)
-  function scrubCustomTextBox(tokenShown){
-    const msg = findCustomTextInput(); if (!msg) return;
-    const val = (msg.value||'').trim();
-    // only clear when it matches the token id we just rendered
-    if (val === tokenShown){
-      msg.value = '';
-      try{ msg.dispatchEvent(new Event('input', {bubbles:true})); }catch(_){}
-      try{ msg.dispatchEvent(new Event('change', {bubbles:true})); }catch(_){}
-    }
-  }
-
-  // --- apply styles + keep Custom Text clean
-  function applyStyles(){
-    if (STATE.id==null || !STATE.ui) return;
-    const c = C(); const t = ensureTokenText(); if (!c || !t) return;
-
-    const { fmt, size, fill, stroke, width, readout } = STATE.ui;
-
-    const shown = '#'+formatId(STATE.id, fmt);
-    t.set({ text: shown });
-
-    const fs = parseInt(size && size.value, 10);
-    if (Number.isFinite(fs) && fs>0) t.set('fontSize', fs);
-
-    if (fill   && fill.value)   t.set('fill',   fill.value);   // inside color
-    if (stroke && stroke.value) t.set('stroke', stroke.value); // outline color
-
-    const w = parseFloat(width && width.value);
-    if (Number.isFinite(w)) t.set('strokeWidth', w);
-
-    // make the selection box “hug” the glyphs
-    t.set({ padding:0, lineHeight:1, dirty:true, noScaleCache:true });
-    t.setCoords(); c.requestRenderAll();
-
-    if (readout){
-      if (readout.tagName && readout.tagName.toLowerCase()==='input'){ readout.value = shown; }
-      else { readout.textContent = shown; }
-    }
-
-    // keep the Custom Text message box empty if it picked up our token text
-    scrubCustomTextBox(shown);
-    setTimeout(()=> scrubCustomTextBox(shown), 30); // run again after app’s own sync
-  }
-
-  // --- wire everything
-  function wire(){
-    const card = findCard(); if (!card) return false;
-
-    const base = ensureUI(card); if (!base) return false;
-    const styles = findStyleCtrls(base.card);
-    STATE.ui = { ...base, ...styles };
-
-    // Load Token ID
-    base.loadBtn.addEventListener('click', (e)=>{
-      try{ e.preventDefault(); e.stopPropagation(); }catch(_){}
-      const n = readMainToken();
-      if (n==null){ alert('Type a number in the main “Token ID” field (e.g., 1111), then click “Load Token ID”.'); return; }
-      STATE.id = n;
-      applyStyles();
-    }, true);
-
-    // Hook your existing Delete Token ID button
-    base.delBtn && base.delBtn.addEventListener('click', ()=>{
-      const c = C();
-      if (STATE.text && STATE.text.canvas){ try{ STATE.text.canvas.remove(STATE.text); }catch(_){} }
-      STATE.text = null;
-      if (STATE.ui && STATE.ui.readout){
-        if (STATE.ui.readout.tagName && STATE.ui.readout.tagName.toLowerCase()==='input') STATE.ui.readout.value = '#—';
-        else STATE.ui.readout.textContent = '#—';
-      }
-      c?.requestRenderAll();
-    }, true);
-
-    // Live style updates — only affect the token‑ID text
-    [styles.fmt, styles.size, styles.fill, styles.stroke, styles.width].forEach(el=>{
-      if (!el) return;
-      el.addEventListener('input',  ()=>{ if (STATE.text) applyStyles(); });
-      el.addEventListener('change', ()=>{ if (STATE.text) applyStyles(); });
-    });
-
-    // If you change the number later, click Load again to refresh it
-    const main = mainTokenInput();
-    main && main.addEventListener('change', ()=>{
-      if (!STATE.text) return;
-      const n = readMainToken();
-      if (n!=null){ STATE.id = n; applyStyles(); }
-    });
-
-    // If selection switches to the token‑ID object, keep the Custom Text box clean
-    const c = C();
-    const scrubIfToken = ()=> {
-      if (!STATE.text) return;
-      const a = c?.getActiveObject?.();
-      const uiText = '#'+formatId(STATE.id, styles.fmt);
-      if (a && a._raTokenId) { scrubCustomTextBox(uiText); }
-    };
-    c?.on?.('selection:created', scrubIfToken);
-    c?.on?.('selection:updated', scrubIfToken);
-
-    return true;
-  }
-
-  function boot(){
-    if (!wire()){
-      // if the card appears late, try briefly
-      let tries = 0;
-      const iv = setInterval(()=>{ if (wire() || (++tries>40)) clearInterval(iv); }, 200);
-    }
-  }
-
- onReady(boot);
-})();
-
-/* ========== RA_SAFE_SCRUB_v1 — stop the Custom Text box from mirroring the Token‑ID text ========== */
-(()=>{
-  function C(){ return window.canvas || null; }
-
-  function findCustomBox(){
-    const t = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el=>/custom text/i.test(el.textContent||''));
-    const card = t ? (t.closest('.card')||t.parentElement) : null;
-    return card ? (card.querySelector('textarea, input[type="text"], input:not([type])')||null) : null;
-  }
-
-  function scrubIfToken(){
-    const c = C(); if (!c) return;
-    const a = c.getActiveObject && c.getActiveObject();
-    if (!a || !a._raTokenId) return;             // only react to the Token‑ID object
-    const box = findCustomBox(); if (!box) return;
-    const val = (box.value||'').trim();
-    if (val && /^#\S+/.test(val)) {               // if it shows "#1111" etc, clear it
-      box.value = '';
-      try{ box.dispatchEvent(new Event('input',{bubbles:true})); }catch(_){}
-      try{ box.dispatchEvent(new Event('change',{bubbles:true})); }catch(_){}
-    }
-  }
-
-  function boot(){
-    const c = C(); if (!c){ setTimeout(boot,200); return; }
-    c.on('selection:created', ()=> setTimeout(scrubIfToken,0));
-    c.on('selection:updated', ()=> setTimeout(scrubIfToken,0));
-  }
-
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
-})();
-
-/* ========== RA_FRONT_GUARD_SAFE_v3 — only on selection change (safe for Curved) ========== */
-(()=>{
-  const C = ()=> window.canvas || null;
-  const isSys = o => !!(o && (o._isBase || false || o._raSys));
-  const hasText = o => {
-    if (!o) return false;
-    const t = (o.type||'').toLowerCase();
-    if (t.includes('text')) return true;
-    if (typeof o.getObjects === 'function'){
-      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
-      catch(_){}
-    }
-    return false;
-  };
-
-  function bumpSelected(){
-    const c = C(); if (!c) return;
-    const a = c.getActiveObject && c.getActiveObject();
-    if (!a || isSys(a) || !hasText(a)) return;
-    try { c.bringToFront(a); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  function boot(){
-    const c = C(); if (!c){ setTimeout(boot, 200); return; }
-    // Only react when the user changes selection or releases the mouse.
-    c.on('selection:created', ()=> setTimeout(bumpSelected,0));
-    c.on('selection:updated', ()=> setTimeout(bumpSelected,0));
-    c.on('mouse:up',          ()=> setTimeout(bumpSelected,0));
-  }
-
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
-  else boot();
-})();
-
-/* ========== RA_CURVED_FLOW_GUARD_UI_v3 — require “Add Text” before Curved (UI-only, no canvas edits) ========== */
-(()=>{
-  if (window.__RA_CURVED_GUARD_UI_V3) return; window.__RA_CURVED_GUARD_UI_V3 = true;
-
-  const C = ()=> window.canvas || null;
-
-  function hasUserText(){
-    const c = C(); if (!c) return false;
-    const objs = (c.getObjects?.() || []);
-    for (const o of objs){
-      if (!o || o._isBase || false || o._raTokenId || o._raSys) continue;
-      const t = (o.type||'').toLowerCase();
-      if (t==='text' || t==='textbox' || t==='i-text') return true;
-      if (t==='group'){
-        try{
-          if (o.getObjects().some(k => ((k.type||'').toLowerCase().includes('text')))) return true;
-        }catch(_){}
-      }
-    }
-    return false;
-  }
-
-  function findCustomTextCard(){
-    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el => /custom text/i.test(el.textContent||''));
-    return h ? (h.closest('.card') || h.parentElement) : null;
-  }
-
-  function findCurvedControl(card){
-    if (!card) return null;
-    // Label "Curved" with a checkbox or custom switch.
-    const labels = Array.from(card.querySelectorAll('label')).filter(l => /curved/i.test(l.textContent||''));
-    for (const lab of labels){
-      const id = lab.getAttribute('for');
-      if (id){
-        const el = document.getElementById(id);
-        if (el) return el;
-      }
-      const cb = lab.querySelector('input[type="checkbox"]');
-      if (cb) return cb;
-    }
-    // Fall back to common “switch” patterns inside the Custom Text card
-    return card.querySelector('[role="switch"], .switch, .toggle') || null;
-  }
-
-  function showInlineHint(anchor){
-    let hint = document.getElementById('raCurvedHintInline');
-    if (!hint){
-      hint = document.createElement('div');
-      hint.id = 'raCurvedHintInline';
-      hint.textContent = 'Add Text first, then enable Curved.';
-      hint.style.cssText = 'margin-top:6px;font-size:12px;color:#fbbf24;opacity:.95';
-      (anchor?.parentElement || anchor || document.body).appendChild(hint);
-    }
-    clearTimeout(hint._t);
-    hint.style.display = '';
-    hint._t = setTimeout(()=>{ hint.style.display = 'none'; }, 1800);
-  }
-
-  function wire(){
-    const card = findCustomTextCard(); if (!card){ setTimeout(wire, 300); return; }
-    const ctl  = findCurvedControl(card); if (!ctl){ setTimeout(wire, 300); return; }
-
-    const blockIfNoText = (ev)=>{
-      if (hasUserText()) return;              // OK: already have a text object
-      try{ ev.stopImmediatePropagation(); }catch(_){}
-      try{ ev.preventDefault(); }catch(_){}
-      // If it’s a real checkbox, keep the UI in the OFF state
-      if ((ctl.tagName||'').toLowerCase()==='input' && ctl.type==='checkbox'){ ctl.checked = false; }
-      showInlineHint(ctl);
-    };
-
-    // Capture-phase so we run before the app’s own handler
-    ctl.addEventListener('change',      blockIfNoText, true);
-    ctl.addEventListener('click',       blockIfNoText, true);
-    ctl.addEventListener('pointerdown', blockIfNoText, true);
-    ctl.addEventListener('keydown',     (e)=>{ if ((e.key===' '||e.key==='Enter') && !hasUserText()){ blockIfNoText(e); }}, true);
-  }
-
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, { once:true });
-  else wire();
-})();
-
 /* ========== RA_CURVED_PRE_FLUSH_UI_v1 — commit message box before Curved toggles (no canvas edits) ========== */
 (()=>{
   if (window.__RA_CURVED_PRE_FLUSH_UI_V1) return; window.__RA_CURVED_PRE_FLUSH_UI_V1 = true;
@@ -6928,7 +7318,7 @@ async function loadTokenFromCollection(tokenId, col){
     const c = C(); if (!c) return false;
     const objs = (c.getObjects?.() || []);
     for (const o of objs){
-      if (!o || o._isBase || false || o._raTokenId || o._raSys) continue;
+      if (!o || o._isBase || o._raBrandFooter || o._raTokenId || o._raSys) continue;
       const t = (o.type||'').toLowerCase();
       if (t==='text' || t==='textbox' || t==='i-text') return true;
       if (t==='group'){
@@ -7020,7 +7410,7 @@ async function loadTokenFromCollection(tokenId, col){
     try { el.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
     try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
   }
-  function isSys(o){ return !!(o && (o._isBase || false || o._raSys || o._raTokenId)); }
+  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId)); }
   function newestUserObject(){
     const c = C(); if (!c) return null;
     const objs = c.getObjects ? c.getObjects() : [];
@@ -7108,7 +7498,7 @@ async function loadTokenFromCollection(tokenId, col){
     try { el.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
     try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
   }
-  function isSys(o){ return !!(o && (o._isBase || false || o._raSys || o._raTokenId)); }
+  function isSys(o){ return !!(o && (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId)); }
   function newestUserObject(){
     const c = C(); if (!c) return null;
     const objs = c.getObjects ? c.getObjects() : [];
@@ -7157,6 +7547,800 @@ async function loadTokenFromCollection(tokenId, col){
     document.addEventListener('DOMContentLoaded', boot, { once:true });
   } else {
     boot();
+  }
+})();
+
+/* ========== RA_WATERMARK_HARDLOCK_v1 — keep big watermark unmovable, even after "Unlock All" ========== */
+(() => {
+  function C(){ return window.canvas || null; }
+
+  // Identify the big watermark. We lock "system" overlays but leave base, footer and token-ID alone.
+  function isWM(o){
+    if (!o) return false;
+    if (o._raWM || o._raWatermark || o._isWatermark || o._wm) return true; // common flags
+    // Treat other system overlays as locked too, but allow footer / token-ID / base / bg
+    if (o._raSys && !o._raBrandFooter && !o._raTokenId && !o._isBase && !o._isBgRect) return true;
+    const n = (o.name||o.id||'').toString().toLowerCase();
+    if (n.includes('watermark') || n === 'wm') return true;
+    return false;
+  }
+
+  function hardLock(o){
+    if (!o) return;
+    o.set?.({ selectable:false, evented:false, hasControls:false, lockMovementX:true, lockMovementY:true });
+    o.selectable = false; o.evented = false; o.hasControls = false;
+    o.lockMovementX = true; o.lockMovementY = true;
+  }
+
+  function relockAll(){
+    const c=C(); if (!c) return;
+    (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) hardLock(o); });
+    try{ c.discardActiveObject(); c.requestRenderAll(); }catch(_){}
+  }
+
+  function hookUnlockAllButton(){
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const unlockBtn = buttons.find(b => /unlock\s*all/i.test((b.textContent||'').trim()));
+    if (!unlockBtn) return;
+    // After Unlock All fires, immediately re-lock the watermark
+    unlockBtn.addEventListener('click', ()=> setTimeout(relockAll,0), true);
+  }
+
+  function boot(){
+    const c=C(); if (!c){ setTimeout(boot,200); return; }
+    relockAll();                         // lock now
+    document.addEventListener('ra-wm-recalc', ()=> setTimeout(relockAll,0)); // lock after WM toggles
+    c.on?.('object:added', e => { const o=e?.target; if (isWM(o)) setTimeout(relockAll,0); }); // lock if reinserted
+    hookUnlockAllButton();
+  }
+
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+})();
+
+/* ==========================================================
+   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED)
+   - Hooks ONLY the button with id="openNewTab" (no text sniffing)
+   - Opens a clean viewer tab first, then sends a Blob URL (Safari-safe)
+   - Never navigates the original tab
+   - Paste at the VERY BOTTOM of app.js
+   ========================================================== */
+(function RA_OPEN_NEW_TAB_VIEWER_V2(){
+  if (window.__RA_OPEN_NEW_TAB_VIEWER_V2__) return;
+  window.__RA_OPEN_NEW_TAB_VIEWER_V2__ = true;
+
+  function getCanvas(){
+    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
+      for (const k in window){
+        try{
+          const v = window[k];
+          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
+        }catch(_){}
+      }
+    }
+    return null;
+  }
+
+  function getMultiplier(){
+    const el = document.getElementById('exportMultiplier') || document.getElementById('exportQuality');
+    const raw = (el?.value || el?.textContent || '').trim();
+    const m = parseInt((raw.match(/([1-8])/)||[])[1] || '2', 10);
+    return Math.min(8, Math.max(1, m || 2));
+  }
+
+  function openViewer(){
+    const c = getCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
+
+    // Open the tab immediately (user gesture → popup-safe)
+    const win = window.open('about:blank','_blank');
+    if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
+
+    // Lightweight viewer shell
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
+            box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
+        .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+             color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+             background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
+      </style></head><body>
+        <div class="viewer"><img id="raImg" alt="export"></div>
+        <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+        <script>
+          (function(){
+            var img = document.getElementById('raImg'), fit = true;
+            function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
+                              else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
+            img.addEventListener('click', function(){ fit=!fit; apply(); });
+            apply();
+            window.addEventListener('message', function(ev){
+              if (ev && ev.data && ev.data.type==='ra-img') { img.src = ev.data.url; }
+            }, false);
+            setTimeout(function(){
+              if (!img.src) {
+                document.body.insertAdjacentHTML(
+                  'beforeend',
+                  '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'
+                );
+              }
+            }, 2000);
+          })();
+        <\/script>
+      </body></html>`;
+    win.document.open(); win.document.write(html); win.document.close();
+
+    // Produce the PNG and send a Blob URL to the viewer (more reliable than giant data: URLs)
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+      fetch(dataUrl).then(r=>r.blob()).then(blob=>{
+        const url = URL.createObjectURL(blob);
+        try { win.postMessage({ type:'ra-img', url }, '*'); } catch(_){}
+        const tid = setInterval(()=>{ if (win.closed){ URL.revokeObjectURL(url); clearInterval(tid); } }, 4000);
+      }).catch(()=>{
+        try{ win.document.body.innerHTML =
+          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
+      });
+    }catch(e){
+      try{ win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
+    }
+  }
+
+  // Capture ONLY the actual “Open in new tab” button (id="openNewTab")
+  document.addEventListener('click', function(e){
+    const btn = e.target && e.target.closest && e.target.closest('#openNewTab');
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    openViewer();
+  }, true);
+})();
+
+/* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
+(function(){
+  if (window.__RA_APE_RPC_FALLBACK__) return;
+  window.__RA_APE_RPC_FALLBACK__ = true;
+
+  // We set a safe default earlier in CONFIG. You can still override window.__APECHAIN_RPC at runtime if needed.
+
+  async function jsonRpc(url, body){
+    const r = await fetch(url, {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error('rpc http '+r.status);
+    const j = await r.json();
+    if (j.error) throw new Error('rpc error '+(j.error.message||''));
+    return j.result;
+  }
+
+  function ipfsToHttp(u){
+    if (!u) return u;
+    if (u.startsWith('ipfs://ipfs/')) return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(12);
+    if (u.startsWith('ipfs://'))      return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(7);
+    return u;
+  }
+
+  window.__fetchApechainImageURL = async function(contract, tokenId){
+    const rpc = window.__APECHAIN_RPC;  // now guaranteed to exist
+    if (!rpc) return null;
+
+/* ========== RA_FRONT_GUARD_SAFE_v3 — only on selection change (safe for Curved) ========== */
+(()=>{
+  const C = ()=> window.canvas || null;
+  const isSys = o => !!(o && (o._isBase || false || o._raSys));
+  const hasText = o => {
+    if (!o) return false;
+    const t = (o.type||'').toLowerCase();
+    if (t.includes('text')) return true;
+    if (typeof o.getObjects === 'function'){
+      try { return o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text'))); }
+      catch(_){}
+    }
+    return false;
+  };
+
+    const res = await jsonRpc(rpc, { jsonrpc:'2.0', id:1, method:'eth_call', params:[call, 'latest'] });
+
+    // decode ABI string result
+    const hex = (res||'').replace(/^0x/,'');
+    if (hex.length < 128) return null;
+    const len = parseInt(hex.slice(64,128),16);
+    const dataHex = hex.slice(128, 128+len*2);
+    let uri = '';
+    for (let i=0;i<dataHex.length;i+=2) uri += String.fromCharCode(parseInt(dataHex.slice(i,i+2),16));
+
+    // fetch metadata → image
+    const metaUrl = ipfsToHttp(uri);
+    const mRes = await fetch(metaUrl, {cache:'no-store'});
+    if (!mRes.ok) return null;
+    const meta = await mRes.json().catch(()=>null);
+    return ipfsToHttp(meta && (meta.image || meta.image_url || meta.imageUrl));
+  };
+})();
+
+
+/* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
+;(() => {
+  'use strict';
+  if (window.__RA_TOKEN_LOADER_XCHAIN_V3__) return;
+  window.__RA_TOKEN_LOADER_XCHAIN_V3__ = true;
+
+  function hasUserText(){
+    const c = C(); if (!c) return false;
+    const objs = (c.getObjects?.() || []);
+    for (const o of objs){
+      if (!o || o._isBase || false || o._raTokenId || o._raSys) continue;
+      const t = (o.type||'').toLowerCase();
+      if (t==='text' || t==='textbox' || t==='i-text') return true;
+      if (t==='group'){
+        try{
+          if (o.getObjects().some(k => ((k.type||'').toLowerCase().includes('text')))) return true;
+        }catch(_){}
+      }
+    }
+    // From visible select (if present)
+    const sel = $('#raColSelect');
+    if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
+      const t = (sel.selectedOptions[0].textContent || '')
+        .split('—')[0].split('(')[0].trim().toLowerCase();
+      if (t) return t;
+    }
+    return null;
+  }
+
+  function detectContractAndChain(){
+    // Highest priority: URL/query or explicit window overrides
+    const q     = new URLSearchParams(location.search);
+    const cQ    = q.get('contract') || q.get('c') || '';
+    const chQ   = q.get('chain') || q.get('network') || '';
+    const cWin  = window.__RA_CONTRACT || window._RA_CONTRACT || '';
+    const chWin = window.__RA_CHAIN    || window._RA_CHAIN    || '';
+    if (cQ || cWin) {
+      const c = normHex(cQ || cWin);
+      const ch = slugFromChain(chQ || chWin || CONTRACT_FOR[c]);
+      return { contract: c, chain: ch, name: '' };
+    }
+
+    // Next: look up by collection name shown in UI
+    const name = detectSelectionName();
+    if (name && KNOWN[name]) {
+      return { contract: normHex(KNOWN[name].address), chain: KNOWN[name].chain, name };
+    }
+
+    // Otherwise, do nothing; let the app’s original loader handle it
+    return null;
+  }
+
+  function readTokenId(){
+    const ids = [
+      '#tokenId', '#token', '#tokenIdInput',
+      'input[name="token"]', 'input[name="tokenId"]',
+      'input[placeholder*="Token"]'
+    ];
+    for (const s of ids){
+      const el = $(s);
+      const v  = (el && (el.value || '').trim()) || '';
+      if (v) return v;
+    }
+    // Fallback: any input/textarea with "token" in placeholder + a value
+    const maybe = Array.from(document.querySelectorAll('input,textarea'))
+      .find(el => /token/i.test(el.placeholder || '') && (el.value || '').trim());
+    return maybe ? maybe.value.trim() : '';
+  }
+
+  function normalizeUrl(u){
+    if (!u) return null;
+    if (u.startsWith('ipfs://')) return 'https://cloudflare-ipfs.com/ipfs/' + u.replace('ipfs://','').replace(/^ipfs\//,'');
+    if (u.startsWith('ar://'))   return 'https://arweave.net/' + u.replace('ar://','');
+    return u;
+  }
+
+  async function fetchAsDataURL(url){
+    const r = await fetch(url, { mode:'cors', cache:'no-store' });
+    if (!r.ok) throw new Error('fetch failed');
+    const b = await r.blob();
+    return await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(b);
+    });
+  }
+
+  async function reservoirCandidates(contract, tokenId, chainSlug){
+  let rsSlug = (chainSlug||'').toLowerCase();
+  // standardize our internal slugs
+  if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
+  if (rsSlug === 'base') rsSlug = 'base';
+  if (rsSlug === 'ape' || rsSlug === 'apechain' || rsSlug === 'apecoinchain') rsSlug = 'apechain';
+
+  // choose correct host per chain (per Reservoir docs)
+  // https://nft.reservoir.tools/reference/supported-chains
+  const HOST = (
+    rsSlug === 'apechain'  ? 'https://api-apechain.reservoir.tools' :
+    rsSlug === 'base'      ? 'https://api-base.reservoir.tools'     :
+                             'https://api.reservoir.tools'           // ethereum default
+  );
+
+  const url = `${HOST}/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&limit=1`;
+  const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
+  if (!r.ok) return [];
+  const j = await r.json();
+  const t = j?.tokens?.[0]?.token || {};
+  const m = t.media || {};
+  return [
+    m?.original?.url || m?.original?.mediaUrl,
+    t.imageLarge, t.image, t.imageUrl, t.imageSmall
+  ].filter(Boolean).map(normalizeUrl);
+}
+
+  function hasUserText(){
+    const c = C(); if (!c) return false;
+    const objs = (c.getObjects?.() || []);
+    for (const o of objs){
+      if (!o || o._isBase || false || o._raTokenId || o._raSys) continue;
+      const t = (o.type||'').toLowerCase();
+      if (t==='text' || t==='textbox' || t==='i-text') return true;
+      if (t==='group'){
+        try{ if (o.getObjects().some(ch => ((ch.type||'').toLowerCase().includes('text')))) return true; }catch(_){}
+      }
+    }
+
+    if (looksLikeBase) {
+      try { c.remove(o); } catch(_) {}
+    }
+  });
+
+  try { c.requestRenderAll(); } catch(_) {}
+}
+
+  function fitAndAddAsBase(img){
+    const c = getCanvas(); if (!c) return false;
+    img.set({ originX:'center', originY:'center' });
+    const cw=c.getWidth(), ch=c.getHeight();
+    const sc = Math.min(cw/(img.width||cw), ch/(img.height||ch), 1);
+    if (Number.isFinite(sc) && sc>0) img.scale(sc);
+    img.left = cw/2; img.top = ch/2; img.setCoords();
+
+    // lock as base
+    img._isBase = true;
+    img._raBaseSig = 'BASE_V1';     // <-- paste THIS line here (fingerprint)    
+    img.selectable=false; img.evented=false; img.hasControls=false;
+    img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
+
+c.add(img);
+// Let the deterministic enforcer set exact indices
+try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+c.requestRenderAll();
+return true;
+
+
+  }
+
+  function annotateBase(meta){
+    const c = getCanvas(); if (!c) return;
+    const base = (c.getObjects?.()||[]).find(o => o && o._isBase && !o._isBgRect);
+    if (!base) return;
+    base._tokenContract = normHex(meta.contract || '');
+    base._tokenChain    = meta.chain || '';  // 'ethereum' | 'apechain' | 'base'
+    base._tokenName     = meta.name || '';
+    try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
+    try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function upsertTokenLabel(id){
+    const c = getCanvas(); if (!c || !window.fabric) return;
+    (c.getObjects()||[]).forEach(o => { if (o && o._raTokenId) c.remove(o); });
+    const txt = new fabric.Text('#'+String(id), {
+      originX:'center', originY:'top',
+      left:c.getWidth()/2, top: 32,
+      fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      fontSize:48, fill:'#fff', stroke:'transparent', strokeWidth:0,
+      selectable:false, evented:false
+    });
+    txt._raTokenId = true; txt._raSys = true;
+    c.add(txt);
+    try{ c.bringToFront(txt); }catch(_){}
+  }
+
+  async function loadViaDataURL(u){
+    return await new Promise(res => {
+      fabric.Image.fromURL(u, img => res(img), {}); // dataURL → no crossOrigin needed
+    });
+  }
+  async function loadViaNoCors(u){
+    return await new Promise(res => {
+      // Intentionally no {crossOrigin:'anonymous'} to avoid blocking where host has no CORS.
+      fabric.Image.fromURL(u, img => res(img), {});
+    });
+  }
+
+  async function runLoader({ contract, chain, name }, tokenId){
+    const c = getCanvas(), f = window.fabric;
+    if (!c || !f) { alert('Canvas not ready'); return; }
+
+    // 1) Query Reservoir with the correct chain
+    let urls = await reservoirCandidates(contract, tokenId, chain);
+
+// ApeChain often needs tokenURI → metadata fallback
+if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
+  try{
+    const u = await window.__fetchApechainImageURL(contract, tokenId);
+    if (u) urls = [u];
+  }catch(_){}
+}
+
+if (!urls || !urls.length){
+  alert('No image found for that token.');
+  return;
+}
+
+    // 2) CORS‑safe path first (best for export)
+    try { c.discardActiveObject(); } catch(_){}
+    killOldBase(c);
+    for (const u of urls){
+      try{
+        const data = await fetchAsDataURL(u);
+        const img  = await loadViaDataURL(data);
+        if (img){
+          fitAndAddAsBase(img);
+          // ...after fitAndAddAsBase(...)
+annotateBase({ contract, chain, name: name || '' });
+// no automatic label here — user controls it from “Token ID Styles”
+return;
+
+        }
+      }catch(_){}
+    }
+
+    // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
+const img = await loadViaNoCors(urls[0]);
+if (img){
+  fitAndAddAsBase(img);
+  annotateBase({ contract, chain, name: name || '' });
+  // no auto label — user adds it from “Token ID Styles”
+  return;
+}
+
+/* ========== RA_ADD_TEXT_PRIME_v1 — keep text visible after 'Add Text' ========== */
+(() => {
+  const C = () => window.canvas || null;
+
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — always preferred footer everywhere ===== */
+;(() => { return;  // DISABLED
+  if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
+  window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Recognizers
+  const isFooter = o => !!(o && (o._raBrandFooter || o._raFooterId === 'footer-group' || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isRing   = o => !!(o && (o._raWMCenter === true || o._raWMCenterId === 'center-ring'));
+  const isBg     = o => !!(o && o._isBgRect);
+  const isBase   = o => !!(o && o._isBase);
+  const isID     = o => !!(o && o._raTokenId);
+
+  function quarantine(o){
+    if (!o) return;
+    o._raSys = true;
+    if (!isID(o)) o.excludeFromExport = true;
+    if (isFooter(o) || isRing(o)) {
+      o.selectable=false; o.evented=false; o.hasControls=false;
+      o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+    }
+  }
+
+  function centerRing(wm){
+    const c = C(); if (!c || !wm) return;
+    wm.originX = 'center'; wm.originY = 'center';
+    wm.left = c.getWidth() / 2; wm.top = c.getHeight() / 2;
+    wm.setCoords();
+  }
+
+  function ensureFooter() {
+    const c = C();
+    if (!c) return null;
+    let footers = (c.getObjects?.() || []).filter(isFooter);
+    // Dedupe: if multiple, remove extras
+    if (footers.length > 1) {
+      footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch(_){ } });
+      footers = [footers[footers.length - 1]];
+    }
+    let footer = footers[0];
+    // If missing, create one
+    if (!footer) {
+      if (!window.fabric) return null;
+      footer = new fabric.Text('Powered by Rebel Studios', {
+        fontFamily: 'Inter, system-ui, Arial, sans-serif',
+        fontSize: 16,
+        fill: '#fff',
+        opacity: 1,
+        originX: 'right',
+        originY: 'bottom',
+        left: c.getWidth() - 60,
+        top: c.getHeight() - 20,
+        selectable: false,
+        evented: false,
+        shadow: new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        }),
+        _raBrandFooter: true,
+        _raSys: true
+      });
+      c.add(footer);
+    } else {
+      // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
+      let dirty = false;
+      if (footer.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { footer.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
+      if (footer.fontSize !== 16) { footer.fontSize = 16; dirty = true; }
+      if (footer.fill !== '#fff') { footer.set('fill', '#fff'); dirty = true; }
+      if (footer.opacity !== 1) { footer.opacity = 1; dirty = true; }
+      if (footer.originX !== 'right') { footer.originX = 'right'; dirty = true; }
+      if (footer.originY !== 'bottom') { footer.originY = 'bottom'; dirty = true; }
+      const desiredLeft = c.getWidth() - 60;
+      const desiredTop = c.getHeight() - 20;
+      if (footer.left !== desiredLeft) { footer.left = desiredLeft; dirty = true; }
+      if (footer.top !== desiredTop) { footer.top = desiredTop; dirty = true; }
+      // Update shadow if needed
+      const shadow = footer.shadow;
+      if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
+        footer.shadow = new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        });
+        dirty = true;
+      }
+      if (dirty) {
+        try { footer.setCoords(); } catch(_){}
+        quarantine(footer);
+      }
+    }
+    quarantine(footer);
+    return footer;
+  }
+
+  function isSys(o){ return !!(o && (o._isBase || false || o._raSys || o._raTokenId)); }
+  function newestUserObject(){
+    const c = C(); if (!c) return null;
+    const objs = c.getObjects ? c.getObjects() : [];
+    for (let i = objs.length - 1; i >= 0; i--){
+      const o = objs[i]; if (!o || isSys(o)) continue;
+      return o;
+    }
+    return ring;
+  }
+
+  function assertTopNow(){
+    const c = C(); if (!c) return;
+    const all  = c.getObjects?.() || [];
+    const bg   = all.find(isBg);
+    const base = all.find(isBase);
+
+    // Always restore ring and footer if they should be present
+    if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
+      const desired = RAWatermark.debug().desired;
+      if (desired.ring) ensureRing();
+      else {
+        const ring = all.find(isRing);
+        if (ring) ring.visible = false;
+      }
+      if (desired.footer) ensureFooter();
+      else {
+        const foot = all.find(isFooter);
+        if (foot) foot.visible = false;
+      }
+    } else {
+      // Fallback: always show both for disconnected/manual upload
+      ensureRing();
+      ensureFooter();
+    }
+
+    // Stacking logic
+    if (bg){
+      bg.selectable=false; bg.evented=false; bg.hasControls=false;
+      try { c.moveTo(bg, 0); } catch(_){}
+    }
+
+    const foot = all.find(isFooter);
+    if (foot) quarantine(foot);
+
+    const ring = all.find(isRing);
+    if (ring) {
+      quarantine(ring);
+      centerRing(ring);
+      if (base){
+        const baseZ = all.indexOf(base);
+        try { c.moveTo(ring, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
+      }
+    }
+
+    // Token ID on absolute top (footer below it if visible)
+    try {
+      if (foot && foot.visible !== false) c.bringToFront(foot);
+      const id = all.find(isID);
+      if (id && id.visible !== false) c.bringToFront(id);
+    } catch(_){}
+    c.requestRenderAll();
+  }
+
+  function wire(){
+    const c = C(); if (!c) { setTimeout(wire, 120); return; }
+    if (c.__raWmFooterFixShimV7rBound) return;
+    c.__raWmFooterFixShimV7rBound = true;
+
+    // Prevent watermark logic on overlays/text
+    const skipOverlayEvent = e => {
+      const obj = e?.target;
+      if (obj && (obj._kind === 'overlay' || obj._kind === 'text')) return;
+      assertTopNow();
+    };
+
+    // Listen for canvas events, but skip overlays/text
+    c.on('object:added', skipOverlayEvent);
+    c.on('object:removed', skipOverlayEvent);
+    c.on('object:modified', skipOverlayEvent);
+
+    // Support undo: if you're using a custom undo event, wire here
+    if (c.onUndo) c.onUndo(assertTopNow);
+
+    // Listen for watermark/collection/holder changes
+    ['ra-wm-recalc', 'ra-holder-update', 'ra-collection-change'].forEach(ev =>
+      document.addEventListener(ev, assertTopNow)
+    );
+
+    // Canvas resize (keep ring/footer centered)
+    try {
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmCenterResizeObs){
+        c.__raWmCenterResizeObs = true;
+        new ResizeObserver(assertTopNow).observe(el);
+      }
+    } catch(_){}
+
+    // Initial pass
+    assertTopNow();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
+
+/* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
+;(() => { return;  // DISABLED
+  if (window.__RA_WM_RULES_V9__) return;
+  window.__RA_WM_RULES_V9__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
+
+  // RAF-based evaluation scheduling for this block too
+  let WM_EVAL_SCHEDULED_V9 = false;
+  function scheduleWMEvalV9(reason) {
+    if (WM_EVAL_SCHEDULED_V9 || window.__RA_RESTORING__) return;
+    WM_EVAL_SCHEDULED_V9 = true;
+    requestAnimationFrame(() => {
+      WM_EVAL_SCHEDULED_V9 = false;
+      if (!window.__RA_RESTORING__) {
+        applyRules();
+      }
+    });
+  }
+
+  // recognizers
+  const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true || o._raWatermark === true || o._wm));
+  const isBase = o => !!(o && o._isBase);
+  const isFooter = o => !!(o && (o._raBrandFooter ||
+                          (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+
+  const faintOpacity = () =>
+    (typeof window.__RA_WM_ADMIN_OPACITY === 'number') ? window.__RA_WM_ADMIN_OPACITY : 0.18;
+  const targetPct = () => {
+    const p = (typeof window.__RA_WM_TARGET_PCT === 'number') ? window.__RA_WM_TARGET_PCT : 0.28;
+    return Math.max(0.05, Math.min(1, p));
+  };
+
+  const holderState = () => (window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false });
+
+  function currentBase(c){
+    const objs = (c.getObjects?.() || []);
+    return objs.find(isBase) || null;
+  }
+  function classifyBase(base){
+    if (!base) return 'none';
+    const cc = String(base._tokenContract || '').toLowerCase();
+    if (!cc) return 'manual';                          // manual upload (no token metadata)
+    if (cc === REBEL_CONTRACT) return 'rebel';         // your collection
+    return 'friend';                                   // any other token collection
+  }
+
+  function dedupeRing(c){
+    const wms = (c.getObjects?.()||[]).filter(isWM);
+    if (wms.length > 1){
+      const keep = wms[wms.length - 1];
+      wms.slice(0, -1).forEach(o => { try { c.remove(o); } catch(_) {} });
+      return keep;
+    }
+    return wms[0] || null;
+  }
+  function seatAboveBase(wm, c){
+    try{
+      const objs = c.getObjects() || [];
+      const base = objs.find(isBase); if (!base) return;
+      const baseZ = objs.indexOf(base);
+      c.moveTo(wm, Math.min(objs.length - 1, baseZ + 1));
+    }catch(_){}
+  }
+
+  function isSys(o){ return !!(o && (o._isBase || false || o._raSys || o._raTokenId)); }
+  function newestUserObject(){
+    const c = C(); if (!c) return null;
+    const objs = c.getObjects ? c.getObjects() : [];
+    for (let i = objs.length - 1; i >= 0; i--){
+      const o = objs[i]; if (!o || isSys(o)) continue;
+      return o;
+    }
+
+    if (ringOn) ensureRingVisible(c); else hideRing(c);
+
+    // Never interfere with overlays/uploads UI
+    try { c.requestRenderAll(); } catch(_) {}
+  }
+
+  // ——— Wiring ———
+  function wire(){
+    const c = C(); if (!c) { scheduleWMEvalV9('retry-wire'); return setTimeout(wire, 120); }
+    if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
+
+    // Base changes only (ignore overlays) - block object:moving/modified for overlays
+    c.on('object:added',   e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-added'); });
+    c.on('object:removed', e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-removed'); });
+
+// Wallet changes — active; collection change — passive unless base is loaded
+['ra-holder-update', 'ra-wm-recalc'].forEach(ev => {
+  document.addEventListener(ev, () => {
+    if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9(ev);
+  });
+});
+
+// Collection change handler — only act if a base image is already loaded
+document.addEventListener('ra-collection-change', (e) => {
+  try {
+    const c = typeof C === 'function' ? C() : null;
+    const hasBase =
+      !!(c && typeof c.getObjects === 'function' &&
+         (c.getObjects() || []).some(o => o && o._isBase && !o._isBgRect));
+    if (!hasBase) return; // stay passive until base loads
+  } catch {
+    return;
+  }
+  if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9('ra-collection-change');
+});
+
+// Canvas resize (size dropdown etc.)
+    try{
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__raWmRulesV9Resize) {
+        c.__raWmRulesV9Resize = true;
+        new ResizeObserver(() => scheduleWMEvalV9('resize')).observe(el);
+      }
+    }catch(_){}
+
+    // First pass
+    scheduleWMEvalV9('initial');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
   }
 })();
 
@@ -7444,7 +8628,6 @@ c.add(img);
 try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
 c.requestRenderAll();
 return true;
-
 
   }
 
@@ -7957,6 +9140,18 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       existing.visible = false;  // keep to reuse without touching history
       try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
     }
+  };
+
+  function boot(){
+    hookCanvas();
+    hookEvents();
+    queueApply('boot');
+  }
+
+  if (document.readyState === 'complete'){
+    setTimeout(boot, 40);
+  } else {
+    window.addEventListener('load', ()=> setTimeout(boot, 40), { once:true });
   }
 
   // --------------- Footer — strictly inside canvas wrapper ---------------
@@ -8058,3 +9253,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
   bind();
 })();
+
+/* ===== APP_MARKER_0928 ===== */
+window.APP_MARKER_0928 = true;
+console.log("✅ app.js marker loaded: APP_MARKER_0928");
