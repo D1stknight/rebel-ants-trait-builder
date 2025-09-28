@@ -1,5 +1,89 @@
+// === WM/FOOTER NUKE MODE — put this near the top of app.js ===
+(function RA_NUKE_WM_FOOTER(){
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-(function(){
+  const isFooter = (o) => !!(o && (
+    o._raBrandFooter ||
+    o._raFooterId === 'footer-group' ||
+    (typeof o.text === 'string' && /powered\s+by/i.test(o.text))
+  ));
+
+  const isRing = (o) => !!(o && (
+    o._raWMCenter === true ||
+    o._isWatermark === true ||
+    o._raWatermark === true ||
+    o._wm === true ||
+    o._raWMCenterId === 'center-ring'
+  ));
+
+  const purge = () => {
+    const c = C(); if (!c) return;
+    (c.getObjects?.() || []).slice().forEach(o => {
+      if (isFooter(o) || isRing(o)) { try { c.remove(o); } catch(_){} }
+    });
+    try { c.requestRenderAll?.(); } catch(_) {}
+  };
+
+  // 1) Intercept fabric.Image.fromURL for typical WM image paths
+  if (window.fabric && fabric.Image && typeof fabric.Image.fromURL === 'function') {
+    const _fromURL = fabric.Image.fromURL;
+    fabric.Image.fromURL = function(url, cb, opts) {
+      const bad = typeof url === 'string' && /watermark|ring|wm/i.test(url);
+      if (bad) {
+        // Skip creation; invoke callback with null to signal “not created”
+        if (typeof cb === 'function') { try { cb(null); } catch(_) {} }
+        return;
+      }
+      return _fromURL.call(this, url, cb, opts);
+    };
+  }
+
+  // 2) Intercept canvas.add to block ring/footer objects
+  const waitCanvas = () => {
+    const c = C();
+    if (!c) return void setTimeout(waitCanvas, 120);
+    if (c.__raNukeHooked) return;
+    c.__raNukeHooked = true;
+
+    const _add = c.add;
+    c.add = function(...objs) {
+      const keep = objs.filter(o => !(isFooter(o) || isRing(o)));
+      if (keep.length !== objs.length) {
+        // some were blocked
+      }
+      return _add.apply(this, keep);
+    };
+
+    // 3) Purge on add/modify/remove (in case something sneaks in)
+    const onEvt = () => purge();
+    c.on('object:added', onEvt);
+    c.on('object:modified', onEvt);
+    c.on('object:removed', onEvt);
+
+    purge();
+  };
+
+  // 4) Neuter legacy RAWatermark APIs that might reapply stuff
+  try {
+    Object.defineProperty(window, 'RAWatermark', {
+      configurable: true,
+      get() {
+        return {
+          setConnection(){}, setHoldings(){}, refresh(){}, setConfig(){},
+          force(){}, clearForce(){},
+          debug(){ return { desired: { ring:false, footer:false }, state:{}, config:{} }; }
+        };
+      },
+      set(_) { /* ignore */ }
+    });
+  } catch(_) {}
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', waitCanvas, { once:true });
+  } else {
+    waitCanvas();
+  }
+})();(function(){
   if (window.__RA_WM_CONSOLIDATION_P1__) return;
   window.__RA_WM_CONSOLIDATION_P1__ = true;
   // Adjust selectors if Phase 2 uses different tagging.
