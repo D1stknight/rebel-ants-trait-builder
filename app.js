@@ -9219,3 +9219,7 @@ document.addEventListener('ra-collection-change', (e) => {
   }
 
 })();
+
+/* ===== APP_MARKER_0928 ===== */
+window.APP_MARKER_0928 = true;
+console.log("✅ app.js marker loaded: APP_MARKER_0928");
