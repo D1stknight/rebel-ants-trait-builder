@@ -7848,13 +7848,13 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   }
 
   // --- RING overlay (Fabric.js vector, non-interactive)
-  // ---- Watermark image overlay (from /assets/watermark.png), non-interactive
-const WM_URL = new URL('assets/watermark.png', document.baseURI).toString();
-const WM_SCALE = 0.85;      // 85% of min(canvas width, height)
-const WM_OPACITY = 0.10;    // very faint
+ // ---- Watermark image overlay (from /assets/watermark.png), non-interactive, undo-safe
+const WM_URL     = new URL('assets/watermark.png', document.baseURI).toString();
+const WM_SCALE   = 0.85;  // 85% of min(canvas width, height)
+const WM_OPACITY = 0.10;  // very faint
 
 function getWM(c){
-  const objs = (c.getObjects?.() || []);
+  const objs = (c && c.getObjects?.()) || [];
   return objs.find(o => o && o._raRingOverlay === true) || null;
 }
 
@@ -7864,7 +7864,7 @@ function layoutWM(c, img){
   const target = Math.min(w, h) * WM_SCALE;
   const sx = target / (img.width  || 1);
   const sy = target / (img.height || 1);
-  const s = Math.min(sx, sy);
+  const s  = Math.min(sx, sy);
   img.set({
     left: w / 2,
     top:  h / 2,
@@ -7878,7 +7878,7 @@ function layoutWM(c, img){
 
 function ensureWM(c, done){
   let wm = getWM(c);
-  if (wm) { done && done(wm); return; }
+  if (wm) { layoutWM(c, wm); done && done(wm); return; }
   if (!window.fabric || !c) { done && done(null); return; }
 
   // Prevent duplicate loads if recompute fires rapidly
@@ -7888,15 +7888,20 @@ function ensureWM(c, done){
   fabric.Image.fromURL(WM_URL, (img) => {
     ensureWM._loading = false;
     if (!img) { done && done(null); return; }
-    img._raRingOverlay = true;
+    // Mark as "system" so history ignores it and exports skip it (fixes Undo)
+    img._raRingOverlay    = true;
+    img._raSys            = true;            // history filter
+    img._kind             = 'wm';
+    img.excludeFromExport = true;            // skip JSON/SVG exports
     img.set({
       selectable: false,
       evented: false,
       hasControls: false,
       opacity: WM_OPACITY,
-      globalCompositeOperation: 'source-over'
+      globalCompositeOperation: 'source-over',
+      perPixelTargetFind: false
     });
-    try { c.add(img); } catch(_) {}
+    try { c.add(img); } catch(_){}
     layoutWM(c, img);
     done && done(img);
   }, { crossOrigin: 'anonymous' });
@@ -7908,7 +7913,6 @@ function applyRing(pol){
   const existing = getWM(c);
 
   if (want){
-    // Create (if needed) and show
     ensureWM(c, (img) => {
       if (!img) return;
       layoutWM(c, img);
@@ -7917,7 +7921,7 @@ function applyRing(pol){
       try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
     });
   } else if (existing){
-    // Hide if present (don’t remove so we can reuse on next toggle)
+    // Hide (keep instance so it can be reused without touching history)
     existing.visible = false;
     try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
   }
