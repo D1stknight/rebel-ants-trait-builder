@@ -7890,7 +7890,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // --------------- Watermark (image) — undo‑safe ---------------
   const WM_URL     = new URL('assets/watermark.png', document.baseURI).toString();
   const WM_SCALE   = 0.85;  // 85% of min(canvas width, height)
-  const WM_OPACITY = 0.10;  // very faint
+  const WM_OPACITY = 0.07;  // very faint
 
   function getWM(c){
     const objs = (c && c.getObjects?.()) || [];
