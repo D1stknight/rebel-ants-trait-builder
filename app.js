@@ -1513,13 +1513,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // Regular PNG download
   safeAddListener("exportPng","click",()=> doExport(false));
 
-  // New-tab viewer (prevents Chrome navigating the current tab)
-  safeAddListener("openNewTab", "click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Open the viewer
-    raOpenNewTabViewer();
-  });
+  // New-tab viewer (Safari/Chrome safe)
+safeAddListener("openNewTab", "click", (e) => {
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  e.stopPropagation();
+  window.raOpenNewTabViewer();
+});
 
   // High-quality PNG export used by both paths
   function doExport(openTab){
@@ -1561,81 +1561,67 @@ document.addEventListener("DOMContentLoaded", ()=>{
     }
   }
 
-  // ---- Inline, popup-safe viewer that fits to the browser tab ----
-  // Exposed globally so other code can reuse: window.raOpenNewTabViewer()
-  window.raOpenNewTabViewer = function raOpenNewTabViewer(){
-    if (!window.canvas){ alert("Canvas not ready"); return; }
+ // ---- New Tab viewer (opens via blob URL; works in Safari & Chrome) ----
+window.raOpenNewTabViewer = function raOpenNewTabViewer(){
+  if (!window.canvas){ alert("Canvas not ready"); return; }
 
-    // Open a blank tab synchronously (avoids popup blockers)
-    const win = window.open("", "_blank", "noopener");
-    if (!win){ alert("Popup blocked. Allow popups for this site."); return; }
+  // Read export multiplier from UI (1..8), default 2
+  const multEl = document.getElementById("exportMultiplier") || document.getElementById("exportQuality");
+  let mult = 2;
+  if (multEl){
+    const v = parseInt((multEl.value||multEl.textContent||"").replace(/\D+/g,""),10);
+    if (v && v>=1 && v<=8) mult = v;
+  }
 
-    // Minimal head+styles
-    win.document.title = "Export";
-    win.document.head.innerHTML = `
-      <meta charset="utf-8">
-      <title>Export</title>
-      <style>
-        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
-        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
-        img#raImg{
-          display:block;
-          max-width:calc(100vw - 32px);
-          max-height:calc(100vh - 32px);
-          width:auto;height:auto;
-          box-shadow:0 8px 24px rgba(0,0,0,.5);
-          border-radius:8px;
-          image-rendering:auto;
-        }
-        .hud{
-          position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
-          color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none;
-        }
-      </style>
-    `;
-    win.document.body.innerHTML = `
-      <div class="viewer"><img id="raImg" alt="export"/></div>
-      <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
-    `;
+  let dataUrl;
+  try{
+    dataUrl = canvas.toDataURL({ format:"png", multiplier: mult, enableRetinaScaling:true });
+  }catch(_){
+    alert("Export blocked (CORS). Use images with CORS headers or same-origin.");
+    return;
+  }
 
-    // Read export multiplier from UI (1..8), default 2
-    const multEl = document.getElementById("exportMultiplier") || document.getElementById("exportQuality");
-    let mult = 2;
-    if (multEl){
-      const v = parseInt((multEl.value||multEl.textContent||"").replace(/\D+/g,""),10);
-      if (v && v>=1 && v<=8) mult = v;
-    }
+  // Minimal HTML viewer with Fit ↔ Actual toggle
+  const html = [
+    "<!doctype html><html><head><meta charset='utf-8'>",
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>",
+    "<title>Export</title>",
+    "<style>",
+    "html,body{height:100%;margin:0;background:#0b0c10;overflow:auto}",
+    ".viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10}",
+    "img#raImg{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto}",
+    ".hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}",
+    "</style></head><body>",
+    "<div class='viewer'><img id='raImg' alt='export'/></div>",
+    "<div class='hud'>Click image to toggle: Fit ↔ Actual size</div>",
+    "<script>",
+    "var img=document.getElementById('raImg');",
+    "img.src=", JSON.stringify(dataUrl), ";",
+    "var fit=true;",
+    "function apply(){",
+    " if(fit){img.style.maxWidth='calc(100vw - 32px)';img.style.maxHeight='calc(100vh - 32px)';img.style.width='auto';img.style.height='auto';}",
+    " else{img.style.maxWidth='none';img.style.maxHeight='none';img.style.width='auto';img.style.height='auto';}",
+    "}",
+    "img.addEventListener('click',function(){fit=!fit;apply();});",
+    "apply();",
+    "</script>",
+    "</body></html>"
+  ].join("");
 
-    try{
-      const dataUrl = canvas.toDataURL({ format:"png", multiplier: mult, enableRetinaScaling:true });
-      const img = win.document.getElementById("raImg");
-      img.src = dataUrl;
+  // Open viewer via blob URL + anchor (user-initiated navigation)
+  const viewerBlob = new Blob([html], { type: "text/html" });
+  const viewerUrl  = URL.createObjectURL(viewerBlob);
 
-      // Fit ↔ Actual size toggle
-      let fit = true;
-      function applyFit(){
-        if (fit){
-          img.style.maxWidth  = "calc(100vw - 32px)";
-          img.style.maxHeight = "calc(100vh - 32px)";
-          img.style.width = "auto";
-          img.style.height = "auto";
-        } else {
-          img.style.maxWidth  = "none";
-          img.style.maxHeight = "none";
-          img.style.width = "auto";  // natural size
-          img.style.height = "auto";
-        }
-      }
-      img.addEventListener("click", ()=>{ fit = !fit; applyFit(); });
-      applyFit();
-    }catch(e){
-      win.document.body.innerHTML =
-        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">' +
-        'Export failed (CORS/security). Try a different image or use a CORS-enabled host.' +
-        '</div>';
-    }
-  };
+  const a = document.createElement("a");
+  a.href = viewerUrl;
+  a.target = "_blank";
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+
+  // Cleanup
+  setTimeout(() => { URL.revokeObjectURL(viewerUrl); a.remove(); }, 60000);
+};
 });  // <-- closes DOMContentLoaded
 
 
