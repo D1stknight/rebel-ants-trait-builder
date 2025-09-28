@@ -549,6 +549,16 @@ function toRoman(num){
   }, { once: true });
 })();
 
+/* Favicon: inject one if the site doesn't provide it (prevents 404 /favicon.ico) */
+;(() => {
+  if (!document.querySelector('link[rel="icon"]')) {
+    const l = document.createElement('link');
+    l.rel = 'icon';
+    l.href = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="#0d0e13"/></svg>';
+    document.head.appendChild(l);
+  }
+})();
+
 // ===============================
 //  DOM READY
 // ===============================
