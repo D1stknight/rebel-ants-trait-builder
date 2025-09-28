@@ -8922,8 +8922,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
  * Output:
  * - { ring: boolean, footer: boolean }
  */
-export function accessRules({ walletConnected, ownsRebel, ownsAnyFriend, context }) {
-  // Normalize context
+const accessRules = ({ walletConnected, ownsRebel, ownsAnyFriend, context }) => {
   const type = (context && context.type) || 'other';
 
   // 1) Wallet NOT connected -> Ring YES, Footer YES for all
@@ -8937,40 +8936,30 @@ export function accessRules({ walletConnected, ownsRebel, ownsAnyFriend, context
       // Rebels are 100% clean
       return { ring: false, footer: false };
     }
-    // Friends (owned or not) and uploads carry Footer only
-    if (type === 'friend' || type === 'upload') {
-      return { ring: false, footer: true };
-    }
-    // Other tokens also get Footer only
+    // Friends (owned or not), uploads, and others → Footer only
     return { ring: false, footer: true };
   }
 
   // 3) Wallet connected but NO Rebel
-  if (!ownsRebel) {
-    if (ownsAnyFriend) {
-      // Footer-only everywhere
-      return { ring: false, footer: true };
-    }
-    // NO Rebel and NO Friend
-    if (type === 'rebel') {
-      // Rebel tokens -> Ring YES, Footer NO
-      return { ring: true, footer: false };
-    }
-    // Other tokens & uploads -> Ring YES, Footer YES
-    return { ring: true, footer: true };
+  if (ownsAnyFriend) {
+    // Footer-only everywhere
+    return { ring: false, footer: true };
   }
-
-  // Fallback (shouldn't hit)
+  // NO Rebel and NO Friend
+  if (type === 'rebel') {
+    // Rebel tokens → Ring YES, Footer NO
+    return { ring: true, footer: false };
+  }
+  // Other tokens & uploads → Ring YES, Footer YES
   return { ring: true, footer: true };
-}
+};
 
 /**
  * Optional helper: compute rule per item list for UI rendering pipelines.
  * Accepts an array of item contexts and a single wallet state.
  */
-export function mapAccessForItems(items, walletState) {
-  return items.map(ctx => ({ ctx, ...accessRules({ ...walletState, context: ctx }) }));
-}
+const mapAccessForItems = (items, walletState) =>
+  items.map(ctx => ({ ctx, ...accessRules({ ...walletState, context: ctx }) }));
 
 /**
  * Integration hint:
@@ -8978,3 +8967,11 @@ export function mapAccessForItems(items, walletState) {
  * - Use the returned flags to drive *separate* overlay or footer systems at the top-level UI.
  * - All block-level code has been scrubbed of watermark/footer traces.
  */
+
+// UMD-style exports (works in browser and Node/ESM bundlers)
+if (typeof window !== 'undefined') {
+  window.RAAccess = { accessRules, mapAccessForItems };
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { accessRules, mapAccessForItems };
+}
