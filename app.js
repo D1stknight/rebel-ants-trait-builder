@@ -570,11 +570,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // Ensure faint ring (legacy hook removed)
 try { /* no-op */ } catch(_) {}
 
-  // When WM / ring asset resolves, re-ensure (first load scenario)
-  window.addEventListener('ra-wm-src-ready', () => {
-    try { window.ensureNonTokenRingWM &&  } catch(_) {}
-  }, { once:false });
-
+ // When WM / ring asset resolves, re-ensure (first load scenario)
+window.addEventListener('ra-wm-src-ready', () => {
+  try {
+    /* no-op (legacy hook removed) */
+  } catch (_) {}
+}, { once: false });
   // Layer order helper
   function enforce(){
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
