@@ -8321,7 +8321,7 @@ window.raDump = () => {
 };
 
 /* ===== RA_WM_FOOTER_FIX_SHIM_v7r — always preferred footer everywhere ===== */
-;(() => {
+;(() => { return;  // DISABLED
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
   window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
 
@@ -8543,7 +8543,7 @@ window.raDump = () => {
 })();
 
 /* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
-;(() => {
+;(() => { return;  // DISABLED
   if (window.__RA_WM_RULES_V9__) return;
   window.__RA_WM_RULES_V9__ = true;
 
