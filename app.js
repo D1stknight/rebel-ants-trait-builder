@@ -7898,7 +7898,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       el = document.createElement('div');
       el.id = 'raFooterBarFinal';
       el.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:8px 12px;font:600 12px/1.2 system-ui,Arial;color:#e8eaed;background:linear-gradient(to top, rgba(0,0,0,.6), rgba(0,0,0,0));text-align:center;pointer-events:none;z-index:9999';
-      el.textContent = '— built with Rebel Builder —';
+      el.textContent = '— Rebel Studios Builder —';
       const cs = getComputedStyle(host);
       if (cs.position === 'static') host.style.position = 'relative';
       try { host.appendChild(el); } catch(_){}
