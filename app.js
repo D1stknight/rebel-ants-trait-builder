@@ -1,4 +1,11 @@
-;
+;(() => {
+  const kill = sel => document.querySelectorAll(sel).forEach(n => n.remove());
+  document.addEventListener('DOMContentLoaded', () => {
+    kill('img[src*="assets/overlay.png"]');
+    kill('link[rel="preload"][href*="assets/overlay.png"]');
+    kill('meta[content*="assets/overlay.png"]');
+  }, { once: true });
+})();
 /* ===============================
    CONFIG (Phase 2 safe minimal)
    =============================== */
