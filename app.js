@@ -9117,4 +9117,5 @@ console.log("✅ APP_MARKER_SURGICAL_VF loaded at 2025-09-28T05:08:45.639432");
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, {once:true});
   else wire();
-})();
+}
+})(); 
