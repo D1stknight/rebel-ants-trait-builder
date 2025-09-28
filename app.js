@@ -7828,47 +7828,37 @@ if (img){
     alert('Failed to load token image.');
   }
 
-  // ---------- wire once (capture phase). We only hijack when we know the contract+chain. ----------
-  function looksLikeLoadByToken(node){
-    if (!node) return false;
-    const btn = node.id && /loadbytoken|loadtoken/i.test(node.id);
-    if (btn) return true;
-    const t = (node.textContent || '').toLowerCase().replace(/\s+/g,' ');
-    return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
-  }
-
- // Helper: find the Token ID Styles card so we can skip hijacking inside it
-function findTokenIdStylesCard(){
-  const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
-  const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
-  return h ? (h.closest('.card,section,div') || h.parentElement) : null;
+ // ---------- wire once (capture phase). We only hijack when we know the contract+chain. ----------
+function looksLikeLoadByToken(node){
+  if (!node) return false;
+  const byId = node.id && /loadbytoken|loadtoken/i.test(node.id);
+  if (byId) return true;
+  const t = (node.textContent || '').toLowerCase();
+  return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
 }
 
 function onClick(e){
   const el = e.target && e.target.closest && e.target.closest('button, a');
-  if (!el) return;
-
-  // ⛔️ Do NOT hijack clicks in the Token ID Styles card (this button is for the label UI)
-  const stylesCard = findTokenIdStylesCard();
-  if (stylesCard && stylesCard.contains(el)) return;
-
-  if (!looksLikeLoadByToken(el)) return;
+  if (!el || !looksLikeLoadByToken(el)) return;
 
   const tokenId  = readTokenId();
   const detected = detectContractAndChain();
 
+  // Only take over if we have a token id AND a confident contract+chain.
   if (tokenId && detected && detected.contract) {
-    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
     runLoader(detected, tokenId);
   }
 }
 
-  // Boot
-  if (!document.__raTokenLoaderXChainBound){
-    document.__raTokenLoaderXChainBound = true;
-    document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
-  }
-})();
+// Boot
+if (!document.__raTokenLoaderXChainBound){
+  document.__raTokenLoaderXChainBound = true;
+  document.addEventListener('click', onClick, true); // capture so we can short-circuit when we have everything
+}
+})(); // <— end of the IIFE
 
 /* ===== RA_TOKEN_ID_STYLE_WIRING_V3 — no auto-create; update only; proper format; de-dupe ===== */
 ;(() => {
