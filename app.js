@@ -18,13 +18,6 @@
     return objs.find(o => o && (o._raWMRing === true || o._raWatermark === true || o._raWMCenter === true)) || null;
   };
 
-  // Retained guard flags (can delete once sure no other file tests them)
-  window.__RA_WM_FOOTER_FIX_SHIM_v7r__ = true;
-  window.__RA_WM_RULES_V9__            = true;
-  window.__RA_WM_GLOBAL_SYNC_V3__      = true;
-  window.__RA_WM_FOLLOW_EVENTS_V1__    = true;
-  window.__RA_WM_SERVER_MASTER_V1__    = true;
-
   // Legacy non-token ring creator placeholder (kept to avoid ReferenceErrors)
   Object.defineProperty(window, 'ensureNonTokenRingWM', {
     configurable: true,
