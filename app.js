@@ -567,8 +567,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setCanvasSize(initialSize);
   setZoom(1);
 
-  // Ensure faint ring (will noop if not ready yet)
-  try { window.ensureNonTokenRingWM &&  } catch(_) {}
+  // Ensure faint ring (legacy hook removed)
+try { /* no-op */ } catch(_) {}
 
   // When WM / ring asset resolves, re-ensure (first load scenario)
   window.addEventListener('ra-wm-src-ready', () => {
