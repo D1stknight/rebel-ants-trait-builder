@@ -1,34 +1,78 @@
+/* ===== WM CONSOLIDATION PHASE 1 (LEGACY NEUTRALIZED) =====
+   Original purpose: block duplicate legacy watermark controllers.
+   Legacy centered watermark logic has been removed/stubbed (Phase 2 active).
+   This block now only provides a compatibility finder & placeholder flags
+   until final purge.
+*/
+(function(){
+  if (window.__RA_WM_CONSOLIDATION_P1__) return;
+// Compatibility finder: try Phase 2 ring first, else legacy center tag (now absent).
+  // Adjust selectors if Phase 2 uses different tagging.
+  window.raFindWatermark = function raFindWatermark(){
+    const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+    if (!c) return null;
+    const objs = (c.getObjects?.() || []);
+    // Phase 2 ring candidates: (example tags) _raWMRing or _raWatermark
+    return objs.find(o => o && (o._raWMRing === true || o._raWatermark === true || o._raWMCenter === true)) || null;
+  };
+
+  // Legacy non-token ring creator placeholder (kept to avoid ReferenceErrors)
+  Object.defineProperty(window, 'ensureNonTokenRingWM', {
+    configurable: true,
+    writable: true,
+    value: function(){ /* Phase 2: legacy ensureNonTokenRingWM disabled */ }
+  });
+})();
 /* ===============================
-   CONFIG
+   CONFIG (Phase 2 safe minimal)
    =============================== */
 ;(() => {
-  // Prefer ?contract=… or window._RA_CONTRACT, else default to Rebel Ants
+  if (window.__RA_WM_CONFIG_MIN__) return;
+const qs = new URLSearchParams(location.search);
+
   const CONTRACT =
-    new URLSearchParams(location.search).get('contract')
-    || (window._RA_CONTRACT && String(window._RA_CONTRACT))
-    || "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
+    qs.get('contract') ||
+    (window._RA_CONTRACT && String(window._RA_CONTRACT)) ||
+    "0x96C1469c1C76E3Bb0e37c23a830d0Eea6BCf9221";
 
   const RESERVOIR = "https://api.reservoir.tools/tokens/v7?media=true&tokens=";
 
-  // ---- ApeChain RPC default (only if not provided elsewhere)
   if (!window.__APECHAIN_RPC) {
     window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
   }
 
-  // ---- Watermark...
-  const __wmQS = new URLSearchParams(location.search).get('wm');
-  let WM_SRC = isAllowedAssetURL(__wmQS) ? __wmQS : "/assets/watermark.png?v=wm10";
+  // Watermark / ring image source
+  const qsWM = qs.get('wm');
+  let candidate = isAllowedAssetURL(qsWM) ? qsWM : "/assets/watermark.png?v=wm10";
+  const FALLBACK = "/watermark.png?v=wm10";
 
-  (function checkWatermark(){
-    const test = new Image();
-    test.crossOrigin = "anonymous";
-    test.onerror = () => { WM_SRC = "/watermark.png?v=wm10"; }; // fallback
-    test.src = WM_SRC + (WM_SRC.includes("?") ? "&" : "?") + "t=" + Date.now();
-  })();
+  function validateAndExport(src){
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      window.WM_SRC = src;
+      window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src, ok:true } }));
+    };
+    img.onerror = () => {
+      if (src !== FALLBACK) {
+        validateAndExport(FALLBACK);
+      } else {
+        window.WM_SRC = FALLBACK;
+        window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src: FALLBACK, ok:false } }));
+      }
+    };
+    img.src = src + (src.includes("?") ? "&" : "?") + "t=" + Date.now();
+  }
 
-  // 🔴 Export WM_SRC so the rest of the app (stamps, loaders) can use it
-  window.WM_SRC = WM_SRC;
-})(); // end CONFIG
+  validateAndExport(candidate);
+
+  // Export environment snapshot
+  window.RA_ENV = Object.freeze({
+    contract: CONTRACT,
+    reservoirAPI: RESERVOIR,
+    apechainRPC: window.__APECHAIN_RPC
+  });
+})(); // end CONFIGG
 
   // ===============================
   //  FABRIC DEFAULTS
@@ -100,247 +144,135 @@ function normalize(u){
   return u;
 }
 
-/* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
+
+/* [REMOVED duplicate Non-token ring watermark helper] */
+;
+/* === Phase 2 Ring Watermark Helper (faint; auto-hide for holders) === */
 ;(() => {
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // Strict detectors
-  const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
+  // Strict ring detector (Phase 2 tags + legacy compatibility)
+  const isWM = o => !!(o && (o._raWMRing === true || o._isWatermark === true || o._raWMCenter === true));
+
+  // Base / background detectors
   const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
   const isBg   = o => !!(o && o._isBgRect);
 
   function isHolder() {
-    const s = (window.RA_HOLDER_STATE || {});
+    const s = window.RA_HOLDER_STATE || {};
     return !!(s.hasRebel || s.hasFriend);
-  }
-
-  // Faintness (admin can override by setting window.__RA_WM_ADMIN_OPACITY)
-  function faintOpacity() {
-    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
-      ? window.__RA_WM_ADMIN_OPACITY
-      : 0.18; // default faint
-  }
-
-  // Target size (% of canvas width) — admin can override with window.__RA_WM_TARGET_PCT
-  function targetPct() {
-    const pct = (typeof window.__RA_WM_TARGET_PCT === 'number')
-      ? window.__RA_WM_TARGET_PCT
-      : 0.28; // default 28% of canvas width
-    return Math.max(0.05, Math.min(1, pct));
   }
 
   function scaleRingToCanvas(wm) {
     const c = C(); if (!c || !wm) return;
-    const cw = c.getWidth();
+    const cw   = c.getWidth();
     const natW = wm.width || 1;
-    const sc = (cw * targetPct()) / Math.max(1, natW);
-    wm.scaleX = sc; wm.scaleY = sc;
-    wm.left = cw / 2; wm.top = c.getHeight() / 2;
+    const pct  = (typeof window.__RA_WM_TARGET_PCT === 'number')
+      ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT))
+      : 0.28; // default: ring spans 28% of canvas width
+    const sc = (cw * pct) / Math.max(1, natW);
+    wm.scaleX = sc;
+    wm.scaleY = sc;
+    wm.left   = cw / 2;
+    wm.top    = c.getHeight() / 2;
     wm.setCoords();
   }
 
-  // Seat WM just above BASE (keeps faint look); if base not present, seat above BG
+  function faintOpacity() {
+    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
+      ? window.__RA_WM_ADMIN_OPACITY
+      : 0.18;
+  }
+
+  // Seat ring just above base (or above bg if base not yet there)
   function seatAboveBase(wm) {
     const c = C(); if (!c || !wm) return;
     try {
       const all  = c.getObjects() || [];
       const base = all.find(isBase);
       const bgIx = all.findIndex(isBg);
+
       let targetZ = Math.min(all.length - 1, (bgIx >= 0 ? bgIx : -1) + 1);
       if (base) {
         const baseZ = all.indexOf(base);
         targetZ = Math.min(all.length - 1, baseZ + 1);
       }
+
       const curZ = all.indexOf(wm);
       if (curZ !== targetZ) c.moveTo(wm, targetZ);
     } catch (_) {}
   }
 
-  // Create/show ring watermark unless holder; otherwise hide it.
+  // Public API: ensure the faint ring watermark (unless holder)
   window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
     const c = C(); if (!c) return;
+    if (window.__RA_RESTORING__) return;
 
-    // Holder: hide ring, keep footer
+    const objs = (c.getObjects?.() || []);
+    const existing = objs.find(isWM);
+
     if (isHolder()) {
-      (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) o.visible = false; });
-      try { c.requestRenderAll(); } catch(_) {}
-      return;
-    }
-
-    // If ring exists → ensure visible, clamp faintness, scale + seat, render
-    let wm = (c.getObjects?.()||[]).find(isWM);
-    if (wm) {
-      wm.visible = true;
-      wm.opacity = faintOpacity();
-      scaleRingToCanvas(wm);
-      seatAboveBase(wm);
-      try { c.requestRenderAll(); } catch(_) {}
-      return;
-    }
-
-    // Create new ring from WM_SRC (must be exported from CONFIG)
-    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
-    fabric.Image.fromURL(src, img => {
-      if (!img) return;
-      img.set({
-        originX: 'center', originY: 'center',
-        selectable: false, evented: false, hasControls: false,
-        objectCaching: false, opacity: faintOpacity()
-      });
-      // Tag so v7 recognizes it as watermark
-      img._raWMCenter = true;
-      img._isWatermark = true;
-      img._raSys = true; img.excludeFromExport = true;
-
-      // Size & position
-      scaleRingToCanvas(img);
-      c.add(img);
-
-      // Seat immediately so it isn’t hidden under the base
-      seatAboveBase(img);
-
-      // Double-tap re-seat after other listeners (rare race protection)
-      requestAnimationFrame(() => { seatAboveBase(img); try { c.requestRenderAll(); } catch(_) {} });
-
-      try { c.requestRenderAll(); } catch(_) {}
-    }, { crossOrigin: 'anonymous' });
-  };
-
-  // React to wallet status (show/hide ring)
-  document.addEventListener('ra-holder-update', () => {
-    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
-  });
-
-  // Keep ring sized/positioned on canvas resizes
-  try {
-    const c = C();
-    const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
-    if (el && !c.__raNonTokenRingResizeObs) {
-      c.__raNonTokenRingResizeObs = true;
-      new ResizeObserver(() => {
-        const wm = (c.getObjects?.()||[]).find(isWM);
-        if (wm) {
-          wm.opacity = faintOpacity();
-          scaleRingToCanvas(wm);
-          seatAboveBase(wm);
-          try { c.requestRenderAll(); } catch(_) {}
-        }
-      }).observe(el);
-    }
-  } catch(_) {}
-})();
-/* === Non-token ring watermark helper (faint; auto-hide for holders) — FULL BLOCK === */
-;(() => {
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  // Strict watermark detector (only objects we tag as WM)
-  const isWM = o => !!(o && (o._raWMCenter === true || o._isWatermark === true));
-  // Base detector (covers image base or grouped base)
-  const isBase = o => !!(o && (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract));
-  const isBg   = o => !!(o && o._isBgRect);
-
-  function isHolder() {
-    const s = (window.RA_HOLDER_STATE || {});
-    return !!(s.hasRebel || s.hasFriend);
-  }
-
-  function scaleRingToCanvas(wm) {
-    const c = C(); if (!c || !wm) return;
-    const cw = c.getWidth();
-    const natW = wm.width || 1;
-    const pct  = (typeof window.__RA_WM_TARGET_PCT === 'number')
-      ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT))
-      : 0.28; // default width = 28% of canvas
-    const sc = (cw * pct) / Math.max(1, natW);
-    wm.scaleX = sc; wm.scaleY = sc;
-    wm.left = cw / 2; wm.top = c.getHeight() / 2;
-    wm.setCoords();
-  }
-
-  function faintOpacity() {
-    return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
-      ? window.__RA_WM_ADMIN_OPACITY
-      : 0.18; // faint default (bump if you want it slightly more visible)
-  }
-
-  // Seat watermark just above base (keeps "faint" look), or just above bg if base isn't present yet
-  function seatAboveBase(wm) {
-    const c = C(); if (!c || !wm) return;
-    try {
-      const all  = c.getObjects() || [];
-      const base = all.find(isBase);
-      const bgIx = all.findIndex(isBg);
-
-      let targetZ = Math.min(all.length - 1, (bgIx >= 0 ? bgIx : -1) + 1); // just above bg by default
-      if (base) {
-        const baseZ = all.indexOf(base);
-        targetZ = Math.min(all.length - 1, baseZ + 1);
+      // Hide if present (do not remove so we can show again quickly)
+      if (existing) {
+        existing.visible = false;
+        try { c.requestRenderAll(); } catch(_) {}
       }
+      return;
+    }
 
-      const curZ = all.indexOf(wm);
-      if (curZ !== targetZ) c.moveTo(wm, targetZ);
-    } catch (_) {}
-  }
-
-  // Create/show ring watermark unless holder; otherwise hide it.
-  window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
-    const c = C(); if (!c) return;
-
-    // If wallet is holder, hide any ring watermark and bail (footer stays)
-    if (isHolder()) {
-      (c.getObjects?.()||[]).forEach(o => { if (isWM(o)) o.visible = false; });
+    // Show & update existing ring
+    if (existing) {
+      existing.visible = true;
+      scaleRingToCanvas(existing);
+      seatAboveBase(existing);
       try { c.requestRenderAll(); } catch(_) {}
       return;
     }
 
-    // Find existing ring
-    let wm = (c.getObjects?.()||[]).find(isWM);
-    if (wm) {
-      wm.visible = true;
-      scaleRingToCanvas(wm);
-      seatAboveBase(wm);
-      try { c.requestRenderAll(); } catch(_) {}
-      return;
-    }
+    // Create new ring (WM_SRC previously validated by config)
+    const src = window.RING_SRC || window.WM_SRC || '/assets/watermark.png?v=wm10';
+    if (!window.fabric || !fabric.Image) return;
 
-    // Create new ring from WM_SRC
-    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
     fabric.Image.fromURL(src, img => {
       if (!img) return;
       img.set({
-        originX: 'center', originY: 'center',
-        selectable: false, evented: false, hasControls: false,
-        objectCaching: false, opacity: faintOpacity()
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+        hasControls: false,
+        objectCaching: false,
+        opacity: faintOpacity()
       });
-      // Tag so v7 recognizes it as “the watermark”
-      img._raWMCenter = true;
-      img._isWatermark = true;
-      img._raSys = true; img.excludeFromExport = true;
+
+      // Tag with Phase 2 + backward-compatible flags
+      img._raWMRing     = true;
+      img._isWatermark  = true;
+      img._raWMCenter   = true;     // (keep temporarily for any stray legacy detector)
+      img._raSys        = true;
+      img.excludeFromExport = true;
 
       scaleRingToCanvas(img);
       c.add(img);
-
-      // Seat above base right away so it isn't hidden
       seatAboveBase(img);
-
       try { c.requestRenderAll(); } catch(_) {}
     }, { crossOrigin: 'anonymous' });
   };
 
-  // React to wallet status (show/hide ring)
+  // Wallet status: show/hide ring
   document.addEventListener('ra-holder-update', () => {
-    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+    try { window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
-  // Keep ring sized/positioned on canvas resizes
+  // Canvas resize: keep ring scaled & properly layered
   try {
     const c = C();
     const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
-    if (el && !c.__raNonTokenRingResizeObs) {
-      c.__raNonTokenRingResizeObs = true;
+    if (el && !c.__raRingResizeObs) {
+      c.__raRingResizeObs = true;
       new ResizeObserver(() => {
-        const wm = (c.getObjects?.()||[]).find(isWM);
-        if (wm) {
+        const wm = (c.getObjects?.() || []).find(isWM);
+        if (wm && wm.visible) {
           scaleRingToCanvas(wm);
           seatAboveBase(wm);
           try { c.requestRenderAll(); } catch(_) {}
@@ -348,6 +280,16 @@ function normalize(u){
       }).observe(el);
     }
   } catch(_) {}
+
+  // Auto-run once after asset is ready (optional)
+  window.addEventListener('ra-wm-src-ready', () => {
+    try { window.ensureNonTokenRingWM(); } catch(_) {}
+  });
+
+  // Also attempt soon after load in case source already set
+  setTimeout(() => {
+    try { window.ensureNonTokenRingWM(); } catch(_) {}
+  }, 250);
 })();
 
 /* ===== RA_TOKEN_ID_DEBUG_AND_FORCE ===== */
@@ -443,7 +385,7 @@ function raSafeClear(keepBg=true){
   }
 }
 
-  // ——— Security helpers ———
+// ——— Security helpers ———
 function isAllowedAssetURL(u){
   if (!u) return false;
   // Hard-block dangerous schemes up front
@@ -457,35 +399,36 @@ function isAllowedAssetURL(u){
     return !/^[a-z][a-z0-9+\-.]*:/i.test(String(u));
   }
 }
-  
-  async function fetchImageByTokenId(contract, tokenId){
-    const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
-    const r = await fetch(u,{headers:{'accept':'application/json'}, cache:'no-store'});
-    if(!r.ok) return null;
-    const j = await r.json();
-    const t = j.tokens && j.tokens[0] && j.tokens[0].token;
-    if(!t) return null;
-    const m = t.media || {};
-    const candidates = [
-      (m.original && (m.original.url || m.original.mediaUrl)),
-      t.imageLarge, t.image, t.imageUrl, t.imageSmall
-    ].filter(Boolean).map(normalize);
-    return candidates[0] || null;
-  }
-  async function fabricFromURL(url){
-    return await new Promise((res)=>{
-      const opts = /^data:|^blob:/i.test(url) ? {} : { crossOrigin:"anonymous" };
-      fabric.Image.fromURL(url, img=>res(img), opts);
-    });
-  }
 
-  function bringInterfaceToFront(){
-    if (idLabel) canvas.bringToFront(idLabel);
-  }
+async function fetchImageByTokenId(contract, tokenId){
+  const u = RESERVOIR + encodeURIComponent(`${contract}:${tokenId}`);
+  const r = await fetch(u,{headers:{'accept':'application/json'}, cache:'no-store'});
+  if(!r.ok) return null;
+  const j = await r.json();
+  const t = j.tokens && j.tokens[0] && j.tokens[0].token;
+  if(!t) return null;
+  const m = t.media || {};
+  const candidates = [
+    (m.original && (m.original.url || m.original.mediaUrl)),
+    t.imageLarge, t.image, t.imageUrl, t.imageSmall
+  ].filter(Boolean).map(normalize);
+  return candidates[0] || null;
+}
 
-/* (tiny helper used below — keep label above other UI if present) */
+async function fabricFromURL(url){
+  return await new Promise((res)=>{
+    const opts = /^data:|^blob:/i.test(url) ? {} : { crossOrigin:"anonymous" };
+    fabric.Image.fromURL(url, img=>res(img), opts);
+  });
+}
+
+// (single consolidated helper) keep label above other UI if present
 function bringInterfaceToFront(){
-  try { if (typeof idLabel !== 'undefined' && idLabel) canvas.bringToFront(idLabel); } catch(_){}
+  try {
+    if (typeof idLabel !== 'undefined' && idLabel && canvas) {
+      canvas.bringToFront(idLabel);
+    }
+  } catch(_){}
 }
 
 function initBackgroundRect(fill){
@@ -502,14 +445,20 @@ function setCanvasSize(size){
   const prevW = canvas.getWidth() || size, prevH = canvas.getHeight() || size;
   const sx = size / prevW, sy = size / prevH;
   canvas.setWidth(size); canvas.setHeight(size);
-  if (backgroundRect){ backgroundRect.set({ width:size, height:size }); canvas.sendToBack(backgroundRect); }
+  if (backgroundRect){
+    backgroundRect.set({ width:size, height:size });
+    canvas.sendToBack(backgroundRect);
+  }
   canvas.getObjects().forEach(o=>{
     if (o === backgroundRect) return;
     o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
   });
   canvas.setViewportTransform([1,0,0,1,0,0]);
   canvas.requestRenderAll();
-  try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
+
+  // Phase 2: legacy 'ra-wm-recalc' event removed. Ring resizing handled by ResizeObserver.
+  // Optional: ensure ring watermark stays centered if present
+  try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
 }
 
 function setZoom(v){
@@ -534,43 +483,31 @@ function clearBaseOnly(){
   baseGroup = null; canvas.requestRenderAll();
 }
 
-// Place two corner stamps into a center-origin group
-async function makeStampedGroup(img, bw, bh, wmWidthRatio){
-  const wmTL = await fabricFromURL(WM_SRC);
-  const wmBR = await fabricFromURL(WM_SRC);
-  const wmTargetW = Math.max(16, bw * wmWidthRatio);
-  const margin    = Math.max(6,  bw * 0.02);
-
-  const scaleTL = wmTargetW / wmTL.width;
-  const scaleBR = wmTargetW / wmBR.width;
-  wmTL.scale(scaleTL); wmBR.scale(scaleBR);
-
-  Object.assign(wmTL, {
-    selectable:false, evented:false, hasControls:false,
-    _isWatermark:true, raWM:true, raPos:"TL"
-  });
-  Object.assign(wmBR, {
-    selectable:false, evented:false, hasControls:false,
-    _isWatermark:true, raWM:true, raPos:"BR"
-  });
-
-  wmTL.set({
-    originX:"center", originY:"center",
-    left: -bw/2 + margin + wmTL.width*scaleTL/2,
-    top:  -bh/2 + margin + wmTL.height*scaleTL/2
-  });
-  wmBR.set({
-    originX:"center", originY:"center",
-    left:  bw/2 - margin - wmBR.width*scaleBR/2,
-    top:   bh/2 - margin - wmBR.height*scaleBR/2
-  });
-
-  const group = new fabric.Group([img, wmTL, wmBR], { originX:"center", originY:"center" });
-  return group;
+// Return only the main image globally (no corner stamps)
+async function makeStampedGroup(img /*, bw, bh, wmWidthRatio */){
+  // Phase 2: corner-stamp logic removed – just center origin
+  img.set({ originX:"center", originY:"center" });
+  return img;
 }
 
 async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
+
+  // Phase 2: Strip any legacy watermark objects before loading new base (especially token mode)
+  if (isToken) {
+    try {
+      const os = canvas.getObjects() || [];
+      os.forEach(o => {
+        if (o && (o._raWMCenter === true || o._isWatermark === true || o._raWMRing === true)) {
+          canvas.remove(o);
+        }
+      });
+      if (window.__raWMTimer) {
+        clearTimeout(window.__raWMTimer);
+        window.__raWMTimer = null;
+      }
+    } catch (_) {}
+  }
 
   const img = await fabricFromURL(dataUrl);
   img.set({ originX:"center", originY:"center" });
@@ -580,49 +517,29 @@ async function loadBaseImage(dataUrl, isToken){
   const sc = Math.min(cw / img.width, ch / img.height, 1);
   img.scale(sc);
 
-  const bw = img.width * sc, bh = img.height * sc;
-
   let obj;
   if (isToken) {
-    // NEW: hide any non-token ring immediately (prevents flicker on token loads)
-    try {
-      const os = canvas.getObjects() || [];
-      os.forEach(o => { if (o && (o._raWMCenter === true || o._isWatermark === true)) o.visible = false; });
-    } catch (_) {}
-
-    // Token = RA (real asset) => NO ring watermark
     img._isBase = true;
     lockBaseObject(img);
     img.set({ left:cw/2, top:ch/2 }); img.setCoords();
     obj = img;
-
-    canvas.add(obj);
-    baseGroup = obj;
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-
   } else {
-    // Non-token => add corner stamps
-    const group = await makeStampedGroup(img, bw, bh, 0.15);
+    const group = await makeStampedGroup(img, img.width*sc, img.height*sc, 0.15);
     group._isBase = true;
     lockBaseObject(group);
     group.set({ left:cw/2, top:ch/2 }); group.setCoords();
     obj = group;
 
-    canvas.add(obj);
-    baseGroup = obj;
-    bringInterfaceToFront();
-    canvas.requestRenderAll();
-
-    // NEW: ensure ring watermark shows and seats above base (call twice)
+    // Optional: auto-ensure faint ring for non-token load
     try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
-    requestAnimationFrame(() => {
-      try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
-    });
   }
+
+  canvas.add(obj);
+  baseGroup = obj;
+  bringInterfaceToFront();
+  canvas.requestRenderAll();
 }
 
-// Add overlay (with small corner stamps unless permanent)
 async function addOverlayToCanvas(src, isPermanent){
   const img = await fabricFromURL(src);
   img.set({ originX:"center", originY:"center" });
@@ -789,10 +706,14 @@ function toRoman(num){
   for (const [sym,val] of map){ while(num >= val){ out += sym; num -= val; } }
   return out;
 }
+
 // ===============================
 //  DOM READY
 // ===============================
 document.addEventListener("DOMContentLoaded", () => {
+  if (window.__RA_CANVAS_BOOTED__) return;
+  window.__RA_CANVAS_BOOTED__ = true;
+
   if (!window.fabric) {
     alert("fabric.js failed to load. Open via a local server or check internet.");
     return;
@@ -811,21 +732,34 @@ document.addEventListener("DOMContentLoaded", () => {
   // Background and initial size
   initBackgroundRect("#0d0e13");
   const sizeEl = $("canvasSize");
-  if (sizeEl) sizeEl.value = "700";
-  setCanvasSize(parseInt(sizeEl ? sizeEl.value : "700", 10));
+  const initialSize = parseInt(sizeEl ? sizeEl.value : "700", 10) || 700;
+  if (sizeEl) sizeEl.value = String(initialSize);
+  setCanvasSize(initialSize);
   setZoom(1);
 
-  // >>> NEW: run once right after initial layout
-  try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+  // Ensure faint ring (will noop if not ready yet)
+  try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
 
-  // >>> NEW: keep layers sane after *any* canvas change
+  // When WM / ring asset resolves, re-ensure (first load scenario)
+  window.addEventListener('ra-wm-src-ready', () => {
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  }, { once:false });
+
+  // Layer order helper
+  function enforce(){
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+  }
+
+  // Run once right after initial layout
+  enforce();
+
+  // Keep layers sane after canvas changes
   try {
-    canvas.on('object:added',    () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-    canvas.on('object:modified', () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
-    canvas.on('object:removed',  () => { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); });
+    canvas.on('object:added',    enforce);
+    canvas.on('object:modified', enforce);
+    canvas.on('object:removed',  enforce);
   } catch(_) {}
 
-  // --- keep the rest of your existing boot code below this line ---
   // Permanents → embed to the grid
   overlayList = (window.__EMBED_OVERLAYS__ || []).map(m => ({ name: m.name, src: m.src, perm: true }));
   renderOverlayGrid();
@@ -835,17 +769,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     const data = await fileToDataURL(f);
-    await loadBaseImage(data, false); // non-token => watermark
+    await loadBaseImage(data, false); // non-token => ring watermark
+    // Re-ensure ring (in case a token was previously loaded & removed it)
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
   safeAddListener("clearUpload", "click", () => {
     const inp = $("baseUpload"); if (inp) inp.value = "";
     clearBaseOnly();
+    // After clearing base we may still want a faint ring visible
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
   // ... any other startup listeners, buttons, etc. ...
-
-});   // <-- closes DOMContentLoaded
+});  // end DOMContentLoaded
 
 /* ===== RA_TOKEN_ID_WIRING — place/update on-canvas Token ID label ===== */
 ;(() => {
@@ -936,7 +873,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }, true);
 })();
   
- /* ===== RA_JSON_RESTORE_GUARD ===== */
+/* ===== RA_JSON_RESTORE_GUARD (Phase 2 aware) ===== */
 (function RA_JSON_RESTORE_GUARD(){
   if (window.__RA_JSON_RESTORE_GUARD__) return;
   window.__RA_JSON_RESTORE_GUARD__ = true;
@@ -948,86 +885,90 @@ document.addEventListener("DOMContentLoaded", () => {
     const orig = c.loadFromJSON.bind(c);
 
     c.loadFromJSON = function(json, cb, reviver){
-      const next = (typeof cb === 'function') ? cb : function(){};
+      const userCb = (typeof cb === 'function') ? cb : function(){};
+      // Set both legacy + Phase 2 restore guards
       window.__raLoadingJSON = true;
-      const done = ()=>{
+      window.__RA_RESTORING__ = true;
+      try {
+        document.dispatchEvent(new CustomEvent('ra-json-restore-start'));
+        return orig(json, () => {
+          try {
+            window.__raLoadingJSON = false;
+            window.__RA_RESTORING__ = false;
+            try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+            try { C()?.requestRenderAll(); } catch(_){}
+            document.dispatchEvent(new CustomEvent('ra-json-restore-end'));
+            // Re-ensure faint ring (will no-op if hidden for holder)
+            try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
+          } finally {
+            userCb();
+          }
+        }, reviver);
+      } catch(e){
         window.__raLoadingJSON = false;
-        try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-        try { c.requestRenderAll(); } catch(_){}
-        next();
-      };
-      try { return orig(json, done, reviver); }
-      catch(e){ window.__raLoadingJSON = false; throw e; }
+        window.__RA_RESTORING__ = false;
+        throw e;
+      }
     };
 
     c.__raPatchedLoadJSON = true;
   }
 
-  (function wait(){ const c=C(); if (!c) return setTimeout(wait,120); patch(c); })();
+  (function wait(){
+    const c = C();
+    if (!c) return setTimeout(wait,120);
+    patch(c);
+  })();
 })();
 
-/* -------- Base image: load by token (multi-collection) --------
-   Reads the selected collection’s contract from your dropdown and
-   loads the token’s image via Reservoir (works for Chumpz, Saints, Rebel, etc.)
-   UI ids expected:
-     - collectionSelect  (or collectionKey)  ← your collection dropdown
-     - tokenIdInput      ← input where you type the token id
-     - tokenStatus       ← small <span> to show status text (optional)
-     - loadToken         ← the “Load Token ID” button
-*/
+/* -------- Base image: load by token (multi-collection) -------- */
 safeAddListener("loadToken","click", async ()=>{
   const statusEl = $("tokenStatus");
-  const tokenId  = (($("tokenIdInput")||{}).value || "").trim();
-  if (!tokenId){ if (statusEl) statusEl.textContent = "Enter a token ID."; return; }
+  const tokenIdRaw  = (($("tokenIdInput")||{}).value || "").trim();
+  if (!tokenIdRaw){ if (statusEl) statusEl.textContent = "Enter a token ID."; return; }
 
-  // Remember last loaded token for the Styles button
-  try { window.__raTokenMemory = String(tokenId).replace(/[^0-9]/g,''); } catch(_){}
+  try { window.__raTokenMemory = String(tokenIdRaw).replace(/[^0-9]/g,''); } catch(_){}
 
-  // Find the contract for the currently selected collection
   function selectedContract(){
     const sel = $("collectionSelect") || $("collectionKey") || document.querySelector("[data-ra-collection-select]");
     const opt = sel?.selectedOptions?.[0];
     const fromData = opt?.dataset?.contract || opt?.getAttribute?.("data-contract");
     const val = (fromData || sel?.value || "").trim();
-
-    // If the value already looks like an address, use it
     if (/^0x[a-fA-F0-9]{40}$/.test(val)) return val;
-
-    // Otherwise try a global list if you have one (RA_COLLECTIONS, etc.)
     const list = (window.RA_COLLECTIONS && Array.isArray(window.RA_COLLECTIONS)) ? window.RA_COLLECTIONS : [];
     const hit  = list.find(x => x.key===val || x.slug===val || x.name===val);
     if (hit && (hit.address || hit.contract)) return (hit.address || hit.contract);
-
-    // Safe fallback: your Rebel Ants contract
     return (typeof CONTRACT === "string" && CONTRACT) ? CONTRACT : "0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221";
   }
 
   const contract = selectedContract();
-
   if (statusEl) statusEl.textContent = "Fetching token…";
+
   try{
-    // Uses your existing helper (already in your file)
-    const imgUrl = await fetchImageByTokenId(contract, tokenId);
+    const imgUrl = await fetchImageByTokenId(contract, tokenIdRaw);
     if (!imgUrl){ if (statusEl) statusEl.textContent = "No image URL found."; return; }
 
     if (statusEl) statusEl.textContent = "Downloading image…";
     const data = await fetchAsDataURL(imgUrl);
 
-    // Mark as token image (no watermarks) and load
-    await loadBaseImage(data, true);
+    await loadBaseImage(data, true); // token => no ring
 
-    // Tag the base object with the contract so watermark/branding logic can read it
+    // Tag base with contract
     try{
-      const objs = canvas.getObjects() || [];
-      const base = objs.find(o => o._isBase && !o._isBgRect);
+      const base = (canvas.getObjects()||[]).find(o => o._isBase && !o._isBgRect);
       if (base) base._tokenContract = contract;
+      window.__raLastTokenContract = contract;
     }catch(_){}
 
     if (statusEl) statusEl.textContent = "Loaded 👍";
 
-    // Let any watermark/brand-footer listeners re-evaluate
-    try { document.dispatchEvent(new Event("ra-wm-recalc")); } catch(_){}
-    try { canvas.requestRenderAll(); } catch(_){}
+    // Ensure ring stays hidden (safety; loadBaseImage already removed it)
+    try {
+      (canvas.getObjects()||[]).forEach(o=>{
+        if (o && (o._raWMRing || o._isWatermark || o._raWMCenter)) o.visible = false;
+      });
+      canvas.requestRenderAll();
+    } catch(_){}
   }catch(_){
     if (statusEl) statusEl.textContent = "Failed to load token.";
   }
@@ -1040,13 +981,24 @@ safeAddListener("zoomReset","click", ()=>{
   setZoom(1);
   canvas.setViewportTransform([1,0,0,1,0,0]);
 });
-safeAddListener("canvasSize","change", (e)=> setCanvasSize(parseInt(e.target.value,10)));
+
+safeAddListener("canvasSize","change", (e)=>{
+  const v = parseInt(e.target.value, 10);
+  if (!isNaN(v)) setCanvasSize(v);
+});
+
 safeAddListener("clearBase","click", clearBaseOnly);
+
 safeAddListener("clearCanvas","click", ()=>{
   raSafeClear(true);          // keep backgroundRect, clear everything else
-  idLabel = null; baseGroup = null;
-  // After UI clears, re-enforce order on idle so Undo/Restore isn't racing our redraw
-  setTimeout(()=>{ try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {} }, 60);
+  idLabel = null; 
+  baseGroup = null;
+  // Re-create faint ring (non-token mode) if appropriate
+  try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+  // Re-enforce layer order after a short delay so undo/restore ops aren't racing
+  setTimeout(()=>{
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+  }, 60);
 });
 
 /* -------- Token ID style live controls (if present) -------- */
@@ -1174,6 +1126,29 @@ safeAddListener("duplicate","click", ()=>{
   const o = canvas.getActiveObject(); if (!o) return;
   o.clone(c=>{
     c.set({ left:(o.left||0)+20, top:(o.top||0)+20 });
+    
+    // Preserve permanence flag from original
+    if (typeof o?._isPermanent !== 'undefined') {
+      c._isPermanent = o._isPermanent;
+    }
+
+    // Force the clone and its children to be treated as overlays
+    function setOverlayKindDeep(obj) {
+      if (!obj) return;
+
+      // Skip system/base/watermark/bg/token-id elements
+      const isSystem =
+        obj._raSys || obj._isWatermark || obj._raWMRing || obj._isBgRect || obj._isBase || obj._raWMCenter || obj._raTokenId;
+
+      if (!isSystem) {
+        obj._kind = 'overlay';
+      }
+
+      const children = (typeof obj.getObjects === 'function' ? obj.getObjects() : obj._objects) || [];
+      children.forEach(setOverlayKindDeep);
+    }
+    setOverlayKindDeep(c);
+    
     canvas.add(c).setActiveObject(c);
     canvas.requestRenderAll();
   });
@@ -1191,17 +1166,13 @@ safeAddListener("delete","click", ()=>{
   // If it’s the Token-ID label, clear the pointer so it won’t come back
   try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
 
-  // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
   try { c.discardActiveObject(); } catch(_) {}
-
-  // Remove and render
   try { c.remove(o); } catch(_) {}
   try { c.requestRenderAll(); } catch(_) {}
 });
 
 // -------- Keyboard Delete/Backspace (same rules as Selection → Delete)
 document.addEventListener('keydown', (e)=>{
-  // ignore when typing in inputs/textareas or contenteditable
   const tag = (e.target && e.target.tagName || '').toLowerCase();
   if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
 
@@ -1213,20 +1184,15 @@ document.addEventListener('keydown', (e)=>{
   const o = c.getActiveObject && c.getActiveObject();
   if (!o) return;
 
-  // Never delete background, base, or system items from keyboard
   if (o._isBgRect || o._isBase || o._raSys) { e.preventDefault(); return; }
 
-  // If it’s the Token-ID label, clear the pointer so it won’t come back
   try { if (o._raTokenId) { window.idLabel = null; } } catch(_) {}
 
-  // Drop selection first to avoid Fabric drawControls/getRetinaScaling crash
   try { c.discardActiveObject(); } catch(_) {}
-
-  // Remove and render
   try { c.remove(o); } catch(_) {}
   try { c.requestRenderAll(); } catch(_) {}
 
-  e.preventDefault();  // consume the key so browser doesn’t do anything else
+  e.preventDefault();
 }, true);
 
 safeAddListener("opacity","input", (e)=>{
@@ -1270,7 +1236,6 @@ safeAddListener("unlockAll","click", ()=>{
   const c = window.canvas; if (!c) return;
   const objs = c.getObjects() || [];
 
-  // Keep background RECT locked & at index 0 (prevents "ghost box")
   const bg = objs.find(o => o && o._isBgRect);
   if (bg) {
     bg.selectable = false; bg.evented = false; bg.hasControls = false;
@@ -1278,13 +1243,11 @@ safeAddListener("unlockAll","click", ()=>{
     try { c.moveTo(bg, 0); } catch(_) {}
   }
 
-  // If background was selected, drop selection to avoid Fabric control glitches
   const active = c.getActiveObject && c.getActiveObject();
   if (active && active._isBgRect) {
     try { c.discardActiveObject(); } catch(_) {}
   }
 
-  // Unlock only user layers (never bg, base, or any system: footer/WM/label)
   objs.forEach(o => {
     if (!o) return;
     if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
@@ -1299,9 +1262,58 @@ safeAddListener("unlockAll","click", ()=>{
   c.requestRenderAll();
 });
 
-safeAddListener("clearAllOverlays","click", ()=>{
-  canvas.getObjects().slice().forEach(o=>{ if (o._kind==='overlay') canvas.remove(o); });
-  canvas.requestRenderAll();
+safeAddListener("clearAllOverlays", "click", () => {
+  const isSystem = (o) =>
+    o?._raSys || o?._isWatermark || o?._raWMRing || o?._isBgRect || o?._isBase || o?._raWMCenter || o?._raTokenId;
+
+  const isRemovableOverlay = (o) =>
+    o && o._kind === "overlay" && !o._isPermanent && !isSystem(o);
+
+  function removeChildFromGroup(group, child) {
+    if (typeof group.removeWithUpdate === "function") {
+      group.removeWithUpdate(child);
+    } else if (typeof group.remove === "function") {
+      group.remove(child);
+      group._calcBounds?.();
+      group.setCoords?.();
+    } else if (Array.isArray(group._objects)) {
+      group._objects = group._objects.filter((o) => o !== child);
+      group._calcBounds?.();
+      group.setCoords?.();
+    }
+  }
+
+  function pruneGroupRecursive(obj) {
+    if (!obj || typeof obj.getObjects !== "function") return;
+    const children = (obj.getObjects?.() || obj._objects || []).slice();
+
+    children.forEach((child) => {
+      if (isRemovableOverlay(child)) {
+        removeChildFromGroup(obj, child);
+      } else if (typeof child.getObjects === "function" || child.type === "group") {
+        pruneGroupRecursive(child);
+        const remaining = child.getObjects?.() || child._objects || [];
+        if (remaining.length === 0 && !child._isPermanent) {
+          removeChildFromGroup(obj, child);
+        }
+      }
+    });
+  }
+
+  (canvas.getObjects?.() || []).slice().forEach((o) => {
+    if (isRemovableOverlay(o)) {
+      canvas.remove(o);
+    } else if (typeof o.getObjects === "function" || o.type === "group") {
+      pruneGroupRecursive(o);
+      const remaining = o.getObjects?.() || o._objects || [];
+      if (remaining.length === 0 && (o._kind === "overlay" || !o._isPermanent)) {
+        canvas.remove(o);
+      }
+    }
+  });
+
+  canvas.discardActiveObject?.();
+  canvas.requestRenderAll?.();
 });
 
 /* -------- Overlays panel & uploads -------- */
@@ -1320,42 +1332,37 @@ safeAddListener("clearOverlayGrid","click", ()=>{
   renderOverlayGrid();
 });
 
- // -------- Keyboard (Delete/Backspace, Arrows, Cmd/Ctrl+D)
+// -------- Keyboard helpers (duplicate + nudge only; delete handled elsewhere) --------
 document.addEventListener("keydown", (e)=>{
-  // ignore when typing in inputs/textareas/contenteditable
   const tag = (e.target && e.target.tagName || "").toLowerCase();
   if (e.target?.isContentEditable || /^(input|textarea|select)$/.test(tag)) return;
 
   const c = window.canvas; if (!c) return;
   const o = c.getActiveObject && c.getActiveObject();
-
-  // Delete selection — robust (no sys/base delete, avoid Fabric draw crash)
-  if (e.key === "Delete" || e.key === "Backspace") {
-    if (!o) return;
-
-    // NEVER delete background, base, or system (footer/wm/label) from keyboard
-    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) {
-      e.preventDefault();
-      return;
-    }
-
-    // Drop selection first to avoid Fabric's drawControls/getRetinaScaling crash
-    try { c.discardActiveObject(); } catch(_) {}
-
-    // Remove and render
-    try { c.remove(o); } catch(_) {}
-    try { c.requestRenderAll(); } catch(_) {}
-
-    e.preventDefault();
-    return;
-  }
+  if (!o) return;
 
   // Duplicate (Cmd/Ctrl + D)
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
-    if (!o) return;
+    // Never duplicate system/base/bg/token-id items
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId || o._isWatermark || o._raWMRing || o._raWMCenter) {
+      e.preventDefault();
+      return;
+    }
     try {
       o.clone(cl => {
         cl.set({ left:(o.left||0)+10, top:(o.top||0)+10 });
+
+        function markAsOverlayDeep(node){
+          if (!node) return;
+            // Skip if system-ish
+            if (!(node._isBgRect || node._isBase || node._raSys || node._raTokenId || node._isWatermark || node._raWMRing || node._raWMCenter)) {
+              node._kind = 'overlay';
+            }
+            const kids = (typeof node.getObjects === 'function' ? node.getObjects() : node._objects) || [];
+            kids.forEach(markAsOverlayDeep);
+        }
+        markAsOverlayDeep(cl);
+
         c.add(cl);
         c.setActiveObject(cl);
         c.requestRenderAll();
@@ -1365,9 +1372,13 @@ document.addEventListener("keydown", (e)=>{
     return;
   }
 
-  // Nudge with arrows (Shift = 10px)
-  const arrows = ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"];
-  if (o && arrows.includes(e.key)) {
+  // Arrow key nudge (Shift = 10px)
+  if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) {
+    // Do not nudge system/base/bg/watermark/token-id objects
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId || o._isWatermark || o._raWMRing || o._raWMCenter) {
+      e.preventDefault();
+      return;
+    }
     const step = e.shiftKey ? 10 : 1;
     if (e.key === "ArrowLeft")  o.left -= step;
     if (e.key === "ArrowRight") o.left += step;
@@ -1379,74 +1390,118 @@ document.addEventListener("keydown", (e)=>{
     return;
   }
 });
-/* -------- SNAP + ALIGN UI (fixed to use window.canvas safely) -------- */
-(function snapAlign(){
+
+/* -------- SNAP + ALIGN UI (v2 – robust bounding box snapping) -------- */
+(function snapAlignV2(){
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  // UI row (Center buttons + Snap toggle)
-  const header = Array.from(document.querySelectorAll("h3")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
-  const holder = header ? header.parentNode : document.body;
-
-  if (!document.getElementById("raSnapRow")){
-    const row = document.createElement("div");
-    row.id = "raSnapRow";
-    row.style.cssText = "margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
-    row.innerHTML = `
-      <button class="btn small" id="raCenterH">Center H</button>
-      <button class="btn small" id="raCenterV">Center V</button>
-      <button class="btn small" id="raCenterHV">Center HV</button>
-      <button class="btn small" id="raSnapToggle">Snap: On</button>
-      <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
-    `;
-    holder.appendChild(row);
-
-    // Button wiring uses a fresh canvas reference each click
-    document.getElementById("raSnapToggle").onclick = ()=>{
-      window.__snapOn = !window.__snapOn;
-      document.getElementById("raSnapToggle").textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
-    };
-    function center(which){
-      const c = C(); if (!c) return;
-      const o = c.getActiveObject(); if(!o) return;
-      if (which==="H" || which==="HV") o.left = c.getWidth()/2;
-      if (which==="V" || which==="HV") o.top  = c.getHeight()/2;
-      o.setCoords(); c.requestRenderAll();
+  function ensureUI(){
+    let row = document.getElementById("raSnapRow");
+    if (!row){
+      const header = Array.from(document.querySelectorAll("h3,h2")).find(h => (h.textContent||"").trim().toLowerCase()==="selection");
+      const holder = header ? header.parentNode : document.body;
+      row = document.createElement("div");
+      row.id = "raSnapRow";
+      row.style.cssText = "margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
+      row.innerHTML = `
+        <button class="btn small" id="raCenterH">Center H</button>
+        <button class="btn small" id="raCenterV">Center V</button>
+        <button class="btn small" id="raCenterHV">Center HV</button>
+        <button class="btn small" id="raSnapToggle">Snap: On</button>
+        <div style="opacity:.65;font-size:11px">Arrows=1px · Shift+Arrows=10px · Cmd/Ctrl+D duplicate</div>
+      `;
+      holder.appendChild(row);
+      document.getElementById("raCenterH").onclick  = ()=>center("H");
+      document.getElementById("raCenterV").onclick  = ()=>center("V");
+      document.getElementById("raCenterHV").onclick = ()=>center("HV");
     }
-    document.getElementById("raCenterH").onclick  = ()=>center("H");
-    document.getElementById("raCenterV").onclick  = ()=>center("V");
-    document.getElementById("raCenterHV").onclick = ()=>center("HV");
+    const toggle = document.getElementById("raSnapToggle");
+    if (toggle && !toggle.__wired){
+      toggle.__wired = true;
+      toggle.onclick = ()=>{
+        window.__snapOn = !window.__snapOn;
+        toggle.textContent = "Snap: " + (window.__snapOn ? "On" : "Off");
+      };
+    }
   }
 
-  window.__snapOn = true;
-
-  // Fabric event wiring (only once per canvas instance)
-  const c = C();
-  if (!c) return; // canvas not ready yet — this IIFE is cheap and can re-run later if you call it
-  if (c.__snapWired) return;
-  c.__snapWired = true;
-
-  function halfW(o){
-    return (o.getScaledWidth ? o.getScaledWidth() : (o.width||0)*(o.scaleX||1)) / 2;
-  }
-  function halfH(o){
-    return (o.getScaledHeight? o.getScaledHeight(): (o.height||0)*(o.scaleY||1)) / 2;
-  }
-  function clampSnap(o){
-    if (!window.__snapOn) return;
-    const tol = 8, cw=c.getWidth(), ch=c.getHeight();
-    const hw=halfW(o), hh=halfH(o);
-    // centers
-    if (Math.abs(o.left - cw/2) <= tol) o.left = cw/2;
-    if (Math.abs(o.top  - ch/2) <= tol) o.top  = ch/2;
-    // edges
-    if (Math.abs((o.left - hw) - 0)  <= tol) o.left = hw;
-    if (Math.abs((o.left + hw) - cw) <= tol) o.left = cw - hw;
-    if (Math.abs((o.top  - hh) - 0)  <= tol) o.top  = hh;
-    if (Math.abs((o.top  + hh) - ch) <= tol) o.top  = ch - hh;
+  function center(which){
+    const c = C(); if (!c) return;
+    const o = c.getActiveObject(); if(!o) return;
+    // Skip centering system / watermark / base / token id items
+    if (o._raSys || o._raWMRing || o._isWatermark || o._raWMCenter || o._isBgRect || o._isBase || o._raTokenId) return;
+    const cw = c.getWidth(), ch = c.getHeight();
+    if (which==="H" || which==="HV") o.left = cw/2;
+    if (which==="V" || which==="HV") o.top  = ch/2;
+    o.setCoords(); c.requestRenderAll();
   }
 
-  c.on("object:moving", e=>{ const o=e.target; if (!o) return; clampSnap(o); o.setCoords(); });
-  c.on("mouse:up", ()=> c.requestRenderAll());
+  function isSnapTarget(o){
+    if (!o) return false;
+    // Added _raWMRing to exclusion list for Phase 2 ring watermark
+    if (o._raSys || o._raWMRing || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
+    const kind = (o._kind||'').toLowerCase();
+    const t = (o.type||'').toLowerCase();
+    return kind==='overlay' || kind==='sticker' || kind==='icon' || kind==='customtext' ||
+           t==='textbox' || t==='i-text' || t==='text';
+  }
+
+  function snapObject(o){
+    if (!window.__snapOn || !isSnapTarget(o)) return;
+    const c = C(); if (!c) return;
+    let br;
+    try { br = o.getBoundingRect(true, true); } catch(_){ return; }
+
+    const cw = c.getWidth(), ch = c.getHeight();
+    const tol = 8;
+
+    const centerX = br.left + br.width / 2;
+    const centerY = br.top  + br.height / 2;
+
+    let dx = 0, dy = 0;
+
+    // Center lines
+    if (Math.abs(centerX - cw/2) <= tol) dx += (cw/2 - centerX);
+    if (Math.abs(centerY - ch/2) <= tol) dy += (ch/2 - centerY);
+
+    // Edges
+    if (Math.abs(br.left - 0) <= tol) dx += (0 - br.left);
+    if (Math.abs(br.top - 0) <= tol) dy += (0 - br.top);
+    if (Math.abs((br.left + br.width) - cw) <= tol) dx += (cw - (br.left + br.width));
+    if (Math.abs((br.top + br.height) - ch) <= tol) dy += (ch - (br.top + br.height));
+
+    if (dx || dy){
+      o.left += dx;
+      o.top  += dy;
+      o.setCoords();
+    }
+  }
+
+  function wireSnap(){
+    const c = C(); if (!c){ setTimeout(wireSnap,120); return; }
+    if (c.__snapV2Wired) return;
+    c.__snapV2Wired = true;
+
+    if (typeof window.__snapOn === 'undefined') window.__snapOn = true;
+
+    function handler(e){
+      const o = e && e.target;
+      if (!o) return;
+      snapObject(o);
+    }
+
+    c.on('object:moving',   handler);
+    c.on('object:scaling',  handler);
+    c.on('object:rotating', handler);
+
+    c.on('mouse:up', ()=>{
+      const o = c.getActiveObject();
+      if (o){ snapObject(o); c.requestRenderAll(); }
+    });
+  }
+
+  ensureUI();
+  wireSnap();
 })();
 
 /* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
@@ -1617,6 +1672,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (!window.canvas) return;
     const rawMult = parseInt((($("exportMultiplier")||{}).value) || "2", 10);
     const mult    = Math.max(1, Math.min(4, isFinite(rawMult) ? rawMult : 2));
+
     let dataURL;
     try{
       dataURL = canvas.toDataURL({format:"png", enableRetinaScaling:true, multiplier:mult});
@@ -1729,57 +1785,98 @@ document.addEventListener("DOMContentLoaded", ()=>{
 });  // <-- closes DOMContentLoaded
 
 /* =========================
-   RA_CANVAS_RESIZE_SYNC_ONLY_V8
+   RA_CANVAS_RESIZE_SYNC_ONLY_V8 (Phase 2 integrated)
+   - Single square canvas resize with optional proportional scaling
+   - Skips scaling watermark ring, background, system, token id label (configurable)
    ========================= */
 (function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
+  if (window.__RA_RESIZE_V8_INIT__) return;
+  window.__RA_RESIZE_V8_INIT__ = true;
+
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  // Config flags (tweak if desired)
+  const SCALE_BASE      = true;   // scale base image/group when resizing
+  const SCALE_OVERLAYS  = true;   // scale user overlays
+  const SCALE_TOKEN_ID  = false;  // keep token ID label size constant (position shifts)
+  const MIN_SIZE = 400, MAX_SIZE = 2000;
+
+  function isWatermark(o){
+    return !!(o && (o._raWMRing || o._isWatermark || o._raWMCenter));
+  }
+  function isSystem(o){
+    return !!(o && (o._raSys || o._isBgRect || isWatermark(o)));
+  }
+  function isTokenIdLabel(o){
+    return !!(o && o._raTokenId);
+  }
+  function shouldScale(o){
+    if (!o) return false;
+    if (isSystem(o)) return false;
+    if (isTokenIdLabel(o)) return SCALE_TOKEN_ID;
+    if (o._isBase) return SCALE_BASE;
+    if (o._kind === 'overlay') return SCALE_OVERLAYS;
+    // Default: scale only if it's not an excluded category
+    return true;
+  }
 
   function resizeCanvasAndScale(newSize){
     const c = C(); if (!c) return;
-    newSize = parseInt(newSize, 10);
-if (!isFinite(newSize)) return;
-newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
+    let target = parseInt(newSize, 10);
+    if (!isFinite(target)) return;
+    target = Math.max(MIN_SIZE, Math.min(MAX_SIZE, target));
 
     const oldW = c.getWidth(), oldH = c.getHeight();
     if (!oldW || !oldH) return;
-
-    if (oldW === newSize && oldH === newSize){
+    if (oldW === target && oldH === target){
+      // Just normalize transform
       try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
       try { c.requestRenderAll(); } catch(_) {}
       return;
     }
 
-    const s = newSize / oldW;
+    const s = target / oldW; // square assumption
     const oldCenter = new fabric.Point(oldW/2, oldH/2);
-    const newCenter = new fabric.Point(newSize/2, newSize/2);
+    const newCenter = new fabric.Point(target/2, target/2);
 
+    // Snapshot object center + original scale for objects we will transform
     const objs = (c.getObjects() || []).slice();
     const info = objs.map(o => ({
       o,
-      ctr: (typeof o.getCenterPoint === 'function') ? o.getCenterPoint() : new fabric.Point(o.left||0, o.top||0),
+      ctr: (typeof o.getCenterPoint === 'function')
+            ? o.getCenterPoint()
+            : new fabric.Point(o.left||0, o.top||0),
       sx: o.scaleX || 1,
-      sy: o.scaleY || 1
+      sy: o.scaleY || 1,
+      doScale: shouldScale(o)
     }));
 
-    c.setWidth(newSize);
-    c.setHeight(newSize);
+    // Resize canvas
+    c.setWidth(target);
+    c.setHeight(target);
 
+    // Adjust backgroundRect (no uniform scale; direct size)
     const bgRect = (window.backgroundRect && typeof window.backgroundRect.set === 'function') ? window.backgroundRect : null;
     if (bgRect) {
       try {
-        bgRect.set({ width: newSize, height: newSize, left: 0, top: 0 });
+        bgRect.set({ width: target, height: target, left: 0, top: 0 });
         c.sendToBack(bgRect);
+        bgRect.setCoords();
       } catch(_) {}
     }
 
-    info.forEach(({o, ctr, sx, sy}) => {
+    // Transform eligible objects
+    info.forEach(({o, ctr, sx, sy, doScale}) => {
       try {
-        const vx = ctr.x - oldCenter.x;
-        const vy = ctr.y - oldCenter.y;
-        const nx = newCenter.x + vx * s;
-        const ny = newCenter.y + vy * s;
+        const offsetX = ctr.x - oldCenter.x;
+        const offsetY = ctr.y - oldCenter.y;
+        const nx = newCenter.x + offsetX * s;
+        const ny = newCenter.y + offsetY * s;
 
-        o.set({ scaleX: sx * s, scaleY: sy * s });
+        if (doScale){
+          o.set({ scaleX: sx * s, scaleY: sy * s });
+        }
+        // Always reposition to keep relative placement
         if (typeof o.setPositionByOrigin === 'function') {
           o.setPositionByOrigin(new fabric.Point(nx, ny), 'center', 'center');
         } else {
@@ -1789,44 +1886,77 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
       } catch(_) {}
     });
 
+    // Normalize viewport
     try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
     const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
+
+    // Re-seat watermark ring (it has its own scaling logic) & enforce layer order
+    try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+
     try { c.requestRenderAll(); } catch(_) {}
   }
 
+  // Expose globally (overrides earlier Phase 2 setCanvasSize)
   window.raResizeCanvasAndScale = resizeCanvasAndScale;
   window.setCanvasSize = resizeCanvasAndScale;
 
   function wireSizeInput(){
     const el = document.getElementById('canvasSize');
-    if (el && !el.__raBound) {
-      el.__raBound = true;
-      el.addEventListener('change', (e)=> resizeCanvasAndScale(parseInt(e.target.value, 10)));
+    if (el && !el.__raBoundV8) {
+      el.__raBoundV8 = true;
+      el.addEventListener('change', (e)=> {
+        const v = parseInt(e.target.value, 10);
+        if (!isNaN(v)) resizeCanvasAndScale(v);
+      });
     }
   }
 
   function wireQuickButtons(){
-    if (document.__raSizeCaptureOnly) return;
-    document.__raSizeCaptureOnly = true;
+    if (document.__raSizeCaptureOnlyV8) return;
+    document.__raSizeCaptureOnlyV8 = true;
     document.addEventListener('click', function(ev){
       const btn = ev.target && ev.target.closest && ev.target.closest('button');
       if (!btn) return;
       const t = (btn.textContent||'').trim();
       if (/^(700|900|1024|1200)$/i.test(t)) {
         ev.preventDefault(); ev.stopImmediatePropagation(); ev.stopPropagation();
-        resizeCanvasAndScale(parseInt(t, 10));
+        const v = parseInt(t, 10);
+        resizeCanvasAndScale(v);
+        const sizeInput = document.getElementById('canvasSize');
+        if (sizeInput) sizeInput.value = v;
       }
     }, true);
   }
 
-  function boot(){ wireSizeInput(); wireQuickButtons(); }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  function boot(){
+    wireSizeInput();
+    wireQuickButtons();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
 
 /* ==========================================================
-   RA_FIXED_CENTER_CANVAS_V1
+   RA_FIXED_CENTER_CANVAS_V2 (Phase 2 aware)
+   - Fixes ghost dimension staleness
+   - Optional true viewport centering (config)
+   - Throttled reposition
+   - Safe cleanup + re-init guard
    ========================================================== */
-(function RA_FIXED_CENTER_CANVAS_V1(){
+(function RA_FIXED_CENTER_CANVAS_V2(){
+  if (window.__RA_FIXED_CENTER_INIT__) return;
+  window.__RA_FIXED_CENTER_INIT__ = true;
+
+  // Config flags (tweak as desired)
+  const TRUE_VIEWPORT_CENTER = true;   // if false: keep original column X position
+  const MIN_TOP              = 12;     // clamp so it never hugs the very top
+  const DISABLE_MOBILE_MAX_W = 640;    // disable on very narrow viewports (set null to always enable)
+  const Z_INDEX              = 40;     // slightly above typical UI, below modals you might set later
+
   function byId(id){ return document.getElementById(id); }
   function getCanvasCard(){
     const c = byId('c');
@@ -1836,21 +1966,33 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
 
   function install(){
     const card = getCanvasCard();
-    if (!card) { setTimeout(install, 200); return; }
-    if (card.__raFixedCenter) return;
-    card.__raFixedCenter = true;
+    if (!card) { setTimeout(install, 180); return; }
+    if (card.__raFixedCenterApplied) return;
+    card.__raFixedCenterApplied = true;
 
+    // Respect mobile disable
+    if (DISABLE_MOBILE_MAX_W && window.innerWidth <= DISABLE_MOBILE_MAX_W) {
+      return; // leave in flow
+    }
+
+    // Create/update ghost placeholder
     const ghost = document.createElement('div');
     ghost.id = 'raCanvasGhost';
-    ghost.style.width = card.offsetWidth + 'px';
-    ghost.style.height = card.offsetHeight + 'px';
+    ghost.setAttribute('aria-hidden','true');
     ghost.style.visibility = 'hidden';
     ghost.style.pointerEvents = 'none';
+    ghost.style.width  = card.offsetWidth + 'px';
+    ghost.style.height = card.offsetHeight + 'px';
+
+    // Insert ghost just before card so layout stays
     card.parentNode.insertBefore(ghost, card);
+
+    // Capture initial flow rect for column anchoring
+    let initialRect = ghost.getBoundingClientRect();
 
     Object.assign(card.style, {
       position: 'fixed',
-      zIndex: 4,
+      zIndex: String(Z_INDEX),
       margin: 0,
       left: '0px',
       top:  '0px',
@@ -1858,21 +2000,90 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
       transform: 'none'
     });
 
-    function place(){
-      const rect = ghost.getBoundingClientRect();
-      card.style.width = rect.width + 'px';
-      card.style.left  = rect.left + 'px';
-
-      const h   = card.offsetHeight || rect.height;
-      const top = Math.max(12, Math.round((window.innerHeight - h) / 2));
-      card.style.top = top + 'px';
+    // Throttle reposition inside rAF
+    let pending = false;
+    function requestPlace(){
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(()=>{
+        pending = false;
+        place();
+      });
     }
 
-    window.addEventListener('scroll', place, { passive: true });
-    window.addEventListener('resize', place);
-    try { new ResizeObserver(place).observe(card); } catch(_) {}
-    try { new ResizeObserver(place).observe(ghost); } catch(_) {}
-    document.addEventListener('ra:canvas-ready', place);
+    function updateGhostSize(){
+      // Keep ghost dimension synced in case card interior changed
+      try {
+        ghost.style.width  = card.offsetWidth + 'px';
+        ghost.style.height = card.offsetHeight + 'px';
+      } catch(_) {}
+    }
+
+    function place(){
+      if (!document.body.contains(card)) return; // removed
+      updateGhostSize();
+      const gRect = ghost.getBoundingClientRect();
+
+      // Column X origin (from initialRect, to maintain original horizontal alignment if not centering)
+      if (!initialRect || !initialRect.width) initialRect = gRect;
+
+      const cardHeight = card.offsetHeight || gRect.height;
+      let top = Math.max(MIN_TOP, Math.round((window.innerHeight - cardHeight) / 2));
+
+      // On very tall layouts you may prefer not to overly center—optionally clamp
+      // Example: if (cardHeight > window.innerHeight * 0.9) top = MIN_TOP;
+
+      let left;
+      if (TRUE_VIEWPORT_CENTER){
+        // Fully center in viewport horizontally
+        const cardWidth = card.offsetWidth || gRect.width;
+        left = Math.max(0, Math.round((window.innerWidth - cardWidth) / 2));
+      } else {
+        // Maintain column alignment using original flow X
+        left = Math.round(gRect.left);
+      }
+
+      card.style.top  = top  + 'px';
+      card.style.left = left + 'px';
+      card.style.width = gRect.width + 'px';
+    }
+
+    // Observers
+    let roCard, roGhost;
+    try {
+      roCard = new ResizeObserver(()=> requestPlace());
+      roCard.observe(card);
+    } catch(_) {}
+    try {
+      roGhost = new ResizeObserver(()=> requestPlace());
+      roGhost.observe(ghost);
+    } catch(_) {}
+
+    window.addEventListener('scroll', requestPlace, { passive: true });
+    window.addEventListener('resize', requestPlace);
+
+    document.addEventListener('ra:canvas-ready', requestPlace);
+
+    // Public cleanup if needed
+    window.__RA_UNFIX_CANVAS = function(){
+      try {
+        window.removeEventListener('scroll', requestPlace);
+        window.removeEventListener('resize', requestPlace);
+        roCard && roCard.disconnect();
+        roGhost && roGhost.disconnect();
+      } catch(_) {}
+      if (card && document.body.contains(card)){
+        card.style.position = '';
+        card.style.top = '';
+        card.style.left = '';
+        card.style.width = '';
+        card.style.zIndex = '';
+      }
+      if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+      card && (card.__raFixedCenterApplied = false);
+      window.__RA_FIXED_CENTER_INIT__ = false;
+    };
+
     place();
   }
 
@@ -1884,18 +2095,22 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
 })();
 
 /* =========================================
-   RA_MOBILE_FLOW_v28  — MOBILE ONLY (≤900px)
-   - Canvas sits IN THE PAGE FLOW as the first box above “Rebel Ant”
-   - Hides the old stage container (kills rogue checkerboard)
-   - Proper Konva scaling (stage.scale + content size) so overlays drag correctly
-   - Desktop untouched (code is gated by max-width:900px)
+   RA_MOBILE_FLOW_v29  — MOBILE ONLY (≤900px)
+   - Canvas/Stage enters normal page flow above "Rebel Ant"
+   - Hides original Konva container (removes stray checkerboard)
+   - Scales via stage.scale (no CSS transforms) + syncs DOM size
+   - Debounced resize/orientation handling
+   - Clean teardown when leaving mobile breakpoint
    ========================================= */
 (() => {
+  const MEDIA_Q = '(max-width: 900px)';
   const CSS = `
-    @media (max-width: 900px){
+    @media ${MEDIA_Q}{
       #ra-mobile-stage-host{
-        order:-1; width:100%;
-        display:flex; justify-content:center;
+        order:-1;
+        width:100%;
+        display:flex;
+        justify-content:center;
         margin:12px 0 8px;
       }
       #ra-mobile-stage-frame{
@@ -1904,6 +2119,7 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
         position: relative;
         border-radius: 12px;
         overflow: hidden;
+        background:#0d0e13;
       }
       #ra-mobile-checker{
         position:absolute; inset:0; border-radius:inherit; pointer-events:none;
@@ -1915,63 +2131,90 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
         background-size: 24px 24px;
         background-position: 0 0, 0 12px, 12px -12px, -12px 0px;
       }
-      /* Don’t CSS-scale the Konva wrapper; we size it numerically from JS */
       #ra-mobile-stage-frame > .konvajs-content,
       #ra-mobile-stage-frame > canvas{
         position:absolute; top:0; left:0; border-radius:inherit;
       }
-      /* Kill any old floaters on mobile */
       .ra-canvas-floater,[data-ra-role="stage-floater"]{ display:none !important; }
     }`;
-  const mq = window.matchMedia('(max-width: 900px)');
 
+  const mq = window.matchMedia(MEDIA_Q);
   let applied = false;
-  let styleEl, host, frame, checker, live, origRoot, origRootDisplay;
+  let styleEl, host, frame, checker, live, origRoot, origRootDisplay, mo;
+  let rafPending = false;
 
   function $(q){ return document.querySelector(q); }
   function $$(q){ return Array.from(document.querySelectorAll(q)); }
 
-  function findLive(){
-    // Konva wrapper or plain canvas (whichever is used)
-    return $('.konvajs-content') || $('#app canvas, .app canvas, main canvas');
+  function findKonvaContent(){
+    // Prefer window.stage.getContent if stage exists
+    if (window.stage && typeof window.stage.getContent === 'function') {
+      return window.stage.getContent();
+    }
+    // Fallback: first konvajs-content that is not obviously Fabric
+    const candidates = $$('.konvajs-content');
+    if (candidates.length) return candidates[0];
+    return null;
   }
+
   function findUploadCard(){
-    const h = $$('h1,h2,h3').find(n => /rebel\s*ant/i.test(n.textContent||''));
+    const h = $$('h1,h2,h3').find(n => /rebel\s*ant/i.test((n.textContent||'')));
     return h ? (h.closest('.card, .panel, section, form, div') || h.parentElement) : null;
   }
 
-  function fitStageIntoFrame(){
-    if (!mq.matches || !window.stage || !frame) return;
-    try{
+  function debounced(fn){
+    return function(){
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(()=>{
+        rafPending = false;
+        fn();
+      });
+    };
+  }
+
+  const fitStageIntoFrame = debounced(function fit(){
+    if (!mq.matches || !applied || !frame) return;
+    if (!window.stage){
+      // Retry shortly until stage is ready
+      setTimeout(fitStageIntoFrame, 120);
+      return;
+    }
+    try {
+      const content = window.stage.getContent?.() || live;
+      if (!content) return;
+
+      // Logical base size (assumes square or uses max dimension)
       const baseW = window.stage.width();
       const baseH = window.stage.height();
-      const side  = Math.max(baseW, baseH) || 1024;
-      const target = frame.clientWidth;           // square frame
+      const logicalSide = Math.max(baseW, baseH) || 1024;
 
-      // Scale the stage (Konva math, not CSS)
-      const scale = target / side;
+      const targetPx = frame.clientWidth; // square frame width
+
+      // Scale the stage itself (Konva coordinate system remains logical)
+      const scale = targetPx / logicalSide;
       window.stage.scale({ x: scale, y: scale });
       window.stage.position({ x: 0, y: 0 });
 
-      // Make the DOM wrapper’s box match the visible size (keeps hit-testing correct)
-      const content = window.stage.getContent();  // .konvajs-content
-      content.style.width  = `${target}px`;
-      content.style.height = `${target}px`;
+      // Reflect visual size in DOM for proper pointer mapping
+      content.style.width  = `${targetPx}px`;
+      content.style.height = `${targetPx}px`;
 
-      window.stage.batchDraw();
-    }catch(e){}
-  }
+      // Optionally you could also do: window.stage.batchDraw();
+      window.stage.draw();
+    } catch(_) {}
+  });
 
   function apply(){
     if (!mq.matches || applied) return;
+    // Guard: only proceed if we have a Konva environment (avoid hijacking Fabric canvas)
+    const konvaContent = findKonvaContent();
+    if (!konvaContent) return;
 
-    live = findLive();
-    if (!live) return; // wait until canvas exists
-
-    origRoot = live.parentElement;     // this is the old checkerboard container
+    live = konvaContent;
+    origRoot = live.parentElement;
     if (!origRoot) return;
 
-    // build our in-flow host
     host = document.createElement('div');
     host.id = 'ra-mobile-stage-host';
     frame = document.createElement('div');
@@ -1981,90 +2224,114 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     frame.appendChild(checker);
     host.appendChild(frame);
 
-    // insert BEFORE "Rebel Ant" card so it’s the first box
     const card = findUploadCard();
     const container = card?.parentElement || document.body;
     if (card) container.insertBefore(host, card); else container.prepend(host);
 
-    // move live canvas into our frame
     frame.appendChild(live);
 
-    // hide the old checkerboard container (this is the rogue strip you saw)
     origRootDisplay = origRoot.style.display;
     origRoot.style.display = 'none';
 
-    // stop stage panning (base image stays put); overlays remain draggable
-    try { window.stage?.draggable(false); } catch(e){}
+    try { window.stage?.draggable(false); } catch(_) {}
 
-    // size correctly now and on rotate/resize
     fitStageIntoFrame();
-
     applied = true;
   }
 
   function cleanup(){
     if (!applied) return;
-    try{
+    try {
       if (live && origRoot) origRoot.appendChild(live);
       if (origRoot) origRoot.style.display = origRootDisplay || '';
       host?.remove();
-    }catch(e){}
+    } catch(_) {}
     applied = false;
   }
 
-  // — wiring —
   function kick(){
-    if (mq.matches){ apply(); fitStageIntoFrame(); }
-    else { cleanup(); }
+    if (mq.matches) {
+      apply();
+      fitStageIntoFrame();
+    } else {
+      cleanup();
+    }
   }
 
-  // inject CSS once
-  styleEl = document.getElementById('ra-mobile-flow-css-v28');
+  // Inject CSS once
+  styleEl = document.getElementById('ra-mobile-flow-css-v29');
   if (!styleEl){
     styleEl = document.createElement('style');
-    styleEl.id = 'ra-mobile-flow-css-v28';
+    styleEl.id = 'ra-mobile-flow-css-v29';
     styleEl.textContent = CSS;
     document.head.appendChild(styleEl);
   }
 
-  // react to DOM changes (token loads later)
-  const mo = new MutationObserver(() => { if (mq.matches && !applied) apply(); });
-  mo.observe(document.documentElement, { childList:true, subtree:true });
+  // Observe DOM to catch late stage creation (e.g., async mount)
+  if (!mo){
+    mo = new MutationObserver(() => {
+      if (mq.matches && !applied) apply();
+    });
+    mo.observe(document.documentElement, { childList:true, subtree:true });
+  }
 
   window.addEventListener('resize', fitStageIntoFrame, {passive:true});
   window.addEventListener('orientationchange', () => setTimeout(fitStageIntoFrame, 200), {passive:true});
-  mq.addEventListener?.('change', () => kick());
+  mq.addEventListener?.('change', kick);
 
-  // first run
+  // Expose manual toggles if needed
+  window.__RA_MOBILE_STAGE_REFRESH = fitStageIntoFrame;
+  window.__RA_DISABLE_MOBILE_FLOW = function(){
+    cleanup();
+    mq.removeEventListener?.('change', kick);
+    window.removeEventListener('resize', fitStageIntoFrame);
+    window.removeEventListener('orientationchange', fitStageIntoFrame);
+    mo && mo.disconnect();
+  };
+
   kick();
 })();
 
-/* ====================== RA_mobile_css_fit_inflow_v3 (MOBILE ONLY) ======================
-   Fixes mobile crash + keeps the drawing in normal page flow.
-   - Removes the bad "$$('.', wrap)" line that crashed Safari.
-   - Fits the stage to the phone width via CSS only (exports stay crisp).
-   - Hides any stray checkerboard strips and the fixed-layout ghost if present.
-   - Never touches desktop.
-   ====================================================================== */
+/* ====================== RA_MOBILE_CSS_FIT_V4 (MOBILE ONLY) ======================
+   Coexists with RA_MOBILE_FLOW_v29:
+   - If Konva mobile flow (v29) is active, this script no-ops.
+   - Otherwise (e.g., Fabric-only), it fits the main canvas via CSS without changing intrinsic size.
+   - Hides fixed-center ghost & stray checkerboard siblings once.
+   ============================================================================== */
 (() => {
   const MQ = '(max-width: 920px)';
-  if (!window.matchMedia(MQ).matches || window.__RA_MOBILE_CSS_FIT_V3__) return;
-  window.__RA_MOBILE_CSS_FIT_V3__ = true;
+  if (!window.matchMedia(MQ).matches) return;
+  if (window.__RA_MOBILE_CSS_FIT_V4__) return;
+  window.__RA_MOBILE_CSS_FIT_V4__ = true;
+
+  // If Konva mobile flow script is present (v29), it manages layout itself.
+  if (window.__RA_MOBILE_STAGE_REFRESH || document.getElementById('ra-mobile-stage-frame')) {
+    // Konva flow active → bail
+    return;
+  }
 
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const  $ = (s, r=document)=>r.querySelector(s);
 
+  function isLikelyOffscreenUtilityCanvas(c){
+    // Heuristic: extremely small or 0-sized logical canvases used for measurement
+    return (c.width <= 2 && c.height <= 2);
+  }
+
   function findStageCanvas(){
-    const all = $$('canvas');
+    // Prefer a Fabric canvas (id="c") if present
+    const primary = $('#c');
+    if (primary && primary.width && primary.height) return primary;
+
+    // Otherwise pick the largest non-trivial canvas
+    const all = $$('canvas').filter(c => !isLikelyOffscreenUtilityCanvas(c));
     if (!all.length) return null;
-    // pick the intrinsically largest canvas — that's the drawing stage
-    return all.reduce((a,b)=> (b.width > (a?.width||0) ? b : a), null);
+    return all.reduce((a,b)=> (b.width * b.height > (a?.width||0)*(a?.height||0) ? b : a), null);
   }
 
   function hideGhostsAndStrips(wrap){
-    // Kill the fixed-center “ghost” if it exists (causes the huge blank gap)
     const ghost = document.getElementById('raCanvasGhost');
-    if (ghost){
+    if (ghost && ghost.getAttribute('data-ra-hidden-gap') !== '1'){
       ghost.style.display = 'none';
       ghost.style.height  = '0px';
       ghost.style.margin  = '0';
@@ -2072,9 +2339,8 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
       ghost.setAttribute('data-ra-hidden-gap', '1');
     }
 
-    // Collapse any checkerboard/empty siblings right around the stage block
     [wrap?.previousElementSibling, wrap?.nextElementSibling].forEach(el => {
-      if (!el) return;
+      if (!el || el.getAttribute('data-ra-hidden-gap') === '1') return;
       const cs = getComputedStyle(el);
       const looksChecker = (cs.backgroundImage||'').includes('linear-gradient')
                         || (cs.backgroundImage||'').includes('repeating');
@@ -2089,27 +2355,27 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     });
   }
 
+  let rafPending = false;
   function cssFit(){
+    if (!window.matchMedia(MQ).matches) return;
+    // Skip if Konva stage is present (let RA_MOBILE_FLOW handle)
+    if (window.stage && typeof window.stage.getContent === 'function') return;
+
     const stage = findStageCanvas();
     if (!stage) return;
-
-    // Usually the stage’s parent div; fall back to the canvas itself
     const wrap = stage.parentElement || stage;
 
-    // Intrinsic render size (used by export)
     const W = Math.max(1, stage.width);
     const H = Math.max(1, stage.height);
 
-    // Available width inside page
     const host  = wrap.parentElement || document.body;
     const hostW = Math.max(320, host.clientWidth || window.innerWidth);
-    const sidePad = 28; // layout breathing room
+    const sidePad = 28;
     const targetW = Math.min(W, hostW - sidePad);
     const scale   = Math.min(1, targetW / W);
     const dW      = Math.round(W * scale);
     const dH      = Math.round(H * scale);
 
-    // View‑only sizing (do NOT change canvas.width/height)
     Object.assign(wrap.style, {
       width: dW + 'px',
       height: dH + 'px',
@@ -2118,7 +2384,6 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
       position: 'relative'
     });
 
-    // If the container holds multiple canvases (scene/hit), size them all
     $$('canvas', wrap).forEach(c => {
       c.style.width    = dW + 'px';
       c.style.height   = dH + 'px';
@@ -2129,48 +2394,72 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     hideGhostsAndStrips(wrap);
   }
 
+  function scheduleFit(){
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      cssFit();
+    });
+  }
+
   function bindLoadTriggers(){
-    // Re-fit after real load actions
-    const cards = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
-    cards.forEach(card => {
+    const markers = $$('section,div').filter(n => (n.innerText||'').toLowerCase().includes('rebel ant'));
+    markers.forEach(card => {
       $$('button', card).forEach(btn => {
         const t = (btn.textContent||'').toLowerCase().trim();
-        if (t === 'load' || t === 'load by token' || t === 'clear upload'){
+        if (['load', 'load by token', 'clear upload'].includes(t)){
           if (!btn.__raFitBound){
             btn.__raFitBound = true;
-            btn.addEventListener('click', () => setTimeout(cssFit, 60), {passive:true});
+            btn.addEventListener('click', () => setTimeout(scheduleFit, 60), {passive:true});
           }
         }
       });
       const file = $('input[type="file"]', card);
       if (file && !file.__raFitBound){
         file.__raFitBound = true;
-        file.addEventListener('change', () => setTimeout(cssFit, 60), {passive:true});
+        file.addEventListener('change', () => setTimeout(scheduleFit, 60), {passive:true});
       }
     });
   }
 
-  // Observe DOM churns so the fit reapplies if the app re-renders
-  new MutationObserver(() => { bindLoadTriggers(); cssFit(); })
-    .observe(document.documentElement, { childList:true, subtree:true });
+  // MutationObserver to refit on dynamic UI changes
+  const mo = new MutationObserver(() => {
+    if (!window.matchMedia(MQ).matches) return;
+    // Skip if Konva stage logic appears later
+    if (window.stage && typeof window.stage.getContent === 'function') return;
+    bindLoadTriggers();
+    scheduleFit();
+  });
+  mo.observe(document.documentElement, { childList:true, subtree:true });
 
-  window.addEventListener('resize',           () => { if (window.matchMedia(MQ).matches) cssFit(); }, {passive:true});
-  window.addEventListener('orientationchange',() => setTimeout(cssFit, 150), {passive:true});
+  window.addEventListener('resize',           scheduleFit, {passive:true});
+  window.addEventListener('orientationchange',() => setTimeout(scheduleFit, 150), {passive:true});
 
   if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', () => { bindLoadTriggers(); cssFit(); }, {once:true});
+    document.addEventListener('DOMContentLoaded', () => { bindLoadTriggers(); scheduleFit(); }, {once:true});
   } else {
-    bindLoadTriggers(); cssFit();
+    bindLoadTriggers(); scheduleFit();
   }
 
-  // Minimal CSS (mobile only) to make sure hidden gaps stay hidden
-  const s = document.createElement('style');
-  s.textContent = `
-    @media ${MQ} {
-      [data-ra-hidden-gap="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
-    }
-  `;
-  document.head.appendChild(s);
+  const styleId = 'ra-mobile-css-fit-v4-style';
+  if (!document.getElementById(styleId)){
+    const s = document.createElement('style');
+    s.id = styleId;
+    s.textContent = `
+      @media ${MQ} {
+        [data-ra-hidden-gap="1"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; }
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // Public disable if needed
+  window.__RA_DISABLE_MOBILE_CSS_FIT = function(){
+    mo.disconnect();
+    window.removeEventListener('resize', scheduleFit);
+    window.removeEventListener('orientationchange', scheduleFit);
+  };
 })();
 
 /* ==================== RA_AI_QUOTE_v1 — “✨ Inspire me” (motivational quotes) ====================
@@ -2321,16 +2610,24 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
   }
 })();
 
-/* ================= RA_FONT_PICKER_PREVIEW_V2 =================
-   - Clean labels in the font dropdown (no long stacks shown).
-   - Each option is styled with its font (works in most desktop browsers).
-   - Live preview box below the picker updates instantly.
-   - Applies to #fontFamily (Custom Text) and, if present, #idFontFamily.
-   ============================================================ */
-(function RA_FONT_PICKER_PREVIEW_V2(){
-  // Curated, cross‑platform stacks (Mac + Windows + Linux fallbacks).
-  // Add/remove families freely; the dropdown will rebuild automatically.
-  const FONTS = [
+/* ==============================================================
+   RA_FONT_PICKER_UNIFIED_V1
+   - Base curated font list + Google web fonts (optgroup)
+   - Live preview box under each picker (#fontFamily, #idFontFamily)
+   - Persists last chosen font (localStorage key: ra_last_font_stack)
+   - Immediate application to active customText & token ID label
+   - Safe against repeated DOM mutations (idempotent)
+   ============================================================= */
+(function RA_FONT_PICKER_UNIFIED_V1(){
+  if (window.__RA_FONT_PICKER_UNIFIED_V1__) return;
+  window.__RA_FONT_PICKER_UNIFIED_V1__ = true;
+
+  const PICKER_IDS = ['fontFamily','idFontFamily'];
+  const LS_KEY     = 'ra_last_font_stack';
+  const PREVIEW_SAMPLE = window.__RA_FONT_PREVIEW_SAMPLE || 'AaBbCc 1234  #RebelAnts';
+
+  // Base (system / bundled) fonts
+  const BASE_FONTS = [
     { name:'Impact',              stack:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
     { name:'Arial Black',         stack:"'Arial Black', Gadget, sans-serif" },
     { name:'Arial',               stack:"Arial, Helvetica, sans-serif" },
@@ -2364,725 +2661,820 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     { name:'Brush Script MT',     stack:"'Brush Script MT', cursive" },
     { name:'Comic Sans MS',       stack:"'Comic Sans MS', 'Comic Sans', Chalkboard, cursive" },
 
-    // System UI stack for a clean, modern default on any platform:
     { name:'System UI',           stack:"system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" }
   ];
 
-  const PICKER_IDS = ['fontFamily', 'idFontFamily']; // second one is optional in your UI
+  // Web fonts (Google). Each has a 'kind' to refine fallback stack.
+  const WEB_FONTS = [
+    { name:'Inter',             google:'Inter:wght@400;600;700',          kind:'sans' },
+    { name:'Roboto',            google:'Roboto:wght@400;500;700',         kind:'sans' },
+    { name:'Poppins',           google:'Poppins:wght@400;600;700',        kind:'sans' },
+    { name:'Montserrat',        google:'Montserrat:wght@400;600;700',     kind:'sans' },
+    { name:'Lato',              google:'Lato:wght@400;700',               kind:'sans' },
+    { name:'Raleway',           google:'Raleway:wght@400;600;700',        kind:'sans' },
+    { name:'Oswald',            google:'Oswald:wght@400;600;700',         kind:'sans' },
+    { name:'Nunito',            google:'Nunito:wght@400;600;800',         kind:'sans' },
+    { name:'Source Sans 3',     google:'Source+Sans+3:wght@400;600;700',  kind:'sans' },
+    { name:'Merriweather',      google:'Merriweather:wght@400;700',       kind:'serif' },
+    { name:'Playfair Display',  google:'Playfair+Display:wght@400;700',   kind:'serif' },
+    { name:'Abril Fatface',     google:'Abril+Fatface',                   kind:'serif' },
+    { name:'Bebas Neue',        google:'Bebas+Neue',                      kind:'display' },
+    { name:'Dancing Script',    google:'Dancing+Script:wght@400;600',     kind:'script' },
+    { name:'Pacifico',          google:'Pacifico',                        kind:'script' },
+    { name:'Inconsolata',       google:'Inconsolata:wght@400;700',        kind:'mono' },
+    { name:'Fira Code',         google:'Fira+Code:wght@400;600',          kind:'mono' },
+    { name:'JetBrains Mono',    google:'JetBrains+Mono:wght@400;700',     kind:'mono' }
+  ];
 
-  function ensurePreviewBelow(picker, id){
-    const prevId = 'raPreview_' + id;
-    let box = document.getElementById(prevId);
-    if (!box) {
-      box = document.createElement('div');
-      box.id = prevId;
-      box.style.cssText = [
-        'margin-top:6px',
-        'padding:8px 10px',
-        'border:1px solid #2a2a2e',
-        'border-radius:8px',
-        'background:#111319',
-        'color:#e7e7ea',
-        'font-size:15px',
-        'line-height:1.35',
-        'letter-spacing:.1px'
+  function fallbackStack(kind){
+    switch(kind){
+      case 'serif': return 'Georgia, "Times New Roman", serif';
+      case 'mono':  return 'ui-monospace, SFMono-Regular, "Courier New", monospace';
+      case 'script':return '"Brush Script MT", cursive';
+      case 'display':return 'Impact, Arial, sans-serif';
+      default:      return 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+    }
+  }
+  function stackForWeb(f){ return `"${f.name}", ${fallbackStack(f.kind)}`; }
+
+  function injectGoogleOnce(){
+    if (document.getElementById('raUnifiedWebFontsCSS')) return;
+    const fam = WEB_FONTS.map(f=>'family='+f.google).join('&');
+    const href = 'https://fonts.googleapis.com/css2?'+fam+'&display=swap';
+    ['https://fonts.gstatic.com','https://fonts.googleapis.com'].forEach(u=>{
+      if (!document.querySelector(`link[rel="preconnect"][href="${u}"]`)){
+        const lk=document.createElement('link');
+        lk.rel='preconnect'; lk.href=u;
+        if (u.includes('gstatic')) lk.crossOrigin='anonymous';
+        document.head.appendChild(lk);
+      }
+    });
+    const link=document.createElement('link');
+    link.id='raUnifiedWebFontsCSS';
+    link.rel='stylesheet';
+    link.href=href;
+    document.head.appendChild(link);
+    if (document.fonts && document.fonts.ready){
+      document.fonts.ready.then(()=>{ try { window.canvas?.requestRenderAll(); } catch(_){} });
+    }
+  }
+
+  function ensurePreview(picker, id){
+    const pid='raPreview_'+id;
+    let box=document.getElementById(pid);
+    if(!box){
+      box=document.createElement('div');
+      box.id=pid;
+      box.style.cssText=[
+        'margin-top:6px','padding:8px 10px','border:1px solid #2a2a2e',
+        'border-radius:8px','background:#111319','color:#e7e7ea',
+        'font-size:15px','line-height:1.35','letter-spacing:.1px'
       ].join(';');
-      const label = document.createElement('div');
-      label.textContent = 'Preview';
-      label.style.cssText = 'font-size:11px;opacity:.65;margin-bottom:4px';
-      const text = document.createElement('div');
-      text.className = 'raPreviewText';
-      text.textContent = 'AaBbCc 1234  #RebelAnts';
-      box.appendChild(label);
-      box.appendChild(text);
-      // insert right after the picker
+      const label=document.createElement('div');
+      label.textContent='Preview';
+      label.style.cssText='font-size:11px;opacity:.65;margin-bottom:4px';
+      const txt=document.createElement('div');
+      txt.className='raPreviewText';
+      txt.textContent=PREVIEW_SAMPLE;
+      box.appendChild(label); box.appendChild(txt);
       picker.parentNode.insertBefore(box, picker.nextSibling);
     }
     return box.querySelector('.raPreviewText');
   }
 
-  function repopulateSelect(selectEl, id){
-    // Preserve previously selected stack if it exists
-    const current = (selectEl.value || '').trim();
+  function applySelectionToCanvas(stack, pickerId){
+    const c=window.canvas;
+    if (!c) return;
+    const active=c.getActiveObject && c.getActiveObject();
+    if (active && active._kind==='customText'){
+      active.set('fontFamily', stack);
+    }
+    if (pickerId==='idFontFamily' && window.idLabel){
+      window.idLabel.set('fontFamily', stack);
+    }
+    try { c.requestRenderAll(); } catch(_) {}
+  }
 
-    // Clear & rebuild options
-    selectEl.innerHTML = '';
-    FONTS.forEach(f => {
-      const opt = document.createElement('option');
-      opt.value = f.stack;         // what Fabric/text actually uses
-      opt.textContent = f.name;    // what the user sees
-      // Live preview in dropdown (supported in most desktop browsers)
-      opt.style.fontFamily = f.stack;
-      opt.style.fontSize   = '14px';
-      selectEl.appendChild(opt);
+  async function handleChange(select, pickerId, previewEl){
+    const stack=select.value;
+    try { localStorage.setItem(LS_KEY, stack); } catch(_){}
+    previewEl.style.fontFamily = stack;
+    // Try font load (probe one weight); timeout fails safe
+    const fam = stack.split(',')[0].replace(/["']/g,'').trim();
+    if (document.fonts && fam){
+      try {
+        await Promise.race([
+          document.fonts.load(`48px "${fam}"`),
+          new Promise(res=>setTimeout(res,1200))
+        ]);
+      } catch(_) {}
+    }
+    applySelectionToCanvas(stack, pickerId);
+  }
+
+  function rebuildSelect(el, pickerId){
+    const stored = localStorage.getItem(LS_KEY)||'';
+    const current = el.value;
+    el.innerHTML='';
+
+    // Base group (no label, just flat)
+    BASE_FONTS.forEach(f=>{
+      const opt=document.createElement('option');
+      opt.value=f.stack;
+      opt.textContent=f.name;
+      opt.style.fontFamily=f.stack;
+      opt.style.fontSize='14px';
+      el.appendChild(opt);
     });
 
-    // Keep selection if still available, otherwise default to first
-    const found = FONTS.find(f => f.stack === current);
-    selectEl.value = found ? found.stack : FONTS[0].stack;
-
-    // Preview box under the picker
-    const previewText = ensurePreviewBelow(selectEl, id);
-    const updatePreview = () => {
-      previewText.style.fontFamily = selectEl.value || FONTS[0].stack;
-      // text already set; we just switch the font
-    };
-
-    // Wire once
-    if (!selectEl.__raFontPreviewBound){
-      selectEl.addEventListener('change', updatePreview);
-      selectEl.addEventListener('input',  updatePreview);
-      selectEl.__raFontPreviewBound = true;
-    }
-    updatePreview();
-  }
-
-  function apply(){
-    PICKER_IDS.forEach(id => {
-      const el = document.getElementById(id);
-      if (!el || el.__raFontPreviewV2) return;
-      el.__raFontPreviewV2 = true;
-
-      if (el.tagName.toLowerCase() === 'select'){
-        repopulateSelect(el, id);
-      } else {
-        // If your UI uses an <input> for fonts, just attach a preview box
-        const previewText = ensurePreviewBelow(el, id);
-        const update = () => { previewText.style.fontFamily = el.value || FONTS[0].stack; };
-        el.addEventListener('input', update);
-        el.addEventListener('change', update);
-        update();
-      }
-    });
-  }
-
-  // Run now and watch for UI re-renders (defensive)
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', apply, { once:true });
-  } else {
-    apply();
-  }
-  new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
-})();
-
-/* ============================ RA_WEBFONTS_LAZY_V1 ============================
-   Adds Google web fonts to the existing font picker (and keeps live preview).
-   - Injects a single Google Fonts CSS with many families (weights included).
-   - Appends a <optgroup label="Web fonts"> to #fontFamily / #idFontFamily.
-   - When you select a web font, waits for it to load, then re-renders Fabric.
-   ========================================================================= */
-(function RA_WEBFONTS_LAZY_V1(){
-  // Configure your web fonts here (Google "family=" spec on the right)
-  const WEB_FONTS = [
-    { name:'Inter',             google:'Inter:wght@400;600;700' },
-    { name:'Roboto',            google:'Roboto:wght@400;500;700' },
-    { name:'Poppins',           google:'Poppins:wght@400;600;700' },
-    { name:'Montserrat',        google:'Montserrat:wght@400;600;700' },
-    { name:'Lato',              google:'Lato:wght@400;700' },
-    { name:'Raleway',           google:'Raleway:wght@400;600;700' },
-    { name:'Oswald',            google:'Oswald:wght@400;600;700' },
-    { name:'Nunito',            google:'Nunito:wght@400;600;800' },
-    { name:'Source Sans 3',     google:'Source+Sans+3:wght@400;600;700' },
-    { name:'Merriweather',      google:'Merriweather:wght@400;700' },
-    { name:'Playfair Display',  google:'Playfair+Display:wght@400;700' },
-    { name:'Abril Fatface',     google:'Abril+Fatface' },
-    { name:'Bebas Neue',        google:'Bebas+Neue' },
-    { name:'Dancing Script',    google:'Dancing+Script:wght@400;600' },
-    { name:'Pacifico',          google:'Pacifico' },
-    { name:'Inconsolata',       google:'Inconsolata:wght@400;700' },
-    { name:'Fira Code',         google:'Fira+Code:wght@400;600' },
-    { name:'JetBrains Mono',    google:'JetBrains+Mono:wght@400;700' }
-  ];
-
-  const PICKERS = ['fontFamily','idFontFamily'];  // #idFontFamily is optional in your UI
-
-  // -------- load Google Fonts CSS once
-  function injectCssOnce(){
-    if (document.getElementById('raWebFontsCSS')) return;
-    const fam = WEB_FONTS.map(f => 'family=' + f.google).join('&');
-    const href = 'https://fonts.googleapis.com/css2?' + fam + '&display=swap';
-
-    // Preconnect (nice to have)
-    if (!document.querySelector('link[rel="preconnect"][href*="fonts.gstatic"]')){
-      const pre1 = document.createElement('link');
-      pre1.rel = 'preconnect'; pre1.href = 'https://fonts.gstatic.com'; pre1.crossOrigin = 'anonymous';
-      document.head.appendChild(pre1);
-    }
-    if (!document.querySelector('link[rel="preconnect"][href*="fonts.googleapis"]')){
-      const pre2 = document.createElement('link');
-      pre2.rel = 'preconnect'; pre2.href = 'https://fonts.googleapis.com';
-      document.head.appendChild(pre2);
-    }
-
-    const link = document.createElement('link');
-    link.id = 'raWebFontsCSS';
-    link.rel = 'stylesheet';
-    link.href = href;
-    document.head.appendChild(link);
-
-    // After CSS parses & fonts load, nudge Fabric so metrics refresh
-    const nudge = () => { try { window.canvas && window.canvas.requestRenderAll(); } catch(_){} };
-    (document.fonts && document.fonts.ready ? document.fonts.ready.then(nudge) : Promise.resolve().then(nudge));
-  }
-
-  // Get a readable CSS stack for a given family (with sensible fallbacks)
-  function stackFor(family){
-    return `"${family}", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif`;
-  }
-
-  // Extract first family name from a stack (handles quotes)
-  function firstFamily(stack){
-    if (!stack) return '';
-    const m = stack.match(/^["']?([^"',]+(?:\s[^"',]+)?)["']?/);
-    return (m && m[1]) ? m[1].trim() : stack.split(',')[0].trim().replace(/^["']|["']$/g,'');
-  }
-
-  // Append an <optgroup> with all web fonts to a <select>
-  function extendPicker(select){
-    if (!select || select.tagName.toLowerCase() !== 'select') return;
-    if (select.querySelector('optgroup[label="Web fonts"]')) return; // already extended
-
-    const og = document.createElement('optgroup');
-    og.label = 'Web fonts';
-    WEB_FONTS.forEach(f => {
-      const opt = document.createElement('option');
-      opt.textContent = f.name;
-      opt.value = stackFor(f.name);
-      // style option with its own font (desktop browsers)
-      opt.style.fontFamily = opt.value;
-      opt.style.fontSize = '14px';
+    // Web fonts group
+    const og=document.createElement('optgroup');
+    og.label='Web fonts';
+    WEB_FONTS.forEach(f=>{
+      const opt=document.createElement('option');
+      opt.value=stackForWeb(f);
+      opt.textContent=f.name;
+      opt.style.fontFamily=opt.value;
+      opt.style.fontSize='14px';
       og.appendChild(opt);
     });
-    select.appendChild(og);
+    el.appendChild(og);
 
-    // When a web font is chosen, wait for it to load then redraw Fabric
-    if (!select.__raWebFontsBound){
-      const onChange = async () => {
-        const fam = firstFamily(select.value);
-        try {
-          if (document.fonts && fam) { await document.fonts.load(`48px "${fam}"`); }
-        } catch(_){}
-        try { window.canvas && window.canvas.requestRenderAll(); } catch(_){}
-      };
-      select.addEventListener('change', onChange);
-      select.addEventListener('input', onChange);
-      select.__raWebFontsBound = true;
+    const allStacks=[...BASE_FONTS.map(f=>f.stack), ...WEB_FONTS.map(f=>stackForWeb(f))];
+    const target = allStacks.includes(stored) ? stored
+                 : allStacks.includes(current) ? current
+                 : allStacks[0];
+    el.value = target;
+
+    const previewEl = ensurePreview(el, pickerId);
+
+    const onChange = ()=>handleChange(el, pickerId, previewEl);
+    if (!el.__raUnifiedFontBound){
+      el.addEventListener('change', onChange);
+      el.addEventListener('input', onChange);
+      el.__raUnifiedFontBound = true;
     }
+
+    // Initial apply
+    previewEl.style.fontFamily = el.value;
+    applySelectionToCanvas(el.value, pickerId);
   }
 
   function apply(){
-    injectCssOnce();
-    PICKERS.forEach(id => {
-      const el = document.getElementById(id);
-      if (el) extendPicker(el);
+    injectGoogleOnce();
+    PICKER_IDS.forEach(id=>{
+      const el=document.getElementById(id);
+      if (!el) return;
+      // If some earlier script already tagged it, ignore (or remove that script)
+      if (el.__raUnifiedFontPicker) return;
+      if (el.tagName.toLowerCase()!=='select') return;
+      el.__raUnifiedFontPicker = true;
+      rebuildSelect(el, id);
     });
   }
 
-  if (document.readyState === 'loading'){
+  if (document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded', apply, {once:true});
   } else {
     apply();
   }
-  new MutationObserver(apply).observe(document.documentElement, { childList:true, subtree:true });
+  new MutationObserver(apply).observe(document.documentElement,{childList:true, subtree:true});
 })();
 
+/* (REMOVED) RA_MAKE_VIDEO_TOKEN_ONLY_V1
+   The entire token-only video panel and export logic is obsolete and removed.
+   If you ever want to reintroduce token-only video, add it as a mode in your unified animation/export pipeline.
+   Last removed on 2025-09-27.
+*/
+
 /* ==========================================================
-   RA_MAKE_VIDEO_TOKEN_ONLY_V1
-   - Adds a bottom "Video (token-only)" panel.
-   - Records a short WebM using an offscreen canvas (no layout changes).
-   - Works only when the base image is a token (no watermark group).
-   - Desktop & mobile safe. No changes to your Fabric canvas state.
+   RA_ANIMATE_UNIFIED_V2
+   Version: 2.0.2  (Layout rollback + minimal button & auto-download fix)
+
+   Changes from 2.0.0:
+     • Added tiny inline style so Preview / Export buttons align uniformly.
+     • Added config.autoDownloadOnExport (default true). When export completes,
+       it immediately triggers a download AND still shows the link.
+     • No other logic, layout, or behavior changed.
+     • Reverted any v2.0.1 structural/UI alterations (grid / title reposition).
+
+   Everything else (watermark modes, return modes, animation logic) untouched.
    ========================================================== */
 (() => {
-  // ---------- Small helpers ----------
-  const $  = (s, r=document) => r.querySelector(s);
-  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const easeInOut = t => t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+  if (window.raAnimateUnifiedV2 && window.raAnimateUnifiedV2.version === '2.0.2') return;
 
-  function getFabricCanvas() {
-    if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = $('canvas.lower-canvas') || $('canvas.upper-canvas') || $('canvas');
-    if (!el) return null;
-    // Try to find its Fabric instance
-    for (const k in window) {
-      try {
-        const v = window[k];
-        if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') return v;
-      } catch(_) {}
-    }
-    return null;
+  const VERSION = '2.0.2';
+  const CONFIG = {
+    fps: 30,
+    maxDurationSec: 30,
+    defaultReturnMode: 'soft',
+    defaultWmMode: 'inherit',
+    softFraction: 0.18,
+    softMinMs: 140,
+    reverseFraction: 0.35,
+    holdFraction: 0.25,
+    snapFrames: 10,
+    tailFlushFrames: 5,
+    respectViewport: true,
+    cameraMaxZoom: 2.0,
+    wmSnapshotMultiplier: 1.0,
+    wmOpacityFloor: 0.02,
+    exportHeaderPattern: /export/i,
+    autoDownloadOnExport: true // NEW: auto-trigger download after export finishes
+  };
+
+  /* -------------------- EASING -------------------- */
+  const EASE = {
+    linear: t=>t,
+    ioQuad: t=>t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2,
+    ioSine: t=>-(Math.cos(Math.PI*t)-1)/2,
+    ioCubic: t=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,
+    ioBack: t=>{
+      const c1=1.70158,c2=c1*1.525;
+      return t<0.5?
+        (Math.pow(2*t,2)*((c2+1)*2*t-c2))/2:
+        (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2;
+    },
+    ioExpo: t=>t===0?0:t===1?1:(t<0.5?Math.pow(2,20*t-10)/2:(2-Math.pow(2,-20*t+10))/2)
+  };
+
+  /* -------------------- PRESETS (unchanged) -------------------- */
+  const PRESETS = [
+    { id:'cam_kb_in_ur', name:'KB in ↗', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:+0.06}},
+    { id:'cam_kb_in_dl', name:'KB in ↙', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:-0.06}},
+    { id:'cam_kb_in_ul', name:'KB in ↖', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:+0.06}},
+    { id:'cam_kb_in_dr', name:'KB in ↘', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:-0.06}},
+    { id:'cam_kb_out',   name:'KB out',   kind:'camera', ease:'ioSine', from:{z:1.15,x:0,y:0}, to:{z:1.00,x:0,y:0}},
+    { id:'cam_pan_up',   name:'Pan up',   kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:0.06}, to:{z:1,x:0,y:-0.06}},
+    { id:'cam_pan_down', name:'Pan down', kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:-0.06},to:{z:1,x:0,y:0.06}},
+    { id:'cam_pan_left', name:'Pan left', kind:'camera', ease:'ioQuad', from:{z:1,x:0.06,y:0}, to:{z:1,x:-0.06,y:0}},
+    { id:'cam_pan_right',name:'Pan right',kind:'camera', ease:'ioQuad', from:{z:1,x:-0.06,y:0},to:{z:1,x:0.06,y:0}},
+    { id:'cam_zoom_in',  name:'Zoom in',  kind:'camera', ease:'ioCubic',from:{z:1,x:0,y:0},   to:{z:1.15,x:0,y:0}},
+    { id:'cam_zoom_out', name:'Zoom out', kind:'camera', ease:'ioCubic',from:{z:1.12,x:0,y:0}, to:{z:1.00,x:0,y:0}},
+    { id:'base_nudge',    name:'Base nudge in', kind:'base', ease:'ioSine', from:{s:1.00}, to:{s:1.06}},
+    { id:'base_pulse',    name:'Base pulse',    kind:'base', ease:'ioSine', from:{s:0.97}, to:{s:1.00}},
+    { id:'base_zoom_in',  name:'Base zoom in',  kind:'base', ease:'ioCubic',from:{s:1.00}, to:{s:1.12}},
+    { id:'base_zoom_out', name:'Base zoom out', kind:'base', ease:'ioCubic',from:{s:1.08}, to:{s:1.00}},
+    { id:'base_slide_r',  name:'Base slide →',  kind:'base', ease:'ioSine', from:{dxN:-0.06}, to:{dxN:0}},
+    { id:'base_slide_l',  name:'Base slide ←',  kind:'base', ease:'ioSine', from:{dxN:0.06},  to:{dxN:0}},
+    { id:'base_tilt',     name:'Base tiny tilt',kind:'base', ease:'ioSine', from:{rot:-3},    to:{rot:0}},
+    { id:'base_drift',    name:'Base drift diag',kind:'base',ease:'ioSine', from:{dxN:0.04,dyN:-0.04}, to:{dxN:0,dyN:0}},
+    { id:'ov_pop',       name:'Overlay/Text pop',        kind:'overlay', ease:'ioBack',  from:{s:0.90},   to:{s:1.00}},
+    { id:'ov_pop_big',   name:'Overlay/Text pop big',    kind:'overlay', ease:'ioBack',  from:{s:0.85},   to:{s:1.00}},
+    { id:'ov_fade',      name:'Overlay/Text fade in',    kind:'overlay', ease:'ioCubic', from:{alpha:0},  to:{alpha:1}},
+    { id:'ov_slide_up',  name:'Overlay/Text slide ↑',    kind:'overlay', ease:'ioSine',  from:{dyN:0.14}, to:{dyN:0}},
+    { id:'ov_slide_dn',  name:'Overlay/Text slide ↓',    kind:'overlay', ease:'ioSine',  from:{dyN:-0.14},to:{dyN:0}},
+    { id:'ov_slide_l',   name:'Overlay/Text slide ←',    kind:'overlay', ease:'ioSine',  from:{dxN:-0.18},to:{dxN:0}},
+    { id:'ov_slide_r',   name:'Overlay/Text slide →',    kind:'overlay', ease:'ioSine',  from:{dxN:0.18}, to:{dxN:0}},
+    { id:'ov_wiggle',    name:'Overlay/Text wiggle',     kind:'overlay', ease:'ioSine',  from:{rot:-5},   to:{rot:0}},
+    { id:'ov_scale_in',  name:'Overlay/Text scale in',   kind:'overlay', ease:'ioCubic', from:{s:0.8},    to:{s:1.0}},
+    { id:'ov_attention', name:'Overlay/Text attention',  kind:'overlay', ease:'ioSine',  from:{s:1.0},    to:{s:1.07}}
+  ];
+
+  /* -------------------- DOM HELPERS -------------------- */
+  const $  = (s,r=document)=>r.querySelector(s);
+  const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+  function anchorPanel(){
+    return $$('h3').find(h=> CONFIG.exportHeaderPattern.test((h.textContent||'').trim()))?.parentNode || document.body;
   }
 
-  // Find the current base object and decide if it’s a token image (no corner stamps).
-  function baseIsToken() {
-    const c = getFabricCanvas();
-    if (!c) return false;
-    const base = (c.getObjects() || []).find(o => o && o._isBase === true);
-    if (!base) return false;
-    // Non-token path in your code builds a Group with two watermark children (raWM:true).
-    // Token path uses a plain Image (no watermark group).
-    if (base.type === 'image') return true;         // token (no watermarks)
-    if (base.type === 'group') {
-      const kids = (base._objects || []);
-      const hasStamp = kids.some(k => k && (k.raWM || k._isWatermark || k.raPos));
-      return !hasStamp; // if somehow no stamps, treat as token; but normally stamps exist
-    }
-    return false;
-  }
-
-  // Try to read a token id for naming (optional)
-  function currentTokenId() {
-    const box = $('#tokenIdDisplay') || $('#tokenIdInput');
-    const raw = (box && (box.value || box.textContent) || '').trim();
-    if (!raw) return '';
-    const n = parseInt(raw.replace(/[^0-9]/g,''), 10);
-    return Number.isFinite(n) ? String(n) : '';
-  }
-
-  // Snapshot the Fabric canvas as a high-quality PNG DataURL.
-  // We upscale if needed to meet target size (multiplier capped to 3× for safety).
-  function snapshotCanvasPNG(targetSide=720) {
-    const c = getFabricCanvas();
-    if (!c) throw new Error('Canvas not ready');
-    const cw = c.getWidth(), ch = c.getHeight();
-    const side = Math.max(cw, ch) || 1024;
-    const mul = clamp(targetSide / side, 0.25, 3);
-    // toDataURL ignores selection handles; exports clean artwork
-    return c.toDataURL({ format:'png', enableRetinaScaling:true, multiplier: mul });
-  }
-
-  function chooseMimeType() {
-    const candidates = [
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm'
-    ];
-    for (const m of candidates) {
-      if (MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
-    }
-    return ''; // no support
-  }
-
-  // Draw a Ken Burns style frame
-  function drawKenBurns(ctx, img, tNorm, res, mode) {
-    const W = img.naturalWidth  || img.width;
-    const H = img.naturalHeight || img.height;
-    // Base "cover" scale so the square video is fully covered
-    const cover = Math.max(res / W, res / H);
-
-    // Style profiles
-    const zoomIn  = { z0: 1.05, z1: 1.20, pan: 'none' };
-    const zoomOut = { z0: 1.20, z1: 1.05, pan: 'none' };
-    const panLR   = { z0: 1.12, z1: 1.12, pan: 'lr' };
-    const panTB   = { z0: 1.12, z1: 1.12, pan: 'tb' };
-    const drift   = { z0: 1.10, z1: 1.18, pan: 'diag' };
-
-    const prof = ({in:zoomIn,out:zoomOut,lr:panLR,tb:panTB,drift:drift})[mode] || zoomIn;
-
-    const e = easeInOut(tNorm);
-    const zoom = prof.z0 + (prof.z1 - prof.z0) * e; // smooth zoom
-
-    // Allowed pan range to keep image covering the square after scaling
-    const scaledW = W * cover * zoom;
-    const scaledH = H * cover * zoom;
-    const maxX = Math.max(0, (scaledW - res) / 2);
-    const maxY = Math.max(0, (scaledH - res) / 2);
-
-    let shiftX = 0, shiftY = 0;
-    if (prof.pan === 'lr')   shiftX = -maxX + 2*maxX*e;
-    if (prof.pan === 'tb')   shiftY = -maxY + 2*maxY*e;
-    if (prof.pan === 'diag') { shiftX = -maxX + 2*maxX*e; shiftY =  maxY - 2*maxY*e; }
-
-    ctx.save();
-    ctx.clearRect(0,0,res,res);
-    ctx.translate(res/2 + shiftX, res/2 + shiftY);
-    ctx.scale(cover*zoom, cover*zoom);
-    ctx.drawImage(img, -W/2, -H/2);
-    ctx.restore();
-  }
-
-  async function makeVideo({style='in', seconds=5, size=720, statusEl, linkEl, buttonEl}) {
-    // Gate: token only
-    if (!baseIsToken()) {
-      if (statusEl) statusEl.textContent = 'Token-only: load a token image first.';
-      return;
-    }
-
-    // Snapshot once (clean export of canvas content)
-    let dataURL;
-    try {
-      if (statusEl) statusEl.textContent = 'Preparing snapshot…';
-      dataURL = snapshotCanvasPNG(size);
-    } catch (e) {
-      if (statusEl) statusEl.textContent = 'Snapshot blocked (CORS). Use images with CORS headers/same-origin.';
-      return;
-    }
-
-    // Build offscreen canvas for animation + recording
-    const res = parseInt(size, 10) || 720;
-    const fps = 30;
-    const totalFrames = Math.max(10, Math.round(seconds * fps));
-
-    const off = document.createElement('canvas');
-    off.width = res; off.height = res;
-    const ctx = off.getContext('2d', { alpha: false });
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
-    const img = new Image();
-    img.src = dataURL;
-    await new Promise((r, j) => { img.onload = r; img.onerror = j; });
-
-    // Setup MediaRecorder
-    const mime = chooseMimeType();
-    if (!mime) {
-      if (statusEl) statusEl.textContent = 'This browser cannot record WebM (try Chrome/Edge).';
-      return;
-    }
-    const stream = off.captureStream(fps);
-    const chunks = [];
-    const rec = new MediaRecorder(stream, {
-      mimeType: mime,
-      videoBitsPerSecond: res >= 1024 ? 7_000_000 : (res >= 720 ? 5_000_000 : 3_500_000)
-    });
-    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-    const doneP = new Promise(resolve => { rec.onstop = resolve; });
-
-    // Animate & record
-    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = 'Rendering…'; }
-    if (statusEl) statusEl.textContent = 'Rendering video…';
-
-    rec.start();
-    const t0 = performance.now();
-    let f = 0;
-
-    const modes = { 'Zoom In':'in', 'Zoom Out':'out', 'Pan L→R':'lr', 'Pan T→B':'tb', 'Drift':'drift' };
-    const modeKey = modes[style] || style;
-
-    // Frame loop
-    function frameLoop(now) {
-      const t = Math.min(1, (now - t0) / (seconds * 1000));
-      drawKenBurns(ctx, img, t, res, modeKey);
-      f++;
-      if (t < 1) {
-        requestAnimationFrame(frameLoop);
-      } else {
-        // Pad a couple of frames at the end for encoders that like a tail
-        setTimeout(() => rec.stop(), 60);
-      }
-    }
-    requestAnimationFrame(frameLoop);
-
-    await doneP;
-
-    // Build blob + link
-    const blob = new Blob(chunks, { type: mime });
-    const url = URL.createObjectURL(blob);
-
-    const tid = currentTokenId();
-    const niceName = `rebel-ant${tid?`-token-${tid}`:''}-${modeKey}-${res}.webm`;
-
-    if (linkEl) {
-      linkEl.href = url;
-      linkEl.download = niceName;
-      linkEl.style.display = 'inline-block';
-      linkEl.textContent = `Download ${niceName}`;
-    }
-    if (statusEl) statusEl.textContent = `Done (${Math.round(blob.size/1024)} KB).`;
-
-    if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = 'Make Video (Token Only)'; }
-  }
-
-  // ---------- UI Panel ----------
-  function ensurePanel() {
-    if ($('#raVideoPanel')) return $('#raVideoPanel');
-
-    // Try to place under an "Animate" or "Animation" section if it exists; else append to the main content.
-    const anchorCard =
-      $$('h3,h2').find(h => /animate|animation/i.test((h.textContent||'').toLowerCase()))?.parentElement
-      || $('main') || $('.content') || document.body;
-
-    const pane = document.createElement('section');
-    pane.id = 'raVideoPanel';
-    pane.style.cssText = 'margin:16px 0 28px 0;border:1px solid #222;border-radius:12px;background:#0d0e13;color:#e7e7ea;padding:12px';
-    pane.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <h3 style="margin:0;font:600 14px/1.2 -apple-system,Segoe UI,Roboto,Arial">Video (token‑only)</h3>
-        <span id="raVMsg" style="font:12px/1.2 -apple-system,Segoe UI,Roboto,Arial;opacity:.75"></span>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <label style="font-size:12px;opacity:.9">Style
-          <select id="raVStyle" class="input" style="margin-left:6px">
-            <option>Zoom In</option>
-            <option>Zoom Out</option>
-            <option>Pan L→R</option>
-            <option>Pan T→B</option>
-            <option selected>Drift</option>
+  function buildPanel(){
+    let panel=$('#raAnimUnifiedV2Panel');
+    if(panel) return panel;
+    panel=document.createElement('div');
+    panel.id='raAnimUnifiedV2Panel';
+    panel.style.cssText='margin:16px 0;padding:14px;border:1px solid #23262c;border-radius:12px;background:#0f1116;color:#e9eaed;font:12px system-ui;position:relative';
+    panel.innerHTML=`
+      <style>
+        #raAnimUnifiedV2Panel button.btn{
+          background:#1d2229;
+          color:#e9eaed;
+          border:1px solid #2c3138;
+          padding:8px 18px;
+          border-radius:9px;
+          cursor:pointer;
+          font:12px system-ui;
+          font-weight:500;
+          letter-spacing:.2px;
+          min-height:36px;
+        }
+        #raAnimUnifiedV2Panel button.btn:hover{background:#272d35}
+        #raAnimUnifiedV2Panel select,
+        #raAnimUnifiedV2Panel input[type=number]{
+          background:#161a21;
+          color:#e9eaed;
+          border:1px solid #2c3138;
+          border-radius:8px;
+          padding:7px 10px;
+          min-height:36px;
+          font:12px system-ui;
+        }
+        #raAnimUnifiedV2Panel label{display:flex;gap:6px;align-items:center}
+        #raAnimUnifiedV2Panel strong{font-size:13px}
+        #raAnimUnifiedV2Panel #uaPreviewCanvas,
+        #raAnimUnifiedV2Panel #uaVideoOut{box-shadow:0 0 0 1px #1d2025}
+        #raAnimUnifiedV2Panel #uaDL a{
+          display:inline-block;
+          margin-top:8px;
+          background:#1d2229;
+          padding:8px 14px;
+          border-radius:8px;
+          border:1px solid #2c3138;
+          text-decoration:none;
+          color:#d5d8dc;
+          font:12px system-ui;
+        }
+        #raAnimUnifiedV2Panel #uaDL a:hover{background:#272d35}
+      </style>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <strong>Unified Animate</strong>
+        <span style="opacity:.55">v${VERSION}</span>
+        <label>Scope:
+          <select id="uaScope">
+            <option value="camera">Camera</option>
+            <option value="base">Base only</option>
+            <option value="overlay">Overlays only</option>
+            <option value="text">Text only</option>
           </select>
         </label>
-        <label style="font-size:12px;opacity:.9">Duration
-          <select id="raVDur" class="input" style="margin-left:6px">
-            <option>3</option>
-            <option selected>5</option>
-            <option>8</option>
-          </select> s
+        <label>Preset:
+          <select id="uaPreset"></select>
         </label>
-        <label style="font-size:12px;opacity:.9">Size
-          <select id="raVRes" class="input" style="margin-left:6px">
-            <option>512</option>
-            <option selected>720</option>
-            <option>1024</option>
-          </select> px
+        <label>Ease:
+          <select id="uaEase">
+            <option value="ioSine">ioSine</option>
+            <option value="ioQuad">ioQuad</option>
+            <option value="ioCubic">ioCubic</option>
+            <option value="ioBack">ioBack</option>
+            <option value="ioExpo">ioExpo</option>
+            <option value="linear">linear</option>
+          </select>
         </label>
-        <button id="raVMake" class="btn" style="margin-left:auto;background:#3b82f6;border:0;border-radius:8px;color:#fff;padding:8px 12px;cursor:pointer">Make Video (Token Only)</button>
-        <a id="raVDown" href="#" download style="display:none;margin-left:8px;font-size:12px;text-decoration:underline">Download</a>
+        <label>Dur:
+          <input id="uaDur" type="number" min="2" max="${CONFIG.maxDurationSec}" value="6" step="0.1" style="width:60px">
+          s
+        </label>
+        <label>Return:
+          <select id="uaReturn">
+            <option value="soft">soft</option>
+            <option value="reverse">reverse</option>
+            <option value="snap">snap</option>
+            <option value="hold">hold</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <label>WM:
+          <select id="uaWMMode">
+            <option value="inherit">inherit</option>
+            <option value="lock">lock</option>
+          </select>
+        </label>
+        <button id="uaPreview" class="btn">Preview</button>
+        <button id="uaExport" class="btn">Export</button>
+        <span id="uaMsg" style="opacity:.7"></span>
       </div>
-      <div style="margin-top:8px;font-size:11px;opacity:.65">Tip: Works when your base image was loaded by <em>Token</em>. PNG/URL uploads are blocked from video on purpose.</div>
+      <canvas id="uaPreviewCanvas" style="display:none;margin-top:10px;max-width:100%;border-radius:8px;background:#000"></canvas>
+      <video id="uaVideoOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
+      <div id="uaDL"></div>
     `;
-    anchorCard.appendChild(pane);
+    anchorPanel().appendChild(panel);
 
-    // Wire button
-    const makeBtn = $('#raVMake', pane);
-    const msg     = $('#raVMsg', pane);
-    const downLn  = $('#raVDown', pane);
-    makeBtn.addEventListener('click', async () => {
-      downLn.style.display = 'none';
-      if (!baseIsToken()) {
-        msg.textContent = 'Token-only: load a token image first.';
+    const presetSel=$('#uaPreset');
+    PRESETS.forEach(p=>{
+      const o=document.createElement('option');
+      o.value=p.id; o.textContent=p.name;
+      presetSel.appendChild(o);
+    });
+
+    $('#uaReturn').value=CONFIG.defaultReturnMode;
+    $('#uaWMMode').value=CONFIG.defaultWmMode;
+
+    $('#uaScope').addEventListener('change', ()=>{
+      const sc=$('#uaScope').value;
+      const first = PRESETS.find(p=>{
+        if (sc==='camera') return p.kind==='camera';
+        if (sc==='base') return p.kind==='base';
+        if (sc==='overlay') return p.kind==='overlay';
+        if (sc==='text') return p.kind==='overlay';
+      });
+      if (first) $('#uaPreset').value=first.id;
+    });
+
+    $('#uaPreview').onclick=()=>API.preview();
+    $('#uaExport').onclick=()=>API.export();
+
+    return panel;
+  }
+
+  function showMsg(t){
+    const m=$('#uaMsg'); if(!m) return;
+    m.textContent=t||'';
+    if (t) setTimeout(()=>{ if(m.textContent===t) m.textContent=''; },2500);
+  }
+
+  /* -------------------- Watermark Manager (unchanged logic) -------------------- */
+  const WM = {
+    is(o){ return !!(o && (o._isWatermark||o._raWMRing||o._raWMCenter||o._raFooter)); },
+    collect(){
+      const c=window.canvas; if(!c) return [];
+      return (c.getObjects()||[]).filter(WM.is);
+    },
+    snapshot:null,
+    prepare(mode){
+      const wmObjs=WM.collect();
+      if (mode==='inherit' || !wmObjs.length)
+        return { wmObjs, restores:[] };
+      const c=window.canvas;
+      const restores=wmObjs.map(o=>({
+        o, vis:o.visible, excl:o.excludeFromExport, op:o.opacity
+      }));
+      wmObjs.forEach(o=>{
+        if (o.excludeFromExport) o.excludeFromExport=false;
+        if (!o.visible) o.visible=true;
+        if (o.opacity===0) o.opacity=CONFIG.wmOpacityFloor;
+      });
+      const data=c.toDataURL({format:'png', enableRetinaScaling:true, multiplier:CONFIG.wmSnapshotMultiplier});
+      const img=new Image(); img.src=data;
+      WM.snapshot=img;
+      wmObjs.forEach(o=> o.visible=false);
+      c.requestRenderAll();
+      return { wmObjs, restores };
+    },
+    restore(restores, mode){
+      if (mode==='lock'){
+        restores.forEach(r=>{
+          r.o.visible=r.vis;
+          r.o.excludeFromExport=r.excl;
+            r.o.opacity=r.op;
+        });
+      }
+      WM.snapshot=null;
+    },
+    drawLocked(ctx,W,H){
+      if (!WM.snapshot) return;
+      ctx.save();
+      ctx.globalAlpha=1;
+      ctx.drawImage(WM.snapshot,0,0,W,H);
+      ctx.restore();
+    }
+  };
+
+  /* -------------------- Classifiers -------------------- */
+  const isBg=o=>!!o?._isBgRect;
+  const isBase=o=>!!(o?._isBase && !o._isBgRect);
+  const isText=o=>{
+    if(!o) return false;
+    const k=(o._kind||'').toLowerCase(), t=(o.type||'').toLowerCase();
+    return k==='customtext'||k==='tokenid'||t==='textbox'||t==='i-text'||t==='text';
+  };
+  const isOverlay=o=>{
+    if(!o) return false;
+    if (o._raSys || WM.is(o) || o._isBgRect || o._isBase || o._raTokenId) return false;
+    const k=(o._kind||'').toLowerCase();
+    if (k==='overlay'||k==='sticker'||k==='icon') return true;
+    if (o.type==='group'){
+      const kids=(o.getObjects?.()||o._objects||[]);
+      return kids.some(ch=>{
+        const ck=(ch._kind||'').toLowerCase();
+        return ck==='overlay'||ck==='sticker'||ck==='icon';
+      });
+    }
+    if (o.type==='image' && !o._isBase) return true;
+    return false;
+  };
+  function pickTargets(scope){
+    const c=window.canvas; if(!c) return [];
+    const objs=(c.getObjects()||[]).filter(o=>!isBg(o));
+    if (scope==='base') return objs.filter(isBase);
+    if (scope==='overlay') return objs.filter(isOverlay);
+    if (scope==='text') return objs.filter(isText);
+    return [];
+  }
+
+  /* -------------------- Return Plan -------------------- */
+  function planReturn(mode,durMs){
+    if (mode==='none') return {mode,reverse:0,snap:0,hold:0,soft:0};
+    if (mode==='reverse') return {mode,reverse:Math.round(durMs*CONFIG.reverseFraction),snap:0,hold:0,soft:0};
+    if (mode==='snap') return {mode,reverse:0,snap:CONFIG.snapFrames,hold:0,soft:0};
+    if (mode==='hold') return {mode,reverse:0,snap:CONFIG.snapFrames,hold:Math.round(durMs*CONFIG.holdFraction),soft:0};
+    if (mode==='soft'){
+      const soft=Math.max(CONFIG.softMinMs, Math.round(durMs*CONFIG.softFraction));
+      return {mode,reverse:soft,snap:0,hold:0,soft};
+    }
+    return {mode:'none',reverse:0,snap:0,hold:0,soft:0};
+  }
+
+  /* -------------------- Animation Core -------------------- */
+  let running=false, cancelFlag=false;
+
+  function animate({scope,preset,easingFn,durationMs,record,returnMode,wmMode}){
+    const c=window.canvas;
+    const W=c.getWidth(), H=c.getHeight();
+    const previewCanvas=$('#uaPreviewCanvas');
+    const videoOut=$('#uaVideoOut');
+    const dl=$('#uaDL');
+
+    if (!record){
+      previewCanvas.style.display='block';
+      videoOut.style.display='none';
+      dl.innerHTML='';
+    } else {
+      previewCanvas.style.display='none';
+      videoOut.style.display='none';
+      dl.innerHTML='';
+    }
+
+    const surface = record? document.createElement('canvas') : previewCanvas;
+    surface.width=W; surface.height=H;
+    const ctx=surface.getContext('2d');
+    ctx.imageSmoothingEnabled=true;
+    ctx.imageSmoothingQuality='high';
+
+    const wmState=WM.prepare(wmMode);
+
+    const vt0=(c.viewportTransform||[1,0,0,1,0,0]).slice();
+    const baseScale0=vt0[0]; const baseE0=vt0[4]; const baseF0=vt0[5];
+
+    const targets = scope==='camera'?[]:pickTargets(scope);
+    if (scope!=='camera' && targets.length===0){
+      showMsg('No targets');
+      WM.restore(wmState.restores, wmMode);
+      return;
+    }
+
+    const baselines=new Map();
+    targets.forEach(o=>{
+      baselines.set(o,{
+        left:o.left, top:o.top,
+        scaleX:o.scaleX, scaleY:o.scaleY,
+        angle:o.angle||0, opacity:o.opacity==null?1:o.opacity
+      });
+    });
+
+    const ret=planReturn(returnMode,durationMs);
+
+    let rec=null,chunks=[];
+    if (record){
+      try{
+        const stream=surface.captureStream(CONFIG.fps);
+        const mime=pickMimeType();
+        rec=new MediaRecorder(stream,{mimeType:mime});
+        rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+        rec.start();
+      }catch(_){}
+    }
+
+    const start=performance.now();
+    running=true; cancelFlag=false;
+    showMsg(record?'Recording…':'Animating…');
+
+    function phase(now){
+      const elapsed=now-start;
+      if (elapsed<=durationMs) return {ph:'forward',p:elapsed/durationMs};
+      let t=elapsed-durationMs;
+      if (ret.soft){
+        if (t<=ret.soft) return {ph:'reverse',p:t/ret.soft};
+        t-=ret.soft;
+      } else if (ret.reverse){
+        if (t<=ret.reverse) return {ph:'reverse',p:t/ret.reverse};
+        t-=ret.reverse;
+      }
+      if (ret.snap){
+        const span=ret.snap*(1000/CONFIG.fps);
+        if (t<=span) return {ph:'snap',p:0};
+        t-=span;
+      }
+      if (ret.hold){
+        if (t<=ret.hold) return {ph:'hold',p:0};
+        t-=ret.hold;
+      }
+      const tailSpan=CONFIG.tailFlushFrames*(1000/CONFIG.fps);
+      if (t<=tailSpan) return {ph:'tail',p:1};
+      return {ph:'done',p:1};
+    }
+
+    function applyCamera(tFrac, reverse){
+      const f=preset.from,to=preset.to;
+      const t=easingFn(tFrac);
+      const z=clamp( lerp(f.z,to.z, reverse?1-t:t), 0.01, CONFIG.cameraMaxZoom);
+      const xn=lerp(f.x,to.x, reverse?1-t:t);
+      const yn=lerp(f.y,to.y, reverse?1-t:t);
+      if (CONFIG.respectViewport){
+        const eCam=(1 - z)*(W/2) + xn*W;
+        const fCam=(1 - z)*(H/2) + yn*H;
+        const finalScale=baseScale0*z;
+        const finalE=baseE0 + eCam*baseScale0;
+        const finalF=baseF0 + fCam*baseScale0;
+        c.setViewportTransform([finalScale,0,0,finalScale,finalE,finalF]);
+      } else {
+        const e=(1 - z)*(W/2) + xn*W;
+        const f2=(1 - z)*(H/2) + yn*H;
+        c.setViewportTransform([z,0,0,z,e,f2]);
+      }
+    }
+
+    function applyObjects(tFrac, reverse){
+      const p=preset;
+      const has=k=>p.from[k]!=null && p.to[k]!=null;
+      const fwd=k=>lerp(p.from[k],p.to[k],tFrac);
+      const rev=k=>lerp(p.to[k],p.from[k],tFrac);
+      const val=k=>has(k)?(reverse?rev(k):fwd(k)):(k==='s'?1:0);
+
+      const s=val('s');
+      const rot=val('rot');
+      const alpha=has('alpha')?val('alpha'):null;
+      const dxN=val('dxN'), dyN=val('dyN');
+      const dx=val('dx'), dy=val('dy');
+      const dpx= dx + dxN*W;
+      const dpy= dy + dyN*H;
+
+      targets.forEach(o=>{
+        const b=baselines.get(o); if(!b) return;
+        const cw=o.getScaledWidth(), ch=o.getScaledHeight();
+        const cx=b.left+cw/2, cy=b.top+ch/2;
+        o.scaleX=b.scaleX*s;
+        o.scaleY=b.scaleY*s;
+        const nw=o.getScaledWidth(), nh=o.getScaledHeight();
+        o.left=cx - nw/2 + dpx;
+        o.top =cy - nh/2 + dpy;
+        if (has('rot')) o.angle=b.angle+rot;
+        if (alpha!=null) o.opacity=alpha*b.opacity;
+        o.setCoords?.();
+      });
+    }
+
+    function restoreAll(){
+      if (scope==='camera') c.setViewportTransform(vt0.slice());
+      else targets.forEach(o=>{
+        const b=baselines.get(o); if(!b) return;
+        o.left=b.left; o.top=b.top;
+        o.scaleX=b.scaleX; o.scaleY=b.scaleY;
+        o.angle=b.angle; o.opacity=b.opacity;
+        o.setCoords?.();
+      });
+      c.requestRenderAll();
+    }
+
+    function drawFrame(){
+      c.requestRenderAll();
+      ctx.clearRect(0,0,W,H);
+      ctx.drawImage(c.lowerCanvasEl || c.upperCanvasEl,0,0,W,H);
+      if (wmMode==='lock') WM.drawLocked(ctx,W,H);
+    }
+
+    function step(){
+      if (cancelFlag){ finalize(true); return; }
+      const now=performance.now();
+      const ph=phase(now);
+      if (ph.ph==='forward'){
+        const e=easingFn(ph.p);
+        scope==='camera'?applyCamera(e,false):applyObjects(e,false);
+        drawFrame();
+      } else if (ph.ph==='reverse'){
+        const e=easingFn(ph.p);
+        scope==='camera'?applyCamera(e,true):applyObjects(e,true);
+        drawFrame();
+      } else if (['snap','hold','tail'].includes(ph.ph)){
+        restoreAll();
+        drawFrame();
+      } else {
+        restoreAll();
+        drawFrame();
+        finalize(false);
         return;
       }
-      const style = ($('#raVStyle', pane)?.value || 'Drift');
-      const secs  = parseInt(($('#raVDur', pane)?.value || '5'), 10);
-      const size  = parseInt(($('#raVRes', pane)?.value || '720'), 10);
-      await makeVideo({ style, seconds: secs, size, statusEl: msg, linkEl: downLn, buttonEl: makeBtn });
-    });
-
-    // Live gate hint: update the message whenever canvas mutates (cheap observer)
-    const c = getFabricCanvas();
-    if (c && !c.__raVideoGateWired) {
-      c.__raVideoGateWired = true;
-      c.on('object:added',   () => { if ($('#raVideoPanel')) $('#raVMsg').textContent = ''; });
-      c.on('object:removed', () => { if ($('#raVideoPanel')) $('#raVMsg').textContent = ''; });
+      requestAnimationFrame(step);
     }
 
-    return pane;
-  }
+    function finalize(aborted){
+      restoreAll();
+      WM.restore(wmState.restores, wmMode);
+      if (rec){
+        try{
+          rec.onstop=()=>{
+            const mime=rec.mimeType||'video/webm';
+            if(!aborted){
+              const blob=new Blob(chunks,{type:mime});
+              const url=URL.createObjectURL(blob);
+              const ext=mime.includes('mp4')?'mp4':'webm';
 
-  // Boot after DOM is ready
-  function boot() {
-    try { ensurePanel(); } catch(_) {}
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, {once:true});
-  } else {
-    boot();
-  }
-})();
+              // Always show video + link (original behavior)
+              const videoOut=$('#uaVideoOut');
+              videoOut.style.display='block';
+              videoOut.src=url;
+              videoOut.play?.().catch(()=>{});
 
-/* ==========================================================
-   RA_WATERMARK_SWITCH_FOUNDATION_V1  — add-only, safe no-op
-   What this gives you:
-   • One switch to turn ON watermarking for the "Make Video" flow (later).
-   • Safe preloading of the watermark as a dataURL (avoids CORS issues).
-   • Works with your existing token‑gated video flow.
-   • Does nothing until you flip enableVideoWM to true.
+              const dl=$('#uaDL');
+              dl.innerHTML='';
+              const a=document.createElement('a');
+              a.href=url;
+              a.download=`anim_${Date.now()}.${ext}`;
+              a.textContent='Download animation';
+              dl.appendChild(a);
 
-   How to enable later (ONE change):
-   1) In CONFIG below, change enableVideoWM: false  →  true
-   2) Done. No other code edits needed.
-
-   Optional: override watermark via ?wm=https://…/your.png (same as images)
-   ========================================================== */
-(() => {
-  if (window.__RA_WM_BOOTED__) return;
-  window.__RA_WM_BOOTED__ = true;
-
-  // ---------- CONFIG (flip these later if you want the watermark) ----------
-  const CONFIG = {
-    enableVideoWM: false,       // ← flip to true when you want watermark in videos
-    wmWidthRatio: 0.12,         // each corner stamp is 12% of the canvas width
-    marginRatio:  0.02          // ~2% margin from edges
-  };
-
-  // ---------- Watermark loader (robust + CORS-safe) ----------
-  const queryWM = new URLSearchParams(location.search).get('wm');
-  const candidates = [
-    queryWM,                             // highest priority if provided
-    '/assets/watermark.png?v=wm10',      // your current primary
-    '/watermark.png?v=wm10'              // fallback
-  ].filter(Boolean);
-
-  const STATE = {
-    url: null,
-    img: null,        // HTMLImageElement (decoded from dataURL)
-    dataURL: null     // dataURL of the watermark (same-origin safe)
-  };
-
-  async function fetchAsDataURL(url){
-    const r = await fetch(url, { cache:'no-store', mode:'cors' });
-    if (!r.ok) throw new Error('fetch failed');
-    const b = await r.blob();
-    return await new Promise(res => {
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result);
-      fr.readAsDataURL(b);
-    });
-  }
-
-  async function loadWatermark(){
-    for (const u of candidates){
-      try{
-        const data = await fetchAsDataURL(u);
-        const img  = await new Promise((res, rej) => {
-          const im = new Image();
-          im.onload = () => res(im);
-          im.onerror = rej;
-          im.crossOrigin = 'anonymous';
-          im.src = data;
-        });
-        STATE.url = u; STATE.img = img; STATE.dataURL = data;
-        return true;
-      }catch(_){/* try next */}
-    }
-    return false;
-  }
-
-  function wmBox(w, h){
-    const wmW = Math.max(16, Math.round(w * CONFIG.wmWidthRatio));
-    const wmH = Math.round(STATE.img.height * (wmW / STATE.img.width));
-    const m   = Math.max(6,  Math.round(w * CONFIG.marginRatio));
-    return { wmW, wmH, m };
-  }
-
-  // Expose a tiny helper if we ever need to paint on a 2D canvas directly (not used today)
-  function paintWMOnCtx(ctx, w, h){
-    if (!STATE.img) return;
-    const { wmW, wmH, m } = wmBox(w, h);
-    try {
-      // TL
-      ctx.drawImage(STATE.img, m, m, wmW, wmH);
-      // BR
-      ctx.drawImage(STATE.img, w - m - wmW, h - m - wmH, wmW, wmH);
-    } catch(_){}
-  }
-
-  // ---------- Fabric helpers: add/remove TEMP watermark objects on the live canvas ----------
-  function baseIsToken(){
-    const c = window.canvas; if (!c) return false;
-    const base = (c.getObjects()||[]).find(o => o._isBase);
-    if (!base) return false;
-    // In your app: token base = plain Image; upload base = Group (image + 2 small stamps)
-    return (base.type === 'image');
-  }
-
-  function addTempFabricWM(){
-    const c = window.canvas;
-    if (!c || !window.fabric || !STATE.img) return null;
-
-    const cw = c.getWidth(), ch = c.getHeight();
-    const { wmW, wmH, m } = wmBox(cw, ch);
-
-    // Create two watermark images
-    const tl = new fabric.Image(STATE.img, {
-      left: m, top: m, selectable: false, evented: false
-    });
-    const br = new fabric.Image(STATE.img, {
-      left: cw - m - wmW, top: ch - m - wmH, selectable: false, evented: false
-    });
-    const sX = wmW / STATE.img.width, sY = wmH / STATE.img.height;
-    tl.scaleX = sX; tl.scaleY = sY;
-    br.scaleX = sX; br.scaleY = sY;
-
-    // Tag them so we can cleanly remove later
-    tl._raTmpWM = br._raTmpWM = true;
-
-    c.add(tl); c.add(br); c.requestRenderAll();
-    return [tl, br];
-  }
-
-  function removeTempFabricWM(){
-    const c = window.canvas; if (!c) return;
-    (c.getObjects()||[]).filter(o => o._raTmpWM).forEach(o => c.remove(o));
-    c.requestRenderAll();
-  }
-
-  // ---------- Gentle hook for "Make Video" button (no-op until you flip the switch) ----------
-  async function ensureWMReady(){ if (!STATE.img) await loadWatermark(); }
-
-  function waitForVideoDone(timeoutMs=60000){
-    return new Promise(resolve => {
-      const obs = new MutationObserver(() => {
-        // heuristic: look for a .webm download link or a status that says done
-        const link = document.querySelector('a[download$=".webm"], a[href$=".webm"]');
-        const stat = document.getElementById('raAnimStatus');
-        if (link || /done|saved|complete/i.test((stat?.textContent||'').toLowerCase())){
-          try{ obs.disconnect(); }catch(_){}
-          resolve();
+              // Auto-download if enabled
+              if (CONFIG.autoDownloadOnExport){
+                try{
+                  const auto=document.createElement('a');
+                  auto.href=url;
+                  auto.download=`anim_${Date.now()}.${ext}`;
+                  document.body.appendChild(auto);
+                  auto.click();
+                  setTimeout(()=>auto.remove(),0);
+                }catch(_){}
+              }
+            }
+            running=false; cancelFlag=false;
+            showMsg(aborted?'Canceled':'Done');
+          };
+          rec.stop();
+        }catch(_){
+          running=false; cancelFlag=false;
+          showMsg(aborted?'Canceled':'Done');
         }
-      });
-      obs.observe(document.body, { childList:true, subtree:true, characterData:true });
-      setTimeout(() => { try{ obs.disconnect(); }catch(_){}
-        resolve();
-      }, timeoutMs);
-    });
+      } else {
+        running=false; cancelFlag=false;
+        showMsg(aborted?'Canceled':'Done');
+      }
+    }
+
+    step();
   }
 
-  function hookMakeVideoButton(){
-    if (!CONFIG.enableVideoWM) return; // ← stays dormant until you flip the switch
-
-    // Intercept clicks on any button/link that looks like "Make Video"
-    const labels = ['make video','render video','animate','make preview','create video'];
-    document.addEventListener('click', async (e) => {
-      const el = e.target && e.target.closest && e.target.closest('button, a');
-      if (!el) return;
-
-      const t = (el.textContent || el.value || '').toLowerCase().trim();
-      if (!labels.some(k => t.includes(k))) return;   // not our button
-      if (!window.canvas) return;
-      if (!baseIsToken()) return;                      // keep token‑gated semantics
-
-      // Prepare watermark image
-      await ensureWMReady();
-      if (!STATE.img) return; // nothing to add
-
-      // Add temp WM objects, let the app's own handler run, then remove when done
-      addTempFabricWM();          // we do NOT preventDefault; original click proceeds
-      waitForVideoDone(60000).then(removeTempFabricWM);
-    }, true); // capture=true so we add WM before the app starts recording frames
+  /* -------------------- Utilities -------------------- */
+  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+  function pickMimeType(){
+    const pref=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
+    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
+    for (const p of pref){ if (MediaRecorder.isTypeSupported(p)) return p; }
+    return pref[2];
   }
 
-  // Boot
-  hookMakeVideoButton();
+  function gather(){
+    buildPanel();
+    const scope=$('#uaScope').value;
+    const presetId=$('#uaPreset').value;
+    const preset=PRESETS.find(p=>p.id===presetId) ||
+      PRESETS.find(p=> (scope==='camera'?p.kind==='camera': scope==='base'?p.kind==='base':'overlay')) ||
+      PRESETS[0];
+    const easeSel=$('#uaEase').value;
+    const easingFn=EASE[easeSel] || EASE[preset.ease] || EASE.ioSine;
+    let dur=parseFloat($('#uaDur').value||'6');
+    if(!Number.isFinite(dur)) dur=6;
+    dur=clamp(dur,2,CONFIG.maxDurationSec);
+    const durationMs=Math.round(dur*1000);
+    const returnMode=$('#uaReturn').value;
+    const wmMode=$('#uaWMMode').value;
+    return { scope, preset, easingFn, durationMs, returnMode, wmMode };
+  }
 
-  // Expose tiny API for future use (optional)
-  window.raWatermark = Object.freeze({
-    options: CONFIG,
-    url: () => STATE.url,
-    dataURL: () => STATE.dataURL,
-    img: () => STATE.img,
-    ready: ensureWMReady,
-    paintOnCtx: paintWMOnCtx,
-    addTempFabricWM,
-    removeTempFabricWM
-  });
+  function preview(){
+    if (running){ showMsg('Busy'); return; }
+    animate({ ...gather(), record:false });
+  }
+  function exportAnim(){
+    if (running){ showMsg('Busy'); return; }
+    animate({ ...gather(), record:true });
+  }
+  function stop(){
+    if (!running) return;
+    cancelFlag=true;
+  }
+
+  const API = {
+    preview,
+    export: exportAnim,
+    stop,
+    config: CONFIG,
+    version: VERSION
+  };
+  window.raAnimateUnifiedV2 = API;
+
+  function init(){ buildPanel(); }
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', init,{once:true});
+  else init();
+
 })();
+
 /* ==========================================================
-   RA_UNDO_REDO_SAFE_MINI_V1
-   • Super‑safe: never restores anything unless you click Undo/Redo.
-   • Records snapshots after edits only (add/move/scale/rotate/remove).
-   • Coalesces bursts (clear / multi‑adds) into one step.
-   • Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Ctrl+Y) wired.
-   • If your old Undo/Redo buttons exist, it uses them.
-     If not, it adds a small row under “Selection”.
-   • Does NOT touch desktop/mobile layout or exports.
+   RA_UNDO_REDO_SAFE_MINI_V1b
+   - Builds on your SAFE MINI V1 with:
+     • Watermark/footer/system overlay ignore.
+     • Smarter burst coalescing (resets timer on each event).
+     • Active object preservation (lightweight).
+     • Public API (window.raHistory).
+     • Base swap detection (optional toggle).
+     • Post-restore hooks (layer & watermark ensure, if present).
    ========================================================== */
 (() => {
-  if (window.__RA_UNDO_SAFE_V1__) return;
-  window.__RA_UNDO_SAFE_V1__ = true;
+  if (window.__RA_UNDO_SAFE_V1B__) return;
+  window.__RA_UNDO_SAFE_V1B__ = true;
 
   const MAX = 60;
   const DRAFT_KEY = 'ra_draft_v1';
+  const COALESCE_MS = 120;          // broader window & resets on each event
+  const AUTO_CLEAR_ON_BASE_SWAP = true;
 
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
@@ -3090,69 +3482,120 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
   let c;
+
   let history = [];
   let idx = -1;
+  let burstTimer = null;
+  let lastBaseSignature = null;
 
-  // mute while restoring so we don't create snapshots during loadFromJSON
+  // Guard flags
   let MUTE = 0;
   const isMuted = () => MUTE > 0;
 
+  // Active object tracking (injection of stable ids)
+  let nextHistId = 1;
+  function ensureId(o){
+    if (!o) return;
+    if (!o._histId) o._histId = 'H'+(nextHistId++);
+  }
+
   const EXTRA = [
     '_kind','_isBase','_isBgRect','raWM','raPos',
+    '_histId','_raSys','_raTokenId','_isWatermark','_raWMRing','_raWMCenter','_raFooter',
     'selectable','evented','hasControls',
     'lockMovementX','lockMovementY','lockScalingX','lockScalingY','lockRotation',
     'globalCompositeOperation','opacity','flipX','flipY'
   ];
 
+  function snapshotBaseSignature(){
+    if (!c) return '';
+    const base = (c.getObjects()||[]).find(o=>o && o._isBase);
+    if (!base) return '';
+    // use src or top-left dimension hash
+    const src = base.getSrc && base.getSrc();
+    return `${base.type}:${base.width}x${base.height}:${src||''}`;
+  }
+
   function serialize(){
     if (!c || isMuted()) return null;
+    (c.getObjects()||[]).forEach(ensureId);
     const j = c.toJSON(EXTRA);
     j.__w  = c.getWidth();
     j.__h  = c.getHeight();
     j.__vt = c.viewportTransform || [1,0,0,1,0,0];
+    // store active object id if exists
+    const active = c.getActiveObject && c.getActiveObject();
+    j.__active = active && active._histId ? active._histId : null;
     return JSON.stringify(j);
   }
 
- function restore(jsonStr, label=''){
-  if (!c || !jsonStr) return;
-  MUTE++;
-  window.__RA_RESTORING__ = true;             // ← set the guard
+  function restore(jsonStr, label=''){
+    if (!c || !jsonStr) return;
+    MUTE++;
+    window.__RA_RESTORING__ = true;
+    try {
+      const data = JSON.parse(jsonStr);
+      c.loadFromJSON(data, () => {
+        try {
+          if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
+          if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
 
-  try{
-    const data = JSON.parse(jsonStr);
-    c.loadFromJSON(data, () => {
-      try{
-        if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
-        if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
+            c.getObjects().forEach(o=>{
+              ensureId(o);
+              if (o._isBase){
+                o.selectable=false; o.evented=false; o.hasControls=false;
+                o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+              }
+              if (o._isBgRect || o._raSys){
+                o.selectable=false; o.evented=false;
+              }
+            });
 
-        // keep base/bg not selectable
-        c.getObjects().forEach(o=>{
-          if (o._isBase){
-            o.selectable=false; o.evented=false; o.hasControls=false;
-            o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+          // Try to reselect previous active object
+          if (data.__active){
+            const target = c.getObjects().find(o => o._histId === data.__active);
+            if (target) c.setActiveObject(target);
           }
-        });
 
-        c.requestRenderAll();
-      } finally {
-        MUTE--;
-        window.__RA_RESTORING__ = false;      // ← clear after restore settles
-        refresh(label);
-      }
-    });
-  } catch(_){
-    MUTE--;
-    window.__RA_RESTORING__ = false;          // ← also clear on error
-    refresh(label);
+          // Post-restore hooks: re-layer + ring/watermark ensure
+          try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+          try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
+
+          c.requestRenderAll();
+        } finally {
+          MUTE--;
+          window.__RA_RESTORING__ = false;
+          refresh(label);
+        }
+      });
+    } catch(e){
+      MUTE--;
+      window.__RA_RESTORING__ = false;
+      refresh(label);
+    }
   }
-}
+
   function push(label=''){
     const s = serialize(); if (!s) return;
-    // if we undid into the middle, drop the tail
+    // Base swap auto-clear (optional)
+    if (AUTO_CLEAR_ON_BASE_SWAP){
+      const sig = snapshotBaseSignature();
+      if (lastBaseSignature && sig && sig !== lastBaseSignature){
+        // new base encountered: start fresh
+        history = [];
+        idx = -1;
+      }
+      lastBaseSignature = sig;
+    }
+
+    // If we undid into the middle, cut tail
     if (idx < history.length - 1) history = history.slice(0, idx + 1);
-    if (history[idx] === s) { refresh(label); return; }
+    if (history[idx] === s){ refresh(label); return; }
+
     history.push(s);
-    if (history.length > MAX) history.shift();
+    if (history.length > MAX){
+      history.shift();
+    }
     idx = history.length - 1;
     refresh(label);
   }
@@ -3160,10 +3603,23 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
   function undo(){ if (idx <= 0) return; idx -= 1; restore(history[idx], 'Undo'); }
   function redo(){ if (idx >= history.length - 1) return; idx += 1; restore(history[idx], 'Redo'); }
 
+  // Public API
+  function canUndo(){ return idx > 0; }
+  function canRedo(){ return idx >= 0 && idx < history.length - 1; }
+  function forceSnapshot(label='Manual'){ push(label); }
+  function clearHistory(msg='Cleared'){ history=[]; idx=-1; refresh(msg); }
+
+  window.raHistory = {
+    undo, redo, push:forceSnapshot,
+    canUndo, canRedo,
+    clear: clearHistory,
+    length: () => history.length,
+    index: () => idx
+  };
+
   // ---------- UI ----------
   let ui = {};
   function ensureUI(){
-    // If your previous buttons exist, wire them
     const existing = {
       undo: $('#raUndoBtn'),
       redo: $('#raRedoBtn'),
@@ -3172,7 +3628,7 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
       clr : $('#raClearDraftBtn'),
       info: $('#raHistInfo')
     };
-    if (existing.undo || existing.redo) {
+    if (existing.undo || existing.redo){
       ui = existing;
       if (ui.undo) ui.undo.onclick = undo;
       if (ui.redo) ui.redo.onclick = redo;
@@ -3182,7 +3638,6 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
       return;
     }
 
-    // Else add a tiny row under “Selection”
     const holder =
       $$('h3').find(h => /selection/i.test((h.textContent||'').trim()))?.parentNode
       || document.body;
@@ -3197,80 +3652,97 @@ newSize = Math.max(400, Math.min(2000, newSize)); // clamp 400–2000 px
     const saveB = mk('raSaveDraftBtn','Save Draft');
     const loadB = mk('raLoadDraftBtn','Restore Draft');
     const clrB  = mk('raClearDraftBtn','×');
-
     const info = document.createElement('div');
     info.id='raHistInfo'; info.style.cssText='font-size:11px;opacity:.65';
 
     row.append(undoB, redoB, saveB, loadB, clrB, info);
     holder.appendChild(row);
-
     ui = {undo:undoB, redo:redoB, save:saveB, load:loadB, clr:clrB, info};
-    undoB.onclick = undo; redoB.onclick = redo;
-    saveB.onclick = saveDraft; loadB.onclick = restoreDraft;
+
+    undoB.onclick = undo;
+    redoB.onclick = redo;
+    saveB.onclick = saveDraft;
+    loadB.onclick = restoreDraft;
     clrB.onclick  = ()=>{ localStorage.removeItem(DRAFT_KEY); refresh('Draft cleared'); };
   }
 
   function refresh(msg=''){
     ensureUI();
-    const canUndo = idx > 0;
-    const canRedo = idx >= 0 && idx < history.length - 1;
-    if (ui.undo) ui.undo.disabled = !canUndo;
-    if (ui.redo) ui.redo.disabled = !canRedo;
+    const stepsBack = idx;                        // # undo steps available
+    const stepsForward = history.length - 1 - idx;
+    if (ui.undo) ui.undo.disabled = stepsBack <= 0;
+    if (ui.redo) ui.redo.disabled = stepsForward <= 0;
     if (ui.load) ui.load.disabled = !localStorage.getItem(DRAFT_KEY);
 
-    if (ui.undo) ui.undo.textContent = `Undo (${canUndo ? idx : 0})`;
-    if (ui.redo) ui.redo.textContent = `Redo (${canRedo ? (history.length - 1 - idx) : 0})`;
-    if (ui.info) ui.info.textContent = `History ${ idx + 1 } / ${ history.length }${msg ? ' • ' + msg : ''}`;
+    if (ui.undo) ui.undo.textContent = `Undo (${stepsBack})`;
+    if (ui.redo) ui.redo.textContent = `Redo (${stepsForward})`;
+    if (ui.info) ui.info.textContent = `History ${idx + 1} / ${history.length}${msg ? ' • ' + msg : ''}`;
   }
 
-  // ---------- Draft ----------
-  function saveDraft(){ if (idx>=0){ try{ localStorage.setItem(DRAFT_KEY, history[idx]); refresh('Draft saved'); }catch(_){ refresh('Draft failed'); } } }
+  // Draft Save/Restore
+  function saveDraft(){
+    if (idx>=0){
+      try {
+        localStorage.setItem(DRAFT_KEY, history[idx]);
+        refresh('Draft saved');
+      } catch(_){
+        refresh('Draft failed');
+      }
+    }
+  }
   function restoreDraft(){
     const j = localStorage.getItem(DRAFT_KEY);
     if (!j) return refresh('No draft');
-    history = [j]; idx = 0; restore(j, 'Draft restored');
+    history = [j]; idx=0;
+    restore(j, 'Draft restored');
   }
 
-  // ---------- Wiring (non‑invasive) ----------
-  let burstTimer = null;
-  function schedulePush(label){ if (isMuted()) return; if (burstTimer) return; burstTimer = setTimeout(()=>{ burstTimer=null; push(label); }, 40); }
+  // Burst coalescing (resets timer each new qualifying event)
+  function schedulePush(label){
+    if (isMuted()) return;
+    if (burstTimer) clearTimeout(burstTimer);
+    burstTimer = setTimeout(()=>{
+      burstTimer=null;
+      push(label);
+    }, COALESCE_MS);
+  }
+
+  function isUserObject(o){
+    if (!o) return false;
+    // Skip system / base / token / watermark
+    if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) return false;
+    if (o._isWatermark || o._raWMRing || o._raWMCenter || o._raFooter) return false;
+    return true;
+  }
 
   function wire(){
     c = C(); if (!c) return defer(wire, 120);
     ensureUI();
 
-    // Take a baseline snapshot a moment after the app finishes initial setup
-    defer(()=>{ push('Init'); }, 150);
+    // Baseline snapshot after initial asynchronous setup
+    defer(()=>{ push('Init'); }, 180);
 
-    // Fabric events — record only real user edits (skip bg/base/sys/label)
-c.on('object:modified', (e)=>{
-  const o = e && e.target; 
-  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
-  schedulePush('Edit');
-});
+    c.on('object:modified', e=>{
+      if (isUserObject(e?.target)) schedulePush('Edit');
+    });
+    c.on('object:added', e=>{
+      if (isUserObject(e?.target)) schedulePush('Add');
+    });
+    c.on('object:removed', e=>{
+      if (isUserObject(e?.target)) schedulePush('Remove');
+    });
 
-c.on('object:added', (e)=>{
-  const o = e && e.target;
-  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
-  schedulePush('Add');
-});
-
-c.on('object:removed', (e)=>{
-  const o = e && e.target;
-  if (!o || o._isBgRect || o._isBase || o._raSys || o._raTokenId) return;
-  schedulePush('Remove');
-});
-
-    // Keyboard shortcuts (ignore when typing)
+    // Keyboard shortcuts
     document.addEventListener('keydown', (e)=>{
       const tag=(e.target&&e.target.tagName||'').toLowerCase();
       if (/^(input|textarea|select)$/.test(tag) || e.target?.isContentEditable) return;
-      if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); }
-      else if (((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z' && e.shiftKey) ||
-               ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='y')){ e.preventDefault(); redo(); }
+      const key = e.key.toLowerCase();
+      if ((e.metaKey||e.ctrlKey) && key==='z' && !e.shiftKey){ e.preventDefault(); undo(); }
+      else if (((e.metaKey||e.ctrlKey) && key==='z' && e.shiftKey) ||
+               ((e.metaKey||e.ctrlKey) && key==='y')){ e.preventDefault(); redo(); }
     });
 
-    // Canvas size dropdown → one snapshot around resize operations
+    // Canvas size dropdown
     const sizeEl = document.getElementById('canvasSize');
     if (sizeEl && !sizeEl.__raHistBound){
       sizeEl.__raHistBound = true;
@@ -3284,378 +3756,6 @@ c.on('object:removed', (e)=>{
     document.addEventListener('DOMContentLoaded', wire, {once:true});
   } else {
     wire();
-  }
-})();
-
-/* ==========================================================
-   RA_ANIMATE_PREVIEW_VIDEO_V4
-   • Presets for: Everything (viewport), Base only, Overlays only, Text only.
-   • Overlay presets still auto-scope when "Everything" is selected.
-   • Broader, safer target detection (text/overlay/base).
-   • Recording: robust MIME selection (VP9→VP8→WebM→MP4 if supported),
-     captureStream FPS, auto download link, and safe fallbacks.
-   • Preview-safe: state restored; undo/redo not spammed; no layout changes.
-   ========================================================== */
-(() => {
-  if (window.__RA_ANIM_V4__) return; window.__RA_ANIM_V4__ = true;
-
-  const VERSION = '4.0.0';
-  const FPS = 30;
-
-  // ---------- Shortcuts ----------
-  const $  = (s, r=document)=>r.querySelector(s);
-  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
-  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  // ---------- Easings ----------
-  const EASE = {
-    linear: t => t,
-    ioQuad: t => t<0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2,
-    ioSine: t => -(Math.cos(Math.PI*t)-1)/2,
-    ioCubic: t => t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2,
-    ioBack: t => { const c1=1.70158, c2=c1*1.525; return t<0.5
-      ? (Math.pow(2*t,2)*((c2+1)*2*t - c2))/2
-      : (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2; },
-    ioExpo: t => t===0?0 : t===1?1 : (t<0.5 ? Math.pow(2,20*t-10)/2 : (2 - Math.pow(2,-20*t+10))/2)
-  };
-
-  // ---------- Presets ----------
-  // kind:'viewport' => whole scene via camera (Everything).
-  // kind:'overlays' => overlay items (stickers, shapes, images that are not base/text).
-  // kind:'text'     => text/token ID only.
-  // kind:'base'     => base image only.
-  // Viewport params: z (zoom), x/y (normalized pan: -0.1..+0.1).
-  // Object params (overlays/base/text): s (scale), rot (deg), alpha (0..1), dx/dy (px), dxN/dyN (normalized W/H).
-  const PRESETS = [
-    // — Viewport / Everything —
-    {id:'kb_in_ur', name:'Ken Burns — in ↗', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:+0.06}},
-    {id:'kb_in_ul', name:'Ken Burns — in ↖', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:+0.06}},
-    {id:'kb_in_dr', name:'Ken Burns — in ↘', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:-0.06,y:-0.06}},
-    {id:'kb_in_dl', name:'Ken Burns — in ↙', kind:'viewport', ease:'ioSine', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.18,x:+0.06,y:-0.06}},
-    {id:'kb_out',    name:'Ken Burns — out',    kind:'viewport', ease:'ioSine',  from:{z:1.15,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
-    {id:'pan_up',    name:'Pan up (slow)',      kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y: 0.06}, to:{z:1.00,x:0.00,y:-0.06}},
-    {id:'pan_down',  name:'Pan down (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:0.00,y:-0.06}, to:{z:1.00,x:0.00,y: 0.06}},
-    {id:'pan_left',  name:'Pan left (slow)',    kind:'viewport', ease:'ioQuad',  from:{z:1.00,x: 0.06,y:0.00}, to:{z:1.00,x:-0.06,y:0.00}},
-    {id:'pan_right', name:'Pan right (slow)',   kind:'viewport', ease:'ioQuad',  from:{z:1.00,x:-0.06,y:0.00}, to:{z:1.00,x: 0.06,y:0.00}},
-    {id:'zoom_in',   name:'Zoom in (gentle)',   kind:'viewport', ease:'ioCubic', from:{z:1.00,x:0.00,y:0.00},  to:{z:1.15,x: 0.00,y: 0.00}},
-    {id:'zoom_out',  name:'Zoom out (gentle)',  kind:'viewport', ease:'ioCubic', from:{z:1.12,x:0.00,y:0.00},  to:{z:1.00,x: 0.00,y: 0.00}},
-
-    // — Overlays only —
-    {id:'ov_pop',      name:'Overlays/Text pop (scale)',        kind:'overlays', ease:'ioBack', from:{s:0.90},     to:{s:1.00}},
-    {id:'ov_slide_up', name:'Overlays/Text slide up',           kind:'overlays', ease:'ioSine', from:{dyN:0.14},   to:{dyN:0.00}},
-    {id:'ov_slide_dn', name:'Overlays/Text slide down',         kind:'overlays', ease:'ioSine', from:{dyN:-0.14},  to:{dyN:0.00}},
-    {id:'ov_slide_l',  name:'Overlays/Text slide in ←',         kind:'overlays', ease:'ioSine', from:{dxN:-0.18},  to:{dxN:0.00}},
-    {id:'ov_slide_r',  name:'Overlays/Text slide in →',         kind:'overlays', ease:'ioSine', from:{dxN: 0.18},  to:{dxN:0.00}},
-    {id:'ov_fade',     name:'Overlays/Text fade in',            kind:'overlays', ease:'ioCubic',from:{alpha:0.00}, to:{alpha:1.00}},
-    {id:'ov_wiggle',   name:'Overlays/Text tiny rotate',        kind:'overlays', ease:'ioSine', from:{rot:-5},     to:{rot:0}},
-    {id:'ov_pop_big',  name:'Overlays/Text big pop (stronger)', kind:'overlays', ease:'ioBack', from:{s:0.85},     to:{s:1.00}},
-
-    // — Base only —
-    {id:'base_nudge',  name:'Base nudge (gentle zoom in)',      kind:'base',     ease:'ioSine', from:{s:1.00},     to:{s:1.06}},
-    {id:'base_slide',  name:'Base slide right a bit',           kind:'base',     ease:'ioQuad', from:{dxN:-0.06},  to:{dxN:0.00}}
-  ];
-
-  // ---------- UI dock ----------
-  function ensureDock(){
-    let dock = $('#raAnimDock');
-    if (dock) return dock;
-
-    const host = $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode || document.body;
-    dock = document.createElement('div');
-    dock.id = 'raAnimDock';
-    dock.style.cssText = 'margin:16px 0;padding:12px;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea';
-    dock.innerHTML = `
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <strong>Animate</strong>
-        <span style="opacity:.55;font-size:12px">v${VERSION}</span>
-        <label style="display:flex;gap:6px;align-items:center">
-          What:
-          <select id="raAnimScope">
-            <option value="all">Everything (camera)</option>
-            <option value="base">Base only</option>
-            <option value="overlays">Overlays only</option>
-            <option value="text">Text only</option>
-          </select>
-        </label>
-        <label style="display:flex;gap:6px;align-items:center">
-          Preset:
-          <select id="raAnimPreset"></select>
-        </label>
-        <label style="display:flex;gap:6px;align-items:center">
-          Easing:
-          <select id="raAnimEase">
-            <option value="ioSine">Smooth (Sine)</option>
-            <option value="ioQuad">Natural (Quad)</option>
-            <option value="ioCubic">Rounded (Cubic)</option>
-            <option value="ioBack">Bounce-back</option>
-            <option value="ioExpo">Snappy (Expo)</option>
-            <option value="linear">Linear</option>
-          </select>
-        </label>
-        <label style="display:flex;gap:6px;align-items:center">
-          Duration: <input id="raAnimDur" type="number" min="2" max="20" value="6" step="0.1" style="width:60px">s
-        </label>
-        <button id="raAnimPreview" class="btn small">Preview</button>
-        <button id="raAnimExport"  class="btn small">Export video</button>
-        <span id="raAnimMsg" style="font-size:12px;opacity:.75;"></span>
-      </div>
-      <video id="raAnimOut" style="display:none;margin-top:10px;max-width:100%;border-radius:8px" controls></video>
-      <div id="raAnimDL" style="margin-top:6px"></div>
-    `;
-    host.appendChild(dock);
-
-    // Fill presets
-    const sel = $('#raAnimPreset', dock);
-    PRESETS.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
-
-    // Events
-    $('#raAnimPreview', dock).onclick = ()=> run(false);
-    $('#raAnimExport',  dock).onclick = ()=> run(true);
-    $('#raAnimPreset',  dock).onchange = () => {
-      const id = $('#raAnimPreset').value;
-      const p  = PRESETS.find(x=>x.id===id);
-      if (!p) return;
-      // If user has Everything/Base but picked an overlay preset, auto-scope to overlays.
-      const scopeEl = $('#raAnimScope');
-      if (p.kind==='overlays' && scopeEl.value!=='overlays') {
-        scopeEl.value = 'overlays';
-        msg('Preset targets overlays → switched "What" to Overlays.');
-      }
-      // Prefer preset’s ease if it has one
-      if (p.ease) $('#raAnimEase').value = p.ease;
-    };
-
-    return dock;
-  }
-
-  function msg(t){
-    const m = $('#raAnimMsg'); if (!m) return;
-    m.textContent = t||'';
-    if (t) setTimeout(()=>{ if ($('#raAnimMsg')===m) m.textContent=''; }, 2200);
-  }
-
-  // ---------- Helpers ----------
-  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-  const lerp=(a,b,t)=>a+(b-a)*t;
-
-  const isBg    = o => !!o._isBgRect;
-  const isBase  = o => !!(o._isBase && !o._isBgRect);
-  const isText  = o => {
-    const k = (o._kind||'').toLowerCase();
-    const t = (o.type||'').toLowerCase();
-    return k==='customtext' || k==='tokenid' || t==='textbox' || t==='i-text' || t==='text';
-  };
-  const isOverlay = o => {
-    if (isBg(o) || isBase(o) || isText(o)) return false;
-    const k = (o._kind||'').toLowerCase();
-    // Treat any non-base/non-text drawable as overlay by default.
-    return k==='overlay' || k==='sticker' || k==='icon' || true;
-  };
-
-  function pickTargets(c, scope){
-    const objs = (c.getObjects?.()||[]).filter(o => !isBg(o));
-    if (scope==='text')     return objs.filter(isText);
-    if (scope==='overlays') return objs.filter(isOverlay);
-    if (scope==='base')     return objs.filter(isBase);
-    return []; // 'all' uses viewport animation only
-  }
-
-  // ---------- Core ----------
-  let running=false;
-  let lastURL=null;
-
-  async function run(record){
-    const c=C(); if(!c){ alert('Canvas not ready'); return; }
-    if (running) return;
-
-    ensureDock();
-    const scopeEl = $('#raAnimScope');
-    const presetEl= $('#raAnimPreset');
-    const easeEl  = $('#raAnimEase');
-    const durSec  = clamp(parseFloat($('#raAnimDur')?.value||'6'),2,20);
-    const dur     = Math.round(durSec*1000);
-
-    const preset  = PRESETS.find(p=>p.id===presetEl.value) || PRESETS[0];
-    const ease    = EASE[(easeEl?.value)||preset.ease||'ioQuad'] || EASE.ioQuad;
-    const scope   = scopeEl?.value || 'all';
-
-    const W=c.getWidth?.()||0, H=c.getHeight?.()||0, cx=W/2, cy=H/2;
-
-    // Decide mode/targets strictly via the UI scope + pickTargets()
-    const viewportOnly = (preset.kind==='viewport' && scope==='all');
-    const targets = viewportOnly ? [] : pickTargets(c, scope);
-
-    // Guard rails for empty selections
-    if (!viewportOnly && targets.length===0){
-      if (scope==='base'){      msg('Load an image first'); return; }
-      if (scope==='overlays'){  msg('Add an overlay first'); return; }
-      if (scope==='text'){      msg('Add custom text or token ID first'); return; }
-    }
-
-    running=true; msg(record?'Recording…':'Playing…');
-
-    // Save state
-    const vt0 = (c.viewportTransform||[1,0,0,1,0,0]).slice();
-    const active = c.getActiveObject?.(); c.discardActiveObject?.(); c.requestRenderAll?.();
-
-    // Snapshots for object animations
-    const snap = new Map();
-    const store = o => snap.set(o, {
-      left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY,
-      angle:o.angle, opacity:(o.opacity==null?1:o.opacity)
-    });
-    targets.forEach(store);
-
-    // Clean previous URL if any
-    if (lastURL){ try{ URL.revokeObjectURL(lastURL); }catch(_){ } lastURL=null; }
-    $('#raAnimDL')?.replaceChildren?.();
-
-    // Optional recording
-    let rec, chunks=[];
-    const vidEl = $('#raAnimOut');
-    if (record){
-      try{
-        const el = (c.lowerCanvasEl || c.upperCanvasEl);
-        const stream = el?.captureStream ? el.captureStream(FPS) : null;
-        const type = pickMimeType();
-        if (stream && typeof MediaRecorder!=='undefined'){
-          const opts = type ? { mimeType:type } : undefined;
-          rec = new MediaRecorder(stream, opts);
-          rec.ondataavailable = e=>{ if (e.data && e.data.size) chunks.push(e.data); };
-          rec.start();
-        } else {
-          msg('Recording not supported in this browser');
-        }
-      }catch(_){ msg('Recording not supported'); }
-    }
-
-    const t0 = performance.now(); let rafId=0;
-
-    function applyViewport(z,xN,yN){
-      // Center-aware transform: translation keeps origin stable while panning by normalized canvas units
-      const e = (1 - z) * cx + xN * W;
-      const f = (1 - z) * cy + yN * H;
-      c.setViewportTransform?.([z,0,0,z, e, f]);
-    }
-
-    function step(now){
-      const raw = clamp((now - t0)/dur, 0, 1);
-      const t   = ease(raw);
-
-      if (viewportOnly){
-        const z  = lerp(preset.from.z, preset.to.z, t);
-        const xn = lerp(preset.from.x, preset.to.x, t);
-        const yn = lerp(preset.from.y, preset.to.y, t);
-        applyViewport(z, xn, yn);
-      } else {
-        const hasScale = (preset.from?.s!=null && preset.to?.s!=null);
-        const hasRot   = (preset.from?.rot!=null && preset.to?.rot!=null);
-        const hasAlpha = (preset.from?.alpha!=null && preset.to?.alpha!=null);
-
-        const dx  = (preset.from?.dx!=null && preset.to?.dx!=null) ? lerp(preset.from.dx,  preset.to.dx,  t) : 0;
-        const dy  = (preset.from?.dy!=null && preset.to?.dy!=null) ? lerp(preset.from.dy,  preset.to.dy,  t) : 0;
-        const dxN = (preset.from?.dxN!=null && preset.to?.dxN!=null)? lerp(preset.from.dxN, preset.to.dxN, t) : 0;
-        const dyN = (preset.from?.dyN!=null && preset.to?.dyN!=null)? lerp(preset.from.dyN, preset.to.dyN, t) : 0;
-
-        const dpx = dx + dxN*W;
-        const dpy = dy + dyN*H;
-
-        const s   = hasScale ? lerp(preset.from.s,   preset.to.s,   t) : 1.0;
-        const rot = hasRot   ? lerp(preset.from.rot, preset.to.rot, t) : 0;
-        const a   = hasAlpha ? lerp(preset.from.alpha, preset.to.alpha, t) : null;
-
-        targets.forEach(o=>{
-          const o0 = snap.get(o); if(!o0) return;
-          o.scaleX = o0.scaleX * s;
-          o.scaleY = o0.scaleY * s;
-          o.left   = o0.left + dpx;
-          o.top    = o0.top  + dpy;
-          if (hasRot)   o.angle   = o0.angle + rot;
-          if (a!=null)  o.opacity = a * (o0.opacity==null?1:o0.opacity);
-          o.setCoords?.();
-        });
-      }
-
-      c.requestRenderAll?.();
-      if (raw<1) { rafId = requestAnimationFrame(step); } else { finish(); }
-    }
-
-    function finish(){
-      cancelAnimationFrame(rafId);
-
-      if (rec){
-        try{
-          rec.onstop = ()=>{
-            const type = rec.mimeType || 'video/webm';
-            const blob = new Blob(chunks, {type});
-            const url  = URL.createObjectURL(blob);
-            lastURL = url;
-
-            // Video element
-            if (vidEl){
-              vidEl.style.display='block';
-              vidEl.src = url;
-              vidEl.play?.().catch(()=>{});
-            }
-
-            // Download link
-            const dl = $('#raAnimDL');
-            if (dl){
-              dl.innerHTML = '';
-              const a = document.createElement('a');
-              a.textContent = 'Download animation';
-              a.href = url;
-              a.download = `animation_${Date.now()}.${extFromMime(type)}`;
-              a.className = 'btn small';
-              dl.appendChild(a);
-            }
-
-            msg('Done. Preview above or use “Download animation”.');
-          };
-          rec.stop();
-        }catch(_){ /* ignore */ }
-      } else {
-        msg('Done');
-      }
-
-      // Restore state
-      try { c.setViewportTransform?.(vt0); } catch(_){}
-      targets.forEach(o=>{
-        const s = snap.get(o); if(!s) return;
-        o.left=s.left; o.top=s.top; o.scaleX=s.scaleX; o.scaleY=s.scaleY; o.angle=s.angle; o.opacity=s.opacity;
-        o.setCoords?.();
-      });
-      if (active) try{ c.setActiveObject?.(active); }catch(_){}
-      c.requestRenderAll?.();
-      running=false;
-    }
-
-    requestAnimationFrame(step);
-  }
-
-  // ---------- Utilities ----------
-  function pickMimeType(){
-    const pref = [
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm',
-      'video/mp4' // may be unsupported in many browsers for MediaRecorder
-    ];
-    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
-    for (const t of pref){ if (MediaRecorder.isTypeSupported(t)) return t; }
-    return '';
-  }
-  function extFromMime(t){
-    if (!t) return 'webm';
-    if (t.includes('mp4')) return 'mp4';
-    return 'webm';
-  }
-
-  // Build UI now/when ready
-  if (document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded', ensureDock, {once:true});
-  } else {
-    ensureDock();
   }
 })();
 
@@ -3700,281 +3800,6 @@ c.on('object:removed', (e)=>{
   }
   window.addEventListener('resize',           run, {passive:true});
   window.addEventListener('orientationchange',() => setTimeout(run, 100), {passive:true});
-})();
-
-/* ================= RA_HIDE_TOKEN_VIDEO_PANEL_v1 ================= */
-(() => {
-  function hide() {
-    // Remove by ID if it exists
-    const el = document.getElementById('raVideoPanel');
-    if (el) el.remove();
-
-    // Fallback: hide any card whose heading says “Video (token‑only)”
-    Array.from(document.querySelectorAll('h2,h3')).forEach(h => {
-      const t = (h.textContent || '').toLowerCase();
-      if (t.includes('video') && t.includes('token')) {
-        const card = h.closest('section,div') || h.parentElement;
-        if (card) card.style.display = 'none';
-      }
-    });
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', hide, { once:true });
-  } else { hide(); }
-  new MutationObserver(hide).observe(document.documentElement, { childList:true, subtree:true });
-})();
-
-/* ==========================================================
-   RA_WM_CENTER_ADMIN_NO_STAMPS_V2
-   • Removes corner stamps from EVERY new/old base or overlay.
-     (We strip the stamp children out of the group; no re-centering bugs.)
-   • One centered watermark layer with admin-only controls.
-     - Enable/disable
-     - Show on Tokens
-     - Show on Uploads
-     - Opacity + Size (width % of canvas)
-   • No dependency on your Undo/Redo patch and no overrides.
-     (We never touch window.raHist and we don’t replace base objects.)
-   ========================================================== */
-(() => {
-  if (window.__RA_WM_CENTER_ADMIN_NO_STAMPS_V2__) return;
-  window.__RA_WM_CENTER_ADMIN_NO_STAMPS_V2__ = true;
-
-  // ---------- helpers ----------
-  const $  = (s, r=document)=>r.querySelector(s);
-  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
-  const C  = ()=> (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-  const isAdmin = /\badmin=1\b/i.test(location.search);
-
-  // ---------- persisted state ----------
-  const KEY = 'ra_wm_center_admin_v2';
-  const STATE = {
-    enabled: true,
-    showOnTokens:  true,
-    showOnUploads: true,
-    opacity: 0.18,
-    sizePct: 0.88,                         // watermark width as % of canvas width
-    img: null,
-    dataURL: null
-  };
-  try { Object.assign(STATE, JSON.parse(localStorage.getItem(KEY)||'{}')); } catch(_){}
-  const save = ()=>{ try {
-    localStorage.setItem(KEY, JSON.stringify({
-      enabled:STATE.enabled,
-      showOnTokens:STATE.showOnTokens,
-      showOnUploads:STATE.showOnUploads,
-      opacity:STATE.opacity,
-      sizePct:STATE.sizePct
-    }));
-  } catch(_){} };
-
-  // ---------- load watermark image (same precedence you’ve used) ----------
-const wmParam = new URLSearchParams(location.search).get('wm') || '';
-// Allow absolute http(s) URLs or same‑origin absolute paths (block data:, javascript:, etc.)
-const queryWM = (/^https?:\/\//i.test(wmParam) || wmParam.startsWith('/')) ? wmParam : null;
-const CAND = [ queryWM, '/assets/watermark.png?v=wm10', '/watermark.png?v=wm10' ].filter(Boolean);
-  async function fetchAsDataURL(u){
-    const r = await fetch(u, { cache:'no-store', mode:'cors' });
-    if (!r.ok) throw new Error('x');
-    const b = await r.blob();
-    return await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
-  }
-  async function ensureWM(){
-    if (STATE.img) return true;
-    for (const u of CAND){
-      try{
-        const data = await fetchAsDataURL(u);
-        const im = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.crossOrigin='anonymous'; i.src=data; });
-        STATE.img = im; STATE.dataURL = im.src; return true;
-      }catch(_){}
-    }
-    return false;
-  }
-
-  // ---------- identify base type ----------
-  function findBase(c){
-    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
-  }
-  function baseIsToken(base){
-    // In your app: tokens were plain Image, uploads were Group.
-    // We keep that invariant by stripping stamp children in-place.
-    return !!(base && base.type === 'image');
-  }
-
-  // ---------- strip corner-stamp children from a group ----------
-  function isStamp(o){ return !!(o && (o._isWatermark || o.raWM || o.raPos)); }
-
-  function stripStampsFromGroup(g){
-    if (!g || g.type!=='group') return false;
-    const kids = (g._objects||[]);
-    const has = kids.some(isStamp);
-    if (!has) return false;
-
-    // remove only the stamp children; keep the main image and group transform
-    kids.slice().forEach(k => { if (isStamp(k)) g.remove(k); });
-    try {
-      g._calcBounds && g._calcBounds();
-      g._updateObjectCoords && g._updateObjectCoords();
-      g.dirty = true; g.setCoords();
-    } catch(_){}
-    return true;
-  }
-
-  function cleanCornerStamps(c){
-    if (!c) return;
-    (c.getObjects()||[]).forEach(o=>{
-      if (o.type==='group') stripStampsFromGroup(o);
-    });
-    c.requestRenderAll();
-  }
-
-  // ---------- centered watermark layer ----------
-  function ensureCenteredWM(c){
-    if (!c || !STATE.img) return;
-
-    const base = findBase(c);
-    const hasBase = !!base;
-    const isToken = baseIsToken(base);
-
-    const force = (window && window.__raWMForce) || null;
-// Personal override (from wallet) wins; else fall back to admin toggles
-const shouldShow =
-  hasBase && (
-    (force && force.off) ? false :
-    (force && force.on)  ? true  :
-    (STATE.enabled && ((isToken && STATE.showOnTokens) || (!isToken && STATE.showOnUploads)))
-  );
-
-    let wm = (c.getObjects()||[]).find(o => o && o._raWMCenter);
-    if (!shouldShow){
-      if (wm){ c.remove(wm); c.requestRenderAll(); }
-      return;
-    }
-
-    if (!wm){
-      wm = new fabric.Image(STATE.img, {
-        originX:'center', originY:'center',
-        left:c.getWidth()/2, top:c.getHeight()/2,
-        selectable:false, evented:false, hasControls:false,
-        _raWMCenter:true, _raSys:true
-      });
-      c.add(wm);
-    }
-
-    const targetW = clamp(Math.round(c.getWidth()*STATE.sizePct), 16, c.getWidth()*1.4);
-    const s = targetW / (STATE.img.width||targetW);
-    wm.scaleX = s; wm.scaleY = s;
-    wm.opacity = clamp(STATE.opacity, 0, 1);
-    wm.left = c.getWidth()/2; wm.top = c.getHeight()/2;
-    wm.setCoords();
-    c.bringToFront(wm);
-    c.requestRenderAll();
-  }
-
-  // ---------- admin dock (only with ?admin=1) ----------
-  function ensureAdminDock(){
-    if (!isAdmin) return;
-
-    if ($('#raWmCenterDock')) return;
-    const holder =
-      $$('h3').find(h=>/selection/i.test((h.textContent||'').trim()))?.parentNode
-      || $$('h3').find(h=>/export/i.test((h.textContent||'').trim()))?.parentNode
-      || document.body;
-
-    const pane = document.createElement('div');
-    pane.id = 'raWmCenterDock';
-    pane.style.cssText = 'margin:12px 0;border:1px solid #23242a;border-radius:12px;background:#0f1116;color:#e7e7ea;padding:10px';
-    pane.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <strong>Watermark</strong>
-        <div style="display:flex;gap:6px">
-          <button id="raWmCRefresh" class="btn small">Refresh</button>
-          <button id="raWmCHide" class="btn small">Hide</button>
-        </div>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
-        <label><input id="raWmCEnabled" type="checkbox"> Enabled</label>
-        <label><input id="raWmCOnTok"  type="checkbox"> Show on tokens</label>
-        <label><input id="raWmCOnUp"   type="checkbox"> Show on uploads</label>
-        <label style="display:flex;align-items:center;gap:6px">Opacity
-          <input id="raWmCOpacity" type="range" min="0" max="1" step="0.01" style="width:140px">
-        </label>
-        <label style="display:flex;align-items:center;gap:6px">Size (width %)
-          <input id="raWmCSize" type="range" min="0.3" max="1.2" step="0.01" style="width:160px">
-        </label>
-      </div>
-      <div style="margin-top:6px;font-size:11px;opacity:.65">Corner stamps are removed automatically from base & overlays.</div>
-    `;
-    holder.appendChild(pane);
-
-    $('#raWmCEnabled').checked   = !!STATE.enabled;
-    $('#raWmCOnTok').checked     = !!STATE.showOnTokens;
-    $('#raWmCOnUp').checked      = !!STATE.showOnUploads;
-    $('#raWmCOpacity').value     = STATE.opacity;
-    $('#raWmCSize').value        = STATE.sizePct;
-
-    const c = C();
-    const sync = ()=>{ save(); ensureCenteredWM(c); };
-
-    $('#raWmCEnabled').onchange = e=>{ STATE.enabled = !!e.target.checked; sync(); };
-    $('#raWmCOnTok').onchange   = e=>{ STATE.showOnTokens  = !!e.target.checked; sync(); };
-    $('#raWmCOnUp').onchange    = e=>{ STATE.showOnUploads = !!e.target.checked; sync(); };
-    $('#raWmCOpacity').oninput  = e=>{ STATE.opacity = clamp(parseFloat(e.target.value||'0.18'),0,1); sync(); };
-    $('#raWmCSize').oninput     = e=>{ STATE.sizePct = clamp(parseFloat(e.target.value||'0.88'),0.3,1.2); sync(); };
-    $('#raWmCRefresh').onclick  = sync;
-    $('#raWmCHide').onclick     = ()=>{ pane.style.display='none'; };
-  }
-
-  // ---------- boot & wiring ----------
-  async function boot(){
-    await ensureWM();
-    const c = C(); if (!c) return;
-
-    // 1) immediately remove any stamp-children already present
-    cleanCornerStamps(c);
-
-    // 2) watermark in correct state
-    ensureCenteredWM(c);
-
-    // 3) watch for future adds/mods
-    if (!c.__raNoStampsV2){
-      c.__raNoStampsV2 = true;
-
-      c.on('object:added', (e)=>{
-        const t = e?.target;
-        if (!t) return;
-
-        if (t.type==='group'){
-          if (stripStampsFromGroup(t)) c.requestRenderAll();
-        }
-        // keep WM consistent
-        ensureCenteredWM(c);
-      });
-
-      c.on('object:modified', ()=> ensureCenteredWM(c));
-      c.on('object:removed',  ()=> ensureCenteredWM(c));
-
-    // 🔔 Wallet holder status changed → re-evaluate watermark
-    document.addEventListener('ra-holder-update', ()=> ensureCenteredWM(c)); 
-    document.addEventListener('ra-wm-recalc',    ()=> ensureCenteredWM(c));
-    }
-
-    // 4) keep WM scaled if canvas element resizes
-    try {
-      const el = c.getElement ? c.getElement() : (c.wrapperEl || c.upperCanvasEl);
-      new ResizeObserver(()=> ensureCenteredWM(c)).observe(el);
-    } catch(_) {}
-
-    // 5) admin UI
-    ensureAdminDock();
-  }
-
-  if (document.readyState==='loading') {
-    document.addEventListener('DOMContentLoaded', boot, {once:true});
-  } else {
-    boot();
-  }
 })();
 
 /* ==========================================================
@@ -4606,7 +4431,7 @@ tile.appendChild(cap);
     c.on('selection:cleared', onEnd);
 
     // Clean on zoom/pan/resize (if your UI does that)
-    c.on('after:render', ()=>{/* keep last guides while dragging; cleared on mouse:up */});
+    c/* removed after:render hook to avoid loops */ // .on('after:render', ()=>{/* keep last guides while dragging; cleared on mouse:up */});
     window.addEventListener('resize', clearTop, {passive:true});
     window.addEventListener('orientationchange', ()=>setTimeout(clearTop,150), {passive:true});
   }
@@ -6280,16 +6105,52 @@ tile.appendChild(cap);
   }
 
   // --- Connect / Refresh / Disconnect
+
+  // Implementation F: Wallet connect reentrancy guard
+  let CONNECTING = false;
+
   async function connect(){
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected (MetaMask/Coinbase).'; return; }
+    
+// Reentrancy guard (supports legacy and new flags)
+if (window.__walletConnecting || (typeof CONNECTING !== 'undefined' && CONNECTING)) {
+  if (out) out.textContent = 'Connection in progress...';
+  return;
+}
+window.__walletConnecting = true;
+if (typeof CONNECTING !== 'undefined') CONNECTING = true;
     try{
+      out.textContent = 'Connecting...';
       const accounts = await eth.request({ method:'eth_requestAccounts' });
       const chainId  = await eth.request({ method:'eth_chainId' });
       const address  = accounts?.[0] || null;
       setConnected(!!address, address, chainId, eth, 'Connected. Click “Check holdings”.');
-    }catch(_){ out.textContent = 'Connect cancelled or failed.'; }
+} catch (err) {
+  // Handle user cancellation (error code 4001) more gracefully
+  if (err && err.code === 4001) {
+    if (out) out.textContent = 'Request cancelled';
+    // Clear the message after a short delay for next attempt
+    setTimeout(() => {
+      if (out && out.textContent === 'Request cancelled') out.textContent = '';
+    }, 2000);
+  } else {
+    console.error('Wallet connect error:', err);
+    if (out) out.textContent = 'Connection failed. Please try again.';
+    // Clear error message after delay
+    setTimeout(() => {
+      if (out && (out.textContent === 'Connection failed' || out.textContent === 'Connection failed. Please try again.')) {
+        out.textContent = '';
+      }
+    }, 3000);
   }
+} finally {
+  // Clear both reentrancy flags
+  window.__walletConnecting = false;
+  if (typeof CONNECTING !== 'undefined') CONNECTING = false;
+}
+  }
+  
   async function refresh(){
     const eth = window.ethereum;
     if (!eth){ out.textContent='No wallet detected.'; return; }
@@ -6306,7 +6167,16 @@ tile.appendChild(cap);
   }
   function disconnect(){
     // Soft disconnect: clear our UI/state. For a full revoke, user disconnects in wallet UI.
+    // Reset holder state and re-evaluate watermarks for non-holders
+    window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
+    window.__raWMForce = null; // Remove any holder-based watermark override
+    
     setDisconnected('Disconnected in app. (Use the wallet menu to fully disconnect this site.)');
+    
+    // Trigger watermark re-evaluation for non-holder state
+    try { 
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
+    } catch(_) {}
   }
 
   function setConnected(ok, address, chainId, provider, msg){
@@ -6323,12 +6193,22 @@ tile.appendChild(cap);
   }
   function setDisconnected(msg){
     window.RA_WALLET_STATE = { connected:false, address:null, chainId:null, provider:null };
+    
+    // Reset holder state when disconnected
+    window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
+    window.__raWMForce = null; // Remove any holder-based watermark override
+    
     qs('#raW_connect', box).style.display  = '';
     btnRefresh.style.display = 'none';
     btnDisc.style.display    = 'none';
     row1.style.display       = 'none';
     actions.style.display    = 'none';
     out.textContent          = msg || '';
+    
+    // Trigger watermark re-evaluation for non-holder state
+    try { 
+      document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
+    } catch(_) {}
   }
 
   // --- Holdings
@@ -6382,8 +6262,14 @@ tile.appendChild(cap);
 
   // update on wallet events
   if (window.ethereum){
-    ethereum.on?.('accountsChanged', ()=>{ hintEl.textContent='Account changed — click Refresh.'; });
-    ethereum.on?.('chainChanged',   cid=>{ chainEl.textContent = netNameFromChainId(cid); hintEl.textContent='Network changed — click Refresh.'; });
+    ethereum.on?.('accountsChanged', ()=>{ 
+      out.textContent = ''; // Clear status on account change
+      hintEl.textContent='Account changed — click Refresh.'; 
+    });
+    ethereum.on?.('chainChanged',   cid=>{ 
+      out.textContent = ''; // Clear status on chain change
+      chainEl.textContent = netNameFromChainId(cid); hintEl.textContent='Network changed — click Refresh.'; 
+    });
   }
 
   // optional: try a silent refresh on load
@@ -6412,19 +6298,20 @@ tile.appendChild(cap);
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — history‑neutral; friend+manual only; black fill + white outline ========== */
+/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — always preferred footer style, deduped, consistent everywhere ========== */
 (() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
   const STYLE = {
-    fontFamily: 'Inter, Arial, sans-serif',
-    fontSize: 12,
-    fill: '#000000',            // black inside
-    stroke: '#ffffff',          // white outline
-    strokeWidth: 1.6,
-    strokeUniform: true,
-    opacity: 0.95
+    fontFamily: 'Inter, system-ui, Arial, sans-serif', // preferred font stack
+    fontSize: 16,                                      // preferred size
+    fill: '#fff',                                      // preferred color (white)
+    opacity: 1,                                        // preferred opacity (fully opaque)
+    // Remove stroke/strokeWidth for no outline, matching preferred look
+    shadow: new fabric.Shadow({
+      color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+    })
   };
-  const PAD = 10;
+  const PAD = 60; // moved footer further in from edge (fixes cut-off)
   const toLower = s => (s || '').toLowerCase();
 
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
@@ -6447,25 +6334,33 @@ tile.appendChild(cap);
     return '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
   }
 
- function shouldShow(c){
-  const base = findBase(c);
-  if (!base) return true; // manual upload → show the footer
+  function shouldShow(c){
+    const base = findBase(c);
+    if (!base) return true; // manual upload → show the footer
 
-  // SAFE: read the contract tag we put on the base image, lower‑cased
-  const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : '');
+    // SAFE: read the contract tag we put on the base image, lower‑cased
+    const cc = toLower((base && base._tokenContract) ? String(base._tokenContract) : '');
 
-  if (!cc) return true;  // no contract info → treat as manual, show the footer
-  return (cc !== rebelContract()); // show on friends; hide on Rebel Ants
-}
+    if (!cc) return true;  // no contract info → treat as manual, show the footer
+    return (cc !== rebelContract()); // show on friends; hide on Rebel Ants
+  }
+
   // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
-  // Do not spawn or modify footer while a JSON restore is in progress
-  if (window.__RA_RESTORING__) return false;
+    // Do not spawn or modify footer while a JSON restore is in progress
+    if (window.__RA_RESTORING__) return false;
 
-  const c = C(); if (!c) return false;
-  let changed = false;
+    const c = C(); if (!c) return false;
+    let changed = false;
 
-    let footer = (c.getObjects?.() || []).find(o => o && o._raBrandFooter) || null;
+    // Dedupe: remove any extra footers, keep only one
+    let footers = (c.getObjects?.() || []).filter(o => o && o._raBrandFooter);
+    if (footers.length > 1) {
+      footers.slice(0, -1).forEach(f => { try { c.remove(f); changed = true; } catch(_){ } });
+      footers = [footers[footers.length - 1]];
+    }
+    let footer = footers[0];
+
     const show = shouldShow(c);
 
     if (!show){
@@ -6476,25 +6371,41 @@ tile.appendChild(cap);
       return changed;
     }
 
-    if (!footer){
-      footer = new fabric.Textbox(FOOTER_TEXT, {
+    // If missing, create new preferred footer
+    if (!footer) {
+      footer = new fabric.Text(FOOTER_TEXT, {
         ...STYLE,
         selectable:false, evented:false, hasControls:false,
         lockMovementX:true, lockMovementY:true, hoverCursor:'default',
         _raBrandFooter:true, _raSys:true,
-        excludeFromExport:true          // keep out of JSON/history
+        excludeFromExport:true
       });
       c.add(footer);
       changed = true;
     } else {
+      // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
+      let dirty = false;
+      if (footer.fontFamily !== STYLE.fontFamily) { footer.fontFamily = STYLE.fontFamily; dirty = true; }
+      if (footer.fontSize !== STYLE.fontSize) { footer.fontSize = STYLE.fontSize; dirty = true; }
+      if (footer.fill !== STYLE.fill) { footer.set('fill', STYLE.fill); dirty = true; }
+      if (footer.opacity !== STYLE.opacity) { footer.opacity = STYLE.opacity; dirty = true; }
+      // Update shadow if needed
+      const shadow = footer.shadow;
+      if (!shadow || shadow.color !== STYLE.shadow.color || shadow.blur !== STYLE.shadow.blur || shadow.offsetX !== STYLE.shadow.offsetX || shadow.offsetY !== STYLE.shadow.offsetY) {
+        footer.shadow = new fabric.Shadow({
+          color: STYLE.shadow.color, blur: STYLE.shadow.blur, offsetX: STYLE.shadow.offsetX, offsetY: STYLE.shadow.offsetY
+        });
+        dirty = true;
+      }
       // Reassert non‑interactive + exclude from export
       footer.set({
         selectable:false, evented:false, hasControls:false,
         lockMovementX:true, lockMovementY:true, hoverCursor:'default',
         excludeFromExport:true
       });
-      // Style reapply is cheap; if identical it won’t dirty
-      footer.set(STYLE);
+      if (dirty) {
+        try { footer.setCoords(); } catch(_){}
+      }
     }
 
     // Position bottom‑right only if it actually moved
@@ -6542,7 +6453,16 @@ tile.appendChild(cap);
 
     // App‑level events that can change what should show
     ['ra-collection-change','ra-wm-recalc','ra-holder-update'].forEach(ev=>{
-      document.addEventListener(ev, () => { ensure(); });
+      document.addEventListener(ev, (e) => {
+        // For collection changes, only respond if there's a base image loaded
+        if (ev === 'ra-collection-change') {
+          const c = C();
+          if (!c) return;
+          const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+          if (!base) return; // No base loaded yet, skip watermark evaluation
+        }
+        ensure();
+      });
     });
   }
 
@@ -6739,57 +6659,206 @@ function annotateBase(meta){
   try { c.requestRenderAll(); } catch(_){}
 }
 
+// Robust token media resolver with fallback to tokenURI
+async function resolveTokenMedia(contract, tokenId, col) {
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
+  const tokenKey = `${contract}:${tokenId}`;
+  
+  // Step A: Try Reservoir first
+  const reservoirUrl = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
+  
+  try {
+    const r = await fetch(reservoirUrl, { headers: { 'accept': 'application/json' }, cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      const t = j?.tokens?.[0]?.token || {};
+      const media = t.media || {};
+      const img = normalizeUrl(
+        (media.original && (media.original.url || media.original.mediaUrl)) ||
+        t.imageLarge || t.image || t.imageSmall
+      );
+      if (img) return img; // Success with Reservoir
+    }
+  } catch (err) {
+    console.warn('Reservoir lookup failed:', err);
+  }
+
+  // Step B: Fallback to tokenURI via RPC
+  try {
+    const rpcUrl = col.rpcUrl || getRpcForChain(col.chainId);
+    if (!rpcUrl) throw new Error('No RPC URL available for chain');
+
+    // Call tokenURI(tokenId) on the contract
+    const tokenUriResult = await callTokenURI(contract, tokenId, rpcUrl);
+    if (!tokenUriResult) throw new Error('No tokenURI returned');
+
+    // Step C: Resolve metadata URL schemes and extract image
+    const metadataUrl = normalizeMetadataUrl(tokenUriResult);
+    const metadata = await fetchMetadataWithTimeout(metadataUrl);
+    
+    const imageUrl = normalizeUrl(
+      metadata.image || metadata.image_url || metadata.imageURI
+    );
+    
+    if (imageUrl) return imageUrl;
+    
+  } catch (err) {
+    console.warn('TokenURI fallback failed:', err);
+  }
+
+  throw new Error('No image found via Reservoir or tokenURI fallback');
+}
+
+// Get RPC URL for chain ID
+function getRpcForChain(chainId) {
+  const normalizedChainId = normalizeChainId(chainId);
+  if (normalizedChainId === '0x1') return 'https://rpc.ankr.com/eth';
+  if (normalizedChainId === '0x8173') return window.__APECHAIN_RPC || 'https://rpc.apecoinchain.org';
+  if (normalizedChainId === '0x2105') return 'https://mainnet.base.org';
+  return null;
+}
+
+// Call tokenURI via RPC with timeout
+async function callTokenURI(contract, tokenId, rpcUrl) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+  try {
+    // ERC-721 tokenURI function signature: 0xc87b56dd
+    const data = '0xc87b56dd' + parseInt(tokenId, 10).toString(16).padStart(64, '0');
+    
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_call',
+        params: [{ to: contract, data }, 'latest'],
+        id: 1
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) throw new Error(`RPC call failed: ${response.status}`);
+    
+    const result = await response.json();
+    if (result.error) throw new Error(`RPC error: ${result.error.message}`);
+    
+    // Decode hex string result (skip first 64 chars for offset, next 64 for length)
+    const hexResult = result.result;
+    if (!hexResult || hexResult === '0x') return null;
+    
+    const dataStart = 2 + 64 + 64; // Skip 0x + offset + length  
+    const hexData = hexResult.slice(dataStart);
+    return hexData ? Buffer.from(hexData, 'hex').toString('utf8').replace(/\0/g, '') : null;
+    
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Normalize metadata URL schemes
+function normalizeMetadataUrl(uri) {
+  if (!uri) return null;
+  
+  // Handle data URLs (base64 JSON)
+  if (uri.startsWith('data:')) return uri;
+  
+  // Handle IPFS
+  if (uri.startsWith('ipfs://')) {
+    return 'https://cloudflare-ipfs.com/ipfs/' + uri.replace('ipfs://', '').replace(/^ipfs\//, '');
+  }
+  
+  // Handle Arweave
+  if (uri.startsWith('ar://')) {
+    return 'https://arweave.net/' + uri.replace('ar://', '');
+  }
+  
+  // Handle HTTP/HTTPS
+  if (uri.startsWith('http://') || uri.startsWith('https://')) {
+    return uri;
+  }
+  
+  return uri;
+}
+
+// Fetch metadata with timeout and parse JSON
+async function fetchMetadataWithTimeout(url) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+
+  try {
+    // Handle data URLs
+    if (url.startsWith('data:')) {
+      const base64Data = url.split(',')[1];
+      const jsonStr = Buffer.from(base64Data, 'base64').toString('utf8');
+      return JSON.parse(jsonStr);
+    }
+
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal
+    });
+
+    if (!response.ok) throw new Error(`Metadata fetch failed: ${response.status}`);
+    
+    return await response.json();
+    
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function loadTokenFromCollection(tokenId, col){
   const contract = (col && col.address) || '';
   if (!contract){ alert('No contract for selected collection.'); return; }
 
-  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
-  const tokenKey = `${contract}:${tokenId}`;
-  const url = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
+  try {
+    const img = await resolveTokenMedia(contract, tokenId, col);
+    if (!img) { 
+      alert('No image found for that token.'); 
+      return; 
+    }
 
-  const r = await fetch(url, { headers:{ 'accept':'application/json' }, cache:'no-store' });
-  if (!r.ok){ alert('Lookup failed for that token.'); return; }
-
-  const j = await r.json();
-  const t = j?.tokens?.[0]?.token || {};
-  const media = t.media || {};
-  const img = normalizeUrl(
-    (media.original && (media.original.url || media.original.mediaUrl)) ||
-    t.imageLarge || t.image || t.imageSmall
-  );
-  if (!img){ alert('No image found for that token.'); return; }
-
-  // Use your existing base loader
-  if (typeof window.loadBaseImage === 'function') {
-    await window.loadBaseImage(img, /*isToken*/ true);
-  } else if (typeof window.loadBase === 'function') {
-    await window.loadBase(img);
-  } else {
-    // very safe fallback
-    const i = new Image();
-    i.crossOrigin = 'anonymous';
-    await new Promise((res,rej)=>{ i.onload=res; i.onerror=rej; i.src=img; });
-    const base = new fabric.Image(i, { selectable:false, evented:false, _isBase:true });
-    const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+    // Use your existing base loader
+    if (typeof window.loadBaseImage === 'function') {
+      await window.loadBaseImage(img, /*isToken*/ true);
+    } else if (typeof window.loadBase === 'function') {
+      await window.loadBase(img);
+    } else {
+      // very safe fallback
+      const i = new Image();
+      i.crossOrigin = 'anonymous';
+      await new Promise((res,rej)=>{ i.onload=res; i.onerror=rej; i.src=img; });
+      const base = new fabric.Image(i, { selectable:false, evented:false, _isBase:true });
+      const c = window.canvas; c && c.clear(); c && c.add(base); c && c.requestRenderAll();
+    }
+  
+  } catch (error) {
+    console.error('Token loading failed:', error);
+    alert(error.message || 'Failed to load token image');
+    return;
   }
 
   function autoFitBase(){
-  const c = window.canvas; if (!c) return;
-  const base = (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect);
-  if (!base || !base.width || !base.height) return;
+    const c = window.canvas; if (!c) return;
+    const base = (c.getObjects?.() || []).find(o => o && o._isBase && !o._isBgRect);
+    if (!base || !base.width || !base.height) return;
 
-  const maxW = c.getWidth(), maxH = c.getHeight();
-  const scale = Math.min(maxW / base.width, maxH / base.height);
+    const maxW = c.getWidth(), maxH = c.getHeight();
+    const scale = Math.min(maxW / base.width, maxH / base.height);
 
-  base.set({
-    scaleX: scale, scaleY: scale,
-    left: (maxW - base.width * scale) / 2,
-    top:  (maxH - base.height * scale) / 2
-  });
-  base.setCoords();
-  try{ c.requestRenderAll(); }catch(_){}
-}
+    base.set({
+      scaleX: scale, scaleY: scale,
+      left: (maxW - base.width * scale) / 2,
+      top:  (maxH - base.height * scale) / 2
+    });
+    base.setCoords();
+    try{ c.requestRenderAll(); }catch(_){}
+  }
+  
   // Tag the base so the footer/watermark can react
+  const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
   annotateBase({ contract, chain: slug, name: col.name });
   autoFitBase();
 }
@@ -7331,108 +7400,6 @@ async function loadTokenFromCollection(tokenId, col){
 
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, { once:true });
   else wire();
-})();
-
-/* ========== RA_CURVED_PRIME_v1 — keep text visible when Curved is ticked ========== */
-(() => {
-  const C = () => window.canvas || null;
-
-  // Find the Custom Text card and its controls
-  function findCustomTextCard(){
-    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
-      .find(el => /custom text/i.test(el.textContent || ''));
-    return h ? (h.closest('.card') || h.parentElement) : null;
-  }
-  function findMsgInput(card){
-    return card ? (card.querySelector('textarea, input[type="text"], input:not([type])') || null) : null;
-  }
-  function findCurvedCheckbox(card){
-    if (!card) return null;
-    const boxes = Array.from(card.querySelectorAll('input[type="checkbox"]'));
-    for (const cb of boxes){
-      const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
-      const txt = (lab && lab.textContent ? lab.textContent : '').toLowerCase();
-      if (txt.includes('curved')) return cb;
-    }
-    return null;
-  }
-
-  // Get the currently selected text on canvas (ignores base/footer/token‑id)
-  function activeCanvasText(){
-    const c = C(); if (!c) return null;
-    const a = c.getActiveObject && c.getActiveObject();
-    if (!a) return null;
-    const isSys = o => !!(o && (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId));
-    if (isSys(a)) return null;
-
-    const isText = o => (o && (String(o.type||'').toLowerCase().includes('text')));
-    if (isText(a)) return a;
-
-    if (typeof a.getObjects === 'function'){
-      try { return a.getObjects().find(isText) || null; } catch(_) {}
-    }
-    return null;
-  }
-
-  function nudgeInput(el){
-    try { el.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
-    try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
-  }
-
-  function onCurvedToggle(){
-    const card = findCustomTextCard(); if (!card) return;
-    const msg  = findMsgInput(card);  if (!msg)   return;
-    const cb   = findCurvedCheckbox(card);       if (!cb)   return;
-
-    // Only do work when turning Curved ON
-    if (!cb.checked) return;
-
-    // If the app cleared the message box after "Add Text", repopulate it from the selected text
-    if (!msg.value || !msg.value.trim()){
-      const t = activeCanvasText();
-      if (t && typeof t.text === 'string'){
-        msg.value = t.text;
-      }
-    }
-
-    // Nudge the app so it rebuilds the curved text immediately (so it doesn't "disappear")
-    nudgeInput(msg);
-
-    // After the app rebuilds, select the newest non-system object so it's easy to move
-    const c = C(); if (!c) return;
-    setTimeout(() => {
-      try{
-        const objs = c.getObjects ? c.getObjects() : [];
-        for (let i = objs.length - 1; i >= 0; i--){
-          const o = objs[i];
-          if (!o) continue;
-          if (o._isBase || o._raBrandFooter || o._raSys || o._raTokenId) continue;
-          if (o.visible === false) o.visible = true;
-          c.setActiveObject(o);
-          o.setCoords && o.setCoords();
-          break;
-        }
-        c.requestRenderAll && c.requestRenderAll();
-      }catch(_){}
-    }, 40);
-  }
-
-  function boot(){
-    const card = findCustomTextCard();
-    const cb   = findCurvedCheckbox(card);
-    if (!card || !cb){ setTimeout(boot, 250); return; }
-
-    // Hook once
-    if (cb.__raPrimeHooked) return;
-    cb.__raPrimeHooked = true;
-    cb.addEventListener('change', () => setTimeout(onCurvedToggle, 10), true);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
 })();
 
 /* ========== RA_ADD_TEXT_PRIME_v1 — keep text visible after 'Add Text' ========== */
@@ -8342,29 +8309,17 @@ window.raDump = () => {
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — center-ring only; make/show on uploads; no overlay interference ===== */
-;(() => {
+/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — always preferred footer everywhere ===== */
+;(() => { return; // DISABLED  return;  // DISABLED
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
-  window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
+const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  // Rebel contract (lowercase)
-  const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
-
-  // Recognizers (STRICT ring match — do NOT treat corner stamps as watermark)
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isRing   = o => !!(o && o._raWMCenter === true);      // <— only the center ring
+  // Recognizers
+  const isFooter = o => !!(o && (o._raBrandFooter || o._raFooterId === 'footer-group' || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+  const isRing   = o => !!(o && (o._raWMCenter === true || o._raWMCenterId === 'center-ring'));
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase);
   const isID     = o => !!(o && o._raTokenId);
-
-  // Small “restore” window to avoid one-frame flashes
-  let lastRestoreSeen = 0;
-  const restoring = () => {
-    if (window.__RA_RESTORING__) { lastRestoreSeen = Date.now(); return true; }
-    return (Date.now() - lastRestoreSeen) < 400;
-  };
 
   function quarantine(o){
     if (!o) return;
@@ -8383,33 +8338,140 @@ window.raDump = () => {
     wm.setCoords();
   }
 
+  function ensureFooter() {
+    const c = C();
+    if (!c) return null;
+    let footers = (c.getObjects?.() || []).filter(isFooter);
+    // Dedupe: if multiple, remove extras
+    if (footers.length > 1) {
+      footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch(_){ } });
+      footers = [footers[footers.length - 1]];
+    }
+    let footer = footers[0];
+    // If missing, create one
+    if (!footer) {
+      if (!window.fabric) return null;
+      footer = new fabric.Text('Powered by Rebel Studios', {
+        fontFamily: 'Inter, system-ui, Arial, sans-serif',
+        fontSize: 16,
+        fill: '#fff',
+        opacity: 1,
+        originX: 'right',
+        originY: 'bottom',
+        left: c.getWidth() - 60,
+        top: c.getHeight() - 20,
+        selectable: false,
+        evented: false,
+        shadow: new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        }),
+        _raBrandFooter: true,
+        _raSys: true
+      });
+      c.add(footer);
+    } else {
+      // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
+      let dirty = false;
+      if (footer.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { footer.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
+      if (footer.fontSize !== 16) { footer.fontSize = 16; dirty = true; }
+      if (footer.fill !== '#fff') { footer.set('fill', '#fff'); dirty = true; }
+      if (footer.opacity !== 1) { footer.opacity = 1; dirty = true; }
+      if (footer.originX !== 'right') { footer.originX = 'right'; dirty = true; }
+      if (footer.originY !== 'bottom') { footer.originY = 'bottom'; dirty = true; }
+      const desiredLeft = c.getWidth() - 60;
+      const desiredTop = c.getHeight() - 20;
+      if (footer.left !== desiredLeft) { footer.left = desiredLeft; dirty = true; }
+      if (footer.top !== desiredTop) { footer.top = desiredTop; dirty = true; }
+      // Update shadow if needed
+      const shadow = footer.shadow;
+      if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
+        footer.shadow = new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        });
+        dirty = true;
+      }
+      if (dirty) {
+        try { footer.setCoords(); } catch(_){}
+        quarantine(footer);
+      }
+    }
+    quarantine(footer);
+    return footer;
+  }
+
+  // Ring logic unchanged (from prior block)
+  function ensureRing(){
+    const c = C();
+    if (!c) return null;
+    let ring = (c.getObjects?.() || []).find(isRing);
+    if (!ring) {
+      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+      if (!window.fabric) return null;
+      fabric.Image.fromURL(src, img => {
+        if (!img) return;
+        img.set({
+          originX:'center', originY:'center',
+          selectable:false, evented:false, hasControls:false,
+          objectCaching:false,
+          opacity: 0.18
+        });
+        img._raWMCenter = true;
+        img._raSys = true;
+        img.excludeFromExport = true;
+        centerRing(img);
+        c.add(img);
+        quarantine(img);
+        try { c.requestRenderAll(); } catch(_){}
+      }, { crossOrigin:'anonymous' });
+    } else {
+      quarantine(ring);
+      centerRing(ring);
+      ring.visible = true;
+    }
+    return ring;
+  }
+
   function assertTopNow(){
     const c = C(); if (!c) return;
     const all  = c.getObjects?.() || [];
     const bg   = all.find(isBg);
     const base = all.find(isBase);
 
+    // Always restore ring and footer if they should be present
+    if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
+      const desired = RAWatermark.debug().desired;
+      if (desired.ring) ensureRing();
+      else {
+        const ring = all.find(isRing);
+        if (ring) ring.visible = false;
+      }
+      if (desired.footer) ensureFooter();
+      else {
+        const foot = all.find(isFooter);
+        if (foot) foot.visible = false;
+      }
+    } else {
+      // Fallback: always show both for disconnected/manual upload
+      ensureRing();
+      ensureFooter();
+    }
+
+    // Stacking logic
     if (bg){
       bg.selectable=false; bg.evented=false; bg.hasControls=false;
       try { c.moveTo(bg, 0); } catch(_){}
     }
 
-    // Footer: hidden on Rebel or while restoring
     const foot = all.find(isFooter);
-    const cc = String(base?._tokenContract || '').toLowerCase();
-    if (foot){
-      quarantine(foot);
-      if (restoring() || (cc && cc === REBEL_CONTRACT)) foot.visible = false;
-    }
+    if (foot) quarantine(foot);
 
-    // Single center ring, always seated right above base and centered
-    const wm = all.find(isRing);
-    if (wm){
-      quarantine(wm);
-      centerRing(wm);
+    const ring = all.find(isRing);
+    if (ring) {
+      quarantine(ring);
+      centerRing(ring);
       if (base){
         const baseZ = all.indexOf(base);
-        try { c.moveTo(wm, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
+        try { c.moveTo(ring, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
       }
     }
 
@@ -8419,91 +8481,44 @@ window.raDump = () => {
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
     } catch(_){}
-  }
-
-  // Create or show the center ring watermark when rules say it should be visible.
-  function ensureRingPresent(){
-    const c = C(); if (!c) return;
-    const all  = c.getObjects?.() || [];
-    const base = all.find(isBase);
-    if (!base) return;
-
-    const cc = String(base._tokenContract || '').toLowerCase();
-    const hs = (window.RA_HOLDER_STATE || {});
-    const isHolder = !!(hs.hasRebel || hs.hasFriend);
-
-    // show ring for: manual uploads (no contract) and Friend tokens (non‑Rebel),
-    // hide ring for: Rebel tokens and any holder
-    const shouldShow = (!cc || cc !== REBEL_CONTRACT) && !isHolder;
-
-    let wm = all.find(isRing);
-    if (!wm && shouldShow){
-      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
-      fabric.Image.fromURL(src, img => {
-        if (!img) return;
-        img.set({
-          originX:'center', originY:'center',
-          selectable:false, evented:false, hasControls:false,
-          objectCaching:false,
-          opacity: (typeof window.__RA_WM_ADMIN_OPACITY === 'number'
-                    ? window.__RA_WM_ADMIN_OPACITY : 0.18)
-        });
-        img._raWMCenter = true;          // tag as “the ring WM”
-        img._raSys = true; img.excludeFromExport = true;
-
-        centerRing(img);
-        c.add(img);
-        assertTopNow();
-        try { c.requestRenderAll(); } catch(_){}
-      }, { crossOrigin:'anonymous' });
-    } else if (wm){
-      wm.visible = shouldShow;
-      centerRing(wm);
-      assertTopNow();
-      try { c.requestRenderAll(); } catch(_){}
-    }
+    c.requestRenderAll();
   }
 
   function wire(){
-    const c = C(); if (!c) return setTimeout(wire, 120);
+    const c = C(); if (!c) { setTimeout(wire, 120); return; }
     if (c.__raWmFooterFixShimV7rBound) return;
     c.__raWmFooterFixShimV7rBound = true;
 
-    // Prevent one‑frame footer flash during restores
-    c.on?.('before:render', () => {
-      if (!restoring()) return;
-      (c.getObjects?.() || []).forEach(o => { if (isFooter(o) && o.visible !== false) o.visible = false; });
-    });
-
-    // Keep order/centering stable at all times
-    c.on?.('after:render',    assertTopNow);
-    c.on?.('object:modified', assertTopNow);
-    c.on?.('object:removed',  assertTopNow);
-
-    // When a new Base is added (manual upload / token load), ensure ring state
-    c.on?.('object:added', (e) => {
-      if (e && e.target && e.target._isBase) ensureRingPresent();
+    // Prevent watermark logic on overlays/text
+    const skipOverlayEvent = e => {
+      const obj = e?.target;
+      if (obj && (obj._kind === 'overlay' || obj._kind === 'text')) return;
       assertTopNow();
-    });
+    };
 
-    // React to admin/wallet/rules changes
-    ['ra-wm-recalc','ra-holder-update','ra-collection-change']
-      .forEach(ev => document.addEventListener(ev, () => { ensureRingPresent(); }));
+    // Listen for canvas events, but skip overlays/text
+    c.on('object:added', skipOverlayEvent);
+    c.on('object:removed', skipOverlayEvent);
+    c.on('object:modified', skipOverlayEvent);
 
-    // Keep ring centered on canvas size changes
+    // Support undo: if you're using a custom undo event, wire here
+    if (c.onUndo) c.onUndo(assertTopNow);
+
+    // Listen for watermark/collection/holder changes
+    ['ra-wm-recalc', 'ra-holder-update', 'ra-collection-change'].forEach(ev =>
+      document.addEventListener(ev, assertTopNow)
+    );
+
+    // Canvas resize (keep ring/footer centered)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmCenterResizeObs){
         c.__raWmCenterResizeObs = true;
-        new ResizeObserver(() => {
-          const wm = (c.getObjects?.()||[]).find(isRing);
-          if (wm){ centerRing(wm); try { c.requestRenderAll(); } catch(_) {} }
-        }).observe(el);
+        new ResizeObserver(assertTopNow).observe(el);
       }
     } catch(_){}
 
-    // First pass
-    ensureRingPresent();
+    // Initial pass
     assertTopNow();
   }
 
@@ -8515,12 +8530,23 @@ window.raDump = () => {
 })();
 
 /* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
-;(() => {
+;(() => { return; // DISABLED  return; // DISABLED  return;  // DISABLED
   if (window.__RA_WM_RULES_V9__) return;
-  window.__RA_WM_RULES_V9__ = true;
-
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
+
+  // RAF-based evaluation scheduling for this block too
+  let WM_EVAL_SCHEDULED_V9 = false;
+  function scheduleWMEvalV9(reason) {
+    if (WM_EVAL_SCHEDULED_V9 || window.__RA_RESTORING__) return;
+    WM_EVAL_SCHEDULED_V9 = true;
+    requestAnimationFrame(() => {
+      WM_EVAL_SCHEDULED_V9 = false;
+      if (!window.__RA_RESTORING__) {
+        applyRules();
+      }
+    });
+  }
 
   // recognizers
   const isWM   = o => !!(o && (o._raWMCenter === true || o._isWatermark === true || o._raWatermark === true || o._wm));
@@ -8633,29 +8659,45 @@ window.raDump = () => {
 
   // ——— Wiring ———
   function wire(){
-    const c = C(); if (!c) return setTimeout(wire, 120);
+    const c = C(); if (!c) { scheduleWMEvalV9('retry-wire'); return setTimeout(wire, 120); }
     if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
 
-    // Base changes only (ignore overlays)
-    c.on('object:added',   e => { if (e?.target && isBase(e.target)) applyRules(); });
-    c.on('object:removed', e => { if (e?.target && isBase(e.target)) applyRules(); });
+    // Base changes only (ignore overlays) - block object:moving/modified for overlays
+    c.on('object:added',   e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-added'); });
+    c.on('object:removed', e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-removed'); });
 
-    // Wallet or collection changes
-    ['ra-holder-update','ra-collection-change','ra-wm-recalc'].forEach(ev=>{
-      document.addEventListener(ev, applyRules);
-    });
+// Wallet changes — active; collection change — passive unless base is loaded
+['ra-holder-update', 'ra-wm-recalc'].forEach(ev => {
+  document.addEventListener(ev, () => {
+    if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9(ev);
+  });
+});
 
-    // Canvas resize (size dropdown etc.)
+// Collection change handler — only act if a base image is already loaded
+document.addEventListener('ra-collection-change', (e) => {
+  try {
+    const c = typeof C === 'function' ? C() : null;
+    const hasBase =
+      !!(c && typeof c.getObjects === 'function' &&
+         (c.getObjects() || []).some(o => o && o._isBase && !o._isBgRect));
+    if (!hasBase) return; // stay passive until base loads
+  } catch {
+    return;
+  }
+  if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9('ra-collection-change');
+});
+
+// Canvas resize (size dropdown etc.)
     try{
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmRulesV9Resize) {
         c.__raWmRulesV9Resize = true;
-        new ResizeObserver(() => applyRules()).observe(el);
+        new ResizeObserver(() => scheduleWMEvalV9('resize')).observe(el);
       }
     }catch(_){}
 
     // First pass
-    applyRules();
+    scheduleWMEvalV9('initial');
   }
 
   if (document.readyState === 'loading') {
@@ -8665,101 +8707,542 @@ window.raDump = () => {
   }
 })();
 
-/* ===== RA_WM_DEDUPE_ENFORCE_v3 — single WM, correct visibility, no overlay interference ===== */
-;(() => {
-  if (window.__RA_WM_DEDUPE_ENFORCE_V3__) return;
-  window.__RA_WM_DEDUPE_ENFORCE_V3__ = true;
 
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+/* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
+;
 
-  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase in data
-
-  const isBase   = o => !!(o && o._isBase);
-  const isFooter = o => !!(o && (o._raBrandFooter || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-  const isWM = o => !!(o && (o._raWMCenter || o._isWatermark || o._raWatermark || o._wm));
-
-  const holder = () => {
-    const s = window.RA_HOLDER_STATE || {};
-    return !!(s.hasRebel || s.hasFriend);
+/* ===== LEGACY WATERMARK NEUTRALIZER (Pre-Phase-2 code) =====
+   Turns obsolete watermark logic into no-ops so Phase 2 manager is sole authority.
+   Remove this once legacy code physically deleted.
+*/
+(function disableLegacyWM(){
+  const noop = ()=>{};
+  const kill = name => {
+    if (typeof window[name] === 'function'){
+      try { window[name] = noop; } catch(_){}
+    }
   };
 
-  function mode(c) {
-    const objs = (c.getObjects?.() || []);
-    const base = objs.find(isBase);
-    if (!base) return 'empty';
-    const contract = String(base._tokenContract || '').toLowerCase();
-    if (!contract) return 'manual';
-    return (contract === REBEL) ? 'rebel' : 'friend';
+  [
+    'ensureCenteredWM',
+    'applyToWM',
+    'ensureWMReady',
+    'seatAboveBase',
+    'scaleToCanvas',
+    'stripStampsFromGroup',
+    'relockAll',
+    'faintOpacity'
+  ].forEach(kill);
+
+  // Legacy isWM variants – overwrite with a narrow detector returning false so Phase 2 detection isn't shadowed
+  if (typeof window.isWM === 'function'){
+    try { window.isWM = ()=>false; } catch(_){}
   }
 
-  function fix() {
+  // Prevent legacy "reapply" loops
+  if (typeof window.reapply === 'function'){
+    try { window.reapply = noop; } catch(_){}
+  }
+
+  // Optional: intercept dispatches of ra-wm-recalc outside Phase 2 if they are too spammy
+  const origDispatch = document.dispatchEvent.bind(document);
+  document.dispatchEvent = (evt)=>{
+    if (evt && evt.type === 'ra-wm-recalc' && !window.__RA_WM_PHASE2_BOOTED__){
+      // Let Phase 2 do first real creation; suppress redundant early spam
+      return true;
+    }
+    return origDispatch(evt);
+  };
+
+  window.__RA_LEGACY_WM_DISABLED__ = true;
+})();
+
+/* ===== PHASE 2 UNIFIED WATERMARK MANAGER (RAWatermark) =====
+   Implements final 3-Rule System + large ring (≈89% width) + footer logic.
+
+   PUBLIC API:
+     RAWatermark.setConnection(bool)
+     RAWatermark.setHoldings({ hasRebel, hasFriend })
+     RAWatermark.refresh()
+     RAWatermark.setConfig(partialConfigObject)
+     RAWatermark.force({ ring, footer })   // debug override (one-shot until next auto apply)
+     RAWatermark.debug()
+
+   EXPECTED ENV (external code should maintain):
+     window.canvas (Fabric.js canvas)
+     window.STATE.sizePct (optional admin slider), numeric
+
+   EVENTS LISTENED:
+     ra-wm-recalc               (legacy creation trigger)
+     ra-collection-change
+     ra-holder-update
+     ra-wallet-connect-state
+
+   RING CREATION:
+     Manager does not manufacture ring graphic; it dispatches 'ra-wm-recalc'
+     if a ring is needed but absent. Existing upstream code should respond.
+
+   SAFETY:
+     - Debounced apply (requestAnimationFrame)
+     - Scaling retries if ring image loads lazily
+     - Dedupe ensures single ring
+*/
+
+(function initRAWatermarkPhase2(){
+  if (window.RAWatermark) return;
+
+  /* ---------- CONFIG ---------- */
+  const CFG = {
+    ringTargetPct: 0.89,          // target ring diameter fraction of canvas width
+    ringPctMin: 0.75,
+    ringPctMax: 0.92,
+    ringEdgeMarginPx: 16,
+    clampAdminSizePct: true,
+    useAdminSizePct: true,
+   ringImageSrc: '/watermark.png?v=wm10',   // ADDED: path to ring image
+     
+    // Rule toggles (from final system)
+    showFooterOnRebelConnected: false,  // Owned Rebel stays fully clean
+    friendOnlySuppressesRing: true,     // Friend (no Rebel) => ring OFF globally
+    footerOnRebelWhenNoHoldings: false, // Non-holder viewing Rebel token: ring only
+    uploadsFollowFriendOnlyPerk: true,  // Friend-only => uploads ring OFF
+    disconnectedAlwaysBoth: true,
+
+    footerText: 'Powered by Rebel Studios',
+
+    // Internal/backoff
+    scalingRetryMS: 140,
+    scalingRetries: 6,
+
+    // Debug flags
+    debugLog: false
+  };
+
+  /* ---------- STATE ---------- */
+  const STATE = {
+    connected: false,
+    hasRebel: false,
+    hasFriend: false,
+    baseKind: 'upload',
+    lastApplyReason: '',
+    pendingScaleRetries: 0,
+    forceOverride: null    // { ring: bool|null, footer: bool|null }
+  };
+
+  let debounceScheduled = false;
+  let rebelAddrCache = null;
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function log(...a){ if (CFG.debugLog) console.log('[RAWatermark]', ...a); }
+
+  function deriveRebelAddr(){
+    if (rebelAddrCache !== null) return rebelAddrCache;
+    try {
+      if (window.RA_COLLECTIONS){
+        const r = window.RA_COLLECTIONS.find(x => (x.tag === 'rebel') && (x.address || x.contract));
+        if (r) return (rebelAddrCache = (r.address || r.contract || '').toLowerCase());
+      }
+      if (typeof window.CONTRACT === 'string'){
+        rebelAddrCache = window.CONTRACT.toLowerCase();
+      } else {
+        rebelAddrCache = '';
+      }
+    } catch(_){ rebelAddrCache = ''; }
+    return rebelAddrCache;
+  }
+
+  function currentBase(){
+    const c = C(); if (!c) return null;
+    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+  }
+
+  function detectBaseKind(){
+    const base = currentBase();
+    if (!base){ STATE.baseKind = 'upload'; return; }
+    const addr = (base._tokenContract || base.contract || '').toLowerCase();
+    if (!addr){ STATE.baseKind = 'upload'; return; }
+    const rebelAddr = deriveRebelAddr();
+    if (rebelAddr && addr === rebelAddr){
+      STATE.baseKind = 'rebel-token';
+    } else {
+      STATE.baseKind = 'friend-token';
+    }
+  }
+
+  function ringObjects(){
+    const c=C(); if(!c) return [];
+    return (c.getObjects()||[]).filter(o => o && o._raWMCenter === true);
+  }
+
+  function footerObject(){
+    const c=C(); if(!c) return null;
+    return (c.getObjects()||[]).find(o =>
+      o._raBrandFooter ||
+      o._raFooterId === 'footer-group' ||
+      (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text))
+    ) || null;
+  }
+
+ function ensureFooter(){
+  const existing = footerObject();
+  if (existing) {
+    // Restyle footer to preferred settings if needed
+    let dirty = false;
+    if (existing.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { existing.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
+    if (existing.fontSize !== 16) { existing.fontSize = 16; dirty = true; }
+    if (existing.fill !== '#fff') { existing.set('fill', '#fff'); dirty = true; }
+    if (existing.opacity !== 1) { existing.opacity = 1; dirty = true; }
+    if (existing.originX !== 'right') { existing.originX = 'right'; dirty = true; }
+    if (existing.originY !== 'bottom') { existing.originY = 'bottom'; dirty = true; }
+    const desiredLeft = C().getWidth() - 60;
+    const desiredTop = C().getHeight() - 20;
+    if (existing.left !== desiredLeft) { existing.left = desiredLeft; dirty = true; }
+    if (existing.top !== desiredTop) { existing.top = desiredTop; dirty = true; }
+    const shadow = existing.shadow;
+    if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
+      existing.shadow = new fabric.Shadow({
+        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+      });
+      dirty = true;
+    }
+    if (dirty) { try { existing.setCoords(); } catch(_){} }
+    return existing;
+  }
+  const c=C(); if(!c) return null;
+  try {
+    if (!window.fabric) return null;
+    const t = new fabric.Text(CFG.footerText, {
+      fontFamily:'Inter, system-ui, Arial, sans-serif',
+      fontSize:16, fill:'#fff', opacity:1,
+      originX:'right', originY:'bottom',
+      left: c.getWidth() - 60,
+      top:  c.getHeight() - 20,
+      selectable:false, evented:false,
+      shadow: new fabric.Shadow({
+        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+      }),
+      _raBrandFooter:true, _raSys:true
+    });
+    c.add(t);
+    return t;
+  } catch(_){}
+  return null;
+}
+
+  function dedupeRing(){
+    const rings = ringObjects();
+    if (rings.length <= 1) return;
+    let keep = rings[0], kW = scaledWidth(keep);
+    for (let i=1;i<rings.length;i++){
+      const w = scaledWidth(rings[i]);
+      if (w > kW){ keep = rings[i]; kW = w; }
+    }
+    const c=C();
+    rings.forEach(r => { if (r !== keep){ try { c.remove(r); } catch(_){ } } });
+  }
+
+  function scaledWidth(obj){
+    if (!obj) return 0;
+    if (obj.getScaledWidth) return obj.getScaledWidth();
+    return (obj.width||0) * (obj.scaleX||1);
+  }
+
+     // Helper: create the ring image if we need one and none exists yet
+  function createRingIfMissing(){
+    const c = C();
+    if (!c) return;
+    if (ringObjects()[0]) return; // already there
+
+    const src = CFG.ringImageSrc || '/watermark.png';
+    if (!window.fabric || !fabric.Image) return;
+
+    try {
+      fabric.Image.fromURL(src, (img) => {
+        if (!img) return;
+        img._raWMCenter = true;
+        img._raSys = true;
+        img.selectable = false;
+        img.evented = false;
+
+        const c2 = C();
+        if (!c2) return;
+        // Place roughly center (Phase 2 scaling will size it)
+        img.left = (c2.getWidth()  / 2) - (img.width  / 2);
+        img.top  = (c2.getHeight() / 2) - (img.height / 2);
+        c2.add(img);
+        scaleRing(img);
+        try { c2.bringToFront(img); } catch(_){}
+        try { c2.requestRenderAll(); } catch(_){}
+      }, { crossOrigin: 'anonymous' });
+    } catch(_){}
+  }
+   
+  function desired(){
+    // Force override (debug) takes precedence if present
+    if (STATE.forceOverride){
+      return {
+        ring: STATE.forceOverride.ring !== null ? STATE.forceOverride.ring : false,
+        footer: STATE.forceOverride.footer !== null ? STATE.forceOverride.footer : false,
+        forced: true
+      };
+    }
+
+    if (!STATE.connected && CFG.disconnectedAlwaysBoth){
+      return { ring:true, footer:true };
+    }
+
+    // Rebel owner global unlock path
+    if (STATE.hasRebel){
+      if (STATE.baseKind === 'rebel-token'){
+        return { ring:false, footer: CFG.showFooterOnRebelConnected }; // expected false
+      }
+      // friend-token or upload
+      return { ring:false, footer:true };
+    }
+
+    // Friend-only holder
+    if (!STATE.hasRebel && STATE.hasFriend && CFG.friendOnlySuppressesRing){
+      // All base kinds: ring off, footer on
+      return { ring:false, footer:true };
+    }
+
+    // No holdings
+    if (!STATE.hasRebel && !STATE.hasFriend){
+      if (STATE.baseKind === 'rebel-token'){
+        return { ring:true, footer: CFG.footerOnRebelWhenNoHoldings }; // expected false
+      }
+      // friend-token or upload
+      return { ring:true, footer:true };
+    }
+
+    // Fallback (should not hit)
+    return { ring:true, footer:true };
+  }
+
+  function computeScalePct(){
+    let pct = CFG.ringTargetPct;
+    if (CFG.useAdminSizePct && window.STATE && typeof window.STATE.sizePct === 'number'){
+      let adminPct = window.STATE.sizePct;
+      if (CFG.clampAdminSizePct){
+        adminPct = Math.min(CFG.ringPctMax, Math.max(CFG.ringPctMin, adminPct));
+      }
+      pct = adminPct;
+    } else {
+      pct = Math.min(CFG.ringPctMax, Math.max(CFG.ringPctMin, pct));
+    }
+    return pct;
+  }
+
+  function scaleRing(ring){
+    const c=C(); if(!c || !ring) return;
+    try {
+      const nativeW = ring.width || ring._element?.naturalWidth || 512;
+      const cw = c.getWidth();
+      const pct = computeScalePct();
+      const targetPx = cw * pct;
+      const maxPxByMargin = cw - 2 * CFG.ringEdgeMarginPx;
+      const finalPx = Math.min(targetPx, maxPxByMargin);
+      const scale = finalPx / nativeW;
+      ring.scaleX = ring.scaleY = scale;
+      ring.setCoords();
+    } catch(_){}
+  }
+
+  function scheduleScaleRetry(){
+    STATE.pendingScaleRetries = CFG.scalingRetries;
+    function tick(){
+      if (STATE.pendingScaleRetries <= 0) return;
+      const ring = ringObjects()[0];
+      if (ring && scaledWidth(ring) > 0){
+        scaleRing(ring);
+        return;
+      }
+      STATE.pendingScaleRetries -= 1;
+      setTimeout(tick, CFG.scalingRetryMS);
+    }
+    setTimeout(tick, CFG.scalingRetryMS);
+  }
+
+  function apply(reason){
+    STATE.lastApplyReason = reason;
+    detectBaseKind();
+    dedupeRing();
+
+    const need = desired();
+    const c=C(); if(!c) return;
+
+    let ring = ringObjects()[0];
+
+       if (!need.ring && ring){
+      try { c.remove(ring); } catch(_){}
+      ring = null;
+    } else if (need.ring && !ring){
+      try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
+      scheduleScaleRetry();
+      // NEW: if nothing else makes the ring quickly, make it ourselves
+      setTimeout(() => {
+        if (!ringObjects()[0]) createRingIfMissing();
+      }, 180);
+    }
+
+    if (need.footer){
+      ensureFooter();
+    } else {
+      const f = footerObject();
+      if (f) try { c.remove(f); } catch(_){}
+    }
+
+    // Re-fetch after potential creation/removal
+    ring = ringObjects()[0];
+    const footer = footerObject();
+
+    if (footer){
+      try { c.bringToFront(footer); } catch(_){}
+    }
+    if (ring){
+      scaleRing(ring);
+      try { c.bringToFront(ring); } catch(_){}
+    }
+
+    try { c.requestRenderAll(); } catch(_){}
+
+    log('apply', reason, {
+      baseKind: STATE.baseKind,
+      desired: need,
+      counts: debugCounts()
+    });
+  }
+
+  function debugCounts(){
+    const c=C(); if(!c) return { ring:0, footer:0 };
+    const objs = c.getObjects()||[];
+    return {
+      ring: objs.filter(o=>o._raWMCenter).length,
+      footer: objs.filter(o =>
+        o._raBrandFooter ||
+        o._raFooterId === 'footer-group' ||
+        (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text))
+      ).length
+    };
+  }
+
+  function queueApply(reason){
+    if (debounceScheduled) return;
+    debounceScheduled = true;
+    requestAnimationFrame(()=>{
+      debounceScheduled = false;
+      apply(reason);
+    });
+  }
+
+  /* ---------- HOOKS ---------- */
+  function hookCanvas(){
+    const c=C(); if(!c){ setTimeout(hookCanvas, 120); return; }
+    if (c.__raWMPhase2) return;
+    c.__raWMPhase2 = true;
+    c.on('object:added',   ()=> queueApply('object:added'));
+    c.on('object:removed', ()=> queueApply('object:removed'));
+    c.on('object:modified',()=> queueApply('object:modified'));
+  }
+
+  function hookEvents(){
+    document.addEventListener('ra-wm-recalc',          ()=> queueApply('evt:recalc'));
+    document.addEventListener('ra-collection-change',  ()=> queueApply('evt:collection-change'));
+    document.addEventListener('ra-holder-update',      ()=> queueApply('evt:holder-update'));
+    document.addEventListener('ra-wallet-connect-state', ()=> queueApply('evt:wallet-connect'));
+  }
+
+  /* ---------- PUBLIC API ---------- */
+  window.RAWatermark = {
+    setConnection(v){
+      STATE.connected = !!v;
+      queueApply('setConnection');
+    },
+    setHoldings({ hasRebel=false, hasFriend=false }){
+      STATE.hasRebel = !!hasRebel;
+      STATE.hasFriend = !!hasFriend;
+      queueApply('setHoldings');
+    },
+    refresh(){
+      queueApply('manual-refresh');
+    },
+    setConfig(partial){
+      Object.keys(partial||{}).forEach(k=>{
+        if (k in CFG) CFG[k] = partial[k];
+      });
+      queueApply('setConfig');
+    },
+    force({ ring=null, footer=null }){
+      STATE.forceOverride = { ring, footer };
+      queueApply('force');
+    },
+    clearForce(){
+      STATE.forceOverride = null;
+      queueApply('clearForce');
+    },
+    debug(){
+      return {
+        state:{
+          connected: STATE.connected,
+          hasRebel: STATE.hasRebel,
+          hasFriend: STATE.hasFriend,
+          baseKind: STATE.baseKind,
+          lastApplyReason: STATE.lastApplyReason,
+          forced: !!STATE.forceOverride
+        },
+        desired: desired(),
+        counts: debugCounts(),
+        config: { ...CFG }
+      };
+    }
+  };
+
+  function boot(){
+    hookCanvas();
+    hookEvents();
+    queueApply('boot');
+  }
+
+  if (document.readyState === 'complete'){
+    setTimeout(boot, 40);
+  } else {
+    window.addEventListener('load', ()=> setTimeout(boot, 40), { once:true });
+  }
+
+})();
+
+/* ===== APP_MARKER_0928 ===== */
+window.APP_MARKER_0928 = true;
+console.log("✅ app.js marker loaded: APP_MARKER_0928");
+
+
+/* ===== APP_MARKER_0928B ===== */
+window.APP_MARKER_0928B = "2025-09-28T04:48:13.736190";
+console.log("✅ app.js marker loaded: APP_MARKER_0928B", window.APP_MARKER_0928B);
+
+/* ===== RA_EMPTY_CANVAS_WM_GUARD_v2 — hide ring/footer when no base (before draw; no loops) ===== */
+;(() => {
+  if (window.__RA_EMPTY_WM_GUARD_V2__) return;
+  window.__RA_EMPTY_WM_GUARD_V2__ = true;
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const isBase   = o => !!(o && o._isBase && !o._isBgRect);
+  const isRing   = o => !!(o && (o._wmEngine==='v12_ring' || o._wmEngine==='v13_ring' || o._raWMCenter || o._isWatermark || o._wm));
+  const isFooter = o => !!(o && (o._wmEngine==='v12_footer'|| o._wmEngine==='v13_footer' || o._raBrandFooter || (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
+  function suppress() {
     const c = C(); if (!c) return;
-
-    const objs = (c.getObjects?.() || []);
-    const base = objs.find(isBase);
-    const foot = objs.find(isFooter);
-    let   wms  = objs.filter(isWM);
-
-    // --- De-dupe: keep the center ring and remove/hide the rest ---
-    if (wms.length > 1) {
-      const keep = wms.find(w => w._raWMCenter) || wms[0];
-      wms.forEach(w => { if (w !== keep) { try { c.remove(w); } catch(_) { w.visible = false; } } });
-      wms = keep ? [keep] : [];
-    }
-    const wm = wms[0] || null;
-
-    // --- Decide visibility ---
-    const m = mode(c);
-    let showRing = false, showFoot = false;
-
-    if (m === 'manual') { showRing = true;  showFoot = true;  }
-    if (m === 'friend') { showRing = true;  showFoot = true;  }
-    if (m === 'rebel')  { showRing = false; showFoot = false; }
-
-    // Wallet override: holders get no ring, footer stays on (branding)
-    if (holder()) { showRing = false; showFoot = true; }
-
-    // --- Apply & keep ordering stable (ring just above base) ---
-    if (wm) {
-      wm.visible = !!showRing;
-      try {
-        const baseZ = objs.indexOf(base);
-        if (base && baseZ >= 0) c.moveTo(wm, Math.min(objs.length - 1, baseZ + 1));
-        wm.selectable = wm.evented = wm.hasControls = false;
-      } catch(_) {}
-    }
-    if (foot) {
-      foot.visible = !!showFoot;
-      foot.selectable = false; foot.evented = false; foot.hasControls = false;
-    }
-
-    try { c.requestRenderAll(); } catch(_) {}
+    const os = c.getObjects?.() || [];
+    const hasBase = os.some(isBase);
+    if (hasBase) return; // only act on empty canvas
+    os.forEach(o => { if (isRing(o) || isFooter(o)) o.visible = false; });
+    // no requestRenderAll here to avoid loops; next frame will not draw them
   }
-
   function wire() {
     const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__raWmDedupeV3) return; c.__raWmDedupeV3 = true;
-
-    // Run after every meaningful change
-    c.on?.('after:render',       fix);
-    c.on?.('object:added',       fix);
-    c.on?.('object:removed',     fix);
-    c.on?.('object:modified',    fix);
-    c.on?.('selection:created',  fix);
-    c.on?.('selection:updated',  fix);
-
-    // React to higher-level signals
-    document.addEventListener('ra-collection-change', fix);
-    document.addEventListener('ra-wm-recalc',         fix);
-    document.addEventListener('ra-holder-update',     fix);
-
-    // First pass
-    fix();
+    if (c.__emptyGuardV2) return; c.__emptyGuardV2 = true;
+    c.on('before:render', suppress);
+    suppress();
   }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire, { once: true });
-  } else {
-    wire();
-  }
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, {once:true});
+  else wire();
 })();
