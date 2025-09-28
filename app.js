@@ -1,30 +1,28 @@
-/* ===== WM CONSOLIDATION PHASE 1 (LEGACY NEUTRALIZED) =====
-   Original purpose: block duplicate legacy watermark controllers.
-   Legacy centered watermark logic has been removed/stubbed (Phase 2 active).
-   This block now only provides a compatibility finder & placeholder flags
-   until final purge.
-*/
+
 (function(){
   if (window.__RA_WM_CONSOLIDATION_P1__) return;
-// Compatibility finder: try Phase 2 ring first, else legacy center tag (now absent).
+  window.__RA_WM_CONSOLIDATION_P1__ = true;
   // Adjust selectors if Phase 2 uses different tagging.
   window.raFindWatermark = function raFindWatermark(){
     const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
     if (!c) return null;
     const objs = (c.getObjects?.() || []);
-    // Phase 2 ring candidates: (example tags) _raWMRing or _raWatermark
     return objs.find(o => o && (o._raWMRing === true || o._raWatermark === true || o._raWMCenter === true)) || null;
   };
-
-  // Legacy non-token ring creator placeholder (kept to avoid ReferenceErrors)
-  window.ensureNonTokenRingWM = null;
+  Object.defineProperty(window, 'ensureNonTokenRingWM', {
+    configurable: true,
+    writable: true,
+    value: function(){  }
+  });
 })();
 /* ===============================
    CONFIG (Phase 2 safe minimal)
    =============================== */
-;(() => { return; /* DISABLED */ 
+;(() => {
   if (window.__RA_WM_CONFIG_MIN__) return;
-const qs = new URLSearchParams(location.search);
+  window.__RA_WM_CONFIG_MIN__ = true;
+
+  const qs = new URLSearchParams(location.search);
 
   const CONTRACT =
     qs.get('contract') ||
@@ -36,8 +34,6 @@ const qs = new URLSearchParams(location.search);
   if (!window.__APECHAIN_RPC) {
     window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
   }
-
-  // Watermark / ring image source
   const qsWM = qs.get('wm');
   let candidate = isAllowedAssetURL(qsWM) ? qsWM : "/assets/watermark.png?v=wm10";
   const FALLBACK = "/watermark.png?v=wm10";
@@ -140,14 +136,10 @@ function normalize(u){
   return u;
 }
 
-
-/* [REMOVED duplicate Non-token ring watermark helper] */
 ;
-/* === Phase 2 Ring Watermark Helper (faint; auto-hide for holders) === */
+
 ;(() => {
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  // Strict ring detector (Phase 2 tags + legacy compatibility)
   const isWM = o => !!(o && (o._raWMRing === true || o._isWatermark === true || o._raWMCenter === true));
 
   // Base / background detectors
@@ -158,29 +150,11 @@ function normalize(u){
     const s = window.RA_HOLDER_STATE || {};
     return !!(s.hasRebel || s.hasFriend);
   }
-
-  function scaleRingToCanvas(wm) {
-    const c = C(); if (!c || !wm) return;
-    const cw   = c.getWidth();
-    const natW = wm.width || 1;
-    const pct  = (typeof window.__RA_WM_TARGET_PCT === 'number')
-      ? Math.max(0.05, Math.min(1, window.__RA_WM_TARGET_PCT))
-      : 0.28; // default: ring spans 28% of canvas width
-    const sc = (cw * pct) / Math.max(1, natW);
-    wm.scaleX = sc;
-    wm.scaleY = sc;
-    wm.left   = cw / 2;
-    wm.top    = c.getHeight() / 2;
-    wm.setCoords();
-  }
-
-  function faintOpacity() {
+function faintOpacity() {
     return (typeof window.__RA_WM_ADMIN_OPACITY === 'number')
       ? window.__RA_WM_ADMIN_OPACITY
       : 0.18;
   }
-
-  // Seat ring just above base (or above bg if base not yet there)
   function seatAboveBase(wm) {
     const c = C(); if (!c || !wm) return;
     try {
@@ -198,8 +172,6 @@ function normalize(u){
       if (curZ !== targetZ) c.moveTo(wm, targetZ);
     } catch (_) {}
   }
-
-  // Public API: ensure the faint ring watermark (unless holder)
   window.ensureNonTokenRingWM = function ensureNonTokenRingWM() {
     const c = C(); if (!c) return;
     if (window.__RA_RESTORING__) return;
@@ -215,8 +187,6 @@ function normalize(u){
       }
       return;
     }
-
-    // Show & update existing ring
     if (existing) {
       existing.visible = true;
       scaleRingToCanvas(existing);
@@ -224,8 +194,6 @@ function normalize(u){
       try { c.requestRenderAll(); } catch(_) {}
       return;
     }
-
-    // Create new ring (WM_SRC previously validated by config)
     const src = window.RING_SRC || window.WM_SRC || '/assets/watermark.png?v=wm10';
     if (!window.fabric || !fabric.Image) return;
 
@@ -254,13 +222,9 @@ function normalize(u){
       try { c.requestRenderAll(); } catch(_) {}
     }, { crossOrigin: 'anonymous' });
   };
-
-  // Wallet status: show/hide ring
   document.addEventListener('ra-holder-update', () => {
     try { window.ensureNonTokenRingWM(); } catch(_) {}
   });
-
-  // Canvas resize: keep ring scaled & properly layered
   try {
     const c = C();
     const el = c && (c.getElement ? c.getElement() : c.upperCanvasEl);
@@ -419,12 +383,7 @@ async function fabricFromURL(url){
 }
 
 // (single consolidated helper) keep label above other UI if present
-function bringInterfaceToFront(){
-  try {
-    if (typeof idLabel !== 'undefined' && idLabel && canvas) {
-      canvas.bringToFront(idLabel);
-    }
-  } catch(_){}
+} catch(_){}
 }
 
 function initBackgroundRect(fill){
@@ -451,9 +410,6 @@ function setCanvasSize(size){
   });
   canvas.setViewportTransform([1,0,0,1,0,0]);
   canvas.requestRenderAll();
-
-  // Phase 2: legacy 'ra-wm-recalc' event removed. Ring resizing handled by ResizeObserver.
-  // Optional: ensure ring watermark stays centered if present
   try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
 }
 
@@ -488,8 +444,6 @@ async function makeStampedGroup(img /*, bw, bh, wmWidthRatio */){
 
 async function loadBaseImage(dataUrl, isToken){
   clearBaseOnly();
-
-  // Phase 2: Strip any legacy watermark objects before loading new base (especially token mode)
   if (isToken) {
     try {
       const os = canvas.getObjects() || [];
@@ -525,8 +479,6 @@ async function loadBaseImage(dataUrl, isToken){
     lockBaseObject(group);
     group.set({ left:cw/2, top:ch/2 }); group.setCoords();
     obj = group;
-
-    // Optional: auto-ensure faint ring for non-token load
     try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   }
 
@@ -732,11 +684,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (sizeEl) sizeEl.value = String(initialSize);
   setCanvasSize(initialSize);
   setZoom(1);
-
-  // Ensure faint ring (will noop if not ready yet)
   try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
-
-  // When WM / ring asset resolves, re-ensure (first load scenario)
   window.addEventListener('ra-wm-src-ready', () => {
     try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   }, { once:false });
@@ -766,21 +714,18 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!f) return;
     const data = await fileToDataURL(f);
     await loadBaseImage(data, false); // non-token => ring watermark
-    // Re-ensure ring (in case a token was previously loaded & removed it)
     try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
   safeAddListener("clearUpload", "click", () => {
     const inp = $("baseUpload"); if (inp) inp.value = "";
     clearBaseOnly();
-    // After clearing base we may still want a faint ring visible
     try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   });
 
   // ... any other startup listeners, buttons, etc. ...
 });  // end DOMContentLoaded
 
-/* ===== RA_TOKEN_ID_WIRING — place/update on-canvas Token ID label ===== */
 ;(() => {
   if (window.__RA_WIRE_TOKENID_BTN__) return;
   window.__RA_WIRE_TOKENID_BTN__ = true;
@@ -894,7 +839,6 @@ document.addEventListener("DOMContentLoaded", () => {
             try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
             try { C()?.requestRenderAll(); } catch(_){}
             document.dispatchEvent(new CustomEvent('ra-json-restore-end'));
-            // Re-ensure faint ring (will no-op if hidden for holder)
             try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
           } finally {
             userCb();
@@ -957,8 +901,6 @@ safeAddListener("loadToken","click", async ()=>{
     }catch(_){}
 
     if (statusEl) statusEl.textContent = "Loaded 👍";
-
-    // Ensure ring stays hidden (safety; loadBaseImage already removed it)
     try {
       (canvas.getObjects()||[]).forEach(o=>{
         if (o && (o._raWMRing || o._isWatermark || o._raWMCenter)) o.visible = false;
@@ -989,7 +931,6 @@ safeAddListener("clearCanvas","click", ()=>{
   raSafeClear(true);          // keep backgroundRect, clear everything else
   idLabel = null; 
   baseGroup = null;
-  // Re-create faint ring (non-token mode) if appropriate
   try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
   // Re-enforce layer order after a short delay so undo/restore ops aren't racing
   setTimeout(()=>{
@@ -1131,8 +1072,6 @@ safeAddListener("duplicate","click", ()=>{
     // Force the clone and its children to be treated as overlays
     function setOverlayKindDeep(obj) {
       if (!obj) return;
-
-      // Skip system/base/watermark/bg/token-id elements
       const isSystem =
         obj._raSys || obj._isWatermark || obj._raWMRing || obj._isBgRect || obj._isBase || obj._raWMCenter || obj._raTokenId;
 
@@ -1370,7 +1309,6 @@ document.addEventListener("keydown", (e)=>{
 
   // Arrow key nudge (Shift = 10px)
   if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) {
-    // Do not nudge system/base/bg/watermark/token-id objects
     if (o._isBgRect || o._isBase || o._raSys || o._raTokenId || o._isWatermark || o._raWMRing || o._raWMCenter) {
       e.preventDefault();
       return;
@@ -1424,7 +1362,6 @@ document.addEventListener("keydown", (e)=>{
   function center(which){
     const c = C(); if (!c) return;
     const o = c.getActiveObject(); if(!o) return;
-    // Skip centering system / watermark / base / token id items
     if (o._raSys || o._raWMRing || o._isWatermark || o._raWMCenter || o._isBgRect || o._isBase || o._raTokenId) return;
     const cw = c.getWidth(), ch = c.getHeight();
     if (which==="H" || which==="HV") o.left = cw/2;
@@ -1434,7 +1371,6 @@ document.addEventListener("keydown", (e)=>{
 
   function isSnapTarget(o){
     if (!o) return false;
-    // Added _raWMRing to exclusion list for Phase 2 ring watermark
     if (o._raSys || o._raWMRing || o._raWMCenter || o._isWatermark || o._isBgRect || o._isBase || o._raTokenId) return false;
     const kind = (o._kind||'').toLowerCase();
     const t = (o.type||'').toLowerCase();
@@ -1780,11 +1716,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
   };
 });  // <-- closes DOMContentLoaded
 
-/* =========================
-   RA_CANVAS_RESIZE_SYNC_ONLY_V8 (Phase 2 integrated)
-   - Single square canvas resize with optional proportional scaling
-   - Skips scaling watermark ring, background, system, token id label (configurable)
-   ========================= */
 (function RA_CANVAS_RESIZE_SYNC_ONLY_V8(){
   if (window.__RA_RESIZE_V8_INIT__) return;
   window.__RA_RESIZE_V8_INIT__ = true;
@@ -1796,11 +1727,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   const SCALE_OVERLAYS  = true;   // scale user overlays
   const SCALE_TOKEN_ID  = false;  // keep token ID label size constant (position shifts)
   const MIN_SIZE = 400, MAX_SIZE = 2000;
-
-  function isWatermark(o){
-    return !!(o && (o._raWMRing || o._isWatermark || o._raWMCenter));
-  }
-  function isSystem(o){
+function isSystem(o){
     return !!(o && (o._raSys || o._isBgRect || isWatermark(o)));
   }
   function isTokenIdLabel(o){
@@ -1885,8 +1812,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
     // Normalize viewport
     try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
     const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
-
-    // Re-seat watermark ring (it has its own scaling logic) & enforce layer order
     try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_) {}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
 
@@ -1936,13 +1861,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
   }
 })();
 
-/* ==========================================================
-   RA_FIXED_CENTER_CANVAS_V2 (Phase 2 aware)
-   - Fixes ghost dimension staleness
-   - Optional true viewport centering (config)
-   - Throttled reposition
-   - Safe cleanup + re-init guard
-   ========================================================== */
 (function RA_FIXED_CENTER_CANVAS_V2(){
   if (window.__RA_FIXED_CENTER_INIT__) return;
   window.__RA_FIXED_CENTER_INIT__ = true;
@@ -1982,8 +1900,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
     // Insert ghost just before card so layout stays
     card.parentNode.insertBefore(ghost, card);
-
-    // Capture initial flow rect for column anchoring
     let initialRect = ghost.getBoundingClientRect();
 
     Object.assign(card.style, {
@@ -2019,8 +1935,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
       if (!document.body.contains(card)) return; // removed
       updateGhostSize();
       const gRect = ghost.getBoundingClientRect();
-
-      // Column X origin (from initialRect, to maintain original horizontal alignment if not centering)
       if (!initialRect || !initialRect.width) initialRect = gRect;
 
       const cardHeight = card.offsetHeight || gRect.height;
@@ -2843,19 +2757,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
    Last removed on 2025-09-27.
 */
 
-/* ==========================================================
-   RA_ANIMATE_UNIFIED_V2
-   Version: 2.0.2  (Layout rollback + minimal button & auto-download fix)
-
-   Changes from 2.0.0:
-     • Added tiny inline style so Preview / Export buttons align uniformly.
-     • Added config.autoDownloadOnExport (default true). When export completes,
-       it immediately triggers a download AND still shows the link.
-     • No other logic, layout, or behavior changed.
-     • Reverted any v2.0.1 structural/UI alterations (grid / title reposition).
-
-   Everything else (watermark modes, return modes, animation logic) untouched.
-   ========================================================== */
 (() => {
   if (window.raAnimateUnifiedV2 && window.raAnimateUnifiedV2.version === '2.0.2') return;
 
@@ -3068,7 +2969,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     if (t) setTimeout(()=>{ if(m.textContent===t) m.textContent=''; },2500);
   }
 
-  /* -------------------- Watermark Manager (unchanged logic) -------------------- */
+  
   const WM = {
     is(o){ return !!(o && (o._isWatermark||o._raWMRing||o._raWMCenter||o._raFooter)); },
     collect(){
@@ -3453,16 +3354,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
 })();
 
-/* ==========================================================
-   RA_UNDO_REDO_SAFE_MINI_V1b
-   - Builds on your SAFE MINI V1 with:
-     • Watermark/footer/system overlay ignore.
-     • Smarter burst coalescing (resets timer on each event).
-     • Active object preservation (lightweight).
-     • Public API (window.raHistory).
-     • Base swap detection (optional toggle).
-     • Post-restore hooks (layer & watermark ensure, if present).
-   ========================================================== */
 (() => {
   if (window.__RA_UNDO_SAFE_V1B__) return;
   window.__RA_UNDO_SAFE_V1B__ = true;
@@ -3552,8 +3443,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
             const target = c.getObjects().find(o => o._histId === data.__active);
             if (target) c.setActiveObject(target);
           }
-
-          // Post-restore hooks: re-layer + ring/watermark ensure
           try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
           try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
 
@@ -3705,7 +3594,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
   function isUserObject(o){
     if (!o) return false;
-    // Skip system / base / token / watermark
     if (o._isBgRect || o._isBase || o._raSys || o._raTokenId) return false;
     if (o._isWatermark || o._raWMRing || o._raWMCenter || o._raFooter) return false;
     return true;
@@ -3798,13 +3686,6 @@ document.addEventListener("DOMContentLoaded", ()=>{
   window.addEventListener('orientationchange',() => setTimeout(run, 100), {passive:true});
 })();
 
-/* ==========================================================
-   RA_FIX_UPLOAD_RECENTER_AFTER_STRIP_V1
-   Keeps newly added base/overlay groups centered after the
-   corner-stamp children are removed.
-   - Runs after the existing watermark/no-stamps patch.
-   - No impact on Undo/Redo (we just correct the initial add).
-   ========================================================== */
 (() => {
   if (window.__RA_FIX_RECENTER_V1__) return;
   window.__RA_FIX_RECENTER_V1__ = true;
@@ -4635,10 +4516,6 @@ tile.appendChild(cap);
   }
 })();
 
-/* ==========================================================
-   RA_WM_GLOBAL_SYNC_v3 — PASTE AT THE VERY BOTTOM OF app.js
-   Uses /api/ra-settings to load+save watermark settings for everyone.
-   ========================================================== */
 (() => {
   const GET_URL  = '/api/ra-settings';  // your endpoint (GET returns {ok, settings:{...}})
   const POST_URL = '/api/ra-settings';  // same endpoint for saving
@@ -4648,8 +4525,6 @@ tile.appendChild(cap);
   function canvas() {
     return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   }
-
-  // Put server values onto the centered watermark layer that's already on the canvas
   function applyToCanvas(settings) {
     if (typeof settings === 'string') { try { settings = JSON.parse(settings); } catch(_) {} }
 
@@ -4682,8 +4557,6 @@ tile.appendChild(cap);
       const j = await r.json();
       let s = j.settings ?? j.data ?? j;
       if (typeof s === 'string') { try { s = JSON.parse(s); } catch(_) {} }
-
-      // Try now; if the watermark layer isn't on the canvas yet, retry briefly
       let tries = 0;
       const tick = () => {
         if (applyToCanvas(s)) return;
@@ -4829,16 +4702,6 @@ tile.appendChild(cap);
   wire();
 })();
 
-/* ==========================================================
-   RA_WM_SERVER_MASTER_v1  — PASTE AT THE VERY BOTTOM
-   What this does (no other edits needed):
-   • Loads settings from /api/ra-settings on open.
-   • Makes the three toggles (Enabled / Show on tokens / Show on uploads)
-     save to the server AND actually show/hide the watermark.
-   • Makes the sliders (Opacity / Size) save to the server and apply.
-   • Turns the "Refresh" button into "Save for everyone" + re-apply.
-   • Works for admin and non-admin pages.
-   ========================================================== */
 (() => {
   const API = '/api/ra-settings';
 
@@ -4884,8 +4747,6 @@ tile.appendChild(cap);
       sizePct:  Number($('raWmCSize')?.value ?? 0.88)
     };
   }
-
-  // --- apply settings to the existing centered watermark layer ---
   function applyToWM(s){
     const c = C(); const wm = findWM();
     if (!c || !wm || !s) return;
@@ -4912,8 +4773,6 @@ tile.appendChild(cap);
     try { c.bringToFront(wm); } catch(_){}
     c.requestRenderAll();
   }
-
-  // keep watermark in sync when canvas objects change
   function wireCanvasFollows(stateRef){
     const c = C(); if (!c || c.__raWmServerMaster) { if (!c) setTimeout(()=>wireCanvasFollows(stateRef), 150); return; }
     c.__raWmServerMaster = true;
@@ -4924,8 +4783,6 @@ tile.appendChild(cap);
     // first pass
     setTimeout(reapply, 0);
   }
-
-  // --- admin wiring: make every control "save + apply" ---
   function wireAdmin(stateRef){
     const ids = {
       en:  'raWmCEnabled',
@@ -4969,7 +4826,6 @@ tile.appendChild(cap);
 
   async function boot(){
     try { STATE.val = await getServer(); } catch(_){ STATE.val = readAdminUI(); }
-    // Apply when watermark shows up (the other script adds it)
     (function waitWm(tries=0){
       const wm = findWM();
       if (wm) { applyToWM(STATE.val); return; }
@@ -4991,13 +4847,6 @@ tile.appendChild(cap);
   }
 })();
 
-/* ==========================================================
-   RA_WM_OVERLAY_ONLY_FALLBACK_v1 — paste at the very bottom
-   - If there is NO base image but overlays/text are present,
-     show a centered watermark (uses your "Show on uploads" setting).
-   - When a base image is added, remove this fallback so your
-     normal watermark logic runs as usual.
-   ========================================================== */
 (() => {
   const API = '/api/ra-settings';
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -5012,8 +4861,6 @@ tile.appendChild(cap);
       settings = j.settings ?? j.data ?? j;
     } catch(_){}
   }
-
-  // Use the watermark image already preloaded by your app (raWatermark).
   async function ensureImage(){
     try {
       if (window.raWatermark && typeof window.raWatermark.ready === 'function'){
@@ -5047,13 +4894,10 @@ tile.appendChild(cap);
     const c = C(); if (!c) return;
 
     if (!settings) await loadSettings();
-    // If settings aren't available, or watermarking is globally off, remove and stop.
     if (!settings || !settings.enabled) { removeFallback(); return; }
 
     const haveBase   = hasBase(c);
     const haveStuff  = canvasHasContent(c);
-
-    // If there is a base image, let the normal watermark handle it.
     if (haveBase) { removeFallback(); return; }
 
     // Nothing on canvas? nothing to show.
@@ -5061,11 +4905,7 @@ tile.appendChild(cap);
 
     // Respect "Show on uploads" for overlay-only use.
     if (!settings.showOnUploads) { removeFallback(); return; }
-
-    // Ensure we have the watermark image
     const img = await ensureImage(); if (!img) return;
-
-    // Create or update the fallback watermark (our own tag; main code won't touch it)
     let wm = (c.getObjects()||[]).find(o => o && o._raWMOverlayFallback);
     if (!wm){
       wm = new fabric.Image(img, {
@@ -6163,13 +6003,10 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   }
   function disconnect(){
     // Soft disconnect: clear our UI/state. For a full revoke, user disconnects in wallet UI.
-    // Reset holder state and re-evaluate watermarks for non-holders
     window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
     window.__raWMForce = null; // Remove any holder-based watermark override
     
     setDisconnected('Disconnected in app. (Use the wallet menu to fully disconnect this site.)');
-    
-    // Trigger watermark re-evaluation for non-holder state
     try { 
       document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
     } catch(_) {}
@@ -6200,8 +6037,6 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
     row1.style.display       = 'none';
     actions.style.display    = 'none';
     out.textContent          = msg || '';
-    
-    // Trigger watermark re-evaluation for non-holder state
     try { 
       document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 
     } catch(_) {}
@@ -6272,20 +6107,15 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   (async ()=>{ try{ await refresh(); }catch(_){} })();
 })();
 
-/* ========== RA_WM_HOLDER_GATING_v2 — wallet → watermark behavior (no loops) ========== */
 (()=>{
   function apply(detail){
     // keep last known state around for other bits if needed
     window.RA_HOLDER_STATE = detail || window.RA_HOLDER_STATE || {};
-
-    // Rebel holders: locally force watermark OFF (doesn't change admin toggles)
     if (detail && detail.hasRebel) {
       window.__raWMForce = { off: true };
     } else {
       window.__raWMForce = null; // obey admin toggles again
     }
-
-    // Tell the watermark block to recompute using the new flag
     try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_) {}
     try { window.canvas && window.canvas.requestRenderAll(); } catch(_) {}
   }
@@ -6294,7 +6124,6 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
   document.addEventListener('ra-holder-update', (e)=> apply(e.detail||{}));
 })();
 
-/* ========== RA_BRAND_FOOTER_TOPMOST_LOCKED_v6 — always preferred footer style, deduped, consistent everywhere ========== */
 (() => {
   const FOOTER_TEXT = 'Powered by Rebel Studios';
   const STYLE = {
@@ -6343,19 +6172,15 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
 
   // Returns true only if we actually changed something (keeps history clean)
   function ensure(){
-    // Do not spawn or modify footer while a JSON restore is in progress
     if (window.__RA_RESTORING__) return false;
 
     const c = C(); if (!c) return false;
     let changed = false;
-
-    // Dedupe: remove any extra footers, keep only one
     let footers = (c.getObjects?.() || []).filter(o => o && o._raBrandFooter);
     if (footers.length > 1) {
       footers.slice(0, -1).forEach(f => { try { c.remove(f); changed = true; } catch(_){ } });
       footers = [footers[footers.length - 1]];
     }
-    let footer = footers[0];
 
     const show = shouldShow(c);
 
@@ -6366,8 +6191,6 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
       if (changed) try { c.requestRenderAll(); } catch(_){}
       return changed;
     }
-
-    // If missing, create new preferred footer
     if (!footer) {
       footer = new fabric.Text(FOOTER_TEXT, {
         ...STYLE,
@@ -6739,8 +6562,6 @@ async function callTokenURI(contract, tokenId, rpcUrl) {
     
     const result = await response.json();
     if (result.error) throw new Error(`RPC error: ${result.error.message}`);
-    
-    // Decode hex string result (skip first 64 chars for offset, next 64 for length)
     const hexResult = result.result;
     if (!hexResult || hexResult === '0x') return null;
     
@@ -6852,8 +6673,6 @@ async function loadTokenFromCollection(tokenId, col){
     base.setCoords();
     try{ c.requestRenderAll(); }catch(_){}
   }
-  
-  // Tag the base so the footer/watermark can react
   const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
   annotateBase({ contract, chain: slug, name: col.name });
   autoFitBase();
@@ -7065,8 +6884,6 @@ async function loadTokenFromCollection(tokenId, col){
     // textarea or large input for message
     return card.querySelector('textarea, input[type="text"], input:not([type])');
   }
-
-  // --- if that box shows our token string, blank it (so the token id never “moves into” Custom Text)
   function scrubCustomTextBox(tokenShown){
     const msg = findCustomTextInput(); if (!msg) return;
     const val = (msg.value||'').trim();
@@ -7180,7 +6997,6 @@ async function loadTokenFromCollection(tokenId, col){
  onReady(boot);
 })();
 
-/* ========== RA_SAFE_SCRUB_v1 — stop the Custom Text box from mirroring the Token‑ID text ========== */
 (()=>{
   function C(){ return window.canvas || null; }
 
@@ -7573,15 +7389,11 @@ async function loadTokenFromCollection(tokenId, col){
   }
 })();
 
-/* ========== RA_WATERMARK_HARDLOCK_v1 — keep big watermark unmovable, even after "Unlock All" ========== */
 (() => {
   function C(){ return window.canvas || null; }
-
-  // Identify the big watermark. We lock "system" overlays but leave base, footer and token-ID alone.
   function isWM(o){
     if (!o) return false;
     if (o._raWM || o._raWatermark || o._isWatermark || o._wm) return true; // common flags
-    // Treat other system overlays as locked too, but allow footer / token-ID / base / bg
     if (o._raSys && !o._raBrandFooter && !o._raTokenId && !o._isBase && !o._isBgRect) return true;
     const n = (o.name||o.id||'').toString().toLowerCase();
     if (n.includes('watermark') || n === 'wm') return true;
@@ -7605,7 +7417,6 @@ async function loadTokenFromCollection(tokenId, col){
     const buttons = Array.from(document.querySelectorAll('button'));
     const unlockBtn = buttons.find(b => /unlock\s*all/i.test((b.textContent||'').trim()));
     if (!unlockBtn) return;
-    // After Unlock All fires, immediately re-lock the watermark
     unlockBtn.addEventListener('click', ()=> setTimeout(relockAll,0), true);
   }
 
@@ -7621,10 +7432,9 @@ async function loadTokenFromCollection(tokenId, col){
 })();
 
 /* ==========================================================
-   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED, FIXED)
+   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED)
    - Hooks ONLY the button with id="openNewTab" (no text sniffing)
    - Opens a clean viewer tab first, then sends a Blob URL (Safari-safe)
-   - Uses export multiplier (1–8). Works with fabric.Canvas or <canvas>
    - Never navigates the original tab
    - Paste at the VERY BOTTOM of app.js
    ========================================================== */
@@ -7632,41 +7442,18 @@ async function loadTokenFromCollection(tokenId, col){
   if (window.__RA_OPEN_NEW_TAB_VIEWER_V2__) return;
   window.__RA_OPEN_NEW_TAB_VIEWER_V2__ = true;
 
-  // ---- helpers -------------------------------------------------------------
-  function getFabricCanvas(){
-    // Prefer an existing fabric canvas instance if present
+  function getCanvas(){
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-
-    // Heuristic: scan window for a fabric.Canvas-like object
-    const guess = document.querySelector('canvas.upper-canvas')
-              ||  document.querySelector('canvas.lower-canvas')
-              ||  document.querySelector('canvas');
-
-    if (guess){
+    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
+    if (el){
       for (const k in window){
         try{
           const v = window[k];
-          // fabric.Canvas typically has upperCanvasEl & toDataURL
-          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function'){
-            window.canvas = v;
-            return v;
-          }
+          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
         }catch(_){}
       }
     }
     return null;
-  }
-
-  function getHtmlCanvas(){
-    // If we have a fabric canvas, prefer its lowerCanvasEl (the rasterized composite)
-    const fc = getFabricCanvas();
-    if (fc && fc.lowerCanvasEl) return fc.lowerCanvasEl;
-
-    // Otherwise fall back to any canvas in DOM
-    return document.querySelector('canvas.lower-canvas')
-        ||  document.querySelector('canvas.upper-canvas')
-        ||  document.querySelector('canvas')
-        ||  null;
   }
 
   function getMultiplier(){
@@ -7676,203 +7463,492 @@ async function loadTokenFromCollection(tokenId, col){
     return Math.min(8, Math.max(1, m || 2));
   }
 
-  function dataURLToBlob(dataURL){
-    // More Safari-proof than toBlob in some contexts
-    const parts = dataURL.split(',');
-    const mime  = (parts[0].match(/:(.*?);/)||[])[1] || 'image/png';
-    const bstr  = atob(parts[1] || '');
-    const n = bstr.length;
-    const u8 = new Uint8Array(n);
-    for (let i=0;i<n;i++) u8[i] = bstr.charCodeAt(i);
-    return new Blob([u8], { type: mime });
-  }
+  function openViewer(){
+    const c = getCanvas();
+    if (!c){ alert('Canvas not ready'); return; }
 
-  function makeDataURL(mult){
-    const fc = getFabricCanvas();
-    if (fc){
-      // fabric handles scaling via multiplier reliably
-      return fc.toDataURL({
-        format: 'png',
-        multiplier: mult,
-        enableRetinaScaling: false
+    // Open the tab immediately (user gesture → popup-safe)
+    const win = window.open('about:blank','_blank');
+    if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
+
+    // Lightweight viewer shell
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Export</title>
+      <style>
+        html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
+        .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
+        img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
+            box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
+        .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
+             color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+             background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none}
+      </style></head><body>
+        <div class="viewer"><img id="raImg" alt="export"></div>
+        <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
+        <script>
+          (function(){
+            var img = document.getElementById('raImg'), fit = true;
+            function apply(){ if (fit){ img.style.maxWidth='calc(100vw - 32px)'; img.style.maxHeight='calc(100vh - 32px)'; }
+                              else { img.style.maxWidth='none'; img.style.maxHeight='none'; } }
+            img.addEventListener('click', function(){ fit=!fit; apply(); });
+            apply();
+            window.addEventListener('message', function(ev){
+              if (ev && ev.data && ev.data.type==='ra-img') { img.src = ev.data.url; }
+            }, false);
+            setTimeout(function(){
+              if (!img.src) {
+                document.body.insertAdjacentHTML(
+                  'beforeend',
+                  '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'
+                );
+              }
+            }, 2000);
+          })();
+        <\/script>
+      </body></html>`;
+    win.document.open(); win.document.write(html); win.document.close();
+
+    // Produce the PNG and send a Blob URL to the viewer (more reliable than giant data: URLs)
+    try{
+      const mult = getMultiplier();
+      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
+      fetch(dataUrl).then(r=>r.blob()).then(blob=>{
+        const url = URL.createObjectURL(blob);
+        try { win.postMessage({ type:'ra-img', url }, '*'); } catch(_){}
+        const tid = setInterval(()=>{ if (win.closed){ URL.revokeObjectURL(url); clearInterval(tid); } }, 4000);
+      }).catch(()=>{
+        try{ win.document.body.innerHTML =
+          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
       });
+    }catch(e){
+      try{ win.document.body.innerHTML =
+        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
     }
-    // Fallback: scale an HTMLCanvasElement manually
-    const c = getHtmlCanvas();
-    if (!c) return null;
-    if (mult === 1){
-      try { return c.toDataURL('image/png'); } catch(_){ return null; }
-    }
-    const w = Math.max(1, Math.floor(c.width  * mult));
-    const h = Math.max(1, Math.floor(c.height * mult));
-    const off = document.createElement('canvas');
-    off.width = w; off.height = h;
-    const ctx = off.getContext('2d');
-    // High quality scaling
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(c, 0, 0, w, h);
-    try { return off.toDataURL('image/png'); } catch(_){ return null; }
   }
 
-  // ---- viewer shell --------------------------------------------------------
-  const VIEWER_HTML = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Export</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
-    .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
-    img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
-        box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;cursor:zoom-in;}
-    .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
-         color:#e5e7eb;opacity:.8;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-         background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none;white-space:nowrap;}
-    .top{position:fixed;left:50%;top:10px;transform:translateX(-50%);
-         color:#e5e7eb;opacity:.8;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
-    a.btn{display:inline-block;margin-left:8px;padding:6px 10px;border-radius:6px;text-decoration:none;
-          background:rgba(255,255,255,.08);color:#e5e7eb;}
-  </style>
-</head>
-<body>
-  <div class="viewer"><img id="raImg" alt="export"></div>
-  <div class="top" id="meta"></div>
-  <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
-  <script>
-  (function(){
-    var img = document.getElementById('raImg'), fit = true, currentURL = null;
+  // Capture ONLY the actual “Open in new tab” button (id="openNewTab")
+  document.addEventListener('click', function(e){
+    const btn = e.target && e.target.closest && e.target.closest('#openNewTab');
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    openViewer();
+  }, true);
+})();
 
-    function apply(){
-      if (fit){
-        img.style.maxWidth  = 'calc(100vw - 32px)';
-        img.style.maxHeight = 'calc(100vh - 32px)';
-        img.style.cursor = 'zoom-in';
-      } else {
-        img.style.maxWidth  = 'none';
-        img.style.maxHeight = 'none';
-        img.style.cursor = 'zoom-out';
-      }
-    }
-    img.addEventListener('click', function(){ fit = !fit; apply(); });
-    apply();
+/* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
+(function(){
+  if (window.__RA_APE_RPC_FALLBACK__) return;
+  window.__RA_APE_RPC_FALLBACK__ = true;
 
-    // Revoke previous object URLs to avoid leaks
-    function setImg(src){
-      if (currentURL && src !== currentURL){
-        try{ URL.revokeObjectURL(currentURL); }catch(_){}
-      }
-      currentURL = src;
-      img.src = src;
-    }
+  // We set a safe default earlier in CONFIG. You can still override window.__APECHAIN_RPC at runtime if needed.
 
-    window.addEventListener('message', function(ev){
-      var d = ev && ev.data;
-      if (!d || d.type !== 'ra-img') return;
-      if (d.url) setImg(d.url);
-      var meta = document.getElementById('meta');
-      var name = d.name || 'export';
-      meta.innerHTML = name
-        ? ('<span>'+String(name).replace(/[&<>]/g,s=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\"}[s]))+'</span>'
-           + ' <a class="btn" download="'+name+'.png" href="'+(d.url||'#')+'">Download</a>')
-        : '';
-    }, false);
-
-    setTimeout(function(){
-      if (!img.src){
-        document.body.insertAdjacentHTML(
-          'beforeend',
-          '<div class="top" style="top:auto;bottom:48px;">No image received.</div>'
-        );
-      }
-    }, 2000);
-
-    window.addEventListener('beforeunload', function(){
-      if (currentURL){
-        try{ URL.revokeObjectURL(currentURL); }catch(_){}
-      }
+  async function jsonRpc(url, body){
+    const r = await fetch(url, {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify(body)
     });
-  })();
-  <\/script>
-</body>
-</html>`;
-
-  function openViewerWindow(){
-    // Open the tab immediately in the user gesture to avoid popup blockers
-    const win = window.open('about:blank', '_blank', 'noopener,noreferrer');
-    if (!win) return null;
-
-    // Write the HTML shell quickly so it can receive postMessage soon after
-    win.document.open();
-    win.document.write(VIEWER_HTML);
-    win.document.close();
-    return win;
+    if (!r.ok) throw new Error('rpc http '+r.status);
+    const j = await r.json();
+    if (j.error) throw new Error('rpc error '+(j.error.message||''));
+    return j.result;
   }
 
-  async function exportAndSend(win){
-    const mult = getMultiplier();
-    const dataURL = makeDataURL(mult);
-    if (!dataURL){
-      alert('Export failed: canvas not ready.');
-      try{ win && win.close(); }catch(_){}
-      return;
-    }
-    // Convert to Blob → Object URL (Safari-friendlier than giant data URLs across windows)
-    let blob, url;
-    try{
-      blob = dataURLToBlob(dataURL);
-      url  = URL.createObjectURL(blob);
-    }catch(_){
-      // Fallback: still try sending the data URL (last resort)
-      url = dataURL;
-    }
-
-    // Derive a simple name if available
-    const name =
-      (typeof window.getExportName === 'function' && window.getExportName()) ||
-      (document.getElementById('exportName')?.value?.trim()) ||
-      'export';
-
-    try{
-      win.postMessage({ type:'ra-img', url, name }, '*');
-    }catch(_){
-      // As a fallback, navigate the viewer to the blob URL (keeps original tab intact)
-      try { win.location.href = url; } catch(__){}
-    }
+  function ipfsToHttp(u){
+    if (!u) return u;
+    if (u.startsWith('ipfs://ipfs/')) return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(12);
+    if (u.startsWith('ipfs://'))      return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(7);
+    return u;
   }
 
-  function onOpenNewTabClicked(e){
-    e.preventDefault();
-    e.stopPropagation();
+  window.__fetchApechainImageURL = async function(contract, tokenId){
+    const rpc = window.__APECHAIN_RPC;  // now guaranteed to exist
+    if (!rpc) return null;
 
-    const win = openViewerWindow();
-    if (!win){
-      alert('Popup blocked. Please allow popups for this site or use Download.');
-      return;
+    // tokenURI(uint256) = 0xc87b56dd
+    const idHex = '0x' + BigInt(String(tokenId).replace(/[^0-9]/g,'')||'0').toString(16);
+    const data  = '0xc87b56dd' + idHex.replace(/^0x/,'').padStart(64,'0');
+    const call  = { to: contract, data };
+
+    const res = await jsonRpc(rpc, { jsonrpc:'2.0', id:1, method:'eth_call', params:[call, 'latest'] });
+    const hex = (res||'').replace(/^0x/,'');
+    if (hex.length < 128) return null;
+    const len = parseInt(hex.slice(64,128),16);
+    const dataHex = hex.slice(128, 128+len*2);
+    let uri = '';
+    for (let i=0;i<dataHex.length;i+=2) uri += String.fromCharCode(parseInt(dataHex.slice(i,i+2),16));
+
+    // fetch metadata → image
+    const metaUrl = ipfsToHttp(uri);
+    const mRes = await fetch(metaUrl, {cache:'no-store'});
+    if (!mRes.ok) return null;
+    const meta = await mRes.json().catch(()=>null);
+    return ipfsToHttp(meta && (meta.image || meta.image_url || meta.imageUrl));
+  };
+})();
+
+/* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
+;(() => {
+  'use strict';
+  if (window.__RA_TOKEN_LOADER_XCHAIN_V3__) return;
+  window.__RA_TOKEN_LOADER_XCHAIN_V3__ = true;
+
+  // ---------- small helpers ----------
+  const getCanvas = () =>
+    (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $ = (sel, r = document) => r.querySelector(sel);
+
+  // Known collections → {address, chain}
+  const KNOWN = {
+    // name (lowercase) : { address, chain }
+    'rebel ants':   { address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chain:'ethereum' },
+    'saints of la': { address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chain:'ethereum' },
+    'chumpz':       { address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chain:'apechain' }
+  };
+
+  // Quick map: contract → chain
+  const CONTRACT_FOR = {
+    '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221': 'ethereum',
+    '0xbed2470ded2519c13eaaf3bd970015ef404d3d20': 'ethereum',
+    '0xa9a1d086623475595a02991664742e4a1cbafcb8': 'apechain'
+  };
+
+  const normHex = s => (s || '').toLowerCase();
+  function slugFromChain(v){
+  const x = (v || '').toString().toLowerCase().trim();
+  if (x === '0x1'    || x === '1'    || x === 'eth' || x.includes('ether')) return 'ethereum';
+  if (x === '0x2105' || x.includes('base'))                                 return 'base';
+  if (x === '0x8173' || x.includes('ape'))                                  return 'apecoin';
+  return x || 'ethereum';
+}
+
+  function detectSelectionName(){
+    // From status row (if present)
+    const st = $('#raColStatus');
+    if (st && st.textContent) {
+      // "Using: Chumpz (ApeChain)" → "chumpz"
+      const name = st.textContent
+        .replace(/^.*using:\s*/i,'')
+        .split('—')[0]
+        .split('(')[0]
+        .trim()
+        .toLowerCase();
+      if (name) return name;
     }
-    // Defer heavy work until after window is open (keeps popup-safe)
-    setTimeout(()=>exportAndSend(win), 0);
+    // From visible select (if present)
+    const sel = $('#raColSelect');
+    if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
+      const t = (sel.selectedOptions[0].textContent || '')
+        .split('—')[0].split('(')[0].trim().toLowerCase();
+      if (t) return t;
+    }
+    return null;
   }
 
-  // ---- wire once -----------------------------------------------------------
-  function wire(){
-    const btn = document.getElementById('openNewTab');
-    if (!btn) return false;
-    if (btn.__ra_bound_openNewTab) return true;
-    btn.__ra_bound_openNewTab = true;
-    btn.addEventListener('click', onOpenNewTabClicked, { capture:true });
-    return true;
+  function detectContractAndChain(){
+    // Highest priority: URL/query or explicit window overrides
+    const q     = new URLSearchParams(location.search);
+    const cQ    = q.get('contract') || q.get('c') || '';
+    const chQ   = q.get('chain') || q.get('network') || '';
+    const cWin  = window.__RA_CONTRACT || window._RA_CONTRACT || '';
+    const chWin = window.__RA_CHAIN    || window._RA_CHAIN    || '';
+    if (cQ || cWin) {
+      const c = normHex(cQ || cWin);
+      const ch = slugFromChain(chQ || chWin || CONTRACT_FOR[c]);
+      return { contract: c, chain: ch, name: '' };
+    }
+
+    // Next: look up by collection name shown in UI
+    const name = detectSelectionName();
+    if (name && KNOWN[name]) {
+      return { contract: normHex(KNOWN[name].address), chain: KNOWN[name].chain, name };
+    }
+
+    // Otherwise, do nothing; let the app’s original loader handle it
+    return null;
   }
 
-  if (!wire()){
-    // In case the button is injected later
-    const obs = new MutationObserver(()=>{ wire(); });
-    obs.observe(document.documentElement, { childList:true, subtree:true });
+  function readTokenId(){
+    const ids = [
+      '#tokenId', '#token', '#tokenIdInput',
+      'input[name="token"]', 'input[name="tokenId"]',
+      'input[placeholder*="Token"]'
+    ];
+    for (const s of ids){
+      const el = $(s);
+      const v  = (el && (el.value || '').trim()) || '';
+      if (v) return v;
+    }
+    // Fallback: any input/textarea with "token" in placeholder + a value
+    const maybe = Array.from(document.querySelectorAll('input,textarea'))
+      .find(el => /token/i.test(el.placeholder || '') && (el.value || '').trim());
+    return maybe ? maybe.value.trim() : '';
+  }
+
+  function normalizeUrl(u){
+    if (!u) return null;
+    if (u.startsWith('ipfs://')) return 'https://cloudflare-ipfs.com/ipfs/' + u.replace('ipfs://','').replace(/^ipfs\//,'');
+    if (u.startsWith('ar://'))   return 'https://arweave.net/' + u.replace('ar://','');
+    return u;
+  }
+
+  async function fetchAsDataURL(url){
+    const r = await fetch(url, { mode:'cors', cache:'no-store' });
+    if (!r.ok) throw new Error('fetch failed');
+    const b = await r.blob();
+    return await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(b);
+    });
+  }
+
+  async function reservoirCandidates(contract, tokenId, chainSlug){
+  let rsSlug = (chainSlug||'').toLowerCase();
+  // standardize our internal slugs
+  if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
+  if (rsSlug === 'base') rsSlug = 'base';
+  if (rsSlug === 'ape' || rsSlug === 'apechain' || rsSlug === 'apecoinchain') rsSlug = 'apechain';
+
+  // choose correct host per chain (per Reservoir docs)
+  // https://nft.reservoir.tools/reference/supported-chains
+  const HOST = (
+    rsSlug === 'apechain'  ? 'https://api-apechain.reservoir.tools' :
+    rsSlug === 'base'      ? 'https://api-base.reservoir.tools'     :
+                             'https://api.reservoir.tools'           // ethereum default
+  );
+
+  const url = `${HOST}/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&limit=1`;
+  const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
+  if (!r.ok) return [];
+  const j = await r.json();
+  const t = j?.tokens?.[0]?.token || {};
+  const m = t.media || {};
+  return [
+    m?.original?.url || m?.original?.mediaUrl,
+    t.imageLarge, t.image, t.imageUrl, t.imageSmall
+  ].filter(Boolean).map(normalizeUrl);
+}
+
+function killOldBase(c){
+  const objs = (c.getObjects() || []).slice();
+  const cw = c.getWidth(), ch = c.getHeight();
+
+  const imgLike = o => o && (o.type === 'image' || o._element);
+  const isGroup = o => o && o.type === 'group';
+
+  const boundsArea = o => {
+    try {
+      const br = o.getBoundingRect(true, true);
+      return (br?.width || 0) * (br?.height || 0);
+    } catch(_) { return 0; }
+  };
+
+  const imageArea = o => {
+    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0) * (o.scaleX||1));
+    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0) * (o.scaleY||1));
+    return w * h;
+  };
+
+  // Collect all candidates we may want to remove; compute a reasonable threshold
+  const imgNonSys = objs.filter(o => imgLike(o) && !o._raSys && !o._raTokenId && !o._isBgRect);
+  const maxImageA = imgNonSys.length ? Math.max(...imgNonSys.map(imageArea)) : 0;
+  const bigImageThreshold = Math.max(cw * ch * 0.25, maxImageA * 0.75); // robust threshold
+
+  // If the active object is one of the candidates, drop selection first (avoids drawControls errors)
+  try {
+    const active = c.getActiveObject && c.getActiveObject();
+    if (active && (imgNonSys.includes(active) || isGroup(active))) {
+      c.discardActiveObject();
+    }
+  } catch(_) {}
+
+  objs.forEach(o => {
+    if (!o) return;
+    if (o._isBgRect || o._raSys || o._raTokenId) return;  // never touch bg/sys/label
+
+    let looksLikeBase = false;
+
+    // Explicit flags or fingerprints
+    if (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract) {
+      looksLikeBase = true;
+    }
+
+    // Large non-overlay image = probable base
+    if (!looksLikeBase && imgLike(o) && o._kind !== 'overlay') {
+      const a = imageArea(o);
+      if (a >= bigImageThreshold) looksLikeBase = true;
+    }
+
+    // Group base (e.g., old non-token base with corner stamps)
+    if (!looksLikeBase && isGroup(o)) {
+      if (o._kind !== 'overlay') {
+        const A = boundsArea(o);
+        const stamps = Array.isArray(o._objects) && o._objects.some(ch => ch && (ch._isWatermark || ch.raWM || ch.raPos));
+        if (A >= cw * ch * 0.25 || stamps) looksLikeBase = true;
+      }
+    }
+
+    if (looksLikeBase) {
+      try { c.remove(o); } catch(_) {}
+    }
+  });
+
+  try { c.requestRenderAll(); } catch(_) {}
+}
+
+  function fitAndAddAsBase(img){
+    const c = getCanvas(); if (!c) return false;
+    img.set({ originX:'center', originY:'center' });
+    const cw=c.getWidth(), ch=c.getHeight();
+    const sc = Math.min(cw/(img.width||cw), ch/(img.height||ch), 1);
+    if (Number.isFinite(sc) && sc>0) img.scale(sc);
+    img.left = cw/2; img.top = ch/2; img.setCoords();
+
+    // lock as base
+    img._isBase = true;
+    img._raBaseSig = 'BASE_V1';     // <-- paste THIS line here (fingerprint)    
+    img.selectable=false; img.evented=false; img.hasControls=false;
+    img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
+
+c.add(img);
+// Let the deterministic enforcer set exact indices
+try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
+c.requestRenderAll();
+return true;
+
+  }
+
+  function annotateBase(meta){
+    const c = getCanvas(); if (!c) return;
+    const base = (c.getObjects?.()||[]).find(o => o && o._isBase && !o._isBgRect);
+    if (!base) return;
+    base._tokenContract = normHex(meta.contract || '');
+    base._tokenChain    = meta.chain || '';  // 'ethereum' | 'apechain' | 'base'
+    base._tokenName     = meta.name || '';
+    try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
+    try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function upsertTokenLabel(id){
+    const c = getCanvas(); if (!c || !window.fabric) return;
+    (c.getObjects()||[]).forEach(o => { if (o && o._raTokenId) c.remove(o); });
+    const txt = new fabric.Text('#'+String(id), {
+      originX:'center', originY:'top',
+      left:c.getWidth()/2, top: 32,
+      fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      fontSize:48, fill:'#fff', stroke:'transparent', strokeWidth:0,
+      selectable:false, evented:false
+    });
+    txt._raTokenId = true; txt._raSys = true;
+    c.add(txt);
+    try{ c.bringToFront(txt); }catch(_){}
+  }
+
+  async function loadViaDataURL(u){
+    return await new Promise(res => {
+      fabric.Image.fromURL(u, img => res(img), {}); // dataURL → no crossOrigin needed
+    });
+  }
+  async function loadViaNoCors(u){
+    return await new Promise(res => {
+      // Intentionally no {crossOrigin:'anonymous'} to avoid blocking where host has no CORS.
+      fabric.Image.fromURL(u, img => res(img), {});
+    });
+  }
+
+  async function runLoader({ contract, chain, name }, tokenId){
+    const c = getCanvas(), f = window.fabric;
+    if (!c || !f) { alert('Canvas not ready'); return; }
+
+    // 1) Query Reservoir with the correct chain
+    let urls = await reservoirCandidates(contract, tokenId, chain);
+
+// ApeChain often needs tokenURI → metadata fallback
+if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
+  try{
+    const u = await window.__fetchApechainImageURL(contract, tokenId);
+    if (u) urls = [u];
+  }catch(_){}
+}
+
+if (!urls || !urls.length){
+  alert('No image found for that token.');
+  return;
+}
+
+    // 2) CORS‑safe path first (best for export)
+    try { c.discardActiveObject(); } catch(_){}
+    killOldBase(c);
+    for (const u of urls){
+      try{
+        const data = await fetchAsDataURL(u);
+        const img  = await loadViaDataURL(data);
+        if (img){
+          fitAndAddAsBase(img);
+          // ...after fitAndAddAsBase(...)
+annotateBase({ contract, chain, name: name || '' });
+// no automatic label here — user controls it from “Token ID Styles”
+return;
+
+        }
+      }catch(_){}
+    }
+
+    // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
+const img = await loadViaNoCors(urls[0]);
+if (img){
+  fitAndAddAsBase(img);
+  annotateBase({ contract, chain, name: name || '' });
+  // no auto label — user adds it from “Token ID Styles”
+  return;
+}
+
+    alert('Failed to load token image.');
+  }
+
+  // ---------- wire once (capture phase). We only hijack when we know the contract+chain. ----------
+  function looksLikeLoadByToken(node){
+    if (!node) return false;
+    const btn = node.id && /loadbytoken|loadtoken/i.test(node.id);
+    if (btn) return true;
+    const t = (node.textContent || '').toLowerCase().replace(/\s+/g,' ');
+    return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
+  }
+
+ // Helper: find the Token ID Styles card so we can skip hijacking inside it
+function findTokenIdStylesCard(){
+  const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,label'));
+  const h  = hs.find(x => /token\s*id\s*styles/i.test((x.textContent||'').trim()));
+  return h ? (h.closest('.card,section,div') || h.parentElement) : null;
+}
+
+function onClick(e){
+  const el = e.target && e.target.closest && e.target.closest('button, a');
+  if (!el) return;
+
+  // ⛔️ Do NOT hijack clicks in the Token ID Styles card (this button is for the label UI)
+  const stylesCard = findTokenIdStylesCard();
+  if (stylesCard && stylesCard.contains(el)) return;
+
+  if (!looksLikeLoadByToken(el)) return;
+
+  const tokenId  = readTokenId();
+  const detected = detectContractAndChain();
+
+  if (tokenId && detected && detected.contract) {
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    runLoader(detected, tokenId);
+  }
+}
+
+  // Boot
+  if (!document.__raTokenLoaderXChainBound){
+    document.__raTokenLoaderXChainBound = true;
+    document.addEventListener('click', onClick, true); // capture so we can short‑circuit when we have everything
   }
 })();
 
-/* ===== RA_TOKEN_ID_STYLE_WIRING_V3 — no auto-create; update only; proper format; de-dupe ===== */
 ;(() => {
   if (window.__RA_TOKEN_ID_STYLE_WIRING_V3__) return;
   window.__RA_TOKEN_ID_STYLE_WIRING_V3__ = true;
@@ -8028,17 +8104,18 @@ window.raDump = () => {
       (o._isBase   ? '[BASE]' : '     '),
       (o._raSys    ? '[SYS]'  : '    '),
       (o._raTokenId? '[ID]'   : '   '),
-      String(o._kind || '').padEnd(10),
+      (o._kind ? (`[${o._kind}]`).padEnd(10) : '          '),
       (o._raBaseSig === 'BASE_V1' ? '(fingerprinted)' : ''),
       (o._tokenContract ? '(token)' : '')
     );
   });
 };
 
-/* ===== RA_WM_FOOTER_FIX_SHIM_v7r — always preferred footer everywhere ===== */
-;(() => { return; /* DISABLED */  return;  // DISABLED
+;(() => { return;  // DISABLED
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
-const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  window.__RA_WM_FOOTER_FIX_SHIM_V7R__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Recognizers
   const isFooter = o => !!(o && (o._raBrandFooter || o._raFooterId === 'footer-group' || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
@@ -8056,15 +8133,7 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
       o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
     }
   }
-
-  function centerRing(wm){
-    const c = C(); if (!c || !wm) return;
-    wm.originX = 'center'; wm.originY = 'center';
-    wm.left = c.getWidth() / 2; wm.top = c.getHeight() / 2;
-    wm.setCoords();
-  }
-
-  function ensureFooter() {
+function ensureFooter() {
     const c = C();
     if (!c) return null;
     let footers = (c.getObjects?.() || []).filter(isFooter);
@@ -8073,7 +8142,7 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
       footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch(_){ } });
       footers = [footers[footers.length - 1]];
     }
-    let footer = footers[0];
+
     // If missing, create one
     if (!footer) {
       if (!window.fabric) return null;
@@ -8124,23 +8193,7 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
     quarantine(footer);
     return footer;
   }
-
-  // Ring logic unchanged (from prior block)
-  function ensureRing(){
-    const c = C();
-    if (!c) return null;
-    let ring = (c.getObjects?.() || []).find(isRing);
-    if (!ring) {
-      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
-      if (!window.fabric) return null;
-      fabric.Image.fromURL(src, img => {
-        if (!img) return;
-        img.set({
-          originX:'center', originY:'center',
-          selectable:false, evented:false, hasControls:false,
-          objectCaching:false,
-          opacity: 0.18
-        });
+);
         img._raWMCenter = true;
         img._raSys = true;
         img.excludeFromExport = true;
@@ -8162,13 +8215,11 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
     const all  = c.getObjects?.() || [];
     const bg   = all.find(isBg);
     const base = all.find(isBase);
-
-    // Always restore ring and footer if they should be present
     if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
       const desired = RAWatermark.debug().desired;
       if (desired.ring) ensureRing();
       else {
-        const ring = all.find(isRing);
+
         if (ring) ring.visible = false;
       }
       if (desired.footer) ensureFooter();
@@ -8191,7 +8242,6 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
     const foot = all.find(isFooter);
     if (foot) quarantine(foot);
 
-    const ring = all.find(isRing);
     if (ring) {
       quarantine(ring);
       centerRing(ring);
@@ -8200,8 +8250,6 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
         try { c.moveTo(ring, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
       }
     }
-
-    // Token ID on absolute top (footer below it if visible)
     try {
       if (foot && foot.visible !== false) c.bringToFront(foot);
       const id = all.find(isID);
@@ -8214,8 +8262,6 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
     const c = C(); if (!c) { setTimeout(wire, 120); return; }
     if (c.__raWmFooterFixShimV7rBound) return;
     c.__raWmFooterFixShimV7rBound = true;
-
-    // Prevent watermark logic on overlays/text
     const skipOverlayEvent = e => {
       const obj = e?.target;
       if (obj && (obj._kind === 'overlay' || obj._kind === 'text')) return;
@@ -8229,13 +8275,9 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
 
     // Support undo: if you're using a custom undo event, wire here
     if (c.onUndo) c.onUndo(assertTopNow);
-
-    // Listen for watermark/collection/holder changes
     ['ra-wm-recalc', 'ra-holder-update', 'ra-collection-change'].forEach(ev =>
       document.addEventListener(ev, assertTopNow)
     );
-
-    // Canvas resize (keep ring/footer centered)
     try {
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmCenterResizeObs){
@@ -8255,10 +8297,11 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
   }
 })();
 
-/* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
-;(() => { return; /* DISABLED */  return;  // DISABLED
+;(() => { return;  // DISABLED
   if (window.__RA_WM_RULES_V9__) return;
-const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  window.__RA_WM_RULES_V9__ = true;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
 
   // RAF-based evaluation scheduling for this block too
@@ -8300,15 +8343,7 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
     if (cc === REBEL_CONTRACT) return 'rebel';         // your collection
     return 'friend';                                   // any other token collection
   }
-
-  function dedupeRing(c){
-    const wms = (c.getObjects?.()||[]).filter(isWM);
-    if (wms.length > 1){
-      const keep = wms[wms.length - 1];
-      wms.slice(0, -1).forEach(o => { try { c.remove(o); } catch(_) {} });
-      return keep;
-    }
-    return wms[0] || null;
+return wms[0] || null;
   }
   function seatAboveBase(wm, c){
     try{
@@ -8328,44 +8363,19 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
       wm.setCoords();
     }catch(_){}
   }
-  function ensureRingVisible(c){
-    let wm = dedupeRing(c);
-    if (!wm){
-      const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
-      fabric.Image.fromURL(src, img => {
-        if (!img) return;
-        img._raWMCenter = true; img._isWatermark = true; img._raSys = true;
-        img.excludeFromExport = true;
-        img.selectable=false; img.evented=false; img.hasControls=false; img.objectCaching=false;
-        img.opacity = faintOpacity();
-        scaleToCanvas(img, c);
-        c.add(img);
-        seatAboveBase(img, c);
-        try { c.requestRenderAll(); } catch(_) {}
-      }, { crossOrigin:'anonymous' });
+, { crossOrigin:'anonymous' });
       return;
     }
     wm.visible = true;
     scaleToCanvas(wm, c);
     seatAboveBase(wm, c);
   }
-  function hideRing(c){
-    let changed = false;
-    (c.getObjects?.()||[]).forEach(o => { if (isWM(o) && o.visible !== false) { o.visible=false; changed=true; }});
-    if (changed){ try { c.requestRenderAll(); } catch(_) {} }
-  }
-
-  // We do NOT force footer here; your footer block handles creation/placement.
-  // We only hide footer for Rebel during restore to prevent flashes (v7 already does this).
-  // This shim focuses on getting the ring visibility right and never touching overlays.
 
   function applyRules(){
     const c = C(); if (!c) return;
     const base = currentBase(c);
     const kind = classifyBase(base);
     const H = holderState();
-
-    // Decide ring visibility
     let ringOn = false;
     if (kind === 'manual') {
       ringOn = true;                         // manual upload → ring + footer
@@ -8382,8 +8392,6 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
     // Never interfere with overlays/uploads UI
     try { c.requestRenderAll(); } catch(_) {}
   }
-
-  // ——— Wiring ———
   function wire(){
     const c = C(); if (!c) { scheduleWMEvalV9('retry-wire'); return setTimeout(wire, 120); }
     if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
@@ -8433,14 +8441,9 @@ document.addEventListener('ra-collection-change', (e) => {
   }
 })();
 
-
 /* [REMOVED RA_WM_DEDUPE_ENFORCE_v3 to avoid after:render loop] */
 ;
 
-/* ===== LEGACY WATERMARK NEUTRALIZER (Pre-Phase-2 code) =====
-   Turns obsolete watermark logic into no-ops so Phase 2 manager is sole authority.
-   Remove this once legacy code physically deleted.
-*/
 (function disableLegacyWM(){
   const noop = ()=>{};
   const kill = name => {
@@ -8483,37 +8486,6 @@ document.addEventListener('ra-collection-change', (e) => {
   window.__RA_LEGACY_WM_DISABLED__ = true;
 })();
 
-/* ===== PHASE 2 UNIFIED WATERMARK MANAGER (RAWatermark) =====
-   Implements final 3-Rule System + large ring (≈89% width) + footer logic.
-
-   PUBLIC API:
-     RAWatermark.setConnection(bool)
-     RAWatermark.setHoldings({ hasRebel, hasFriend })
-     RAWatermark.refresh()
-     RAWatermark.setConfig(partialConfigObject)
-     RAWatermark.force({ ring, footer })   // debug override (one-shot until next auto apply)
-     RAWatermark.debug()
-
-   EXPECTED ENV (external code should maintain):
-     window.canvas (Fabric.js canvas)
-     window.STATE.sizePct (optional admin slider), numeric
-
-   EVENTS LISTENED:
-     ra-wm-recalc               (legacy creation trigger)
-     ra-collection-change
-     ra-holder-update
-     ra-wallet-connect-state
-
-   RING CREATION:
-     Manager does not manufacture ring graphic; it dispatches 'ra-wm-recalc'
-     if a ring is needed but absent. Existing upstream code should respond.
-
-   SAFETY:
-     - Debounced apply (requestAnimationFrame)
-     - Scaling retries if ring image loads lazily
-     - Dedupe ensures single ring
-*/
-
 (function initRAWatermarkPhase2(){
   if (window.RAWatermark) return;
 
@@ -8552,7 +8524,7 @@ document.addEventListener('ra-collection-change', (e) => {
     baseKind: 'upload',
     lastApplyReason: '',
     pendingScaleRetries: 0,
-    forceOverride: null    // { ring: bool|null, footer: bool|null }
+    forceOverride: null    // { footer: bool|null }
   };
 
   let debounceScheduled = false;
@@ -8595,13 +8567,7 @@ document.addEventListener('ra-collection-change', (e) => {
       STATE.baseKind = 'friend-token';
     }
   }
-
-  function ringObjects(){
-    const c=C(); if(!c) return [];
-    return (c.getObjects()||[]).filter(o => o && o._raWMCenter === true);
-  }
-
-  function footerObject(){
+function footerObject(){
     const c=C(); if(!c) return null;
     return (c.getObjects()||[]).find(o =>
       o._raBrandFooter ||
@@ -8609,27 +8575,7 @@ document.addEventListener('ra-collection-change', (e) => {
       (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text))
     ) || null;
   }
-
- function ensureFooter(){
-  const existing = footerObject();
-  if (existing) {
-    // Restyle footer to preferred settings if needed
-    let dirty = false;
-    if (existing.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { existing.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
-    if (existing.fontSize !== 16) { existing.fontSize = 16; dirty = true; }
-    if (existing.fill !== '#fff') { existing.set('fill', '#fff'); dirty = true; }
-    if (existing.opacity !== 1) { existing.opacity = 1; dirty = true; }
-    if (existing.originX !== 'right') { existing.originX = 'right'; dirty = true; }
-    if (existing.originY !== 'bottom') { existing.originY = 'bottom'; dirty = true; }
-    const desiredLeft = C().getWidth() - 60;
-    const desiredTop = C().getHeight() - 20;
-    if (existing.left !== desiredLeft) { existing.left = desiredLeft; dirty = true; }
-    if (existing.top !== desiredTop) { existing.top = desiredTop; dirty = true; }
-    const shadow = existing.shadow;
-    if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
-      existing.shadow = new fabric.Shadow({
-        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
-      });
+);
       dirty = true;
     }
     if (dirty) { try { existing.setCoords(); } catch(_){} }
@@ -8655,16 +8601,7 @@ document.addEventListener('ra-collection-change', (e) => {
   } catch(_){}
   return null;
 }
-
-  function dedupeRing(){
-    const rings = ringObjects();
-    if (rings.length <= 1) return;
-    let keep = rings[0], kW = scaledWidth(keep);
-    for (let i=1;i<rings.length;i++){
-      const w = scaledWidth(rings[i]);
-      if (w > kW){ keep = rings[i]; kW = w; }
-    }
-    const c=C();
+const c=C();
     rings.forEach(r => { if (r !== keep){ try { c.remove(r); } catch(_){ } } });
   }
 
@@ -8673,34 +8610,7 @@ document.addEventListener('ra-collection-change', (e) => {
     if (obj.getScaledWidth) return obj.getScaledWidth();
     return (obj.width||0) * (obj.scaleX||1);
   }
-
-     // Helper: create the ring image if we need one and none exists yet
-  function createRingIfMissing(){
-    const c = C();
-    if (!c) return;
-    if (ringObjects()[0]) return; // already there
-
-    const src = CFG.ringImageSrc || '/watermark.png';
-    if (!window.fabric || !fabric.Image) return;
-
-    try {
-      fabric.Image.fromURL(src, (img) => {
-        if (!img) return;
-        img._raWMCenter = true;
-        img._raSys = true;
-        img.selectable = false;
-        img.evented = false;
-
-        const c2 = C();
-        if (!c2) return;
-        // Place roughly center (Phase 2 scaling will size it)
-        img.left = (c2.getWidth()  / 2) - (img.width  / 2);
-        img.top  = (c2.getHeight() / 2) - (img.height / 2);
-        c2.add(img);
-        scaleRing(img);
-        try { c2.bringToFront(img); } catch(_){}
-        try { c2.requestRenderAll(); } catch(_){}
-      }, { crossOrigin: 'anonymous' });
+, { crossOrigin: 'anonymous' });
     } catch(_){}
   }
    
@@ -8708,42 +8618,40 @@ document.addEventListener('ra-collection-change', (e) => {
     // Force override (debug) takes precedence if present
     if (STATE.forceOverride){
       return {
-        ring: STATE.forceOverride.ring !== null ? STATE.forceOverride.ring : false,
         footer: STATE.forceOverride.footer !== null ? STATE.forceOverride.footer : false,
         forced: true
       };
     }
 
     if (!STATE.connected && CFG.disconnectedAlwaysBoth){
-      return { ring:true, footer:true };
+      return { footer:true };
     }
 
     // Rebel owner global unlock path
     if (STATE.hasRebel){
       if (STATE.baseKind === 'rebel-token'){
-        return { ring:false, footer: CFG.showFooterOnRebelConnected }; // expected false
+        return { footer: CFG.showFooterOnRebelConnected }; // expected false
       }
       // friend-token or upload
-      return { ring:false, footer:true };
+      return { footer:true };
     }
 
     // Friend-only holder
     if (!STATE.hasRebel && STATE.hasFriend && CFG.friendOnlySuppressesRing){
-      // All base kinds: ring off, footer on
-      return { ring:false, footer:true };
+      return { footer:true };
     }
 
     // No holdings
     if (!STATE.hasRebel && !STATE.hasFriend){
       if (STATE.baseKind === 'rebel-token'){
-        return { ring:true, footer: CFG.footerOnRebelWhenNoHoldings }; // expected false
+        return { footer: CFG.footerOnRebelWhenNoHoldings }; // expected false
       }
       // friend-token or upload
-      return { ring:true, footer:true };
+      return { footer:true };
     }
 
     // Fallback (should not hit)
-    return { ring:true, footer:true };
+    return { footer:true };
   }
 
   function computeScalePct(){
@@ -8759,27 +8667,14 @@ document.addEventListener('ra-collection-change', (e) => {
     }
     return pct;
   }
-
-  function scaleRing(ring){
-    const c=C(); if(!c || !ring) return;
-    try {
-      const nativeW = ring.width || ring._element?.naturalWidth || 512;
-      const cw = c.getWidth();
-      const pct = computeScalePct();
-      const targetPx = cw * pct;
-      const maxPxByMargin = cw - 2 * CFG.ringEdgeMarginPx;
-      const finalPx = Math.min(targetPx, maxPxByMargin);
-      const scale = finalPx / nativeW;
-      ring.scaleX = ring.scaleY = scale;
-      ring.setCoords();
-    } catch(_){}
+catch(_){}
   }
 
   function scheduleScaleRetry(){
     STATE.pendingScaleRetries = CFG.scalingRetries;
     function tick(){
       if (STATE.pendingScaleRetries <= 0) return;
-      const ring = ringObjects()[0];
+
       if (ring && scaledWidth(ring) > 0){
         scaleRing(ring);
         return;
@@ -8798,15 +8693,12 @@ document.addEventListener('ra-collection-change', (e) => {
     const need = desired();
     const c=C(); if(!c) return;
 
-    let ring = ringObjects()[0];
-
        if (!need.ring && ring){
       try { c.remove(ring); } catch(_){}
       ring = null;
     } else if (need.ring && !ring){
       try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
       scheduleScaleRetry();
-      // NEW: if nothing else makes the ring quickly, make it ourselves
       setTimeout(() => {
         if (!ringObjects()[0]) createRingIfMissing();
       }, 180);
@@ -8821,7 +8713,6 @@ document.addEventListener('ra-collection-change', (e) => {
 
     // Re-fetch after potential creation/removal
     ring = ringObjects()[0];
-    const footer = footerObject();
 
     if (footer){
       try { c.bringToFront(footer); } catch(_){}
@@ -8841,10 +8732,9 @@ document.addEventListener('ra-collection-change', (e) => {
   }
 
   function debugCounts(){
-    const c=C(); if(!c) return { ring:0, footer:0 };
+    const c=C(); if(!c) return { footer:0 };
     const objs = c.getObjects()||[];
     return {
-      ring: objs.filter(o=>o._raWMCenter).length,
       footer: objs.filter(o =>
         o._raBrandFooter ||
         o._raFooterId === 'footer-group' ||
@@ -8942,202 +8832,74 @@ document.addEventListener('ra-collection-change', (e) => {
 window.APP_MARKER_0928 = true;
 console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
+/* === UI Access Controller: Final 3-Rule System (Appended 2025-09-28) === */
 
-/* ===== APP_MARKER_SURGICAL_VF 2025-09-28T05:08:45.639432 ===== */
-console.log("✅ APP_MARKER_SURGICAL_VF loaded at 2025-09-28T05:08:45.639432");
+/**
+ * Determines whether to show a global Ring (overlay/WM) and/or Footer badge
+ * based on wallet state and token context.
+ *
+ * Inputs:
+ * - walletConnected: boolean
+ * - ownsRebel: boolean (wallet holds any Rebel token)
+ * - ownsAnyFriend: boolean (wallet holds any Friend collection token)
+ * - context: { type: 'rebel'|'friend'|'other'|'upload' }
+ *
+ * Output:
+ * - { ring: boolean, footer: boolean }
+ */
+export function accessRules({ walletConnected, ownsRebel, ownsAnyFriend, context }) {
+  // Normalize context
+  const type = (context && context.type) || 'other';
 
-
-/* ===== WM_MASTER_VF — surgical master control (3-rule, empty-canvas guard, no loops) ===== */
-;(() => {
-  if (window.__WM_MASTER_VF__) return;
-  window.__WM_MASTER_VF__ = true;
-
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
-  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
-  const FRIENDS = new Set(['0xbed2470ded2519c13eaaf3bd970015ef404d3d20','0xa9a1d086623475595a02991664742e4a1cbafcb8']);
-
-  const isBase   = o => !!(o && o._isBase && !o._isBgRect);
-  const isRing   = o => !!(o && (o._wmEngine==='vf_ring' || o._wmEngine==='v12_ring' || o._wmEngine==='v13_ring' || o._raWMCenter || o._isWatermark || o._wm));
-  const isFooter = o => !!(o && (o._wmEngine==='vf_footer' || o._wmEngine==='v12_footer' || o._wmEngine==='v13_footer' || o._raBrandFooter || (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
-
-  const objs = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
-  const baseObj = () => objs().find(isBase) || null;
-
-  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
-  const getPct=()=>{ const v = (typeof window.__RA_WM_TARGET_PCT==='number')?window.__RA_WM_TARGET_PCT:(+localStorage.getItem('ra_wm_pct')||0.85); return clamp(v,0.05,0.95); };
-  const getOpacity=()=>{ const v=(typeof window.__RA_WM_ADMIN_OPACITY==='number')?window.__RA_WM_ADMIN_OPACITY:(+localStorage.getItem('ra_wm_opacity')||0.18); return clamp(v,0,1); };
-
-  function holdings(){
-    const s=window.RA_HOLDER_STATE||{};
-    return { connected:!!s.checked, hasRebel:!!s.hasRebel, hasFriend:!!s.hasFriend };
+  // 1) Wallet NOT connected -> Ring YES, Footer YES for all
+  if (!walletConnected) {
+    return { ring: true, footer: true };
   }
-  function classify(){
-    const b=baseObj(); if(!b) return {kind:'empty', base:null};
-    const c=(b._tokenContract||'').toLowerCase();
-    if(!c) return {kind:'upload', base:b};
-    if(c===REBEL) return {kind:'rebel', base:b};
-    if(FRIENDS.has(c)) return {kind:'friend', base:b};
-    return {kind:'other', base:b};
-  }
-  function rules(){
-    const h=holdings(); const {kind, base}=classify();
-    if(!base) return { base:null, showRing:false, showFoot:false };
-    if(!h.connected) return { base, showRing:true, showFoot:true };
-    if(h.hasRebel){
-      if(kind==='rebel') return { base, showRing:false, showFoot:false };
-      return { base, showRing:false, showFoot:true };
+
+  // 2) Wallet connected and owns a Rebel
+  if (ownsRebel) {
+    if (type === 'rebel') {
+      // Rebels are 100% clean
+      return { ring: false, footer: false };
     }
-    if(h.hasFriend) return { base, showRing:false, showFoot:true };
-    if(kind==='rebel') return { base, showRing:true, showFoot:false };
-    return { base, showRing:true, showFoot:true };
-  }
-
-  function killDomWatermarks(){
-    try {
-      document.querySelectorAll('*').forEach(el=>{
-        const bi=getComputedStyle(el).backgroundImage;
-        if (bi && /watermark/i.test(bi)) { el.style.backgroundImage='none'; el.style.background='none'; }
-      });
-      [...document.images].forEach(img=>{ if(/watermark/i.test(img.src||'')) img.style.display='none'; });
-    } catch(_){}
-  }
-
-  function emptyGuard(){
-    const c=C(); if(!c) return;
-    const os=c.getObjects?.()||[];
-    const hasBase=os.some(isBase);
-    if (hasBase) return;
-    let changed=false;
-    os.slice().forEach(o=>{
-      if (isRing(o) || isFooter(o)) { try{ c.remove(o); changed=true; }catch(_){ if(o.visible!==false){ o.visible=false; changed=true; } } }
-    });
-    killDomWatermarks();
-    if (changed) try{ c.requestRenderAll(); } catch(_){}
-  }
-
-  function resizeRing(r){
-    const c=C(); if(!c||!r) return false;
-    const pct=getPct(); const nat=Math.max(1,r.width||1);
-    const cw=c.getWidth(), ch=c.getHeight(), sc=(cw*pct)/nat;
-    let chg=false;
-    if (r.scaleX!==sc){ r.scaleX=r.scaleY=sc; chg=true; }
-    const cx=cw/2, cy=ch/2;
-    if (r.left!==cx||r.top!==cy){ r.left=cx; r.top=cy; chg=true; }
-    if (r.opacity!==getOpacity()){ r.opacity=getOpacity(); chg=true; }
-    r.setCoords(); return chg;
-  }
-  function seatAboveBase(o, base){
-    const c=C(); if(!c||!o||!base) return false;
-    const arr=objs(); const ib=arr.indexOf(base); const target=Math.min(arr.length-1, ib+1);
-    if (arr.indexOf(o)!==target){ try{ c.moveTo(o,target); return true; }catch(_){ } }
-    return false;
-  }
-  function ensureFooterPosition(f){
-    const c=C(); if(!c||!f) return false;
-    const nx=c.getWidth()-14, ny=c.getHeight()-12; let ch=false;
-    if (f.type!=='textbox'){
-      const tb=new fabric.Textbox(f.text||'Powered by Rebel Studios',{originX:'right',originY:'bottom',
-        left:f.left, top:f.top, fontFamily:f.fontFamily||'Inter, Arial, sans-serif', fontSize:f.fontSize||12,
-        fill:'#000', stroke:'#fff', strokeWidth:1.6, strokeUniform:true, textAlign:'right',
-        selectable:false, evented:false, hasControls:false, objectCaching:false});
-      tb._wmEngine='vf_footer'; tb._raSys=true; tb.excludeFromExport=true;
-      try{ C().remove(f); C().add(tb); f=tb; ch=true; }catch(_){}
+    // Friends (owned or not) and uploads carry Footer only
+    if (type === 'friend' || type === 'upload') {
+      return { ring: false, footer: true };
     }
-    if (f.originX!=='right'){ f.originX='right'; ch=true; }
-    if (f.originY!=='bottom'){ f.originY='bottom'; ch=true; }
-    if (f.left!==nx||f.top!==ny){ f.left=nx; f.top=ny; ch=true; }
-    f.setCoords(); return ch;
+    // Other tokens also get Footer only
+    return { ring: false, footer: true };
   }
 
-  function apply(){
-    const c=C(); if(!c) return;
-
-    // Empty canvas → enforce clean state and bail
-    const base=baseObj();
-    if (!base){ emptyGuard(); return; }
-
-    // Desired visibility
-    const { showRing, showFoot } = rules();
-
-    // Dedupe (keep first)
-    let rgs=rings(), fts=footers(); let changed=false;
-    if (rgs.length>1){ rgs.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){ } }); }
-    if (fts.length>1){ fts.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){ } }); }
-
-    // Ring
-    rgs=rings();
-    let ring=rgs[0]||null;
-    if (showRing){
-      if (!ring){
-        fabric.Image.fromURL(window.WM_SRC||'/assets/watermark.png?v=wm10', img=>{
-          if (!img) return;
-          img.set({originX:'center',originY:'center', selectable:false,evented:false,hasControls:false, objectCaching:false, opacity:getOpacity()});
-          img._wmEngine='vf_ring'; img._raSys=true; img.excludeFromExport=true;
-          try{ c.add(img); resizeRing(img); seatAboveBase(img, base); c.requestRenderAll(); }catch(_){}
-        }, { crossOrigin:'anonymous' });
-      } else {
-        changed = resizeRing(ring) || changed;
-        changed = seatAboveBase(ring, base) || changed;
-        if (ring.visible===false){ ring.visible=true; changed=true; }
-      }
-    } else if (ring && ring.visible!==false){ ring.visible=false; changed=true; }
-
-    // Footer
-    fts=footers();
-    let foot=fts[0]||null;
-    if (showFoot){
-      if (!foot){
-        const tb=new fabric.Textbox('Powered by Rebel Studios',{originX:'right',originY:'bottom',
-          left:c.getWidth()-14, top:c.getHeight()-12, fontFamily:'Inter, Arial, sans-serif', fontSize:12,
-          fill:'#000', stroke:'#fff', strokeWidth:1.6, strokeUniform:true, textAlign:'right',
-          selectable:false, evented:false, hasControls:false, objectCaching:false});
-        tb._wmEngine='vf_footer'; tb._raSys=true; tb.excludeFromExport=true;
-        try{ c.add(tb); changed=true; }catch(_){}
-      } else {
-        changed = ensureFooterPosition(foot) || changed;
-        if (foot.visible===false){ foot.visible=true; changed=true; }
-      }
-    } else if (foot && foot.visible!==false){ foot.visible=false; changed=true; }
-
-    if (changed) try{ c.requestRenderAll(); } catch(_){}
-  }
-
-  function wire(){
-    const c=C(); if(!c) return setTimeout(wire, 120);
-    if (c.__wmMasterVFBound) return; c.__wmMasterVFBound=true;
-
-    emptyGuard(); // clear DOM/CSS ghosts on boot
-
-    ['object:added','object:removed','object:modified','selection:created','selection:updated','mouse:up']
-      .forEach(ev => c.on(ev, apply));
-    ['ra-holder-update','ra-collection-change','ra-wm-recalc']
-      .forEach(ev => document.addEventListener(ev, apply));
-    try{
-      const el=c.getElement ? c.getElement() : c.upperCanvasEl;
-      new ResizeObserver(apply).observe(el);
-    }catch(_){}
-
-    // Post-restore correction
-    if (!c.__wmMasterVFLFJ){
-      c.__wmMasterVFLFJ = true;
-      const orig=c.loadFromJSON?.bind(c);
-      if (orig){
-        c.loadFromJSON = function(json, cb, rev){
-          const done = () => { try{ apply(); } finally { cb && cb(); } };
-          try { return orig(json, done, rev); } catch(e){ try{ apply(); }catch(_){ } throw e; }
-        };
-      }
+  // 3) Wallet connected but NO Rebel
+  if (!ownsRebel) {
+    if (ownsAnyFriend) {
+      // Footer-only everywhere
+      return { ring: false, footer: true };
     }
+    // NO Rebel and NO Friend
+    if (type === 'rebel') {
+      // Rebel tokens -> Ring YES, Footer NO
+      return { ring: true, footer: false };
+    }
+    // Other tokens & uploads -> Ring YES, Footer YES
+    return { ring: true, footer: true };
+  }
 
-   // Disable legacy ring creator if present
-try { if (typeof window.ensureNonTokenRingWM === 'function') window.ensureNonTokenRingWM = null; } catch(_){}
-apply();
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', wire, { once: true });
-} else {
-  wire();
+  // Fallback (shouldn't hit)
+  return { ring: true, footer: true };
 }
-}  // closes the WM_ENGINE_V12 function
-})(); // closes the IIFE
+
+/**
+ * Optional helper: compute rule per item list for UI rendering pipelines.
+ * Accepts an array of item contexts and a single wallet state.
+ */
+export function mapAccessForItems(items, walletState) {
+  return items.map(ctx => ({ ctx, ...accessRules({ ...walletState, context: ctx }) }));
+}
+
+/**
+ * Integration hint:
+ * - This module intentionally contains no watermark/footer components.
+ * - Use the returned flags to drive *separate* overlay or footer systems at the top-level UI.
+ * - All block-level code has been scrubbed of watermark/footer traces.
+ */
