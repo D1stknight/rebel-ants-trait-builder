@@ -9110,12 +9110,14 @@ console.log("✅ APP_MARKER_SURGICAL_VF loaded at 2025-09-28T05:08:45.639432");
       }
     }
 
-    // Disable legacy ring creator if present
-    try { if (typeof window.ensureNonTokenRingWM === 'function') window.ensureNonTokenRingWM = null; } catch(_){}
-    apply();
-  }
+   // Disable legacy ring creator if present
+try { if (typeof window.ensureNonTokenRingWM === 'function') window.ensureNonTokenRingWM = null; } catch(_){}
+apply();
 
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, {once:true});
-  else wire();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', wire, { once: true });
+} else {
+  wire();
 }
-})(); 
+}  // closes the WM_ENGINE_V12 function
+})(); // closes the IIFE
