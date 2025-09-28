@@ -8118,10 +8118,10 @@ function onClick(e){
 window.raDump = () => {
   const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   if (!c) { console.log('No canvas'); return; }
-  (c.getObjects()||[]).forEach((o,i)=>{
-    const t = (o.type||'obj').padEnd(7);
+  (c.getObjects() || []).forEach((o, i) => {
+    const t = (o.type || 'obj').padEnd(7);
     console.log(
-      String(i).padStart(2,' '),
+      String(i).padStart(2, ' '),
       t,
       (o._isBgRect ? '[BG]'   : '   '),
       (o._isBase   ? '[BASE]' : '     '),
@@ -8152,19 +8152,27 @@ window.raDump = () => {
     o._raSys = true;
     if (!isID(o)) o.excludeFromExport = true;
     if (isFooter(o) || isRing(o)) {
-      o.selectable=false; o.evented=false; o.hasControls=false;
-      o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+      o.selectable = false;
+      o.evented = false;
+      o.hasControls = false;
+      o.lockMovementX = o.lockMovementY = o.lockScalingX = o.lockScalingY = o.lockRotation = true;
     }
   }
-function ensureFooter() {
+
+  let footer = null;
+  let ring = null;
+
+  function ensureFooter() {
     const c = C();
     if (!c) return null;
+
     let footers = (c.getObjects?.() || []).filter(isFooter);
-    // Dedupe: if multiple, remove extras
+    // Dedupe: keep only the last one
     if (footers.length > 1) {
-      footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch(_){ } });
+      footers.slice(0, -1).forEach(f => { try { c.remove(f); } catch (_){ } });
       footers = [footers[footers.length - 1]];
     }
+    footer = footers[0] || null;
 
     // If missing, create one
     if (!footer) {
@@ -8188,7 +8196,7 @@ function ensureFooter() {
       });
       c.add(footer);
     } else {
-      // Only update styling/position if wrong (NO REMOVE/RECREATE unless needed)
+      // Only update styling/position if wrong
       let dirty = false;
       if (footer.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { footer.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
       if (footer.fontSize !== 16) { footer.fontSize = 16; dirty = true; }
@@ -8200,69 +8208,88 @@ function ensureFooter() {
       const desiredTop = c.getHeight() - 20;
       if (footer.left !== desiredLeft) { footer.left = desiredLeft; dirty = true; }
       if (footer.top !== desiredTop) { footer.top = desiredTop; dirty = true; }
-     // Update shadow if needed
-const shadow = footer.shadow;
-if (
-  !shadow ||
-  shadow.color !== 'rgba(0,0,0,0.8)' ||
-  shadow.blur !== 5 ||
-  shadow.offsetX !== 2 ||
-  shadow.offsetY !== 2
-) {
-  footer.shadow = new fabric.Shadow({
-    color: 'rgba(0,0,0,0.8)',
-    blur: 5,
-    offsetX: 2,
-    offsetY: 2
-  });
-  dirty = true;
-}
-if (dirty) {
-  try { footer.setCoords(); } catch (_) {}
-  quarantine(footer);
-}
 
-quarantine(footer);
-return footer;
-}
+      // Update shadow if needed
+      const shadow = footer.shadow;
+      if (
+        !shadow ||
+        shadow.color !== 'rgba(0,0,0,0.8)' ||
+        shadow.blur !== 5 ||
+        shadow.offsetX !== 2 ||
+        shadow.offsetY !== 2
+      ) {
+        footer.shadow = new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)',
+          blur: 5,
+          offsetX: 2,
+          offsetY: 2
+        });
+        dirty = true;
+      }
 
-img._raWMCenter = true;
-img._raSys = true;
-img.excludeFromExport = true;
-centerRing(img);
-c.add(img);
-quarantine(img);
-try { c.requestRenderAll(); } catch (_) {}
-}, { crossOrigin: 'anonymous' });
-} else {
-  quarantine(ring);
-  centerRing(ring);
-  ring.visible = true;
-}
-return ring;
-}
-
-function assertTopNow() {
-  const c = C();
-  if (!c) return;
-  const all = c.getObjects?.() || [];
-  const bg = all.find(isBg);
-  const base = all.find(isBase);
-  if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
-    const desired = RAWatermark.debug().desired;
-    if (desired.ring) ensureRing();
-    else {
-      if (ring) ring.visible = false;
+      if (dirty) {
+        try { footer.setCoords(); } catch (_){}
+        quarantine(footer);
+      }
     }
-    if (desired.footer) ensureFooter();
-    else {
-      const foot = all.find(isFooter);
-      if (foot) foot.visible = false;
-    }
-  } else {
-    // fallback path
+
+    quarantine(footer);
+    return footer;
   }
-}
+
+  function centerRing(obj){
+    const c = C();
+    if (!c || !obj) return;
+    obj.originX = 'center';
+    obj.originY = 'center';
+    obj.left = c.getWidth() / 2;
+    obj.top  = c.getHeight() / 2;
+    try { obj.setCoords(); } catch (_){}
+  }
+
+  function ensureRing(){
+    const c = C();
+    if (!c) return null;
+
+    if (!ring) {
+      if (!window.fabric) return null;
+      const src = window.__RA_RING_SRC || '/watermark.png?v=wm10';
+      fabric.Image.fromURL(src, (img) => {
+        if (!img) return;
+        img._raWMCenter = true;
+        img._raSys = true;
+        img.excludeFromExport = true;
+        centerRing(img);
+        c.add(img);
+        quarantine(img);
+        ring = img;
+        try { c.requestRenderAll(); } catch (_){}
+      }, { crossOrigin: 'anonymous' });
+    } else {
+      quarantine(ring);
+      centerRing(ring);
+      ring.visible = true;
+    }
+    return ring;
+  }
+
+  function assertTopNow(){
+    const c = C(); if (!c) return;
+    const all  = c.getObjects?.() || [];
+    const bg   = all.find(isBg);
+    const base = all.find(isBase);
+
+    if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
+      const desired = RAWatermark.debug().desired;
+      if (desired.ring) ensureRing();
+      else { if (ring) ring.visible = false; }
+
+      if (desired.footer) ensureFooter();
+      else {
+        const foot = all.find(isFooter);
+        if (foot) foot.visible = false;
+      }
+    } else {
       // Fallback: always show both for disconnected/manual upload
       ensureRing();
       ensureFooter();
@@ -8270,8 +8297,8 @@ function assertTopNow() {
 
     // Stacking logic
     if (bg){
-      bg.selectable=false; bg.evented=false; bg.hasControls=false;
-      try { c.moveTo(bg, 0); } catch(_){}
+      bg.selectable = false; bg.evented = false; bg.hasControls = false;
+      try { c.moveTo(bg, 0); } catch (_){}
     }
 
     const foot = all.find(isFooter);
@@ -8282,21 +8309,22 @@ function assertTopNow() {
       centerRing(ring);
       if (base){
         const baseZ = all.indexOf(base);
-        try { c.moveTo(ring, Math.min(all.length - 1, baseZ + 1)); } catch(_){}
+        try { c.moveTo(ring, Math.min(all.length - 1, baseZ + 1)); } catch (_){}
       }
     }
     try {
       if (foot && foot.visible !== false) c.bringToFront(foot);
       const id = all.find(isID);
       if (id && id.visible !== false) c.bringToFront(id);
-    } catch(_){}
-    c.requestRenderAll();
+    } catch (_){}
+    try { c.requestRenderAll(); } catch (_){}
   }
 
   function wire(){
     const c = C(); if (!c) { setTimeout(wire, 120); return; }
     if (c.__raWmFooterFixShimV7rBound) return;
     c.__raWmFooterFixShimV7rBound = true;
+
     const skipOverlayEvent = e => {
       const obj = e?.target;
       if (obj && (obj._kind === 'overlay' || obj._kind === 'text')) return;
@@ -8319,7 +8347,7 @@ function assertTopNow() {
         c.__raWmCenterResizeObs = true;
         new ResizeObserver(assertTopNow).observe(el);
       }
-    } catch(_){}
+    } catch (_){}
 
     // Initial pass
     assertTopNow();
@@ -8339,15 +8367,15 @@ function assertTopNow() {
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
 
-  // RAF-based evaluation scheduling for this block too
+  // RAF-based evaluation scheduling
   let WM_EVAL_SCHEDULED_V9 = false;
-  function scheduleWMEvalV9(reason) {
+  function scheduleWMEvalV9() {
     if (WM_EVAL_SCHEDULED_V9 || window.__RA_RESTORING__) return;
     WM_EVAL_SCHEDULED_V9 = true;
     requestAnimationFrame(() => {
       WM_EVAL_SCHEDULED_V9 = false;
       if (!window.__RA_RESTORING__) {
-        applyRules();
+        apply('raf');
       }
     });
   }
@@ -8360,10 +8388,6 @@ function assertTopNow() {
 
   const faintOpacity = () =>
     (typeof window.__RA_WM_ADMIN_OPACITY === 'number') ? window.__RA_WM_ADMIN_OPACITY : 0.18;
-  const targetPct = () => {
-    const p = (typeof window.__RA_WM_TARGET_PCT === 'number') ? window.__RA_WM_TARGET_PCT : 0.28;
-    return Math.max(0.05, Math.min(1, p));
-  };
 
   const holderState = () => (window.RA_HOLDER_STATE || { hasRebel:false, hasFriend:false });
 
@@ -8374,12 +8398,16 @@ function assertTopNow() {
   function classifyBase(base){
     if (!base) return 'none';
     const cc = String(base._tokenContract || '').toLowerCase();
-    if (!cc) return 'manual';                          // manual upload (no token metadata)
-    if (cc === REBEL_CONTRACT) return 'rebel';         // your collection
-    return 'friend';                                   // any other token collection
+    if (!cc) return 'manual';
+    if (cc === REBEL_CONTRACT) return 'rebel';
+    return 'friend';
   }
-return wms[0] || null;
+
+  function ringObjects(){
+    const c = C(); if (!c) return [];
+    return (c.getObjects?.() || []).filter(isWM);
   }
+
   function seatAboveBase(wm, c){
     try{
       const objs = c.getObjects() || [];
@@ -8392,81 +8420,100 @@ return wms[0] || null;
     try{
       const cw = c.getWidth();
       const natW = wm.width || 1;
-      const sc = (cw * targetPct()) / Math.max(1, natW);
+      const pct = 0.28;
+      const sc = (cw * pct) / Math.max(1, natW);
       wm.scaleX = sc; wm.scaleY = sc;
       wm.left = cw/2; wm.top = c.getHeight()/2;
+      wm.originX = 'center'; wm.originY = 'center';
       wm.setCoords();
     }catch(_){}
   }
-, { crossOrigin:'anonymous' });
+
+  function ensureRingVisible(c){
+    let wm = ringObjects()[0] || null;
+    if (wm) {
+      wm.visible = true;
+      scaleToCanvas(wm, c);
+      seatAboveBase(wm, c);
       return;
     }
-    wm.visible = true;
-    scaleToCanvas(wm, c);
-    seatAboveBase(wm, c);
+    const src = window.__RA_RING_SRC || '/watermark.png?v=wm10';
+    try {
+      fabric.Image.fromURL(src, (img) => {
+        if (!img) return;
+        img._raWMCenter = true;
+        img._raSys = true;
+        img.excludeFromExport = true;
+        scaleToCanvas(img, c);
+        c.add(img);
+        seatAboveBase(img, c);
+        try { c.requestRenderAll(); } catch (_){}
+      }, { crossOrigin:'anonymous' });
+    } catch (_){}
   }
 
-  function applyRules(){
+  function hideRing(c){
+    const wm = ringObjects()[0] || null;
+    if (!wm) return;
+    wm.visible = false;
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function apply(){
     const c = C(); if (!c) return;
     const base = currentBase(c);
     const kind = classifyBase(base);
     const H = holderState();
+
     let ringOn = false;
     if (kind === 'manual') {
-      ringOn = true;                         // manual upload → ring + footer
+      ringOn = true;
     } else if (kind === 'rebel') {
-      ringOn = !H.hasRebel;                  // Rebel token → ring only if NOT holder
+      ringOn = !H.hasRebel;
     } else if (kind === 'friend') {
-      ringOn = !H.hasFriend;                 // Friend token → ring if NOT holder (footer handled elsewhere)
+      ringOn = !H.hasFriend;
     } else {
       ringOn = false;
     }
 
     if (ringOn) ensureRingVisible(c); else hideRing(c);
 
-    // Never interfere with overlays/uploads UI
-    try { c.requestRenderAll(); } catch(_) {}
+    try { c.requestRenderAll(); } catch(_){}
   }
+
   function wire(){
-    const c = C(); if (!c) { scheduleWMEvalV9('retry-wire'); return setTimeout(wire, 120); }
+    const c = C(); if (!c) { scheduleWMEvalV9(); return setTimeout(wire, 120); }
     if (c.__raWmRulesV9) return; c.__raWmRulesV9 = true;
 
-    // Base changes only (ignore overlays) - block object:moving/modified for overlays
-    c.on('object:added',   e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-added'); });
-    c.on('object:removed', e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9('base-removed'); });
+    c.on('object:added',   e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9(); });
+    c.on('object:removed', e => { if (e?.target && isBase(e.target)) scheduleWMEvalV9(); });
 
-// Wallet changes — active; collection change — passive unless base is loaded
-['ra-holder-update', 'ra-wm-recalc'].forEach(ev => {
-  document.addEventListener(ev, () => {
-    if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9(ev);
-  });
-});
+    ['ra-holder-update', 'ra-wm-recalc'].forEach(ev => {
+      document.addEventListener(ev, () => scheduleWMEvalV9());
+    });
 
-// Collection change handler — only act if a base image is already loaded
-document.addEventListener('ra-collection-change', (e) => {
-  try {
-    const c = typeof C === 'function' ? C() : null;
-    const hasBase =
-      !!(c && typeof c.getObjects === 'function' &&
-         (c.getObjects() || []).some(o => o && o._isBase && !o._isBgRect));
-    if (!hasBase) return; // stay passive until base loads
-  } catch {
-    return;
-  }
-  if (typeof scheduleWMEvalV9 === 'function') scheduleWMEvalV9('ra-collection-change');
-});
+    document.addEventListener('ra-collection-change', () => {
+      try {
+        const c2 = C();
+        const hasBase =
+          !!(c2 && typeof c2.getObjects === 'function' &&
+             (c2.getObjects() || []).some(o => o && o._isBase && !o._isBgRect));
+        if (!hasBase) return;
+      } catch {
+        return;
+      }
+      scheduleWMEvalV9();
+    });
 
-// Canvas resize (size dropdown etc.)
     try{
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__raWmRulesV9Resize) {
         c.__raWmRulesV9Resize = true;
-        new ResizeObserver(() => scheduleWMEvalV9('resize')).observe(el);
+        new ResizeObserver(() => scheduleWMEvalV9()).observe(el);
       }
     }catch(_){}
 
-    // First pass
-    scheduleWMEvalV9('initial');
+    scheduleWMEvalV9();
   }
 
   if (document.readyState === 'loading') {
@@ -8498,21 +8545,17 @@ document.addEventListener('ra-collection-change', (e) => {
     'faintOpacity'
   ].forEach(kill);
 
-  // Legacy isWM variants – overwrite with a narrow detector returning false so Phase 2 detection isn't shadowed
   if (typeof window.isWM === 'function'){
     try { window.isWM = ()=>false; } catch(_){}
   }
 
-  // Prevent legacy "reapply" loops
   if (typeof window.reapply === 'function'){
     try { window.reapply = noop; } catch(_){}
   }
 
-  // Optional: intercept dispatches of ra-wm-recalc outside Phase 2 if they are too spammy
   const origDispatch = document.dispatchEvent.bind(document);
   document.dispatchEvent = (evt)=>{
     if (evt && evt.type === 'ra-wm-recalc' && !window.__RA_WM_PHASE2_BOOTED__){
-      // Let Phase 2 do first real creation; suppress redundant early spam
       return true;
     }
     return origDispatch(evt);
@@ -8526,28 +8569,26 @@ document.addEventListener('ra-collection-change', (e) => {
 
   /* ---------- CONFIG ---------- */
   const CFG = {
-    ringTargetPct: 0.89,          // target ring diameter fraction of canvas width
+    ringTargetPct: 0.89,
     ringPctMin: 0.75,
     ringPctMax: 0.92,
     ringEdgeMarginPx: 16,
     clampAdminSizePct: true,
     useAdminSizePct: true,
-   ringImageSrc: '/watermark.png?v=wm10',   // ADDED: path to ring image
-     
-    // Rule toggles (from final system)
-    showFooterOnRebelConnected: false,  // Owned Rebel stays fully clean
-    friendOnlySuppressesRing: true,     // Friend (no Rebel) => ring OFF globally
-    footerOnRebelWhenNoHoldings: false, // Non-holder viewing Rebel token: ring only
-    uploadsFollowFriendOnlyPerk: true,  // Friend-only => uploads ring OFF
+    ringImageSrc: '/watermark.png?v=wm10',
+
+    // Rule toggles
+    showFooterOnRebelConnected: false,
+    friendOnlySuppressesRing: true,
+    footerOnRebelWhenNoHoldings: false,
+    uploadsFollowFriendOnlyPerk: true,
     disconnectedAlwaysBoth: true,
 
     footerText: 'Powered by Rebel Studios',
 
-    // Internal/backoff
     scalingRetryMS: 140,
     scalingRetries: 6,
 
-    // Debug flags
     debugLog: false
   };
 
@@ -8559,16 +8600,13 @@ document.addEventListener('ra-collection-change', (e) => {
     baseKind: 'upload',
     lastApplyReason: '',
     pendingScaleRetries: 0,
-    forceOverride: null    // { footer: bool|null }
+    forceOverride: null
   };
 
-  let debounceScheduled = false;
-  let rebelAddrCache = null;
-
   function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  function log(){ /* silent unless CFG.debugLog = true */ }
 
-  function log(...a){ if (CFG.debugLog) console.log('[RAWatermark]', ...a); }
-
+  let rebelAddrCache = null;
   function deriveRebelAddr(){
     if (rebelAddrCache !== null) return rebelAddrCache;
     try {
@@ -8587,7 +8625,7 @@ document.addEventListener('ra-collection-change', (e) => {
 
   function currentBase(){
     const c = C(); if (!c) return null;
-    return (c.getObjects()||[]).find(o => o && o._isBase && !o._isBgRect) || null;
+    return (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect) || null;
   }
 
   function detectBaseKind(){
@@ -8602,122 +8640,155 @@ document.addEventListener('ra-collection-change', (e) => {
       STATE.baseKind = 'friend-token';
     }
   }
-function footerObject(){
-    const c=C(); if(!c) return null;
-    return (c.getObjects()||[]).find(o =>
+
+  function footerObject(){
+    const c = C(); if (!c) return null;
+    return (c.getObjects() || []).find(o =>
       o._raBrandFooter ||
       o._raFooterId === 'footer-group' ||
       (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text))
     ) || null;
   }
-);
-      dirty = true;
+
+  function ensureFooter(){
+    let existing = footerObject();
+    let dirty = false;
+
+    if (existing){
+      const c = C(); if (!c) return existing;
+      const desiredLeft = c.getWidth() - 60;
+      const desiredTop = c.getHeight() - 20;
+
+      if (existing.fontFamily !== 'Inter, system-ui, Arial, sans-serif') { existing.fontFamily = 'Inter, system-ui, Arial, sans-serif'; dirty = true; }
+      if (existing.fontSize !== 16) { existing.fontSize = 16; dirty = true; }
+      if (existing.fill !== '#fff') { existing.set('fill', '#fff'); dirty = true; }
+      if (existing.opacity !== 1) { existing.opacity = 1; dirty = true; }
+      if (existing.originX !== 'right') { existing.originX = 'right'; dirty = true; }
+      if (existing.originY !== 'bottom') { existing.originY = 'bottom'; dirty = true; }
+      if (existing.left !== desiredLeft) { existing.left = desiredLeft; dirty = true; }
+      if (existing.top !== desiredTop) { existing.top = desiredTop; dirty = true; }
+
+      const shadow = existing.shadow;
+      if (!shadow ||
+          shadow.color !== 'rgba(0,0,0,0.8)' ||
+          shadow.blur !== 5 ||
+          shadow.offsetX !== 2 ||
+          shadow.offsetY !== 2) {
+        existing.shadow = new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        });
+        dirty = true;
+      }
+
+      if (dirty) { try { existing.setCoords(); } catch(_){ } }
+      return existing;
     }
-    if (dirty) { try { existing.setCoords(); } catch(_){} }
-    return existing;
+
+    const c = C(); if (!c) return null;
+    try {
+      if (!window.fabric) return null;
+      const t = new fabric.Text(CFG.footerText, {
+        fontFamily:'Inter, system-ui, Arial, sans-serif',
+        fontSize:16, fill:'#fff', opacity:1,
+        originX:'right', originY:'bottom',
+        left: c.getWidth() - 60,
+        top:  c.getHeight() - 20,
+        selectable:false, evented:false,
+        shadow: new fabric.Shadow({
+          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
+        }),
+        _raBrandFooter:true, _raSys:true
+      });
+      c.add(t);
+      return t;
+    } catch(_){}
+    return null;
   }
-  const c=C(); if(!c) return null;
-  try {
-    if (!window.fabric) return null;
-    const t = new fabric.Text(CFG.footerText, {
-      fontFamily:'Inter, system-ui, Arial, sans-serif',
-      fontSize:16, fill:'#fff', opacity:1,
-      originX:'right', originY:'bottom',
-      left: c.getWidth() - 60,
-      top:  c.getHeight() - 20,
-      selectable:false, evented:false,
-      shadow: new fabric.Shadow({
-        color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
-      }),
-      _raBrandFooter:true, _raSys:true
-    });
-    c.add(t);
-    return t;
-  } catch(_){}
-  return null;
-}
-const c=C();
+
+  function ringObjects(){
+    const c = C(); if (!c) return [];
+    return (c.getObjects() || []).filter(o => o && (o._raWMCenter === true));
+  }
+
+  function dedupeRing(){
+    const c = C(); if (!c) return;
+    const rings = ringObjects();
+    const keep = rings[ rings.length - 1 ] || null;
     rings.forEach(r => { if (r !== keep){ try { c.remove(r); } catch(_){ } } });
   }
 
   function scaledWidth(obj){
     if (!obj) return 0;
     if (obj.getScaledWidth) return obj.getScaledWidth();
-    return (obj.width||0) * (obj.scaleX||1);
+    return (obj.width || 0) * (obj.scaleX || 1);
   }
-, { crossOrigin: 'anonymous' });
-    } catch(_){}
+
+  function scaleRing(r){
+    const c = C(); if (!c || !r) return;
+    try {
+      const cw = c.getWidth();
+      const natW = r.width || 1;
+      const pct = Math.min(CFG.ringPctMax, Math.max(CFG.ringPctMin, CFG.ringTargetPct));
+      const sc = (cw * pct) / Math.max(1, natW);
+      r.originX = 'center'; r.originY = 'center';
+      r.scaleX = sc; r.scaleY = sc;
+      r.left = cw / 2; r.top = c.getHeight() / 2;
+      r.setCoords();
+    } catch (_){}
   }
-   
+
+  function createRingIfMissing(){
+    const c = C(); if (!c) return null;
+    const src = CFG.ringImageSrc;
+    try {
+      fabric.Image.fromURL(src, (img) => {
+        if (!img) return;
+        img._raWMCenter = true;
+        img._raSys = true;
+        img.excludeFromExport = true;
+        scaleRing(img);
+        c.add(img);
+        try { c.requestRenderAll(); } catch (_){}
+      }, { crossOrigin: 'anonymous' });
+    } catch (_){}
+  }
+
   function desired(){
-    // Force override (debug) takes precedence if present
     if (STATE.forceOverride){
       return {
-        footer: STATE.forceOverride.footer !== null ? STATE.forceOverride.footer : false,
+        ring: STATE.forceOverride.ring !== null ? STATE.forceOverride.ring : false,
+        footer: STATE.forceOverride.footer !== null ? STATE.forceOverride.footer : true,
         forced: true
       };
     }
 
     if (!STATE.connected && CFG.disconnectedAlwaysBoth){
-      return { footer:true };
+      return { ring:true, footer:true };
     }
 
-    // Rebel owner global unlock path
     if (STATE.hasRebel){
       if (STATE.baseKind === 'rebel-token'){
-        return { footer: CFG.showFooterOnRebelConnected }; // expected false
+        return { ring:false, footer: CFG.showFooterOnRebelConnected }; // usually false
       }
-      // friend-token or upload
-      return { footer:true };
+      return { ring:false, footer:true };
     }
 
-    // Friend-only holder
     if (!STATE.hasRebel && STATE.hasFriend && CFG.friendOnlySuppressesRing){
-      return { footer:true };
+      return { ring:false, footer:true };
     }
 
-    // No holdings
     if (!STATE.hasRebel && !STATE.hasFriend){
       if (STATE.baseKind === 'rebel-token'){
-        return { footer: CFG.footerOnRebelWhenNoHoldings }; // expected false
+        return { ring:true, footer: CFG.footerOnRebelWhenNoHoldings }; // usually false
       }
-      // friend-token or upload
-      return { footer:true };
+      return { ring:true, footer:true };
     }
 
-    // Fallback (should not hit)
-    return { footer:true };
+    return { ring:true, footer:true };
   }
 
-  function computeScalePct(){
-    let pct = CFG.ringTargetPct;
-    if (CFG.useAdminSizePct && window.STATE && typeof window.STATE.sizePct === 'number'){
-      let adminPct = window.STATE.sizePct;
-      if (CFG.clampAdminSizePct){
-        adminPct = Math.min(CFG.ringPctMax, Math.max(CFG.ringPctMin, adminPct));
-      }
-      pct = adminPct;
-    } else {
-      pct = Math.min(CFG.ringPctMax, Math.max(CFG.ringPctMin, pct));
-    }
-    return pct;
-  }
-catch(_){}
-  }
-
-  function scheduleScaleRetry(){
-    STATE.pendingScaleRetries = CFG.scalingRetries;
-    function tick(){
-      if (STATE.pendingScaleRetries <= 0) return;
-
-      if (ring && scaledWidth(ring) > 0){
-        scaleRing(ring);
-        return;
-      }
-      STATE.pendingScaleRetries -= 1;
-      setTimeout(tick, CFG.scalingRetryMS);
-    }
-    setTimeout(tick, CFG.scalingRetryMS);
+  function queueApply(reason){
+    requestAnimationFrame(() => apply(reason));
   }
 
   function apply(reason){
@@ -8726,17 +8797,16 @@ catch(_){}
     dedupeRing();
 
     const need = desired();
-    const c=C(); if(!c) return;
+    const c = C(); if (!c) return;
 
-       if (!need.ring && ring){
+    let ring = ringObjects()[0] || null;
+
+    if (!need.ring && ring){
       try { c.remove(ring); } catch(_){}
       ring = null;
     } else if (need.ring && !ring){
       try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
-      scheduleScaleRetry();
-      setTimeout(() => {
-        if (!ringObjects()[0]) createRingIfMissing();
-      }, 180);
+      setTimeout(() => { if (!ringObjects()[0]) createRingIfMissing(); }, 180);
     }
 
     if (need.footer){
@@ -8746,8 +8816,8 @@ catch(_){}
       if (f) try { c.remove(f); } catch(_){}
     }
 
-    // Re-fetch after potential creation/removal
-    ring = ringObjects()[0];
+    ring = ringObjects()[0] || null;
+    const footer = footerObject();
 
     if (footer){
       try { c.bringToFront(footer); } catch(_){}
@@ -8758,38 +8828,11 @@ catch(_){}
     }
 
     try { c.requestRenderAll(); } catch(_){}
-
-    log('apply', reason, {
-      baseKind: STATE.baseKind,
-      desired: need,
-      counts: debugCounts()
-    });
+    log('apply', reason);
   }
 
-  function debugCounts(){
-    const c=C(); if(!c) return { footer:0 };
-    const objs = c.getObjects()||[];
-    return {
-      footer: objs.filter(o =>
-        o._raBrandFooter ||
-        o._raFooterId === 'footer-group' ||
-        (typeof o.text === 'string' && /powered\s+by\s+rebel\s+studios/i.test(o.text))
-      ).length
-    };
-  }
-
-  function queueApply(reason){
-    if (debounceScheduled) return;
-    debounceScheduled = true;
-    requestAnimationFrame(()=>{
-      debounceScheduled = false;
-      apply(reason);
-    });
-  }
-
-  /* ---------- HOOKS ---------- */
   function hookCanvas(){
-    const c=C(); if(!c){ setTimeout(hookCanvas, 120); return; }
+    const c = C(); if (!c){ setTimeout(hookCanvas, 120); return; }
     if (c.__raWMPhase2) return;
     c.__raWMPhase2 = true;
     c.on('object:added',   ()=> queueApply('object:added'));
@@ -8798,19 +8841,18 @@ catch(_){}
   }
 
   function hookEvents(){
-    document.addEventListener('ra-wm-recalc',          ()=> queueApply('evt:recalc'));
-    document.addEventListener('ra-collection-change',  ()=> queueApply('evt:collection-change'));
-    document.addEventListener('ra-holder-update',      ()=> queueApply('evt:holder-update'));
-    document.addEventListener('ra-wallet-connect-state', ()=> queueApply('evt:wallet-connect'));
+    document.addEventListener('ra-wm-recalc',             ()=> queueApply('evt:recalc'));
+    document.addEventListener('ra-collection-change',     ()=> queueApply('evt:collection-change'));
+    document.addEventListener('ra-holder-update',         ()=> queueApply('evt:holder-update'));
+    document.addEventListener('ra-wallet-connect-state',  ()=> queueApply('evt:wallet-connect'));
   }
 
-  /* ---------- PUBLIC API ---------- */
   window.RAWatermark = {
     setConnection(v){
       STATE.connected = !!v;
       queueApply('setConnection');
     },
-    setHoldings({ hasRebel=false, hasFriend=false }){
+    setHoldings({ hasRebel=false, hasFriend=false } = {}){
       STATE.hasRebel = !!hasRebel;
       STATE.hasFriend = !!hasFriend;
       queueApply('setHoldings');
@@ -8819,12 +8861,12 @@ catch(_){}
       queueApply('manual-refresh');
     },
     setConfig(partial){
-      Object.keys(partial||{}).forEach(k=>{
+      Object.keys(partial || {}).forEach(k=>{
         if (k in CFG) CFG[k] = partial[k];
       });
       queueApply('setConfig');
     },
-    force({ ring=null, footer=null }){
+    force({ ring=null, footer=null } = {}){
       STATE.forceOverride = { ring, footer };
       queueApply('force');
     },
@@ -8843,7 +8885,6 @@ catch(_){}
           forced: !!STATE.forceOverride
         },
         desired: desired(),
-        counts: debugCounts(),
         config: { ...CFG }
       };
     }
@@ -8860,7 +8901,6 @@ catch(_){}
   } else {
     window.addEventListener('load', ()=> setTimeout(boot, 40), { once:true });
   }
-
 })();
 
 /* ===== APP_MARKER_0928 ===== */
