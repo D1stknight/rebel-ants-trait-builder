@@ -9227,3 +9227,288 @@ document.addEventListener('ra-collection-change', (e) => {
 
 })();
 
+/* ===== WM_ENGINE_V12 — single controller (final 3-Rule System, no loops) ===== */
+;(() => {
+  if (window.__WM_ENGINE_V12__) return;
+  window.__WM_ENGINE_V12__ = true;
+
+  // Canvas helper
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  // Contracts (lowercase)
+  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
+  const FRIENDS = new Set([
+    '0xbed2470ded2519c13eaaf3bd970015ef404d3d20', // Saints of LA
+    '0xa9a1d086623475595a02991664742e4a1cbafcb8'  // Chumpz (ApeChain)
+  ]);
+
+  // Tags / finders
+  const isBg     = o => !!(o && o._isBgRect);
+  const isBase   = o => !!(o && o._isBase && !o._isBgRect);
+  const isRing   = o => !!(o && (o._wmEngine === 'v12_ring' || o._raWMCenter === true || o._isWatermark === true));
+  const isFooter = o => !!(o && (o._wmEngine === 'v12_footer' || o._raBrandFooter === true ||
+                       (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
+
+  const objs     = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
+  const findBase = () => objs().find(isBase) || null;
+  const rings    = () => objs().filter(isRing);
+  const footers  = () => objs().filter(isFooter);
+
+  // Admin knobs (default: ring = 85% width, opacity = 0.18)
+  function getPct() {
+    if (typeof window.__RA_WM_TARGET_PCT === 'number') return clamp(window.__RA_WM_TARGET_PCT, 0.05, 1);
+    const ls = localStorage.getItem('ra_wm_pct');
+    return ls != null ? clamp(+ls, 0.05, 1) : 0.85;
+  }
+  function getOpacity() {
+    if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return clamp(window.__RA_WM_ADMIN_OPACITY, 0, 1);
+    const ls = localStorage.getItem('ra_wm_opacity');
+    return ls != null ? clamp(+ls, 0, 1) : 0.18;
+  }
+  function setPct(v){ try{ localStorage.setItem('ra_wm_pct', String(v)); window.__RA_WM_TARGET_PCT = +v; }catch(_){} }
+  function setOpacity(v){ try{ localStorage.setItem('ra_wm_opacity', String(v)); window.__RA_WM_ADMIN_OPACITY = +v; }catch(_){} }
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+
+  // Admin API
+  window.RA_WM_ADMIN = {
+    get state(){ return { pct:getPct(), opacity:getOpacity() }; },
+    setPct(v){ setPct(v); applyRules('admin'); },
+    setOpacity(v){ setOpacity(v); applyRules('admin'); },
+    refresh(){ applyRules('admin'); }
+  };
+
+  // Holdings (your RA_HOLDER_STATE sets checked/hasRebel/hasFriend)
+  function holdings(){
+    const s = window.RA_HOLDER_STATE || {};
+    return { connected: !!s.checked, hasRebel: !!s.hasRebel, hasFriend: !!s.hasFriend };
+  }
+
+  // Base classification
+  function classify(){
+    const base = findBase();
+    if (!base) return { base:null, kind:'empty' };
+    const c = (base._tokenContract || '').toLowerCase();
+    if (!c) return { base, kind:'upload' };
+    if (c === REBEL) return { base, kind:'rebel' };
+    if (FRIENDS.has(c)) return { base, kind:'friend' };
+    return { base, kind:'other' };
+  }
+
+  // Your Final 3-Rule System
+  function visibilityRules(){
+    const { connected, hasRebel, hasFriend } = holdings();
+    const { base, kind } = classify();
+
+    if (!base) return { base:null, showRing:false, showFoot:false }; // empty canvas
+
+    if (!connected) return { base, showRing:true, showFoot:true };   // default ring+footer
+
+    if (hasRebel){
+      if (kind === 'rebel') return { base, showRing:false, showFoot:false };               // Rebel clean
+      return { base, showRing:false, showFoot:true };                                      // friends/uploads footer only
+    }
+
+    if (hasFriend){
+      return { base, showRing:false, showFoot:true };                                      // footer only everywhere
+    }
+
+    // Connected but no Rebel & no Friend
+    if (kind === 'rebel') return { base, showRing:true, showFoot:false };                  // ring only on Rebel
+    return { base, showRing:true, showFoot:true };                                         // others: ring+footer
+  }
+
+  // Seat ring just above base (under overlays)
+  function seatAboveBase(o, base){
+    const c=C(); if (!c || !o || !base) return false;
+    const a = objs();
+    const iBase = a.indexOf(base);
+    const target = Math.min(a.length-1, iBase+1);
+    if (a.indexOf(o)!==target){ try{ c.moveTo(o,target); return true; }catch(_){} }
+    return false;
+  }
+
+  function resizeRing(ring){
+    const c=C(); if (!c || !ring) return false;
+    const pct = getPct();
+    const nat = Math.max(1, ring.width || 1);
+    const cw = c.getWidth(), ch = c.getHeight();
+    const sc = (cw * pct) / nat;
+    let changed=false;
+    if (ring.scaleX!==sc){ ring.scaleX=sc; changed=true; }
+    if (ring.scaleY!==sc){ ring.scaleY=sc; changed=true; }
+    const cx=cw/2, cy=ch/2;
+    if (ring.left!==cx){ ring.left=cx; changed=true; }
+    if (ring.top!==cy){ ring.top=cy; changed=true; }
+    ring.setCoords();
+    return changed;
+  }
+
+  function ensureSingle(list, keepTag){
+    const c=C(); if (!c) return false;
+    let changed=false;
+    if (list.length>1){
+      // keep the one with our tag first; otherwise keep first
+      list.sort((a,b)=> (b._wmEngine===keepTag) - (a._wmEngine===keepTag));
+      list.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){} });
+    }
+    return changed;
+  }
+
+  function ensureFooterPosition(foot){
+    const c=C(); if (!c || !foot) return false;
+    const marginX=14, marginY=12; let ch=false;
+
+    // prefer Textbox to avoid clipping
+    if (foot.type!=='textbox'){
+      const tb = new fabric.Textbox(foot.text || 'Powered by Rebel Studios', {
+        originX:'right', originY:'bottom',
+        left:foot.left, top:foot.top, fontFamily:foot.fontFamily||'Inter, Arial, sans-serif',
+        fontSize:foot.fontSize||12, fill:'#000000', stroke:'#ffffff', strokeWidth:1.6,
+        strokeUniform:true, padding:0, textAlign:'right',
+        selectable:false, evented:false, hasControls:false, objectCaching:false
+      });
+      tb._wmEngine='v12_footer'; tb._raSys=true; tb.excludeFromExport=true;
+      try{ c.remove(foot); c.add(tb); foot=tb; ch=true; }catch(_){}
+    }
+
+    const nx=c.getWidth()-marginX, ny=c.getHeight()-marginY;
+    if (foot.originX!=='right'){ foot.originX='right'; ch=true; }
+    if (foot.originY!=='bottom'){ foot.originY='bottom'; ch=true; }
+    if (foot.left!==nx){ foot.left=nx; ch=true; }
+    if (foot.top!==ny){ foot.top=ny; ch=true; }
+    if (!foot._wmEngine){ foot._wmEngine='v12_footer'; ch=true; }
+    if (!foot._raSys){ foot._raSys=true; ch=true; }
+    if (foot.excludeFromExport!==true){ foot.excludeFromExport=true; ch=true; }
+    if (foot.selectable!==false){ foot.selectable=false; ch=true; }
+    if (foot.evented!==false){ foot.evented=false; ch=true; }
+    if (foot.hasControls!==false){ foot.hasControls=false; ch=true; }
+    foot.setCoords();
+    return ch;
+  }
+
+  // Create ring if needed
+  let _creating=false;
+  function createRing(cb){
+    const c=C(); if (!c || _creating) return;
+    _creating=true;
+    const src = window.WM_SRC || '/assets/watermark.png?v=wm10';
+    fabric.Image.fromURL(src, img => {
+      _creating=false;
+      if (!img) return;
+      img.set({
+        originX:'center', originY:'center',
+        selectable:false, evented:false, hasControls:false, objectCaching:false,
+        opacity:getOpacity()
+      });
+      img._wmEngine='v12_ring'; img._raSys=true; img.excludeFromExport=true;
+      try{ c.add(img);}catch(_){}
+      if (cb) cb(img);
+    }, { crossOrigin:'anonymous' });
+  }
+
+  // Core apply
+  function applyRules(reason=''){
+    const c=C(); if (!c) return;
+    const { base, showRing, showFoot } = visibilityRules();
+
+    // De-dupe foreign copies first
+    let changed = false;
+    changed = ensureSingle(rings(), 'v12_ring') || changed;
+    changed = ensureSingle(footers(), 'v12_footer') || changed;
+
+    // RING
+    let ring = rings()[0] || null;
+    if (!base){
+      if (ring && ring.visible!==false){ ring.visible=false; changed=true; }
+    } else if (showRing){
+      if (!ring){
+        createRing(newRing => {
+          let ch=false;
+          ch = resizeRing(newRing) || ch;
+          ch = seatAboveBase(newRing, base) || ch;
+          if (newRing.opacity !== getOpacity()){ newRing.opacity=getOpacity(); ch=true; }
+          if (newRing.visible===false){ newRing.visible=true; ch=true; }
+          if (ch) try{ c.requestRenderAll(); }catch(_){}
+        });
+      } else {
+        changed = resizeRing(ring) || changed;
+        changed = seatAboveBase(ring, base) || changed;
+        if (ring.opacity !== getOpacity()){ ring.opacity = getOpacity(); changed=true; }
+        if (ring.visible===false){ ring.visible=true; changed=true; }
+        if (!ring._wmEngine){ ring._wmEngine='v12_ring'; changed=true; }
+      }
+    } else {
+      if (ring && ring.visible!==false){ ring.visible=false; changed=true; }
+    }
+
+    // FOOTER
+    let foot = footers()[0] || null;
+    if (!base || !showFoot){
+      if (foot && foot.visible!==false){ foot.visible=false; changed=true; }
+    } else {
+      if (!foot){
+        const tb = new fabric.Textbox('Powered by Rebel Studios', {
+          originX:'right', originY:'bottom',
+          left:c.getWidth()-14, top:c.getHeight()-12,
+          fontFamily:'Inter, Arial, sans-serif', fontSize:12,
+          fill:'#000000', stroke:'#ffffff', strokeWidth:1.6, strokeUniform:true,
+          textAlign:'right', selectable:false, evented:false, hasControls:false, objectCaching:false,
+        });
+        tb._wmEngine='v12_footer'; tb._raSys=true; tb.excludeFromExport=true;
+        try{ c.add(tb); changed=true; }catch(_){}
+      } else {
+        changed = ensureFooterPosition(foot) || changed;
+        if (foot.visible===false){ foot.visible=true; changed=true; }
+        if (!foot._wmEngine){ foot._wmEngine='v12_footer'; changed=true; }
+      }
+    }
+
+    if (changed) try{ c.requestRenderAll(); }catch(_){}
+  }
+
+  // Wire (no after:render)
+  function wire(){
+    const c=C(); if (!c) return setTimeout(wire,120);
+    if (c.__wmEngineV12Bound) return; c.__wmEngineV12Bound = true;
+
+    // Re-apply on meaningful events only
+    c.on('object:added',    ()=>applyRules('add'));
+    c.on('object:removed',  ()=>applyRules('rem'));
+    c.on('object:modified', ()=>applyRules('mod'));
+    c.on('selection:created', ()=>applyRules('selc'));
+    c.on('selection:updated', ()=>applyRules('selu'));
+    c.on('mouse:up', ()=>applyRules('up'));
+
+    // Wallet / collection signals
+    document.addEventListener('ra-holder-update',    ()=>applyRules('holder'));
+    document.addEventListener('ra-collection-change',()=>applyRules('col'));
+    document.addEventListener('ra-wm-recalc',        ()=>applyRules('recalc'));
+
+    // Keep in place on canvas resizes
+    try{
+      const el = c.getElement ? c.getElement() : c.upperCanvasEl;
+      if (el && !c.__wmEngineV12Resize){
+        c.__wmEngineV12Resize = true;
+        new ResizeObserver(()=>applyRules('resize')).observe(el);
+      }
+    }catch(_){}
+
+    // Patch loadFromJSON so Undo/Restore finishes with correct seat/size/vis
+    if (!c.__wmEngineV12LFJ){
+      c.__wmEngineV12LFJ = true;
+      const orig = c.loadFromJSON.bind(c);
+      c.loadFromJSON = function(json, cb, rev){
+        const done = ()=>{ try{ applyRules('restore'); } finally { cb && cb(); } };
+        try{ return orig(json, done, rev); } catch(e){ try{ applyRules('restore-e'); }catch(_){} throw e; }
+      };
+    }
+
+    applyRules('boot');
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+})();
