@@ -383,13 +383,17 @@ async function fabricFromURL(url){
 }
 
 // (single consolidated helper) keep label above other UI if present
-} catch(_){}
-}
 
 function initBackgroundRect(fill){
   backgroundRect = new fabric.Rect({
-    left:0, top:0, width:canvas.getWidth(), height:canvas.getHeight(),
-    fill:fill, selectable:false, evented:false, hasControls:false
+    left: 0,
+    top: 0,
+    width: canvas.getWidth(),
+    height: canvas.getHeight(),
+    fill: fill,
+    selectable: false,
+    evented: false,
+    hasControls: false
   });
   backgroundRect._isBgRect = true;
   canvas.add(backgroundRect);
@@ -397,26 +401,41 @@ function initBackgroundRect(fill){
 }
 
 function setCanvasSize(size){
-  const prevW = canvas.getWidth() || size, prevH = canvas.getHeight() || size;
-  const sx = size / prevW, sy = size / prevH;
-  canvas.setWidth(size); canvas.setHeight(size);
+  const prevW = canvas.getWidth() || size;
+  const prevH = canvas.getHeight() || size;
+  const sx = size / prevW;
+  const sy = size / prevH;
+
+  canvas.setWidth(size);
+  canvas.setHeight(size);
+
   if (backgroundRect){
-    backgroundRect.set({ width:size, height:size });
+    backgroundRect.set({ width: size, height: size });
     canvas.sendToBack(backgroundRect);
   }
-  canvas.getObjects().forEach(o=>{
+
+  canvas.getObjects().forEach(o => {
     if (o === backgroundRect) return;
-    o.scaleX *= sx; o.scaleY *= sy; o.left *= sx; o.top *= sy; o.setCoords();
+    o.scaleX *= sx;
+    o.scaleY *= sy;
+    o.left *= sx;
+    o.top *= sy;
+    o.setCoords();
   });
-  canvas.setViewportTransform([1,0,0,1,0,0]);
+
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
   canvas.requestRenderAll();
-  try { window.ensureNonTokenRingWM && window.ensureNonTokenRingWM(); } catch(_){}
+
+  try {
+    window.ensureNonTokenRingWM && window.ensureNonTokenRingWM();
+  } catch (_) {}
 }
 
 function setZoom(v){
   zoom = Math.max(0.25, Math.min(6, v));
   canvas.setZoom(zoom);
-  const zv = $("zoomVal"); if (zv) zv.textContent = Math.round(zoom*100) + "%";
+  const zv = $("zoomVal");
+  if (zv) zv.textContent = Math.round(zoom * 100) + "%";
   canvas.requestRenderAll();
 }
 
@@ -426,13 +445,17 @@ function lockBaseObject(o){
   o.selectable = false;
   o.evented = false;
   o.hasControls = false;
-  o.lockMovementX = o.lockMovementY = true;
-  try { canvas.sendToBack(o); } catch(_){}
+  o.lockMovementX = true;
+  o.lockMovementY = true;
+  try { canvas.sendToBack(o); } catch (_) {}
 }
 
 function clearBaseOnly(){
-  canvas.getObjects().slice().forEach(o=>{ if (o._isBase) canvas.remove(o); });
-  baseGroup = null; canvas.requestRenderAll();
+  canvas.getObjects().slice().forEach(o => {
+    if (o._isBase) canvas.remove(o);
+  });
+  baseGroup = null;
+  canvas.requestRenderAll();
 }
 
 // Return only the main image globally (no corner stamps)
