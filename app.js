@@ -7621,9 +7621,10 @@ async function loadTokenFromCollection(tokenId, col){
 })();
 
 /* ==========================================================
-   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED)
+   RA_OPEN_NEW_TAB_VIEWER_V2 (HARDENED, FIXED)
    - Hooks ONLY the button with id="openNewTab" (no text sniffing)
    - Opens a clean viewer tab first, then sends a Blob URL (Safari-safe)
+   - Uses export multiplier (1–8). Works with fabric.Canvas or <canvas>
    - Never navigates the original tab
    - Paste at the VERY BOTTOM of app.js
    ========================================================== */
@@ -7631,18 +7632,41 @@ async function loadTokenFromCollection(tokenId, col){
   if (window.__RA_OPEN_NEW_TAB_VIEWER_V2__) return;
   window.__RA_OPEN_NEW_TAB_VIEWER_V2__ = true;
 
-  function getCanvas(){
+  // ---- helpers -------------------------------------------------------------
+  function getFabricCanvas(){
+    // Prefer an existing fabric canvas instance if present
     if (window.canvas && typeof window.canvas.toDataURL === 'function') return window.canvas;
-    const el = document.querySelector('canvas.upper-canvas') || document.querySelector('canvas.lower-canvas') || document.querySelector('canvas');
-    if (el){
+
+    // Heuristic: scan window for a fabric.Canvas-like object
+    const guess = document.querySelector('canvas.upper-canvas')
+              ||  document.querySelector('canvas.lower-canvas')
+              ||  document.querySelector('canvas');
+
+    if (guess){
       for (const k in window){
         try{
           const v = window[k];
-          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function') { window.canvas = v; return v; }
+          // fabric.Canvas typically has upperCanvasEl & toDataURL
+          if (v && v.upperCanvasEl && typeof v.toDataURL === 'function'){
+            window.canvas = v;
+            return v;
+          }
         }catch(_){}
       }
     }
     return null;
+  }
+
+  function getHtmlCanvas(){
+    // If we have a fabric canvas, prefer its lowerCanvasEl (the rasterized composite)
+    const fc = getFabricCanvas();
+    if (fc && fc.lowerCanvasEl) return fc.lowerCanvasEl;
+
+    // Otherwise fall back to any canvas in DOM
+    return document.querySelector('canvas.lower-canvas')
+        ||  document.querySelector('canvas.upper-canvas')
+        ||  document.querySelector('canvas')
+        ||  null;
   }
 
   function getMultiplier(){
@@ -7652,213 +7676,201 @@ async function loadTokenFromCollection(tokenId, col){
     return Math.min(8, Math.max(1, m || 2));
   }
 
-  function openViewer(){
-    const c = getCanvas();
-    if (!c){ alert('Canvas not ready'); return; }
+  function dataURLToBlob(dataURL){
+    // More Safari-proof than toBlob in some contexts
+    const parts = dataURL.split(',');
+    const mime  = (parts[0].match(/:(.*?);/)||[])[1] || 'image/png';
+    const bstr  = atob(parts[1] || '');
+    const n = bstr.length;
+    const u8 = new Uint8Array(n);
+    for (let i=0;i<n;i++) u8[i] = bstr.charCodeAt(i);
+    return new Blob([u8], { type: mime });
+  }
 
-    // Open the tab immediately (user gesture → popup-safe)
-    const win = window.open('about:blank','_blank');
-    if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
+  function makeDataURL(mult){
+    const fc = getFabricCanvas();
+    if (fc){
+      // fabric handles scaling via multiplier reliably
+      return fc.toDataURL({
+        format: 'png',
+        multiplier: mult,
+        enableRetinaScaling: false
+      });
+    }
+    // Fallback: scale an HTMLCanvasElement manually
+    const c = getHtmlCanvas();
+    if (!c) return null;
+    if (mult === 1){
+      try { return c.toDataURL('image/png'); } catch(_){ return null; }
+    }
+    const w = Math.max(1, Math.floor(c.width  * mult));
+    const h = Math.max(1, Math.floor(c.height * mult));
+    const off = document.createElement('canvas');
+    off.width = w; off.height = h;
+    const ctx = off.getContext('2d');
+    // High quality scaling
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(c, 0, 0, w, h);
+    try { return off.toDataURL('image/png'); } catch(_){ return null; }
+  }
 
- // Lightweight viewer shell (self-contained HTML)
-const html = `<!doctype html>
+  // ---- viewer shell --------------------------------------------------------
+  const VIEWER_HTML = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>Export</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     html,body{height:100%;margin:0;background:#0b0c10;overflow:auto;}
     .viewer{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0c10;}
     img{display:block;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);width:auto;height:auto;
-        box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;}
+        box-shadow:0 8px 24px rgba(0,0,0,.5);border-radius:8px;image-rendering:auto;cursor:zoom-in;}
     .hud{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
-         color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-         background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none;}
+         color:#e5e7eb;opacity:.8;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none;white-space:nowrap;}
+    .top{position:fixed;left:50%;top:10px;transform:translateX(-50%);
+         color:#e5e7eb;opacity:.8;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    a.btn{display:inline-block;margin-left:8px;padding:6px 10px;border-radius:6px;text-decoration:none;
+          background:rgba(255,255,255,.08);color:#e5e7eb;}
   </style>
 </head>
 <body>
   <div class="viewer"><img id="raImg" alt="export"></div>
+  <div class="top" id="meta"></div>
   <div class="hud">Click image to toggle: Fit ↔ Actual size</div>
   <script>
-    (function(){
-      var img = document.getElementById('raImg'), fit = true;
-      function apply(){
-        if (fit){
-          img.style.maxWidth  = 'calc(100vw - 32px)';
-          img.style.maxHeight = 'calc(100vh - 32px)';
-        } else {
-          img.style.maxWidth  = 'none';
-          img.style.maxHeight = 'none';
-        }
+  (function(){
+    var img = document.getElementById('raImg'), fit = true, currentURL = null;
+
+    function apply(){
+      if (fit){
+        img.style.maxWidth  = 'calc(100vw - 32px)';
+        img.style.maxHeight = 'calc(100vh - 32px)';
+        img.style.cursor = 'zoom-in';
+      } else {
+        img.style.maxWidth  = 'none';
+        img.style.maxHeight = 'none';
+        img.style.cursor = 'zoom-out';
       }
-      img.addEventListener('click', function(){ fit = !fit; apply(); });
-      apply();
+    }
+    img.addEventListener('click', function(){ fit = !fit; apply(); });
+    apply();
 
-      window.addEventListener('message', function(ev){
-        if (ev && ev.data && ev.data.type === 'ra-img') { img.src = ev.data.url; }
-      }, false);
+    // Revoke previous object URLs to avoid leaks
+    function setImg(src){
+      if (currentURL && src !== currentURL){
+        try{ URL.revokeObjectURL(currentURL); }catch(_){}
+      }
+      currentURL = src;
+      img.src = src;
+    }
 
-      setTimeout(function(){
-        if (!img.src){
-          document.body.insertAdjacentHTML(
-            'beforeend',
-            '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">No image received.</div>'
-          );
-        }
-      }, 2000);
-    })();
+    window.addEventListener('message', function(ev){
+      var d = ev && ev.data;
+      if (!d || d.type !== 'ra-img') return;
+      if (d.url) setImg(d.url);
+      var meta = document.getElementById('meta');
+      var name = d.name || 'export';
+      meta.innerHTML = name
+        ? ('<span>'+String(name).replace(/[&<>]/g,s=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\"}[s]))+'</span>'
+           + ' <a class="btn" download="'+name+'.png" href="'+(d.url||'#')+'">Download</a>')
+        : '';
+    }, false);
+
+    setTimeout(function(){
+      if (!img.src){
+        document.body.insertAdjacentHTML(
+          'beforeend',
+          '<div class="top" style="top:auto;bottom:48px;">No image received.</div>'
+        );
+      }
+    }, 2000);
+
+    window.addEventListener('beforeunload', function(){
+      if (currentURL){
+        try{ URL.revokeObjectURL(currentURL); }catch(_){}
+      }
+    });
+  })();
   <\/script>
 </body>
 </html>`;
 
-// Write the HTML into the new tab
-win.document.open();
-win.document.write(html);
-win.document.close();
+  function openViewerWindow(){
+    // Open the tab immediately in the user gesture to avoid popup blockers
+    const win = window.open('about:blank', '_blank', 'noopener,noreferrer');
+    if (!win) return null;
 
-  function fitAndAddAsBase(img){
-    const c = getCanvas(); if (!c) return false;
-    img.set({ originX:'center', originY:'center' });
-    const cw=c.getWidth(), ch=c.getHeight();
-    const sc = Math.min(cw/(img.width||cw), ch/(img.height||ch), 1);
-    if (Number.isFinite(sc) && sc>0) img.scale(sc);
-    img.left = cw/2; img.top = ch/2; img.setCoords();
-
-    // lock as base
-    img._isBase = true;
-    img._raBaseSig = 'BASE_V1';     // <-- paste THIS line here (fingerprint)    
-    img.selectable=false; img.evented=false; img.hasControls=false;
-    img.lockMovementX=img.lockMovementY=img.lockScalingX=img.lockScalingY=img.lockRotation=true;
-
-c.add(img);
-// Let the deterministic enforcer set exact indices
-try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-c.requestRenderAll();
-return true;
-
-
+    // Write the HTML shell quickly so it can receive postMessage soon after
+    win.document.open();
+    win.document.write(VIEWER_HTML);
+    win.document.close();
+    return win;
   }
 
-  function annotateBase(meta){
-    const c = getCanvas(); if (!c) return;
-    const base = (c.getObjects?.()||[]).find(o => o && o._isBase && !o._isBgRect);
-    if (!base) return;
-    base._tokenContract = normHex(meta.contract || '');
-    base._tokenChain    = meta.chain || '';  // 'ethereum' | 'apechain' | 'base'
-    base._tokenName     = meta.name || '';
-    try { document.dispatchEvent(new CustomEvent('ra-collection-change', { detail: meta })); } catch(_){}
-    try { document.dispatchEvent(new Event('ra-wm-recalc')); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
-  }
-
-  function upsertTokenLabel(id){
-    const c = getCanvas(); if (!c || !window.fabric) return;
-    (c.getObjects()||[]).forEach(o => { if (o && o._raTokenId) c.remove(o); });
-    const txt = new fabric.Text('#'+String(id), {
-      originX:'center', originY:'top',
-      left:c.getWidth()/2, top: 32,
-      fontFamily:"Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-      fontSize:48, fill:'#fff', stroke:'transparent', strokeWidth:0,
-      selectable:false, evented:false
-    });
-    txt._raTokenId = true; txt._raSys = true;
-    c.add(txt);
-    try{ c.bringToFront(txt); }catch(_){}
-  }
-
-  async function loadViaDataURL(u){
-    return await new Promise(res => {
-      fabric.Image.fromURL(u, img => res(img), {}); // dataURL → no crossOrigin needed
-    });
-  }
-  async function loadViaNoCors(u){
-    return await new Promise(res => {
-      // Intentionally no {crossOrigin:'anonymous'} to avoid blocking where host has no CORS.
-      fabric.Image.fromURL(u, img => res(img), {});
-    });
-  }
-
-  async function runLoader({ contract, chain, name }, tokenId){
-    const c = getCanvas(), f = window.fabric;
-    if (!c || !f) { alert('Canvas not ready'); return; }
-
-    // 1) Query Reservoir with the correct chain
-    let urls = await reservoirCandidates(contract, tokenId, chain);
-
-// ApeChain often needs tokenURI → metadata fallback
-if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
-  try{
-    const u = await window.__fetchApechainImageURL(contract, tokenId);
-    if (u) urls = [u];
-  }catch(_){}
-}
-
-if (!urls || !urls.length){
-  alert('No image found for that token.');
-  return;
-}
-
-    // 2) CORS‑safe path first (best for export)
-    try { c.discardActiveObject(); } catch(_){}
-    killOldBase(c);
-    for (const u of urls){
-      try{
-        const data = await fetchAsDataURL(u);
-        const img  = await loadViaDataURL(data);
-        if (img){
-          fitAndAddAsBase(img);
-          // ...after fitAndAddAsBase(...)
-annotateBase({ contract, chain, name: name || '' });
-// no automatic label here — user controls it from “Token ID Styles”
-return;
-
-        }
-      }catch(_){}
+  async function exportAndSend(win){
+    const mult = getMultiplier();
+    const dataURL = makeDataURL(mult);
+    if (!dataURL){
+      alert('Export failed: canvas not ready.');
+      try{ win && win.close(); }catch(_){}
+      return;
+    }
+    // Convert to Blob → Object URL (Safari-friendlier than giant data URLs across windows)
+    let blob, url;
+    try{
+      blob = dataURLToBlob(dataURL);
+      url  = URL.createObjectURL(blob);
+    }catch(_){
+      // Fallback: still try sending the data URL (last resort)
+      url = dataURL;
     }
 
-    // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
-const img = await loadViaNoCors(urls[0]);
-if (img){
-  fitAndAddAsBase(img);
-  annotateBase({ contract, chain, name: name || '' });
-  // no auto label — user adds it from “Token ID Styles”
-  return;
-}
+    // Derive a simple name if available
+    const name =
+      (typeof window.getExportName === 'function' && window.getExportName()) ||
+      (document.getElementById('exportName')?.value?.trim()) ||
+      'export';
 
-    alert('Failed to load token image.');
+    try{
+      win.postMessage({ type:'ra-img', url, name }, '*');
+    }catch(_){
+      // As a fallback, navigate the viewer to the blob URL (keeps original tab intact)
+      try { win.location.href = url; } catch(__){}
+    }
   }
 
- // ---------- wire once (capture phase). We only hijack when we know the contract+chain. ----------
-function looksLikeLoadByToken(node){
-  if (!node) return false;
-  const byId = node.id && /loadbytoken|loadtoken/i.test(node.id);
-  if (byId) return true;
-  const t = (node.textContent || '').toLowerCase();
-  return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
-}
-
-function onClick(e){
-  const el = e.target && e.target.closest && e.target.closest('button, a');
-  if (!el || !looksLikeLoadByToken(el)) return;
-
-  const tokenId  = readTokenId();
-  const detected = detectContractAndChain();
-
-  // Only take over if we have a token id AND a confident contract+chain.
-  if (tokenId && detected && detected.contract) {
+  function onOpenNewTabClicked(e){
     e.preventDefault();
     e.stopPropagation();
-    e.stopImmediatePropagation();
-    runLoader(detected, tokenId);
-  }
-}
 
-// Boot
-if (!document.__raTokenLoaderXChainBound){
-  document.__raTokenLoaderXChainBound = true;
-  document.addEventListener('click', onClick, true); // capture so we can short-circuit when we have everything
-}
-})(); // <— end of the IIFE
+    const win = openViewerWindow();
+    if (!win){
+      alert('Popup blocked. Please allow popups for this site or use Download.');
+      return;
+    }
+    // Defer heavy work until after window is open (keeps popup-safe)
+    setTimeout(()=>exportAndSend(win), 0);
+  }
+
+  // ---- wire once -----------------------------------------------------------
+  function wire(){
+    const btn = document.getElementById('openNewTab');
+    if (!btn) return false;
+    if (btn.__ra_bound_openNewTab) return true;
+    btn.__ra_bound_openNewTab = true;
+    btn.addEventListener('click', onOpenNewTabClicked, { capture:true });
+    return true;
+  }
+
+  if (!wire()){
+    // In case the button is injected later
+    const obs = new MutationObserver(()=>{ wire(); });
+    obs.observe(document.documentElement, { childList:true, subtree:true });
+  }
+})();
 
 /* ===== RA_TOKEN_ID_STYLE_WIRING_V3 — no auto-create; update only; proper format; de-dupe ===== */
 ;(() => {
