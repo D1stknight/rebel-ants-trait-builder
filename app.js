@@ -7660,7 +7660,7 @@ async function loadTokenFromCollection(tokenId, col){
     const win = window.open('about:blank','_blank');
     if (!win){ alert('Popup blocked. Allow popups or use the Download button.'); return; }
 
-   // Lightweight viewer shell
+ // Lightweight viewer shell (self-contained HTML)
 const html = `<!doctype html>
 <html>
 <head>
@@ -7711,13 +7711,10 @@ const html = `<!doctype html>
 </body>
 </html>`;
 
-    if (looksLikeBase) {
-      try { c.remove(o); } catch(_) {}
-    }
-  });
-
-  try { c.requestRenderAll(); } catch(_) {}
-}
+// Write the HTML into the new tab
+win.document.open();
+win.document.write(html);
+win.document.close();
 
   function fitAndAddAsBase(img){
     const c = getCanvas(); if (!c) return false;
