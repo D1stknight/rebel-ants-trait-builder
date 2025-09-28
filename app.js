@@ -1476,7 +1476,7 @@ function renderPublishedShelf(){
   draw();
 }
 
- // ===============================
+// ===============================
 //  EXPORT (optional UI IDs: exportPng / openNewTab)
 //  — self-contained: includes the New Tab viewer (fit ↔ actual size)
 // ===============================
@@ -1565,7 +1565,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
         .hud{
           position:fixed;left:50%;bottom:10px;transform:translateX(-50%);
           color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none
+          background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px;user-select:none;
         }
       </style>
     `;
@@ -1715,7 +1715,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
     try { c.setViewportTransform([1,0,0,1,0,0]); } catch(_) {}
     const zEl = document.getElementById('zoomVal'); if (zEl) zEl.textContent = '100%';
 
-    try { window.ensureNonTokenRingWM &&  } catch(_) {}
+    // Legacy ring hook removed
+    try { /* no-op */ } catch(_) {}
     try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
 
     try { c.requestRenderAll(); } catch(_) {}
