@@ -6,7 +6,7 @@
 */
 (function(){
   if (window.__RA_WM_CONSOLIDATION_P1__) return;
-// Compatibility finder: try Phase 2 ring first, else legacy center tag (now absent).
+  // Compatibility finder: try Phase 2 ring first, else legacy center tag (now absent).
   // Adjust selectors if Phase 2 uses different tagging.
   window.raFindWatermark = function raFindWatermark(){
     const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -28,7 +28,7 @@
    =============================== */
 ;(() => {
   if (window.__RA_WM_CONFIG_MIN__) return;
-const qs = new URLSearchParams(location.search);
+  const qs = new URLSearchParams(location.search);
 
   const CONTRACT =
     qs.get('contract') ||
@@ -8310,9 +8310,9 @@ window.raDump = () => {
 };
 
 /* ===== RA_WM_FOOTER_FIX_SHIM_v7r — always preferred footer everywhere ===== */
-;(() => { return; // DISABLED  return;  // DISABLED
+;(() => { return; // DISABLED  return; // DISABLED  return;  // DISABLED
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
-const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Recognizers
   const isFooter = o => !!(o && (o._raBrandFooter || o._raFooterId === 'footer-group' || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
@@ -8530,9 +8530,9 @@ const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas :
 })();
 
 /* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
-;(() => { return; // DISABLED  return; // DISABLED  return;  // DISABLED
+;(() => { return; // DISABLED  return;  // DISABLED
   if (window.__RA_WM_RULES_V9__) return;
-const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
 
   // RAF-based evaluation scheduling for this block too
@@ -9217,32 +9217,198 @@ window.APP_MARKER_0928 = true;
 console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
 
-/* ===== APP_MARKER_0928B ===== */
-window.APP_MARKER_0928B = "2025-09-28T04:48:13.736190";
-console.log("✅ app.js marker loaded: APP_MARKER_0928B", window.APP_MARKER_0928B);
+/* ===== APP_MARKER_SURGICAL_VF 2025-09-28T05:08:45.639432 ===== */
+console.log("✅ APP_MARKER_SURGICAL_VF loaded at 2025-09-28T05:08:45.639432");
 
-/* ===== RA_EMPTY_CANVAS_WM_GUARD_v2 — hide ring/footer when no base (before draw; no loops) ===== */
+
+/* ===== WM_MASTER_VF — surgical master control (3-rule, empty-canvas guard, no loops) ===== */
 ;(() => {
-  if (window.__RA_EMPTY_WM_GUARD_V2__) return;
-  window.__RA_EMPTY_WM_GUARD_V2__ = true;
+  if (window.__WM_MASTER_VF__) return;
+  window.__WM_MASTER_VF__ = true;
+
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  const REBEL = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221';
+  const FRIENDS = new Set(['0xbed2470ded2519c13eaaf3bd970015ef404d3d20','0xa9a1d086623475595a02991664742e4a1cbafcb8']);
+
   const isBase   = o => !!(o && o._isBase && !o._isBgRect);
-  const isRing   = o => !!(o && (o._wmEngine==='v12_ring' || o._wmEngine==='v13_ring' || o._raWMCenter || o._isWatermark || o._wm));
-  const isFooter = o => !!(o && (o._wmEngine==='v12_footer'|| o._wmEngine==='v13_footer' || o._raBrandFooter || (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
-  function suppress() {
-    const c = C(); if (!c) return;
-    const os = c.getObjects?.() || [];
-    const hasBase = os.some(isBase);
-    if (hasBase) return; // only act on empty canvas
-    os.forEach(o => { if (isRing(o) || isFooter(o)) o.visible = false; });
-    // no requestRenderAll here to avoid loops; next frame will not draw them
+  const isRing   = o => !!(o && (o._wmEngine==='vf_ring' || o._wmEngine==='v12_ring' || o._wmEngine==='v13_ring' || o._raWMCenter || o._isWatermark || o._wm));
+  const isFooter = o => !!(o && (o._wmEngine==='vf_footer' || o._wmEngine==='v12_footer' || o._wmEngine==='v13_footer' || o._raBrandFooter || (typeof o.text==='string' && /powered\s+by/i.test(o.text))));
+
+  const objs = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
+  const baseObj = () => objs().find(isBase) || null;
+
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const getPct=()=>{ const v = (typeof window.__RA_WM_TARGET_PCT==='number')?window.__RA_WM_TARGET_PCT:(+localStorage.getItem('ra_wm_pct')||0.85); return clamp(v,0.05,0.95); };
+  const getOpacity=()=>{ const v=(typeof window.__RA_WM_ADMIN_OPACITY==='number')?window.__RA_WM_ADMIN_OPACITY:(+localStorage.getItem('ra_wm_opacity')||0.18); return clamp(v,0,1); };
+
+  function holdings(){
+    const s=window.RA_HOLDER_STATE||{};
+    return { connected:!!s.checked, hasRebel:!!s.hasRebel, hasFriend:!!s.hasFriend };
   }
-  function wire() {
-    const c = C(); if (!c) return setTimeout(wire, 120);
-    if (c.__emptyGuardV2) return; c.__emptyGuardV2 = true;
-    c.on('before:render', suppress);
-    suppress();
+  function classify(){
+    const b=baseObj(); if(!b) return {kind:'empty', base:null};
+    const c=(b._tokenContract||'').toLowerCase();
+    if(!c) return {kind:'upload', base:b};
+    if(c===REBEL) return {kind:'rebel', base:b};
+    if(FRIENDS.has(c)) return {kind:'friend', base:b};
+    return {kind:'other', base:b};
   }
+  function rules(){
+    const h=holdings(); const {kind, base}=classify();
+    if(!base) return { base:null, showRing:false, showFoot:false };
+    if(!h.connected) return { base, showRing:true, showFoot:true };
+    if(h.hasRebel){
+      if(kind==='rebel') return { base, showRing:false, showFoot:false };
+      return { base, showRing:false, showFoot:true };
+    }
+    if(h.hasFriend) return { base, showRing:false, showFoot:true };
+    if(kind==='rebel') return { base, showRing:true, showFoot:false };
+    return { base, showRing:true, showFoot:true };
+  }
+
+  function killDomWatermarks(){
+    try {
+      document.querySelectorAll('*').forEach(el=>{
+        const bi=getComputedStyle(el).backgroundImage;
+        if (bi && /watermark/i.test(bi)) { el.style.backgroundImage='none'; el.style.background='none'; }
+      });
+      [...document.images].forEach(img=>{ if(/watermark/i.test(img.src||'')) img.style.display='none'; });
+    } catch(_){}
+  }
+
+  function emptyGuard(){
+    const c=C(); if(!c) return;
+    const os=c.getObjects?.()||[];
+    const hasBase=os.some(isBase);
+    if (hasBase) return;
+    let changed=false;
+    os.slice().forEach(o=>{
+      if (isRing(o) || isFooter(o)) { try{ c.remove(o); changed=true; }catch(_){ if(o.visible!==false){ o.visible=false; changed=true; } } }
+    });
+    killDomWatermarks();
+    if (changed) try{ c.requestRenderAll(); } catch(_){}
+  }
+
+  function resizeRing(r){
+    const c=C(); if(!c||!r) return false;
+    const pct=getPct(); const nat=Math.max(1,r.width||1);
+    const cw=c.getWidth(), ch=c.getHeight(), sc=(cw*pct)/nat;
+    let chg=false;
+    if (r.scaleX!==sc){ r.scaleX=r.scaleY=sc; chg=true; }
+    const cx=cw/2, cy=ch/2;
+    if (r.left!==cx||r.top!==cy){ r.left=cx; r.top=cy; chg=true; }
+    if (r.opacity!==getOpacity()){ r.opacity=getOpacity(); chg=true; }
+    r.setCoords(); return chg;
+  }
+  function seatAboveBase(o, base){
+    const c=C(); if(!c||!o||!base) return false;
+    const arr=objs(); const ib=arr.indexOf(base); const target=Math.min(arr.length-1, ib+1);
+    if (arr.indexOf(o)!==target){ try{ c.moveTo(o,target); return true; }catch(_){ } }
+    return false;
+  }
+  function ensureFooterPosition(f){
+    const c=C(); if(!c||!f) return false;
+    const nx=c.getWidth()-14, ny=c.getHeight()-12; let ch=false;
+    if (f.type!=='textbox'){
+      const tb=new fabric.Textbox(f.text||'Powered by Rebel Studios',{originX:'right',originY:'bottom',
+        left:f.left, top:f.top, fontFamily:f.fontFamily||'Inter, Arial, sans-serif', fontSize:f.fontSize||12,
+        fill:'#000', stroke:'#fff', strokeWidth:1.6, strokeUniform:true, textAlign:'right',
+        selectable:false, evented:false, hasControls:false, objectCaching:false});
+      tb._wmEngine='vf_footer'; tb._raSys=true; tb.excludeFromExport=true;
+      try{ C().remove(f); C().add(tb); f=tb; ch=true; }catch(_){}
+    }
+    if (f.originX!=='right'){ f.originX='right'; ch=true; }
+    if (f.originY!=='bottom'){ f.originY='bottom'; ch=true; }
+    if (f.left!==nx||f.top!==ny){ f.left=nx; f.top=ny; ch=true; }
+    f.setCoords(); return ch;
+  }
+
+  function apply(){
+    const c=C(); if(!c) return;
+
+    // Empty canvas → enforce clean state and bail
+    const base=baseObj();
+    if (!base){ emptyGuard(); return; }
+
+    // Desired visibility
+    const { showRing, showFoot } = rules();
+
+    // Dedupe (keep first)
+    let rgs=rings(), fts=footers(); let changed=false;
+    if (rgs.length>1){ rgs.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){ } }); }
+    if (fts.length>1){ fts.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){ } }); }
+
+    // Ring
+    rgs=rings();
+    let ring=rgs[0]||null;
+    if (showRing){
+      if (!ring){
+        fabric.Image.fromURL(window.WM_SRC||'/assets/watermark.png?v=wm10', img=>{
+          if (!img) return;
+          img.set({originX:'center',originY:'center', selectable:false,evented:false,hasControls:false, objectCaching:false, opacity:getOpacity()});
+          img._wmEngine='vf_ring'; img._raSys=true; img.excludeFromExport=true;
+          try{ c.add(img); resizeRing(img); seatAboveBase(img, base); c.requestRenderAll(); }catch(_){}
+        }, { crossOrigin:'anonymous' });
+      } else {
+        changed = resizeRing(ring) || changed;
+        changed = seatAboveBase(ring, base) || changed;
+        if (ring.visible===false){ ring.visible=true; changed=true; }
+      }
+    } else if (ring && ring.visible!==false){ ring.visible=false; changed=true; }
+
+    // Footer
+    fts=footers();
+    let foot=fts[0]||null;
+    if (showFoot){
+      if (!foot){
+        const tb=new fabric.Textbox('Powered by Rebel Studios',{originX:'right',originY:'bottom',
+          left:c.getWidth()-14, top:c.getHeight()-12, fontFamily:'Inter, Arial, sans-serif', fontSize:12,
+          fill:'#000', stroke:'#fff', strokeWidth:1.6, strokeUniform:true, textAlign:'right',
+          selectable:false, evented:false, hasControls:false, objectCaching:false});
+        tb._wmEngine='vf_footer'; tb._raSys=true; tb.excludeFromExport=true;
+        try{ c.add(tb); changed=true; }catch(_){}
+      } else {
+        changed = ensureFooterPosition(foot) || changed;
+        if (foot.visible===false){ foot.visible=true; changed=true; }
+      }
+    } else if (foot && foot.visible!==false){ foot.visible=false; changed=true; }
+
+    if (changed) try{ c.requestRenderAll(); } catch(_){}
+  }
+
+  function wire(){
+    const c=C(); if(!c) return setTimeout(wire, 120);
+    if (c.__wmMasterVFBound) return; c.__wmMasterVFBound=true;
+
+    emptyGuard(); // clear DOM/CSS ghosts on boot
+
+    ['object:added','object:removed','object:modified','selection:created','selection:updated','mouse:up']
+      .forEach(ev => c.on(ev, apply));
+    ['ra-holder-update','ra-collection-change','ra-wm-recalc']
+      .forEach(ev => document.addEventListener(ev, apply));
+    try{
+      const el=c.getElement ? c.getElement() : c.upperCanvasEl;
+      new ResizeObserver(apply).observe(el);
+    }catch(_){}
+
+    // Post-restore correction
+    if (!c.__wmMasterVFLFJ){
+      c.__wmMasterVFLFJ = true;
+      const orig=c.loadFromJSON?.bind(c);
+      if (orig){
+        c.loadFromJSON = function(json, cb, rev){
+          const done = () => { try{ apply(); } finally { cb && cb(); } };
+          try { return orig(json, done, rev); } catch(e){ try{ apply(); }catch(_){ } throw e; }
+        };
+      }
+    }
+
+    // Disable legacy ring creator if present
+    try { if (typeof window.ensureNonTokenRingWM === 'function') window.ensureNonTokenRingWM = null; } catch(_){}
+    apply();
+  }
+
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire, {once:true});
   else wire();
 })();
