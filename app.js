@@ -3214,59 +3214,59 @@ document.addEventListener("DOMContentLoaded", ()=>{
     step();
   }
 
-  /* -------------------- Utilities -------------------- */
-  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
-  function lerp(a,b,t){ return a+(b-a)*t; }
-  function pickMimeType(){
-    const pref=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
-    if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
-    for (const p of pref){ if (MediaRecorder.isTypeSupported(p)) return p; }
-    return pref[2];
-  }
+ /* -------------------- Utilities -------------------- */
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+function lerp(a,b,t){ return a+(b-a)*t; }
+function pickMimeType(){
+  const pref=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
+  if (typeof MediaRecorder==='undefined' || !MediaRecorder.isTypeSupported) return pref[2];
+  for (const p of pref){ if (MediaRecorder.isTypeSupported(p)) return p; }
+  return pref[2];
+}
 
-  function gather(){
-    buildPanel();
-    const scope=$('#uaScope').value;
-    const presetId=$('#uaPreset').value;
-    const preset=PRESETS.find(p=>p.id===presetId) ||
-      PRESETS.find(p=> (scope==='camera'?p.kind==='camera': scope==='base'?p.kind==='base':'overlay')) ||
-      PRESETS[0];
-    const easeSel=$('#uaEase').value;
-    const easingFn=EASE[easeSel] || EASE[preset.ease] || EASE.ioSine;
-    let dur=parseFloat($('#uaDur').value||'6');
-    if(!Number.isFinite(dur)) dur=6;
-    dur=clamp(dur,2,CONFIG.maxDurationSec);
-    const durationMs=Math.round(dur*1000);
-    const returnMode=$('#uaReturn').value;
-    const wmMode=$('#uaWMMode').value;
-    return { scope, preset, easingFn, durationMs, returnMode, wmMode };
-  }
+function gather(){
+  buildPanel();
+  const scope=$('#uaScope').value;
+  const presetId=$('#uaPreset').value;
+  const preset=PRESETS.find(p=>p.id===presetId) ||
+    PRESETS.find(p=> (scope==='camera'?p.kind==='camera': scope==='base'?p.kind==='base':'overlay')) ||
+    PRESETS[0];
+  const easeSel=$('#uaEase').value;
+  const easingFn=EASE[easeSel] || EASE[preset.ease] || EASE.ioSine;
+  let dur=parseFloat($('#uaDur').value||'6');
+  if(!Number.isFinite(dur)) dur=6;
+  dur=clamp(dur,2,CONFIG.maxDurationSec);
+  const durationMs=Math.round(dur*1000);
+  const returnMode=$('#uaReturn').value;
+  const wmMode=$('#uaWMMode').value;
+  return { scope, preset, easingFn, durationMs, returnMode, wmMode };
+}
 
-  function preview(){
-    if (running){ showMsg('Busy'); return; }
-    animate({ ...gather(), record:false });
-  }
-  function exportAnim(){
-    if (running){ showMsg('Busy'); return; }
-    animate({ ...gather(), record:true });
-  }
-  function stop(){
-    if (!running) return;
-    cancelFlag=true;
-  }
+function preview(){
+  if (running){ showMsg('Busy'); return; }
+  animate({ ...gather(), record:false });
+}
+function exportAnim(){
+  if (running){ showMsg('Busy'); return; }
+  animate({ ...gather(), record:true });
+}
+function stop(){
+  if (!running) return;
+  cancelFlag=true;
+}
 
-  const API = {
-    preview,
-    export: exportAnim,
-    stop,
-    config: CONFIG,
-    version: VERSION
-  };
-  window.raAnimateUnifiedV2 = API;
+const API = {
+  preview,
+  export: exportAnim,
+  stop,
+  config: CONFIG,
+  version: VERSION
+};
+window.raAnimateUnifiedV2 = API;
 
-  function init(){ buildPanel(); }
-  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', init,{once:true});
-  else init();
+function init(){ buildPanel(); }
+if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', init,{once:true});
+else init();
 
 })();
 
@@ -3344,16 +3344,16 @@ document.addEventListener("DOMContentLoaded", ()=>{
           if (data.__w && data.__h){ c.setWidth(data.__w); c.setHeight(data.__h); }
           if (Array.isArray(data.__vt)) c.setViewportTransform(data.__vt);
 
-            c.getObjects().forEach(o=>{
-              ensureId(o);
-              if (o._isBase){
-                o.selectable=false; o.evented=false; o.hasControls=false;
-                o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
-              }
-              if (o._isBgRect || o._raSys){
-                o.selectable=false; o.evented=false;
-              }
-            });
+          c.getObjects().forEach(o=>{
+            ensureId(o);
+            if (o._isBase){
+              o.selectable=false; o.evented=false; o.hasControls=false;
+              o.lockMovementX=o.lockMovementY=o.lockScalingX=o.lockScalingY=o.lockRotation=true;
+            }
+            if (o._isBgRect || o._raSys){
+              o.selectable=false; o.evented=false;
+            }
+          });
 
           // Try to reselect previous active object
           if (data.__active){
@@ -3362,7 +3362,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
           }
 
           try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_){}
-          try { window.ensureNonTokenRingWM &&  } catch(_){}
+          // Legacy hook removed
+          try { /* no-op */ } catch(_){}
 
           c.requestRenderAll();
         } finally {
