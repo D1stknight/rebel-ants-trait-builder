@@ -6,7 +6,7 @@
 */
 (function(){
   if (window.__RA_WM_CONSOLIDATION_P1__) return;
-  // Compatibility finder: try Phase 2 ring first, else legacy center tag (now absent).
+// Compatibility finder: try Phase 2 ring first, else legacy center tag (now absent).
   // Adjust selectors if Phase 2 uses different tagging.
   window.raFindWatermark = function raFindWatermark(){
     const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -17,18 +17,14 @@
   };
 
   // Legacy non-token ring creator placeholder (kept to avoid ReferenceErrors)
-  Object.defineProperty(window, 'ensureNonTokenRingWM', {
-    configurable: true,
-    writable: true,
-    value: function(){ /* Phase 2: legacy ensureNonTokenRingWM disabled */ }
-  });
+  window.ensureNonTokenRingWM = null;
 })();
 /* ===============================
    CONFIG (Phase 2 safe minimal)
    =============================== */
-;(() => {
+;(() => { return; /* DISABLED */ 
   if (window.__RA_WM_CONFIG_MIN__) return;
-  const qs = new URLSearchParams(location.search);
+const qs = new URLSearchParams(location.search);
 
   const CONTRACT =
     qs.get('contract') ||
@@ -7689,297 +7685,7 @@ async function loadTokenFromCollection(tokenId, col){
             }, false);
             setTimeout(function(){
               if (!img.src) {
-                document.body.insertAdjacentHTML(
-                  'beforeend',
-                  '<div style="position:fixed;left:50%;top:10px;transform:translateX(-50%);color:#e5e7eb;opacity:.75;font:12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial">No image received.</div>'
-                );
-              }
-            }, 2000);
-          })();
-        <\/script>
-      </body></html>`;
-    win.document.open(); win.document.write(html); win.document.close();
-
-    // Produce the PNG and send a Blob URL to the viewer (more reliable than giant data: URLs)
-    try{
-      const mult = getMultiplier();
-      const dataUrl = c.toDataURL({ format:'png', multiplier: mult, enableRetinaScaling:true });
-      fetch(dataUrl).then(r=>r.blob()).then(blob=>{
-        const url = URL.createObjectURL(blob);
-        try { win.postMessage({ type:'ra-img', url }, '*'); } catch(_){}
-        const tid = setInterval(()=>{ if (win.closed){ URL.revokeObjectURL(url); clearInterval(tid); } }, 4000);
-      }).catch(()=>{
-        try{ win.document.body.innerHTML =
-          '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export failed (CORS/security). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
-      });
-    }catch(e){
-      try{ win.document.body.innerHTML =
-        '<div style="padding:14px;font:14px/1.4 -apple-system,Segoe UI,Arial;color:#e5e7eb">Export blocked (CORS). Use same-origin or CORS-enabled images.</div>'; }catch(_){}
-    }
-  }
-
-  // Capture ONLY the actual “Open in new tab” button (id="openNewTab")
-  document.addEventListener('click', function(e){
-    const btn = e.target && e.target.closest && e.target.closest('#openNewTab');
-    if (!btn) return;
-    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-    openViewer();
-  }, true);
-})();
-
-/* ===== RA_TOKENURI_FALLBACK_FOR_APECHAIN ===== */
-(function(){
-  if (window.__RA_APE_RPC_FALLBACK__) return;
-  window.__RA_APE_RPC_FALLBACK__ = true;
-
-  // We set a safe default earlier in CONFIG. You can still override window.__APECHAIN_RPC at runtime if needed.
-
-  async function jsonRpc(url, body){
-    const r = await fetch(url, {
-      method:'POST',
-      headers:{ 'content-type':'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (!r.ok) throw new Error('rpc http '+r.status);
-    const j = await r.json();
-    if (j.error) throw new Error('rpc error '+(j.error.message||''));
-    return j.result;
-  }
-
-  function ipfsToHttp(u){
-    if (!u) return u;
-    if (u.startsWith('ipfs://ipfs/')) return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(12);
-    if (u.startsWith('ipfs://'))      return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(7);
-    return u;
-  }
-
-  window.__fetchApechainImageURL = async function(contract, tokenId){
-    const rpc = window.__APECHAIN_RPC;  // now guaranteed to exist
-    if (!rpc) return null;
-
-    // tokenURI(uint256) = 0xc87b56dd
-    const idHex = '0x' + BigInt(String(tokenId).replace(/[^0-9]/g,'')||'0').toString(16);
-    const data  = '0xc87b56dd' + idHex.replace(/^0x/,'').padStart(64,'0');
-    const call  = { to: contract, data };
-
-    const res = await jsonRpc(rpc, { jsonrpc:'2.0', id:1, method:'eth_call', params:[call, 'latest'] });
-
-    // decode ABI string result
-    const hex = (res||'').replace(/^0x/,'');
-    if (hex.length < 128) return null;
-    const len = parseInt(hex.slice(64,128),16);
-    const dataHex = hex.slice(128, 128+len*2);
-    let uri = '';
-    for (let i=0;i<dataHex.length;i+=2) uri += String.fromCharCode(parseInt(dataHex.slice(i,i+2),16));
-
-    // fetch metadata → image
-    const metaUrl = ipfsToHttp(uri);
-    const mRes = await fetch(metaUrl, {cache:'no-store'});
-    if (!mRes.ok) return null;
-    const meta = await mRes.json().catch(()=>null);
-    return ipfsToHttp(meta && (meta.image || meta.image_url || meta.imageUrl));
-  };
-})();
-
-
-/* ===== RA_TOKEN_LOADER_XCHAIN_V3 — paste at the very bottom of app.js ===== */
-;(() => {
-  'use strict';
-  if (window.__RA_TOKEN_LOADER_XCHAIN_V3__) return;
-  window.__RA_TOKEN_LOADER_XCHAIN_V3__ = true;
-
-  // ---------- small helpers ----------
-  const getCanvas = () =>
-    (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const $ = (sel, r = document) => r.querySelector(sel);
-
-  // Known collections → {address, chain}
-  const KNOWN = {
-    // name (lowercase) : { address, chain }
-    'rebel ants':   { address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chain:'ethereum' },
-    'saints of la': { address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chain:'ethereum' },
-    'chumpz':       { address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chain:'apechain' }
-  };
-
-  // Quick map: contract → chain
-  const CONTRACT_FOR = {
-    '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221': 'ethereum',
-    '0xbed2470ded2519c13eaaf3bd970015ef404d3d20': 'ethereum',
-    '0xa9a1d086623475595a02991664742e4a1cbafcb8': 'apechain'
-  };
-
-  const normHex = s => (s || '').toLowerCase();
-  function slugFromChain(v){
-  const x = (v || '').toString().toLowerCase().trim();
-  if (x === '0x1'    || x === '1'    || x === 'eth' || x.includes('ether')) return 'ethereum';
-  if (x === '0x2105' || x.includes('base'))                                 return 'base';
-  if (x === '0x8173' || x.includes('ape'))                                  return 'apecoin';
-  return x || 'ethereum';
-}
-
-  function detectSelectionName(){
-    // From status row (if present)
-    const st = $('#raColStatus');
-    if (st && st.textContent) {
-      // "Using: Chumpz (ApeChain)" → "chumpz"
-      const name = st.textContent
-        .replace(/^.*using:\s*/i,'')
-        .split('—')[0]
-        .split('(')[0]
-        .trim()
-        .toLowerCase();
-      if (name) return name;
-    }
-    // From visible select (if present)
-    const sel = $('#raColSelect');
-    if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
-      const t = (sel.selectedOptions[0].textContent || '')
-        .split('—')[0].split('(')[0].trim().toLowerCase();
-      if (t) return t;
-    }
-    return null;
-  }
-
-  function detectContractAndChain(){
-    // Highest priority: URL/query or explicit window overrides
-    const q     = new URLSearchParams(location.search);
-    const cQ    = q.get('contract') || q.get('c') || '';
-    const chQ   = q.get('chain') || q.get('network') || '';
-    const cWin  = window.__RA_CONTRACT || window._RA_CONTRACT || '';
-    const chWin = window.__RA_CHAIN    || window._RA_CHAIN    || '';
-    if (cQ || cWin) {
-      const c = normHex(cQ || cWin);
-      const ch = slugFromChain(chQ || chWin || CONTRACT_FOR[c]);
-      return { contract: c, chain: ch, name: '' };
-    }
-
-    // Next: look up by collection name shown in UI
-    const name = detectSelectionName();
-    if (name && KNOWN[name]) {
-      return { contract: normHex(KNOWN[name].address), chain: KNOWN[name].chain, name };
-    }
-
-    // Otherwise, do nothing; let the app’s original loader handle it
-    return null;
-  }
-
-  function readTokenId(){
-    const ids = [
-      '#tokenId', '#token', '#tokenIdInput',
-      'input[name="token"]', 'input[name="tokenId"]',
-      'input[placeholder*="Token"]'
-    ];
-    for (const s of ids){
-      const el = $(s);
-      const v  = (el && (el.value || '').trim()) || '';
-      if (v) return v;
-    }
-    // Fallback: any input/textarea with "token" in placeholder + a value
-    const maybe = Array.from(document.querySelectorAll('input,textarea'))
-      .find(el => /token/i.test(el.placeholder || '') && (el.value || '').trim());
-    return maybe ? maybe.value.trim() : '';
-  }
-
-  function normalizeUrl(u){
-    if (!u) return null;
-    if (u.startsWith('ipfs://')) return 'https://cloudflare-ipfs.com/ipfs/' + u.replace('ipfs://','').replace(/^ipfs\//,'');
-    if (u.startsWith('ar://'))   return 'https://arweave.net/' + u.replace('ar://','');
-    return u;
-  }
-
-  async function fetchAsDataURL(url){
-    const r = await fetch(url, { mode:'cors', cache:'no-store' });
-    if (!r.ok) throw new Error('fetch failed');
-    const b = await r.blob();
-    return await new Promise(res => {
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result);
-      fr.readAsDataURL(b);
-    });
-  }
-
-  async function reservoirCandidates(contract, tokenId, chainSlug){
-  let rsSlug = (chainSlug||'').toLowerCase();
-  // standardize our internal slugs
-  if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
-  if (rsSlug === 'base') rsSlug = 'base';
-  if (rsSlug === 'ape' || rsSlug === 'apechain' || rsSlug === 'apecoinchain') rsSlug = 'apechain';
-
-  // choose correct host per chain (per Reservoir docs)
-  // https://nft.reservoir.tools/reference/supported-chains
-  const HOST = (
-    rsSlug === 'apechain'  ? 'https://api-apechain.reservoir.tools' :
-    rsSlug === 'base'      ? 'https://api-base.reservoir.tools'     :
-                             'https://api.reservoir.tools'           // ethereum default
-  );
-
-  const url = `${HOST}/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&limit=1`;
-  const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
-  if (!r.ok) return [];
-  const j = await r.json();
-  const t = j?.tokens?.[0]?.token || {};
-  const m = t.media || {};
-  return [
-    m?.original?.url || m?.original?.mediaUrl,
-    t.imageLarge, t.image, t.imageUrl, t.imageSmall
-  ].filter(Boolean).map(normalizeUrl);
-}
-
-function killOldBase(c){
-  const objs = (c.getObjects() || []).slice();
-  const cw = c.getWidth(), ch = c.getHeight();
-
-  const imgLike = o => o && (o.type === 'image' || o._element);
-  const isGroup = o => o && o.type === 'group';
-
-  const boundsArea = o => {
-    try {
-      const br = o.getBoundingRect(true, true);
-      return (br?.width || 0) * (br?.height || 0);
-    } catch(_) { return 0; }
-  };
-
-  const imageArea = o => {
-    const w = (o.getScaledWidth ? o.getScaledWidth() : (o.width||0) * (o.scaleX||1));
-    const h = (o.getScaledHeight? o.getScaledHeight(): (o.height||0) * (o.scaleY||1));
-    return w * h;
-  };
-
-  // Collect all candidates we may want to remove; compute a reasonable threshold
-  const imgNonSys = objs.filter(o => imgLike(o) && !o._raSys && !o._raTokenId && !o._isBgRect);
-  const maxImageA = imgNonSys.length ? Math.max(...imgNonSys.map(imageArea)) : 0;
-  const bigImageThreshold = Math.max(cw * ch * 0.25, maxImageA * 0.75); // robust threshold
-
-  // If the active object is one of the candidates, drop selection first (avoids drawControls errors)
-  try {
-    const active = c.getActiveObject && c.getActiveObject();
-    if (active && (imgNonSys.includes(active) || isGroup(active))) {
-      c.discardActiveObject();
-    }
-  } catch(_) {}
-
-  objs.forEach(o => {
-    if (!o) return;
-    if (o._isBgRect || o._raSys || o._raTokenId) return;  // never touch bg/sys/label
-
-    let looksLikeBase = false;
-
-    // Explicit flags or fingerprints
-    if (o._isBase || o._raBaseSig === 'BASE_V1' || o._tokenContract) {
-      looksLikeBase = true;
-    }
-
-    // Large non-overlay image = probable base
-    if (!looksLikeBase && imgLike(o) && o._kind !== 'overlay') {
-      const a = imageArea(o);
-      if (a >= bigImageThreshold) looksLikeBase = true;
-    }
-
-    // Group base (e.g., old non-token base with corner stamps)
-    if (!looksLikeBase && isGroup(o)) {
-      if (o._kind !== 'overlay') {
-        const A = boundsArea(o);
-        const stamps = Array.isArray(o._objects) && o._objects.some(ch => ch && (ch._isWatermark || ch.raWM || ch.raPos));
+                document.body.);
         if (A >= cw * ch * 0.25 || stamps) looksLikeBase = true;
       }
     }
@@ -8310,9 +8016,9 @@ window.raDump = () => {
 };
 
 /* ===== RA_WM_FOOTER_FIX_SHIM_v7r — always preferred footer everywhere ===== */
-;(() => { return; // DISABLED  return; // DISABLED  return;  // DISABLED
+;(() => { return; /* DISABLED */  return;  // DISABLED
   if (window.__RA_WM_FOOTER_FIX_SHIM_V7R__) return;
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
   // Recognizers
   const isFooter = o => !!(o && (o._raBrandFooter || o._raFooterId === 'footer-group' || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
@@ -8530,9 +8236,9 @@ window.raDump = () => {
 })();
 
 /* ===== RA_WM_RULES_V9 — correct ring/foot behavior for manual vs Rebel vs Friend tokens (no overlay interference) ===== */
-;(() => { return; // DISABLED  return;  // DISABLED
+;(() => { return; /* DISABLED */  return;  // DISABLED
   if (window.__RA_WM_RULES_V9__) return;
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const REBEL_CONTRACT = '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221'; // lowercase
 
   // RAF-based evaluation scheduling for this block too
