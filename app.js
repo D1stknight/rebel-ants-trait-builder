@@ -824,10 +824,10 @@ safeAddListener("clearCanvas","click", ()=>{
   idLabel = null; 
   baseGroup = null;
   // Re-create faint ring (non-token mode) if appropriate
-  try { window.ensureNonTokenRingWM &&  } catch(_) {}
+  try { /* no-op (legacy hook removed) */ } catch (_) {}
   // Re-enforce layer order after a short delay so undo/restore ops aren't racing
   setTimeout(()=>{
-    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch(_) {}
+    try { window.raEnforceLayerOrder && window.raEnforceLayerOrder(); } catch (_) {}
   }, 60);
 });
 
