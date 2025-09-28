@@ -9234,25 +9234,24 @@ document.addEventListener('ra-collection-change', (e) => {
     '0xa9a1d086623475595a02991664742e4a1cbafcb8'  // Chumpz (ApeChain)
   ]);
 
-  // Object tag helpers
+  // Tags / finders
   const isBg     = o => !!(o && o._isBgRect);
   const isBase   = o => !!(o && o._isBase && !o._isBgRect);
-  const isRing   = o => !!(o && (o._wmEngine === 'v12_ring' || o._raWMCenter === true || o._isWatermark === true));
-  const isFooter = o => !!(o && (o._wmEngine === 'v12_footer' || o._raBrandFooter === true ||
-                       (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
-
+  const isRing   = o => !!(o && (o._wmEngine === 'v12_ring' || o._raWMCenter === true || o._isWatermark === true || o._wm === true));
+  const isFooter = o => !!(o && (o._wmEngine === 'v12_footer' || o._raBrandFooter === true || (typeof o.text === 'string' && /powered\s+by/i.test(o.text))));
   const objs     = () => { const c=C(); return c ? (c.getObjects?.()||[]) : []; };
   const findBase = () => objs().find(isBase) || null;
   const rings    = () => objs().filter(isRing);
   const footers  = () => objs().filter(isFooter);
 
-  // Admin knobs (persisted); defaults: ring 85% width, opacity 0.18
+  // Admin knobs (persisted) — defaults ring 85%, opacity 0.18
   const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
-  function getPct()      { const ls = localStorage.getItem('ra_wm_pct');      if (typeof window.__RA_WM_TARGET_PCT === 'number') return clamp(window.__RA_WM_TARGET_PCT, 0.05,1); return ls!=null?clamp(+ls,0.05,1):0.85; }
-  function getOpacity()  { const ls = localStorage.getItem('ra_wm_opacity');  if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return clamp(window.__RA_WM_ADMIN_OPACITY,0,1); return ls!=null?clamp(+ls,0,1):0.18; }
+  function getPct()      { const ls = localStorage.getItem('ra_wm_pct');     if (typeof window.__RA_WM_TARGET_PCT === 'number') return clamp(window.__RA_WM_TARGET_PCT, 0.05, 0.95); return ls!=null?clamp(+ls,0.05,0.95):0.85; }
+  function getOpacity()  { const ls = localStorage.getItem('ra_wm_opacity'); if (typeof window.__RA_WM_ADMIN_OPACITY === 'number') return clamp(window.__RA_WM_ADMIN_OPACITY,0,1); return ls!=null?clamp(+ls,0,1):0.18; }
   function setPct(v)     { try{ localStorage.setItem('ra_wm_pct', String(v));      window.__RA_WM_TARGET_PCT = +v; }catch(_){} }
   function setOpacity(v) { try{ localStorage.setItem('ra_wm_opacity', String(v));  window.__RA_WM_ADMIN_OPACITY = +v; }catch(_){} }
 
+  // Small admin surface (unchanged)
   window.RA_WM_ADMIN = {
     get state(){ return { pct:getPct(), opacity:getOpacity() }; },
     setPct(v){ setPct(v); applyRules('admin'); },
@@ -9260,13 +9259,14 @@ document.addEventListener('ra-collection-change', (e) => {
     refresh(){ applyRules('admin'); }
   };
 
-  // Holdings (provided elsewhere in your app)
+  // Holdings snapshot (provided elsewhere)
   function holdings(){
     const s = window.RA_HOLDER_STATE || {};
+    // s.checked means we queried wallet (connected)
     return { connected: !!s.checked, hasRebel: !!s.hasRebel, hasFriend: !!s.hasFriend };
   }
 
-  // Classify current base
+  // Base classifier
   function classify(){
     const base = findBase();
     if (!base) return { base:null, kind:'empty' };
@@ -9282,10 +9282,10 @@ document.addEventListener('ra-collection-change', (e) => {
     const { connected, hasRebel, hasFriend } = holdings();
     const { base, kind } = classify();
 
-    // EARLY GUARD: empty canvas → show nothing
+    // Empty canvas → nothing
     if (!base) return { base:null, showRing:false, showFoot:false };
 
-    if (!connected) return { base, showRing:true,  showFoot:true  }; // default (ring+footer)
+    if (!connected) return { base, showRing:true,  showFoot:true  }; // default
 
     if (hasRebel){
       if (kind === 'rebel') return { base, showRing:false, showFoot:false };   // Rebels clean
@@ -9293,15 +9293,15 @@ document.addEventListener('ra-collection-change', (e) => {
     }
 
     if (hasFriend){
-      return { base, showRing:false, showFoot:true };                          // footer only everywhere
+      return { base, showRing:false, showFoot:true };                          // footer only (everywhere)
     }
 
-    // Connected but no Rebel & no Friend
+    // Connected, no Rebel & no Friend
     if (kind === 'rebel') return { base, showRing:true,  showFoot:false };     // ring only on Rebels
     return                     { base, showRing:true,  showFoot:true  };       // others: ring+footer
   }
 
-  // Seat ring just above base (under overlays)
+  // Seat helpers
   function seatAboveBase(o, base){
     const c=C(); if (!c || !o || !base) return false;
     const a = objs();
@@ -9323,17 +9323,8 @@ document.addEventListener('ra-collection-change', (e) => {
     const cx=cw/2, cy=ch/2;
     if (ring.left!==cx){ ring.left=cx; changed=true; }
     if (ring.top!==cy){ ring.top=cy; changed=true; }
+    if (ring.opacity !== getOpacity()){ ring.opacity = getOpacity(); changed=true; }
     ring.setCoords();
-    return changed;
-  }
-
-  function ensureSingle(list, keepTag){
-    const c=C(); if (!c) return false;
-    let changed=false;
-    if (list.length>1){
-      list.sort((a,b)=> (b._wmEngine===keepTag) - (a._wmEngine===keepTag));
-      list.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){} });
-    }
     return changed;
   }
 
@@ -9341,14 +9332,15 @@ document.addEventListener('ra-collection-change', (e) => {
     const c=C(); if (!c || !foot) return false;
     const marginX=14, marginY=12; let ch=false;
 
-    // use Textbox to avoid clipping
+    // Always a Textbox; convert if needed (prevents clipping & odd wrapping)
     if (foot.type!=='textbox'){
       const tb = new fabric.Textbox(foot.text || 'Powered by Rebel Studios', {
         originX:'right', originY:'bottom',
-        left:foot.left, top:foot.top, fontFamily:foot.fontFamily||'Inter, Arial, sans-serif',
-        fontSize:foot.fontSize||12, fill:'#000000', stroke:'#ffffff', strokeWidth:1.6,
-        strokeUniform:true, padding:0, textAlign:'right',
-        selectable:false, evented:false, hasControls:false, objectCaching:false
+        left:foot.left, top:foot.top,
+        fontFamily:foot.fontFamily || 'Inter, Arial, sans-serif',
+        fontSize:foot.fontSize || 12,
+        fill:'#000000', stroke:'#ffffff', strokeWidth:1.6, strokeUniform:true,
+        textAlign:'right', selectable:false, evented:false, hasControls:false, objectCaching:false,
       });
       tb._wmEngine='v12_footer'; tb._raSys=true; tb.excludeFromExport=true;
       try{ c.remove(foot); c.add(tb); foot=tb; ch=true; }catch(_){}
@@ -9369,7 +9361,18 @@ document.addEventListener('ra-collection-change', (e) => {
     return ch;
   }
 
-  // Create ring on demand
+  // De-dupe helpers
+  function ensureSingle(list, keepTag){
+    const c=C(); if (!c) return false;
+    let changed=false;
+    if (list.length>1){
+      list.sort((a,b)=> (b._wmEngine===keepTag) - (a._wmEngine===keepTag));
+      list.slice(1).forEach(o=>{ try{ c.remove(o); changed=true; }catch(_){} });
+    }
+    return changed;
+  }
+
+  // Create ring once
   let _creating=false;
   function createRing(cb){
     const c=C(); if (!c || _creating) return;
@@ -9393,14 +9396,14 @@ document.addEventListener('ra-collection-change', (e) => {
   function applyRules(reason=''){
     const c=C(); if (!c) return;
 
-    // De-dupe foreign copies first
+    // Kill foreign dupes first
     let changed=false;
-    changed = ensureSingle(rings(), 'v12_ring')   || changed;
+    changed = ensureSingle(rings(),   'v12_ring')   || changed;
     changed = ensureSingle(footers(), 'v12_footer') || changed;
 
     const { base, showRing, showFoot } = visibilityRules();
 
-    // If no base (empty canvas) — hide everything and bail
+    // Empty canvas → hide everything and bail
     if (!base){
       rings().forEach(r => { if (r.visible!==false){ r.visible=false; changed=true; } });
       footers().forEach(f => { if (f.visible!==false){ f.visible=false; changed=true; } });
@@ -9414,16 +9417,15 @@ document.addEventListener('ra-collection-change', (e) => {
       if (!ring){
         createRing(newRing => {
           let ch=false;
-          ch = resizeRing(newRing) || ch;
-          ch = seatAboveBase(newRing, base) || ch;
-          if (newRing.opacity !== getOpacity()){ newRing.opacity=getOpacity(); ch=true; }
+          ch = resizeRing(newRing)         || ch;
+          ch = seatAboveBase(newRing,base) || ch;
           if (newRing.visible===false){ newRing.visible=true; ch=true; }
+          if (!newRing._wmEngine){ newRing._wmEngine='v12_ring'; ch=true; }
           if (ch) try{ c.requestRenderAll(); }catch(_){}
         });
       } else {
-        changed = resizeRing(ring) || changed;
-        changed = seatAboveBase(ring, base) || changed;
-        if (ring.opacity !== getOpacity()){ ring.opacity = getOpacity(); changed=true; }
+        changed = resizeRing(ring)         || changed;
+        changed = seatAboveBase(ring,base) || changed;
         if (ring.visible===false){ ring.visible=true; changed=true; }
         if (!ring._wmEngine){ ring._wmEngine='v12_ring'; changed=true; }
       }
@@ -9462,17 +9464,14 @@ document.addEventListener('ra-collection-change', (e) => {
     if (c.__wmEngineV12Bound) return; c.__wmEngineV12Bound = true;
 
     // Meaningful events only
-    c.on('object:added',    ()=>applyRules('add'));
-    c.on('object:removed',  ()=>applyRules('rem'));
-    c.on('object:modified', ()=>applyRules('mod'));
-    c.on('selection:created', ()=>applyRules('selc'));
-    c.on('selection:updated', ()=>applyRules('selu'));
-    c.on('mouse:up', ()=>applyRules('up'));
+    const evs = ['object:added','object:removed','object:modified','selection:created','selection:updated','mouse:up'];
+    evs.forEach(ev => c.on(ev, ()=>applyRules(ev)));
 
     document.addEventListener('ra-holder-update',    ()=>applyRules('holder'));
     document.addEventListener('ra-collection-change',()=>applyRules('col'));
     document.addEventListener('ra-wm-recalc',        ()=>applyRules('recalc'));
 
+    // Resize observer for ring sizing + footer pin
     try{
       const el = c.getElement ? c.getElement() : c.upperCanvasEl;
       if (el && !c.__wmEngineV12Resize){
@@ -9481,7 +9480,7 @@ document.addEventListener('ra-collection-change', (e) => {
       }
     }catch(_){}
 
-    // Ensure Undo/Restore settles to correct state
+    // Ensure undo/restore settles
     if (!c.__wmEngineV12LFJ){
       c.__wmEngineV12LFJ = true;
       const orig = c.loadFromJSON.bind(c);
