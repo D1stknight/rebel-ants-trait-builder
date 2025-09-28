@@ -8200,57 +8200,69 @@ function ensureFooter() {
       const desiredTop = c.getHeight() - 20;
       if (footer.left !== desiredLeft) { footer.left = desiredLeft; dirty = true; }
       if (footer.top !== desiredTop) { footer.top = desiredTop; dirty = true; }
-      // Update shadow if needed
-      const shadow = footer.shadow;
-      if (!shadow || shadow.color !== 'rgba(0,0,0,0.8)' || shadow.blur !== 5 || shadow.offsetX !== 2 || shadow.offsetY !== 2) {
-        footer.shadow = new fabric.Shadow({
-          color: 'rgba(0,0,0,0.8)', blur: 5, offsetX: 2, offsetY: 2
-        });
-        dirty = true;
-      }
-      if (dirty) {
-        try { footer.setCoords(); } catch(_){}
-        quarantine(footer);
-      }
-    }
-    quarantine(footer);
-    return footer;
-  }
-);
-        img._raWMCenter = true;
-        img._raSys = true;
-        img.excludeFromExport = true;
-        centerRing(img);
-        c.add(img);
-        quarantine(img);
-        try { c.requestRenderAll(); } catch(_){}
-      }, { crossOrigin:'anonymous' });
-    } else {
-      quarantine(ring);
-      centerRing(ring);
-      ring.visible = true;
-    }
-    return ring;
-  }
+     // Update shadow if needed
+const shadow = footer.shadow;
+if (
+  !shadow ||
+  shadow.color !== 'rgba(0,0,0,0.8)' ||
+  shadow.blur !== 5 ||
+  shadow.offsetX !== 2 ||
+  shadow.offsetY !== 2
+) {
+  footer.shadow = new fabric.Shadow({
+    color: 'rgba(0,0,0,0.8)',
+    blur: 5,
+    offsetX: 2,
+    offsetY: 2
+  });
+  dirty = true;
+}
+if (dirty) {
+  try { footer.setCoords(); } catch (_) {}
+  quarantine(footer);
+}
 
-  function assertTopNow(){
-    const c = C(); if (!c) return;
-    const all  = c.getObjects?.() || [];
-    const bg   = all.find(isBg);
-    const base = all.find(isBase);
-    if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
-      const desired = RAWatermark.debug().desired;
-      if (desired.ring) ensureRing();
-      else {
+quarantine(footer);
+return footer;
+}
 
-        if (ring) ring.visible = false;
-      }
-      if (desired.footer) ensureFooter();
-      else {
-        const foot = all.find(isFooter);
-        if (foot) foot.visible = false;
-      }
-    } else {
+img._raWMCenter = true;
+img._raSys = true;
+img.excludeFromExport = true;
+centerRing(img);
+c.add(img);
+quarantine(img);
+try { c.requestRenderAll(); } catch (_) {}
+}, { crossOrigin: 'anonymous' });
+} else {
+  quarantine(ring);
+  centerRing(ring);
+  ring.visible = true;
+}
+return ring;
+}
+
+function assertTopNow() {
+  const c = C();
+  if (!c) return;
+  const all = c.getObjects?.() || [];
+  const bg = all.find(isBg);
+  const base = all.find(isBase);
+  if (window.RAWatermark && typeof RAWatermark.debug === 'function') {
+    const desired = RAWatermark.debug().desired;
+    if (desired.ring) ensureRing();
+    else {
+      if (ring) ring.visible = false;
+    }
+    if (desired.footer) ensureFooter();
+    else {
+      const foot = all.find(isFooter);
+      if (foot) foot.visible = false;
+    }
+  } else {
+    // fallback path
+  }
+}
       // Fallback: always show both for disconnected/manual upload
       ensureRing();
       ensureFooter();
