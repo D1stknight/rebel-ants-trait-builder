@@ -7848,43 +7848,80 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   }
 
   // --- RING overlay (Fabric.js vector, non-interactive)
-  function getRing(c){
-    const objs = (c.getObjects?.() || []);
-    return objs.find(o => o && o._raRingOverlay === true) || null;
+  // ---- Watermark image overlay (from /assets/watermark.png), non-interactive
+const WM_URL = new URL('assets/watermark.png', document.baseURI).toString();
+const WM_SCALE = 0.85;      // 85% of min(canvas width, height)
+const WM_OPACITY = 0.10;    // very faint
+
+function getWM(c){
+  const objs = (c.getObjects?.() || []);
+  return objs.find(o => o && o._raRingOverlay === true) || null;
+}
+
+function layoutWM(c, img){
+  if (!c || !img) return;
+  const w = c.getWidth(), h = c.getHeight();
+  const target = Math.min(w, h) * WM_SCALE;
+  const sx = target / (img.width  || 1);
+  const sy = target / (img.height || 1);
+  const s = Math.min(sx, sy);
+  img.set({
+    left: w / 2,
+    top:  h / 2,
+    originX: 'center',
+    originY: 'center',
+    scaleX: s,
+    scaleY: s
+  });
+  img.setCoords();
+}
+
+function ensureWM(c, done){
+  let wm = getWM(c);
+  if (wm) { done && done(wm); return; }
+  if (!window.fabric || !c) { done && done(null); return; }
+
+  // Prevent duplicate loads if recompute fires rapidly
+  if (ensureWM._loading){ setTimeout(() => ensureWM(c, done), 60); return; }
+  ensureWM._loading = true;
+
+  fabric.Image.fromURL(WM_URL, (img) => {
+    ensureWM._loading = false;
+    if (!img) { done && done(null); return; }
+    img._raRingOverlay = true;
+    img.set({
+      selectable: false,
+      evented: false,
+      hasControls: false,
+      opacity: WM_OPACITY,
+      globalCompositeOperation: 'source-over'
+    });
+    try { c.add(img); } catch(_) {}
+    layoutWM(c, img);
+    done && done(img);
+  }, { crossOrigin: 'anonymous' });
+}
+
+function applyRing(pol){
+  const c = C(); if (!c) return;
+  const want = !!pol.ring;
+  const existing = getWM(c);
+
+  if (want){
+    // Create (if needed) and show
+    ensureWM(c, (img) => {
+      if (!img) return;
+      layoutWM(c, img);
+      img.visible = true;
+      try { img.bringToFront && img.bringToFront(); } catch(_){}
+      try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+    });
+  } else if (existing){
+    // Hide if present (don’t remove so we can reuse on next toggle)
+    existing.visible = false;
+    try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
   }
-  function ensureRing(c){
-    let ring = getRing(c);
-    if (!ring && window.fabric && c){
-      const w = c.getWidth(), h = c.getHeight();
-      const r = Math.floor(Math.min(w, h) * 0.48);
-      ring = new fabric.Circle({
-        radius: r,
-        left: w/2, top: h/2,
-        originX: 'center', originY: 'center',
-        stroke: 'rgba(255,255,255,0.14)',
-        strokeWidth: Math.max(2, Math.round(Math.min(w, h) * 0.012)),
-        fill: 'rgba(0,0,0,0)',
-        selectable: false, evented: false, hasControls: false, hoverCursor: 'default'
-      });
-      ring._raRingOverlay = true;
-      try { c.add(ring); } catch(_) {}
-    }
-    if (ring){
-      const w = c.getWidth(), h = c.getHeight();
-      const r = Math.floor(Math.min(w, h) * 0.48);
-      ring.set({ left:w/2, top:h/2, radius:r, strokeWidth: Math.max(2, Math.round(Math.min(w,h)*0.012)) });
-      ring.setCoords();
-    }
-    return ring;
-  }
-  function applyRing(pol){
-    const c = C(); if (!c) return;
-    const ring = ensureRing(c);
-    if (!ring) return;
-    ring.visible = !!pol.ring;
-    try { ring.bringToFront && ring.bringToFront(); } catch(_){}
-    try { c.requestRenderAll(); } catch(_){}
-  }
+}
 
   // --- FOOTER (DOM bar anchored to canvas container)
   function footerHost(){
