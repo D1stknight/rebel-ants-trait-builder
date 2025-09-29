@@ -8060,38 +8060,44 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   MOBILE UX PACK — Fixed Square (mobile only)
-   - Canvas & checkerboard = same larger square (portrait + landscape)
-   - CSS-scale the Fabric wrapper (coords/export stay correct)
-   - Base uploads "cover" fill (with slight overshoot)
-   - Quick‑Actions Dock + Sticky "Canvas" + Sticky "Del Overlay"
-   - Desktop/export/watermark logic untouched
+   MOBILE UX PACK — Fixed Square w/ Stable Footer (mobile only)
+   - Square canvas/checkerboard, centered, stable while scrolling
+   - CSS-scale Fabric wrapper (coords/export unchanged)
+   - Base uploads "cover" fill (with overshoot)
+   - Footer centered (DOM) + sticky Canvas + sticky Del Overlay
+   - Ignores small iOS toolbar "resize" jitters; reflows on real changes
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_MOBILE_FIXED_SQUARE_V1__) return;
-  window.__RA_MOBILE_FIXED_SQUARE_V1__ = true;
+  if (window.__RA_MOBILE_FIXED_SQUARE_V2__) return;
+  window.__RA_MOBILE_FIXED_SQUARE_V2__ = true;
 
   /* === TWEAK HERE (mobile-only knobs) ======================
-   * SIDE_MARGIN_X_PX   → horizontal page margin around the square
-   * VERTICAL_GAP_PX    → extra breathing room vs. viewport height
-   * PORTRAIT_MULT      → final size multiplier in portrait (≤1.0); bigger → closer to edges
-   * LANDSCAPE_MULT     → final size multiplier in landscape (≤1.0)
-   * MIN_SIDE_PX        → minimum visible side (safety)
+   * SIDE_MARGIN_X_PX   → horizontal margin around the square
+   * VERTICAL_GAP_PX    → breathing room vs. viewport height
+   * PORTRAIT_MULT      → final size multiplier in portrait (≤ 2.0 if upscaling is ok)
+   * LANDSCAPE_MULT     → final size multiplier in landscape (≤ 2.0)
+   * MIN_SIDE_PX        → minimum visible side
    * FRAME_PAD_PX       → equals .canvas-wrap padding * 2 (default 12px each side → 24)
    * COVER_OVERSHOOT    → >1 grows uploads slightly to avoid edge slivers (e.g., 1.03..1.08)
-   * SMALL_QUERY        → mobile breakpoint (width or short height)
+   * MAX_SCALE          → allow mild upscaling for landscape (e.g., 2.0)
+   * HEIGHT_JITTER_PX   → ignore mobile "resize" if height delta is under this (iOS URL bar)
+   * SMALL_QUERY        → mobile breakpoint (width OR short height)
    * ======================================================= */
   const SIDE_MARGIN_X_PX = 14;
   const VERTICAL_GAP_PX  = 14;
-  const PORTRAIT_MULT    = 0.98;   // ↔ bump up/down if you want portrait larger/smaller
-  const LANDSCAPE_MULT   = 2.00;   // ↔ landscape can be a bit larger
+  const PORTRAIT_MULT    = 0.98;   // you can adjust; keep <= MAX_SCALE * (base / side)
+  const LANDSCAPE_MULT   = 2.00;   // you said 2.00 felt perfect
   const MIN_SIDE_PX      = 300;
   const FRAME_PAD_PX     = 24;
   const COVER_OVERSHOOT  = 1.04;
+  const MAX_SCALE        = 2.00;   // cap CSS upscaling to keep quality acceptable
+  const HEIGHT_JITTER_PX = 120;    // ignore tiny toolbar height changes
   const SMALL_QUERY      = '(max-width: 768px), (max-height: 500px)';
 
-  const isSmall = () => window.matchMedia(SMALL_QUERY).matches;
+  /* ------------------------------------------------------- */
+
+  const isSmall    = () => window.matchMedia(SMALL_QUERY).matches;
   const isPortrait = () => window.innerHeight >= window.innerWidth;
 
   const C  = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
@@ -8104,12 +8110,22 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const wrap = document.querySelector('.canvas-wrap') || container;     // checkerboard frame
     return { c, container, wrap };
   }
-  function dockHeight(){
-    const d = $I('raMobileDock');
-    return d ? d.offsetHeight : 0;
+  function dockHeight(){ const d = $I('raMobileDock'); return d ? d.offsetHeight : 0; }
+
+  /* ---------- stable viewport (ignore tiny iOS toolbar "resizes") ---------- */
+  let lastW = 0, lastH = 0, lastO = 'p';
+  const deb = (fn, ms=120) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
+
+  function significantResize(w, h, o){
+    if (o !== lastO) return true;
+    if (Math.abs(w - lastW) > 40) return true;
+    if (Math.abs(h - lastH) > HEIGHT_JITTER_PX) return true;
+    return false;
   }
 
-  /* ---------- target visible square size (based on viewport, not preview) ---------- */
+  function rememberDims(w, h, o){ lastW = w; lastH = h; lastO = o; }
+
+  /* ---------- target visible square size (viewport-based) ---------- */
   function targetSide(){
     const wAvail = window.innerWidth  - SIDE_MARGIN_X_PX*2;
     const hAvail = window.innerHeight - dockHeight() - VERTICAL_GAP_PX;
@@ -8133,7 +8149,8 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     try { (typeof window.setZoom === 'function') ? window.setZoom(1) : c.setZoom(1); } catch(_){}
 
     const side  = targetSide();
-    const scale = Math.max(0.1, Math.min(1, side / Math.max(baseW, baseH)));
+    const need  = side / Math.max(baseW, baseH);
+    const scale = Math.max(0.1, Math.min(MAX_SCALE, need));
 
     container.style.transform = `scale(${scale})`;
 
@@ -8141,6 +8158,12 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const frameSide = Math.round(Math.max(baseW, baseH) * scale + FRAME_PAD_PX);
     wrap.style.width  = frameSide + 'px';
     wrap.style.height = frameSide + 'px';
+
+    // Ensure footer sits inside the wrap (DOM footer) — re-parent if needed
+    const footer = document.getElementById('raFooterBarFinal');
+    if (footer && footer.parentElement !== wrap){
+      try { wrap.appendChild(footer); } catch(_){}
+    }
   }
 
   /* ---------- base uploads: cover fill with slight overshoot ---------- */
@@ -8182,18 +8205,10 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   }
 
   /* ---------- Quick‑Actions Dock (uses your existing buttons/handlers) ---------- */
-  function clickById(id){
-    const el = $I(id);
-    if (el) { el.click(); return true; }
-    return false;
-  }
-  function call(fn, ...args){
-    try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; }
-  }
-  function scrollToSel(selList){
-    const el = document.querySelector(selList);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  function clickById(id){ const el = $I(id); if (el) { el.click(); return true; } return false; }
+  function call(fn, ...args){ try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; } }
+  function scrollToSel(sel){ const el = document.querySelector(sel); if (el) el.scrollIntoView({ behavior:'smooth', block:'start' }); }
+
   function scrollToTextPanel(){
     const candidates = [
       '#customText','#textPanel','#textTools','#customTextPanel',
@@ -8234,6 +8249,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
     document.body.appendChild(dock);
   }
+
   function syncDock(){
     const exists = !!$I('raMobileDock');
     if (isSmall() && !exists) buildDock();
@@ -8282,13 +8298,12 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
         const c = C(); if (!c) return;
 
         const isOverlayCandidate = (o) =>
-          !!o && !isSystem(o) && !o._isBase && o.type !== 'line' && o.type !== 'circle' ? true : false;
+          !!o && !isSystem(o) && !o._isBase && o.type !== 'line' && o.type !== 'circle';
 
         let targets = (typeof c.getActiveObjects === 'function') ? c.getActiveObjects() : [];
         targets = (targets || []).filter(isOverlayCandidate);
 
         if (!targets.length){
-          // fallback: topmost user object
           const objs = (c.getObjects() || []).filter(isOverlayCandidate);
           if (objs.length) targets = [objs[objs.length - 1]];
         }
@@ -8312,30 +8327,33 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   }
 
   /* ---------- Wire up (mobile-only) ---------- */
+  function reflow(){
+    sizeCanvasToViewport();
+    toggleBackToCanvas();
+    showDelOverlay();
+  }
+
   function boot(){
     if (!isSmall()) return;     // Desktop unaffected
     buildDock();
     ensureBackToCanvas();
     ensureDelOverlay();
 
-    // Initial sizing + slight delays (fonts/images/layout)
-    sizeCanvasToViewport();
-    setTimeout(sizeCanvasToViewport, 250);
-    setTimeout(sizeCanvasToViewport, 600);
+    // initial + settle
+    reflow();
+    setTimeout(reflow, 250);
+    setTimeout(reflow, 600);
 
     const refs = containers(); const c = refs && refs.c;
     if (c && c.on){
-      c.on('object:added',   e => { if (e && e.target) coverFillBase(e.target); setTimeout(sizeCanvasToViewport, 0); showDelOverlay(); });
-      c.on('object:removed', () => { setTimeout(sizeCanvasToViewport, 0); showDelOverlay(); });
-      c.on('object:modified',() => { setTimeout(sizeCanvasToViewport, 0); });
+      c.on('object:added',   e => { if (e && e.target) coverFillBase(e.target); setTimeout(reflow, 0); });
+      c.on('object:removed', () => setTimeout(reflow, 0));
+      c.on('object:modified',() => setTimeout(reflow, 0));
     }
 
     // Recompute when app restores/recomputes
-    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sizeCanvasToViewport, 0)); } catch(_){}
-    try { document.addEventListener('ra-collection-change', () => setTimeout(sizeCanvasToViewport, 0)); } catch(_){}
-
-    toggleBackToCanvas();
-    showDelOverlay();
+    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(reflow, 0)); } catch(_){}
+    try { document.addEventListener('ra-collection-change', () => setTimeout(reflow, 0)); } catch(_){}
   }
 
   if (document.readyState === 'loading') {
@@ -8344,67 +8362,32 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 
-  // Keep layout in sync on rotations/resizes/scroll
-  function syncAll(){
-    syncDock();
-    sizeCanvasToViewport();
-    toggleBackToCanvas();
-    showDelOverlay();
-  }
-  window.addEventListener('resize',            syncAll);
-  window.addEventListener('scroll',            () => toggleBackToCanvas(), { passive: true });
-  window.addEventListener('orientationchange', () => setTimeout(syncAll, 200));
-})();
+  // Keep layout in sync on meaningful viewport changes (ignore tiny toolbar jitters)
+  const onResizeStable = debouncedResizeCheck();
+  window.addEventListener('resize', onResizeStable);
+  window.addEventListener('orientationchange', () => {
+    // orientation truly changed — accept new dims and reflow after settle
+    rememberDims(window.innerWidth, window.innerHeight, isPortrait() ? 'p' : 'l');
+    setTimeout(reflow, 200);
+  });
 
-/* =========================================================
-   Mobile Footer Centering Patch (DOM) — mobile only
-   - Re-parent #raFooterBarFinal into .canvas-wrap
-   - Keeps it centered when resizing / rotating
-   - No impact on desktop
-   ========================================================= */
-;(() => {
-  'use strict';
-  if (window.__RA_MOBILE_FOOTER_CENTER__) return;
-  window.__RA_MOBILE_FOOTER_CENTER__ = true;
+  // Only show/hide helper on scroll; don't resize on scroll
+  window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
 
-  /* Tweak here if you ever change the breakpoint */
-  const SMALL_QUERY = '(max-width: 768px), (max-height: 500px)';
-  const isSmall = () => window.matchMedia(SMALL_QUERY).matches;
-
-  function canvasWrap() {
-    // Prefer your checkerboard wrapper; fall back to parent chain if needed
-    const wrap = document.querySelector('.canvas-wrap');
-    if (wrap) return wrap;
-    const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas.upperCanvasEl : null;
-    return c ? c.parentElement?.parentElement || c.parentElement : null;
+  function debouncedResizeCheck(){
+    const run = () => {
+      if (!isSmall()) return;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const o = isPortrait() ? 'p' : 'l';
+      if (significantResize(w, h, o)) {
+        rememberDims(w, h, o);
+        reflow();
+      }
+    };
+    return deb(run, 120);
   }
 
-  function attachFooterIntoWrap() {
-    if (!isSmall()) return;                   // desktop untouched
-    const footer = document.getElementById('raFooterBarFinal');
-    const wrap   = canvasWrap();
-    if (!footer || !wrap) return;
-
-    // Move footer into the wrapper once (so our mobile CSS can center it reliably)
-    if (footer.parentElement !== wrap) {
-      try { wrap.appendChild(footer); } catch(_) {}
-    }
-  }
-
-  function boot() {
-    attachFooterIntoWrap();
-    // Run again after common app events that may rebuild canvas / wrapper
-    try { document.addEventListener('ra-json-restore-end',  attachFooterIntoWrap); } catch(_){}
-    try { document.addEventListener('ra-collection-change', attachFooterIntoWrap); } catch(_){}
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { boot(); }, { once: true });
-  } else {
-    boot();
-  }
-
-  // Keep in sync on viewport changes
-  window.addEventListener('resize',            attachFooterIntoWrap);
-  window.addEventListener('orientationchange', () => setTimeout(attachFooterIntoWrap, 200));
+  // seed last dims so the first resize comparison has a baseline
+  rememberDims(window.innerWidth, window.innerHeight, isPortrait() ? 'p' : 'l');
 })();
