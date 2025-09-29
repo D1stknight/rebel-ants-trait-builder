@@ -8082,7 +8082,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
    * ======================================================= */
   const PREVIEW_SEL     = '#exportPreview';
   const PREVIEW_SCALE   = 1.20;   // ← make the visible canvas a bit larger than the preview (adjust)
-  const FRAME_PAD_PX    = 24;     // ← if you change .canvas-wrap padding, update this (12px * 2 by default)
+  const FRAME_PAD_PX    = 40;     // ← if you change .canvas-wrap padding, update this (12px * 2 by default)
   const VIEW_PAD_PX     = 8;      // breathing room
   const COVER_OVERSHOOT = 1.04;   // ← slightly larger than strict cover to remove tiny borders
   const SMALL_QUERY     = '(max-width: 768px), (max-height: 500px)';
