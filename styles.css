@@ -45,8 +45,8 @@ input[type=range]{width:100%}
 
 /* =========================================================
    Mobile UX Pack (presentation‑only; no logic changes)
+   - Square, centered canvas + matching checkerboard
    - Quick‑Actions Dock (always reachable)
-   - Responsive canvas wrapper
    - Larger touch targets
    - Portrait & short-height landscape support
    ========================================================= */
@@ -54,10 +54,10 @@ input[type=range]{width:100%}
 /* Touch hint for all buttons */
 button, .btn { touch-action: manipulation; }
 
-/* Show the dock + mobile refinements on narrow screens OR short-height landscape */
+/* Narrow portrait OR short-height landscape */
 @media (max-width: 768px), (max-height: 500px) {
 
-  /* If a sticky history row exists anywhere, neutralize it on mobile to avoid two bars */
+  /* If a sticky history row exists, neutralize it on mobile to avoid two bars */
   #raHistoryRow {
     position: static !important;
     background: transparent !important;
@@ -66,16 +66,23 @@ button, .btn { touch-action: manipulation; }
     margin: 0 !important;
   }
 
-  /* Fabric wraps #c in .canvas-container — make it a positioning context & scrollable */
-  .canvas-container {
-    position: relative;
-    max-width: 100vw;
-    overflow: auto;
-    -webkit-overflow-scrolling: touch;
+  /* Center the canvas section on mobile (without affecting desktop grid) */
+  .stage { display: flex; justify-content: center; }
+
+  /* Fabric wraps #c in .canvas-container. We center via the parent .canvas-wrap,
+     and allow JS to set an explicit width/height so the checkerboard matches the canvas. */
+  .canvas-wrap {
+    display: inline-block;       /* shrink-wrap to the explicit width/height we set in JS */
+    margin: 0 auto;              /* centered */
+    max-width: 100vw;            /* don’t exceed viewport */
+    overflow: visible;           /* no inner scrollbars; we scale the container */
   }
 
-  /* Your outer wrapper already scrolls; keep it fluid on small screens */
-  .canvas-wrap { max-width: 100%; }
+  /* Prepare the Fabric wrapper for CSS scaling (JS sets transform) */
+  .canvas-container {
+    transform-origin: top left;
+    will-change: transform;
+  }
 
   /* Primary actions: bigger tap targets */
   #exportPng, #openNewTab, #clearCanvas, #baseUpload, #clearUpload,
