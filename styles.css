@@ -47,7 +47,7 @@ input[type=range]{width:100%}
    MOBILE UX (presentation-only; mobile only)
    - Square, centered canvas + checkerboard that matches visible canvas
    - Quick‑Actions Dock
-   - Sticky "Canvas" jumper
+   - Sticky "Canvas" jumper + "Del Overlay" sticky
    - Portrait & short-height landscape support
    ========================================================= */
 
@@ -71,7 +71,7 @@ button, .btn { touch-action: manipulation; }
 
   /* Checkerboard frame — JS sets explicit width/height to match the visible canvas */
   .canvas-wrap {
-    position: relative;         /* ensures footer is centered and anchored inside */
+    position: relative;         /* ensures footer is centered/anchored inside */
     display: inline-block;      /* shrink-wrap to width/height from JS */
     margin: 0 auto;             /* centered */
     max-width: 100vw;
@@ -124,11 +124,10 @@ button, .btn { touch-action: manipulation; }
     padding: 8px 6px;
   }
 
-  /* Sticky "Canvas" jumper (appears when canvas is off-screen) */
-  .ra-back-to-canvas {
+  /* Sticky helpers above the dock */
+  .ra-back-to-canvas,
+  .ra-del-overlay {
     position: fixed;
-    right: 12px;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 10px); /* above dock */
     z-index: 10001;
     display: none;  /* toggled by JS */
     padding: 10px 12px;
@@ -138,7 +137,17 @@ button, .btn { touch-action: manipulation; }
     color: #e5e7eb;
     font-size: 12px;
   }
-  .ra-back-to-canvas.show { display: block; }
+  .ra-back-to-canvas.show,
+  .ra-del-overlay.show { display: block; }
+
+  .ra-back-to-canvas {
+    right: 12px;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 10px); /* above dock, right */
+  }
+  .ra-del-overlay {
+    left: 12px;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 10px);  /* above dock, left */
+  }
 
   /* Reserve space so the dock doesn’t cover content */
   body {
