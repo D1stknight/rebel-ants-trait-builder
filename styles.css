@@ -48,6 +48,7 @@ input[type=range]{width:100%}
    - Square, centered canvas + checkerboard that matches visible canvas
    - Quick‑Actions Dock
    - Sticky "Canvas" jumper + "Del Overlay" sticky
+   - Footer centered within the square (DOM footer)
    - Portrait & short-height landscape support
    ========================================================= */
 
@@ -82,6 +83,19 @@ button, .btn { touch-action: manipulation; }
   .canvas-container {
     transform-origin: top left;
     will-change: transform;
+  }
+
+  /* Footer: force horizontal centering inside the visible square */
+  #raFooterBarFinal {
+    position: absolute !important;
+    left: 50%;
+    transform: translateX(-50%) !important;
+    bottom: 12px;                 /* tweak vertical offset if you want */
+    width: auto;
+    max-width: calc(100% - 24px); /* keep some side padding inside the square */
+    text-align: center;
+    pointer-events: none;
+    z-index: 9999;
   }
 
   /* Bigger tap targets for common actions */
@@ -159,29 +173,4 @@ button, .btn { touch-action: manipulation; }
 @media (max-width: 420px) {
   .ra-mobile-dock { gap: 6px; padding: 8px 10px; }
   .ra-mobile-dock button { min-height: 42px; font-size: 12px; }
-}
-
-/* =========================================================
-   Mobile Footer Centering (DOM footer) — mobile only
-   Keeps the footer centered within the checkerboard wrapper
-   ========================================================= */
-@media (max-width: 768px), (max-height: 500px) {
-  /* Ensure wrapper is a positioning context (you likely already have this) */
-  .canvas-wrap { position: relative; }
-
-  /* Center the DOM footer bar inside the visible canvas area */
-  #raFooterBarFinal {
-    position: absolute !important;
-    /* inset from wrapper edges; change 12px if you want a different bottom padding */
-    left: 12px; 
-    right: 12px; 
-    bottom: 12px;
-    width: auto;
-    max-width: calc(100% - 24px);
-    margin: 0 auto;
-    text-align: center;
-    transform: none !important;
-    pointer-events: none;    /* keep it non-interactive */
-    z-index: 9999;           /* above the canvas; below your floating UI */
-  }
 }
