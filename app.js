@@ -8060,37 +8060,42 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   MOBILE UX PACK — Preview-Synced Canvas (mobile only)
-   - Canvas & checkerboard match the Export preview box size
-   - Quick‑Actions Dock (calls existing buttons; no logic changes)
-   - Base uploads "cover" fill the canvas with slight overshoot (adjustable)
-   - Sticky "Canvas" jumper
-   - Portrait & landscape support
+   MOBILE UX PACK — Fixed Square (mobile only)
+   - Canvas & checkerboard = same larger square (portrait + landscape)
+   - CSS-scale the Fabric wrapper (coords/export stay correct)
+   - Base uploads "cover" fill (with slight overshoot)
+   - Quick‑Actions Dock + Sticky "Canvas" + Sticky "Del Overlay"
+   - Desktop/export/watermark logic untouched
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_MOBILE_PREVIEW_SYNC_V2__) return;
-  window.__RA_MOBILE_PREVIEW_SYNC_V2__ = true;
+  if (window.__RA_MOBILE_FIXED_SQUARE_V1__) return;
+  window.__RA_MOBILE_FIXED_SQUARE_V1__ = true;
 
   /* === TWEAK HERE (mobile-only knobs) ======================
-   * PREVIEW_SEL     → selector of the Export preview <img>
-   * PREVIEW_SCALE   → multiply preview size (1.00 = same, 1.06 = +6% bigger)
-   * FRAME_PAD_PX    → equals .canvas-wrap horizontal padding * 2 (default 12px each side → 24)
-   * VIEW_PAD_PX     → breathing room against viewport edges
-   * COVER_OVERSHOOT → extra fill on uploads to remove slivers (1.00..1.10)
-   * SMALL_QUERY     → mobile breakpoint (width or short height)
+   * SIDE_MARGIN_X_PX   → horizontal page margin around the square
+   * VERTICAL_GAP_PX    → extra breathing room vs. viewport height
+   * PORTRAIT_MULT      → final size multiplier in portrait (≤1.0); bigger → closer to edges
+   * LANDSCAPE_MULT     → final size multiplier in landscape (≤1.0)
+   * MIN_SIDE_PX        → minimum visible side (safety)
+   * FRAME_PAD_PX       → equals .canvas-wrap padding * 2 (default 12px each side → 24)
+   * COVER_OVERSHOOT    → >1 grows uploads slightly to avoid edge slivers (e.g., 1.03..1.08)
+   * SMALL_QUERY        → mobile breakpoint (width or short height)
    * ======================================================= */
-  const PREVIEW_SEL     = '#exportPreview';
-  const PREVIEW_SCALE   = 1.20;   // ← make the visible canvas a bit larger than the preview (adjust)
-  const FRAME_PAD_PX    = 40;     // ← if you change .canvas-wrap padding, update this (12px * 2 by default)
-  const VIEW_PAD_PX     = 20;      // breathing room
-  const COVER_OVERSHOOT = 1.04;   // ← slightly larger than strict cover to remove tiny borders
-  const SMALL_QUERY     = '(max-width: 768px), (max-height: 500px)';
+  const SIDE_MARGIN_X_PX = 14;
+  const VERTICAL_GAP_PX  = 14;
+  const PORTRAIT_MULT    = 0.98;   // ↔ bump up/down if you want portrait larger/smaller
+  const LANDSCAPE_MULT   = 1.00;   // ↔ landscape can be a bit larger
+  const MIN_SIDE_PX      = 300;
+  const FRAME_PAD_PX     = 24;
+  const COVER_OVERSHOOT  = 1.04;
+  const SMALL_QUERY      = '(max-width: 768px), (max-height: 500px)';
 
   const isSmall = () => window.matchMedia(SMALL_QUERY).matches;
+  const isPortrait = () => window.innerHeight >= window.innerWidth;
 
-  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const $ = (id) => document.getElementById(id);
+  const C  = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $I = (id) => document.getElementById(id);
 
   /* ---------- containers ---------- */
   function containers(){
@@ -8100,28 +8105,22 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return { c, container, wrap };
   }
   function dockHeight(){
-    const d = $('raMobileDock');
+    const d = $I('raMobileDock');
     return d ? d.offsetHeight : 0;
   }
 
-  /* ---------- get square size from Export preview (the ruler) ---------- */
-  function previewSquareSize(){
-    const img = document.querySelector(PREVIEW_SEL);
-    if (img && (img.complete || img.naturalWidth)) {
-      const r = img.getBoundingClientRect();
-      const w = Math.round(r.width || img.clientWidth || 0);
-      const h = Math.round(r.height || img.clientHeight || 0);
-      const s = Math.min(w || 0, h || 0);
-      if (s && isFinite(s)) return Math.max(200, Math.floor(s * PREVIEW_SCALE));
-    }
-    // Fallback when preview isn't present yet
-    const w = Math.max(240, (document.documentElement.clientWidth || window.innerWidth) - VIEW_PAD_PX);
-    const h = Math.max(240, (window.innerHeight - dockHeight()) - VIEW_PAD_PX);
-    return Math.floor(Math.min(w, h));
+  /* ---------- target visible square size (based on viewport, not preview) ---------- */
+  function targetSide(){
+    const wAvail = window.innerWidth  - SIDE_MARGIN_X_PX*2;
+    const hAvail = window.innerHeight - dockHeight() - VERTICAL_GAP_PX;
+    let side = Math.min(wAvail, hAvail);
+    side = side * (isPortrait() ? PORTRAIT_MULT : LANDSCAPE_MULT);
+    side = Math.max(MIN_SIDE_PX, Math.floor(side));
+    return side;
   }
 
-  /* ---------- size canvas & checkerboard to match preview ---------- */
-  function sizeCanvasToPreview(){
+  /* ---------- size canvas & checkerboard to target square ---------- */
+  function sizeCanvasToViewport(){
     if (!isSmall()) return;
     const refs = containers(); if (!refs) return;
     const { c, container, wrap } = refs;
@@ -8130,25 +8129,21 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const baseH = c.getHeight() || 0;
     if (!baseW || !baseH) return;
 
-    // Keep Fabric zoom at 1; we scale visually so coords/export stay correct
-    try { if (typeof window.setZoom === 'function') window.setZoom(1); else c.setZoom(1); } catch(_){}
+    // Keep Fabric zoom at 1; visually scale the wrapper
+    try { (typeof window.setZoom === 'function') ? window.setZoom(1) : c.setZoom(1); } catch(_){}
 
-    // Target side from preview (or fallback)
-    const targetSide = previewSquareSize();             // pixels for the visible canvas (not counting wrap padding)
+    const side  = targetSide();
+    const scale = Math.max(0.1, Math.min(1, side / Math.max(baseW, baseH)));
 
-    // Scale so max(canvas dimension) visually equals targetSide, never upscale > 1
-    const scale = Math.max(0.1, Math.min(1, targetSide / Math.max(baseW, baseH)));
-
-    // Apply visual scaling to Fabric wrapper (scales lower & upper canvases together)
     container.style.transform = `scale(${scale})`;
 
-    // Make checkerboard frame the same visible size as scaled canvas + wrap padding
+    // Checkerboard frame must match visible canvas + its padding
     const frameSide = Math.round(Math.max(baseW, baseH) * scale + FRAME_PAD_PX);
     wrap.style.width  = frameSide + 'px';
     wrap.style.height = frameSide + 'px';
   }
 
-  /* ---------- base uploads "cover fill" with overshoot ---------- */
+  /* ---------- base uploads: cover fill with slight overshoot ---------- */
   function isSystem(o){
     return !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
   }
@@ -8169,7 +8164,6 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const ih = o.height || (o._originalElement && o._originalElement.height) || 1;
     if (!cw || !ch || !iw || !ih) return;
 
-    // Strict cover scale, then overshoot slightly to avoid slivers at edges
     const cover = Math.max(cw/iw, ch/ih);
     const s = cover * COVER_OVERSHOOT;
 
@@ -8187,37 +8181,34 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     }
   }
 
-  /* ---------- Quick‑Actions Dock ---------- */
+  /* ---------- Quick‑Actions Dock (uses your existing buttons/handlers) ---------- */
   function clickById(id){
-    const el = $(id);
+    const el = $I(id);
     if (el) { el.click(); return true; }
     return false;
   }
   function call(fn, ...args){
     try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; }
   }
-
-  // Scroll to TEXT section rather than adding text
+  function scrollToSel(selList){
+    const el = document.querySelector(selList);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   function scrollToTextPanel(){
-    // Try explicit IDs/selectors first (add yours if different)
     const candidates = [
-      '#customText', '#textPanel', '#textTools', '#customTextPanel',
-      '[data-panel="text"]', '.text-tools', '.text-panel'
+      '#customText','#textPanel','#textTools','#customTextPanel',
+      '[data-panel="text"]','.text-tools','.text-panel'
     ];
     for (const sel of candidates){
       const el = document.querySelector(sel);
-      if (el) { el.scrollIntoView({ behavior:'smooth', block:'start' }); return true; }
+      if (el){ el.scrollIntoView({ behavior:'smooth', block:'start' }); return true; }
     }
-    // Fallback: search for a card/section containing "Custom Text" or "Text"
-    const sections = Array.from(document.querySelectorAll('.card, .panel, section, div'));
-    const hit = sections.find(n => /custom\s*text\b|\btext\b/i.test(n.textContent||''));
-    if (hit){ hit.scrollIntoView({ behavior:'smooth', block:'start' }); return true; }
     return false;
   }
 
   function buildDock(){
     if (!isSmall()) return;
-    if ($('raMobileDock')) return;
+    if ($I('raMobileDock')) return;
 
     const dock = document.createElement('div');
     dock.id = 'raMobileDock';
@@ -8235,7 +8226,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       mk('Undo',     () => clickById('raUndoBtn')  || call(window.raHistory?.undo)),
       mk('Redo',     () => clickById('raRedoBtn')  || call(window.raHistory?.redo)),
       mk('Text',     () => scrollToTextPanel() || clickById('addTextBtn') || call(window.raAddTextPrime)),
-      mk('Overlays', () => { const el = document.querySelector('#overlayGrid, .overlay-grid, .grid'); if (el) el.scrollIntoView({ behavior:'smooth', block:'start' }); }),
+      mk('Overlays', () => scrollToSel('#overlayGrid, .overlay-grid, .grid')),
       mk('Upload',   () => clickById('baseUpload')),
       mk('Export',   () => clickById('exportPng')  || call(window.raOpenNewTabViewer)),
       mk('Clear',    () => clickById('clearCanvas')|| call(window.raSafeClear, true))
@@ -8244,15 +8235,15 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     document.body.appendChild(dock);
   }
   function syncDock(){
-    const exists = !!$('raMobileDock');
+    const exists = !!$I('raMobileDock');
     if (isSmall() && !exists) buildDock();
-    if (!isSmall() && exists) $('raMobileDock')?.remove();
+    if (!isSmall() && exists) $I('raMobileDock')?.remove();
   }
 
-  /* ---------- Sticky "Canvas" jumper ---------- */
+  /* ---------- Sticky buttons: Canvas + Delete Overlay ---------- */
   function ensureBackToCanvas(){
     if (!isSmall()) return null;
-    let btn = $('raBackToCanvas');
+    let btn = $I('raBackToCanvas');
     if (!btn){
       btn = document.createElement('button');
       btn.id = 'raBackToCanvas';
@@ -8271,10 +8262,53 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   function toggleBackToCanvas(){
     const btn = ensureBackToCanvas(); if (!btn) return;
     const refs = containers(); if (!refs) { btn.classList.remove('show'); return; }
-    const { wrap } = refs;
-    const r = wrap.getBoundingClientRect();
+    const r = refs.wrap.getBoundingClientRect();
     const fullyVisible = r.top >= 0 && r.bottom <= window.innerHeight;
     if (fullyVisible) btn.classList.remove('show'); else btn.classList.add('show');
+  }
+
+  // Remove selected overlay(s); if none selected, remove topmost non-system object (overlay/text)
+  function ensureDelOverlay(){
+    if (!isSmall()) return null;
+    let btn = $I('raDelOverlayBtn');
+    if (!btn){
+      btn = document.createElement('button');
+      btn.id = 'raDelOverlayBtn';
+      btn.className = 'ra-del-overlay';
+      btn.type = 'button';
+      btn.textContent = 'Del Overlay';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const c = C(); if (!c) return;
+
+        const isOverlayCandidate = (o) =>
+          !!o && !isSystem(o) && !o._isBase && o.type !== 'line' && o.type !== 'circle' ? true : false;
+
+        let targets = (typeof c.getActiveObjects === 'function') ? c.getActiveObjects() : [];
+        targets = (targets || []).filter(isOverlayCandidate);
+
+        if (!targets.length){
+          // fallback: topmost user object
+          const objs = (c.getObjects() || []).filter(isOverlayCandidate);
+          if (objs.length) targets = [objs[objs.length - 1]];
+        }
+
+        if (!targets.length) return;
+
+        try { targets.forEach(t => c.remove(t)); } catch(_){}
+        try { c.discardActiveObject && c.discardActiveObject(); } catch(_){}
+        try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+      });
+      document.body.appendChild(btn);
+    }
+    return btn;
+  }
+  function showDelOverlay(always=true){
+    const btn = ensureDelOverlay(); if (!btn) return;
+    if (always) { btn.classList.add('show'); return; }
+    const c = C(); if (!c) { btn.classList.remove('show'); return; }
+    const hasUserObj = (c.getObjects() || []).some(o => !isSystem(o) && !o._isBase);
+    if (hasUserObj) btn.classList.add('show'); else btn.classList.remove('show');
   }
 
   /* ---------- Wire up (mobile-only) ---------- */
@@ -8282,34 +8316,26 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     if (!isSmall()) return;     // Desktop unaffected
     buildDock();
     ensureBackToCanvas();
+    ensureDelOverlay();
 
-    // Initial sizing + delays to catch late layout/previews
-    sizeCanvasToPreview();
-    setTimeout(sizeCanvasToPreview, 250);
-    setTimeout(sizeCanvasToPreview, 600);
+    // Initial sizing + slight delays (fonts/images/layout)
+    sizeCanvasToViewport();
+    setTimeout(sizeCanvasToViewport, 250);
+    setTimeout(sizeCanvasToViewport, 600);
 
     const refs = containers(); const c = refs && refs.c;
     if (c && c.on){
-      c.on('object:added',   e => { if (e && e.target) coverFillBase(e.target); setTimeout(sizeCanvasToPreview, 0); });
-      c.on('object:removed', () => setTimeout(sizeCanvasToPreview, 0));
-      c.on('object:modified',() => setTimeout(sizeCanvasToPreview, 0));
+      c.on('object:added',   e => { if (e && e.target) coverFillBase(e.target); setTimeout(sizeCanvasToViewport, 0); showDelOverlay(); });
+      c.on('object:removed', () => { setTimeout(sizeCanvasToViewport, 0); showDelOverlay(); });
+      c.on('object:modified',() => { setTimeout(sizeCanvasToViewport, 0); });
     }
 
     // Recompute when app restores/recomputes
-    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sizeCanvasToPreview, 0)); } catch(_){}
-    try { document.addEventListener('ra-collection-change', () => setTimeout(sizeCanvasToPreview, 0)); } catch(_){}
-
-    // Sync when the Export preview loads/changes
-    const prev = document.querySelector(PREVIEW_SEL);
-    if (prev){
-      prev.addEventListener('load', () => { sizeCanvasToPreview(); }, { passive: true });
-      try {
-        const mo = new MutationObserver(() => sizeCanvasToPreview());
-        mo.observe(prev, { attributes: true, attributeFilter: ['src'] });
-      } catch(_){}
-    }
+    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sizeCanvasToViewport, 0)); } catch(_){}
+    try { document.addEventListener('ra-collection-change', () => setTimeout(sizeCanvasToViewport, 0)); } catch(_){}
 
     toggleBackToCanvas();
+    showDelOverlay();
   }
 
   if (document.readyState === 'loading') {
@@ -8321,8 +8347,9 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // Keep layout in sync on rotations/resizes/scroll
   function syncAll(){
     syncDock();
-    sizeCanvasToPreview();
+    sizeCanvasToViewport();
     toggleBackToCanvas();
+    showDelOverlay();
   }
   window.addEventListener('resize',            syncAll);
   window.addEventListener('scroll',            () => toggleBackToCanvas(), { passive: true });
