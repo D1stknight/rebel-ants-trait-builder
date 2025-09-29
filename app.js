@@ -8063,21 +8063,36 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
    MOBILE UX PACK — Preview-Synced Canvas (mobile only)
    - Canvas & checkerboard match the Export preview box size
    - Quick‑Actions Dock (calls existing buttons; no logic changes)
-   - Auto "cover" fill of base uploads to the canvas
+   - Base uploads "cover" fill the canvas with slight overshoot (adjustable)
    - Sticky "Canvas" jumper
+   - Portrait & landscape support
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_MOBILE_PREVIEW_SYNC_V1__) return;
-  window.__RA_MOBILE_PREVIEW_SYNC_V1__ = true;
+  if (window.__RA_MOBILE_PREVIEW_SYNC_V2__) return;
+  window.__RA_MOBILE_PREVIEW_SYNC_V2__ = true;
 
-  const SMALL_QUERY = '(max-width: 768px), (max-height: 500px)';
+  /* === TWEAK HERE (mobile-only knobs) ======================
+   * PREVIEW_SEL     → selector of the Export preview <img>
+   * PREVIEW_SCALE   → multiply preview size (1.00 = same, 1.06 = +6% bigger)
+   * FRAME_PAD_PX    → equals .canvas-wrap horizontal padding * 2 (default 12px each side → 24)
+   * VIEW_PAD_PX     → breathing room against viewport edges
+   * COVER_OVERSHOOT → extra fill on uploads to remove slivers (1.00..1.10)
+   * SMALL_QUERY     → mobile breakpoint (width or short height)
+   * ======================================================= */
+  const PREVIEW_SEL     = '#exportPreview';
+  const PREVIEW_SCALE   = 1.06;   // ← make the visible canvas a bit larger than the preview (adjust)
+  const FRAME_PAD_PX    = 24;     // ← if you change .canvas-wrap padding, update this (12px * 2 by default)
+  const VIEW_PAD_PX     = 8;      // breathing room
+  const COVER_OVERSHOOT = 1.04;   // ← slightly larger than strict cover to remove tiny borders
+  const SMALL_QUERY     = '(max-width: 768px), (max-height: 500px)';
+
   const isSmall = () => window.matchMedia(SMALL_QUERY).matches;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   const $ = (id) => document.getElementById(id);
 
-  /* ----------------------- containers ----------------------- */
+  /* ---------- containers ---------- */
   function containers(){
     const c = C(); if (!c || !c.upperCanvasEl) return null;
     const container = c.upperCanvasEl.parentElement;                      // .canvas-container
@@ -8089,24 +8104,23 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return d ? d.offsetHeight : 0;
   }
 
-  /* ----------------------- size from preview ----------------------- */
+  /* ---------- get square size from Export preview (the ruler) ---------- */
   function previewSquareSize(){
-    const img = $('exportPreview');                 // the preview image below Export
-    if (img && img.src){
+    const img = document.querySelector(PREVIEW_SEL);
+    if (img && (img.complete || img.naturalWidth)) {
       const r = img.getBoundingClientRect();
       const w = Math.round(r.width || img.clientWidth || 0);
       const h = Math.round(r.height || img.clientHeight || 0);
       const s = Math.min(w || 0, h || 0);
-      if (s && isFinite(s)) return s;
+      if (s && isFinite(s)) return Math.max(200, Math.floor(s * PREVIEW_SCALE));
     }
     // Fallback when preview isn't present yet
-    const pad = 24;
-    const w = Math.max(240, (document.documentElement.clientWidth || window.innerWidth) - pad);
-    const h = Math.max(240, (window.innerHeight - dockHeight()) - pad);
-    return Math.min(w, h);
+    const w = Math.max(240, (document.documentElement.clientWidth || window.innerWidth) - VIEW_PAD_PX);
+    const h = Math.max(240, (window.innerHeight - dockHeight()) - VIEW_PAD_PX);
+    return Math.floor(Math.min(w, h));
   }
 
-  /* ----------------------- make canvas match preview ----------------------- */
+  /* ---------- size canvas & checkerboard to match preview ---------- */
   function sizeCanvasToPreview(){
     if (!isSmall()) return;
     const refs = containers(); if (!refs) return;
@@ -8116,27 +8130,25 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const baseH = c.getHeight() || 0;
     if (!baseW || !baseH) return;
 
-    // Keep Fabric zoom neutral; we'll scale visually so coords/export stay correct
+    // Keep Fabric zoom at 1; we scale visually so coords/export stay correct
     try { if (typeof window.setZoom === 'function') window.setZoom(1); else c.setZoom(1); } catch(_){}
 
-    // Target square side from preview
-    const target = Math.max(200, previewSquareSize());
+    // Target side from preview (or fallback)
+    const targetSide = previewSquareSize();             // pixels for the visible canvas (not counting wrap padding)
 
-    // Compute scale to make the visible canvas side match the preview side,
-    // and never upscale above 1 (keeps sharpness & interaction)
-    const scale = Math.max(0.1, Math.min(1, target / Math.max(baseW, baseH)));
+    // Scale so max(canvas dimension) visually equals targetSide, never upscale > 1
+    const scale = Math.max(0.1, Math.min(1, targetSide / Math.max(baseW, baseH)));
 
-    // Apply visual scaling to the Fabric wrapper (scales both lower & upper canvases)
+    // Apply visual scaling to Fabric wrapper (scales lower & upper canvases together)
     container.style.transform = `scale(${scale})`;
 
-    // Checkerboard frame size must match the visible canvas + its padding (12px * 2)
-    const framePad = 24; // .canvas-wrap has 12px padding on each side
-    const frameSide = Math.round(Math.max(baseW, baseH) * scale + framePad);
+    // Make checkerboard frame the same visible size as scaled canvas + wrap padding
+    const frameSide = Math.round(Math.max(baseW, baseH) * scale + FRAME_PAD_PX);
     wrap.style.width  = frameSide + 'px';
     wrap.style.height = frameSide + 'px';
   }
 
-  /* ----------------------- base uploads: cover fill ----------------------- */
+  /* ---------- base uploads "cover fill" with overshoot ---------- */
   function isSystem(o){
     return !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
   }
@@ -8157,8 +8169,9 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const ih = o.height || (o._originalElement && o._originalElement.height) || 1;
     if (!cw || !ch || !iw || !ih) return;
 
-    // "Cover" the canvas: square art matches exactly; non-square is centered and may crop
-    const s = Math.max(cw/iw, ch/ih);
+    // Strict cover scale, then overshoot slightly to avoid slivers at edges
+    const cover = Math.max(cw/iw, ch/ih);
+    const s = cover * COVER_OVERSHOOT;
 
     if (isFinite(s) && s > 0){
       o.set({ originX: 'center', originY: 'center', scaleX: s, scaleY: s });
@@ -8174,7 +8187,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     }
   }
 
-  /* ----------------------- Quick‑Actions Dock ----------------------- */
+  /* ---------- Quick‑Actions Dock ---------- */
   function clickById(id){
     const el = $(id);
     if (el) { el.click(); return true; }
@@ -8183,20 +8196,25 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   function call(fn, ...args){
     try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; }
   }
-  function scrollToSel(sel){
-    const el = document.querySelector(sel);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // Scroll to TEXT section rather than adding text
+  function scrollToTextPanel(){
+    // Try explicit IDs/selectors first (add yours if different)
+    const candidates = [
+      '#customText', '#textPanel', '#textTools', '#customTextPanel',
+      '[data-panel="text"]', '.text-tools', '.text-panel'
+    ];
+    for (const sel of candidates){
+      const el = document.querySelector(sel);
+      if (el) { el.scrollIntoView({ behavior:'smooth', block:'start' }); return true; }
+    }
+    // Fallback: search for a card/section containing "Custom Text" or "Text"
+    const sections = Array.from(document.querySelectorAll('.card, .panel, section, div'));
+    const hit = sections.find(n => /custom\s*text\b|\btext\b/i.test(n.textContent||''));
+    if (hit){ hit.scrollIntoView({ behavior:'smooth', block:'start' }); return true; }
+    return false;
   }
-  function triggerAddText(){
-    if (clickById('addTextBtn')) return;
-    if (clickById('raAddTextBtn')) return;
-    if (typeof window.raAddTextPrime === 'function'){ window.raAddTextPrime(); return; }
-    if (window.raText && typeof window.raText.add === 'function'){ window.raText.add(); return; }
-    const btn = Array.from(document.querySelectorAll('button'))
-      .find(b => /add\s*text|text/i.test((b.textContent||'') + ' ' + (b.id||'')));
-    if (btn){ btn.click(); return; }
-    document.dispatchEvent(new CustomEvent('ra-mobile-add-text'));
-  }
+
   function buildDock(){
     if (!isSmall()) return;
     if ($('raMobileDock')) return;
@@ -8216,8 +8234,8 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     dock.append(
       mk('Undo',     () => clickById('raUndoBtn')  || call(window.raHistory?.undo)),
       mk('Redo',     () => clickById('raRedoBtn')  || call(window.raHistory?.redo)),
-      mk('Text',     () => triggerAddText()),
-      mk('Overlays', () => scrollToSel('#overlayGrid, .overlay-grid, .grid')),
+      mk('Text',     () => scrollToTextPanel() || clickById('addTextBtn') || call(window.raAddTextPrime)),
+      mk('Overlays', () => { const el = document.querySelector('#overlayGrid, .overlay-grid, .grid'); if (el) el.scrollIntoView({ behavior:'smooth', block:'start' }); }),
       mk('Upload',   () => clickById('baseUpload')),
       mk('Export',   () => clickById('exportPng')  || call(window.raOpenNewTabViewer)),
       mk('Clear',    () => clickById('clearCanvas')|| call(window.raSafeClear, true))
@@ -8231,7 +8249,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     if (!isSmall() && exists) $('raMobileDock')?.remove();
   }
 
-  /* ----------------------- Sticky "Canvas" jumper ----------------------- */
+  /* ---------- Sticky "Canvas" jumper ---------- */
   function ensureBackToCanvas(){
     if (!isSmall()) return null;
     let btn = $('raBackToCanvas');
@@ -8259,18 +8277,17 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     if (fullyVisible) btn.classList.remove('show'); else btn.classList.add('show');
   }
 
-  /* ----------------------- Wire up (mobile-only) ----------------------- */
+  /* ---------- Wire up (mobile-only) ---------- */
   function boot(){
     if (!isSmall()) return;     // Desktop unaffected
     buildDock();
     ensureBackToCanvas();
 
-    // Initial sizing + slight delays to catch late layout/previews
+    // Initial sizing + delays to catch late layout/previews
     sizeCanvasToPreview();
     setTimeout(sizeCanvasToPreview, 250);
     setTimeout(sizeCanvasToPreview, 600);
 
-    // When objects change, keep size & fill in sync
     const refs = containers(); const c = refs && refs.c;
     if (c && c.on){
       c.on('object:added',   e => { if (e && e.target) coverFillBase(e.target); setTimeout(sizeCanvasToPreview, 0); });
@@ -8278,15 +8295,14 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       c.on('object:modified',() => setTimeout(sizeCanvasToPreview, 0));
     }
 
-    // Recompute when your app restores/recomputes
+    // Recompute when app restores/recomputes
     try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sizeCanvasToPreview, 0)); } catch(_){}
     try { document.addEventListener('ra-collection-change', () => setTimeout(sizeCanvasToPreview, 0)); } catch(_){}
 
-    // When the Export preview loads/changes, sync canvas to it
-    const prev = $('exportPreview');
+    // Sync when the Export preview loads/changes
+    const prev = document.querySelector(PREVIEW_SEL);
     if (prev){
       prev.addEventListener('load', () => { sizeCanvasToPreview(); }, { passive: true });
-      // If your code swaps src via JS, MutationObserver ensures we catch it
       try {
         const mo = new MutationObserver(() => sizeCanvasToPreview());
         mo.observe(prev, { attributes: true, attributeFilter: ['src'] });
