@@ -8058,3 +8058,67 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
   bind();
 })();
+
+/* === Mobile Quick‑Actions Dock (no logic changes) === */
+;(() => {
+  if (window.__RA_MOBILE_DOCK__) return;
+  window.__RA_MOBILE_DOCK__ = true;
+
+  const isSmall = () => window.matchMedia('(max-width: 768px)').matches;
+
+  function clickById(id){
+    const el = document.getElementById(id);
+    if (el) { el.click(); return true; }
+    return false;
+  }
+  function call(fn, ...args){
+    try { return (typeof fn === 'function') ? fn(...args) : false; }
+    catch(_){ return false; }
+  }
+  function scrollToSel(selList){
+    const el = document.querySelector(selList);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function buildDock(){
+    if (!isSmall()) return;
+    if (document.getElementById('raMobileDock')) return;
+
+    const dock = document.createElement('div');
+    dock.id = 'raMobileDock';
+    dock.className = 'ra-mobile-dock';
+
+    const mk = (label, onTap) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onTap(); });
+      return b;
+    };
+
+    dock.append(
+      mk('Undo',     () => clickById('raUndoBtn')  || call(window.raHistory?.undo)),
+      mk('Redo',     () => clickById('raRedoBtn')  || call(window.raHistory?.redo)),
+      mk('Text',     () => clickById('addTextBtn') || call(window.raAddTextPrime)), // falls back to your text add API if present
+      mk('Overlays', () => scrollToSel('#overlayGrid, .overlay-grid, .grid')),       // jumps to overlays grid section
+      mk('Upload',   () => clickById('baseUpload')),                                  // opens OS picker
+      mk('Export',   () => clickById('exportPng')   || call(window.raOpenNewTabViewer)),
+      mk('Clear',    () => clickById('clearCanvas') || call(window.raSafeClear, true))
+    );
+
+    document.body.appendChild(dock);
+
+    // Rebuild if screen size changes
+    window.addEventListener('resize', () => {
+      const exists = !!document.getElementById('raMobileDock');
+      if (isSmall() && !exists) buildDock();
+      if (!isSmall() && exists) document.getElementById('raMobileDock')?.remove();
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', buildDock, { once: true });
+  } else {
+    buildDock();
+  }
+})();
