@@ -42,3 +42,65 @@ input[type=range]{width:100%}
 .ra-collection-row .ra-mini{opacity:.75; font-size:12px}
 .ra-collection-row select{min-width:200px}
 .ra-collection-row #ra-col-using{flex-basis:100%; font-size:12px; opacity:.7}
+
+/* === Mobile additions (presentation-only) === */
+
+/* Smoother touch defaults (applies everywhere) */
+button, .btn { touch-action: manipulation; }
+
+/* Handset/tablet layout refinements */
+@media (max-width: 768px) {
+  /* You already collapse .app at 1100px; here we tighten spacing further on small screens */
+  .app { grid-template-columns: 1fr; gap: 12px; padding: 12px; height: auto; }
+
+  /* Fabric injects .canvas-container around #c; make sure it's a positioning context
+     so the footer (inside the canvas) anchors correctly, and allow touch scrolling */
+  .canvas-container {
+    position: relative;
+    max-width: 100vw;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Your wrapper already scrolls; keep it fluid on small screens */
+  .canvas-wrap { max-width: 100%; }
+
+  /* Sticky action row (Undo/Redo/Save/Load/Clear) — stays reachable with a thumb */
+  #raHistoryRow {
+    position: sticky;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 0px);
+    z-index: 1000;
+    background: rgba(13,14,19,.85);
+    backdrop-filter: blur(6px);
+    padding: 8px;
+    margin: 0 -8px;          /* stretch to edges if the parent has padding */
+    display: flex;
+    gap: 8px;
+  }
+  #raHistoryRow .btn,
+  #raUndoBtn, #raRedoBtn, #raSaveDraftBtn, #raLoadDraftBtn, #raClearDraftBtn {
+    flex: 1 1 auto;
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  /* Bigger touch targets for primary actions */
+  #exportPng, #openNewTab, #clearCanvas, #baseUpload, #clearUpload,
+  #zoomIn, #zoomOut, #zoomReset, #canvasSize {
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  /* Responsive overlay grid: let cards reflow naturally */
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 8px;
+  }
+  .grid .tile { min-height: 96px; }
+}
+
+/* Ultra-small phones */
+@media (max-width: 420px) {
+  #raHistoryRow { padding: 6px; gap: 6px; }
+  #raHistoryRow .btn { font-size: 13px; min-height: 42px; }
+}
