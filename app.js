@@ -8355,3 +8355,56 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   window.addEventListener('scroll',            () => toggleBackToCanvas(), { passive: true });
   window.addEventListener('orientationchange', () => setTimeout(syncAll, 200));
 })();
+
+/* =========================================================
+   Mobile Footer Centering Patch (DOM) — mobile only
+   - Re-parent #raFooterBarFinal into .canvas-wrap
+   - Keeps it centered when resizing / rotating
+   - No impact on desktop
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_MOBILE_FOOTER_CENTER__) return;
+  window.__RA_MOBILE_FOOTER_CENTER__ = true;
+
+  /* Tweak here if you ever change the breakpoint */
+  const SMALL_QUERY = '(max-width: 768px), (max-height: 500px)';
+  const isSmall = () => window.matchMedia(SMALL_QUERY).matches;
+
+  function canvasWrap() {
+    // Prefer your checkerboard wrapper; fall back to parent chain if needed
+    const wrap = document.querySelector('.canvas-wrap');
+    if (wrap) return wrap;
+    const c = (window.canvas && window.canvas.upperCanvasEl) ? window.canvas.upperCanvasEl : null;
+    return c ? c.parentElement?.parentElement || c.parentElement : null;
+  }
+
+  function attachFooterIntoWrap() {
+    if (!isSmall()) return;                   // desktop untouched
+    const footer = document.getElementById('raFooterBarFinal');
+    const wrap   = canvasWrap();
+    if (!footer || !wrap) return;
+
+    // Move footer into the wrapper once (so our mobile CSS can center it reliably)
+    if (footer.parentElement !== wrap) {
+      try { wrap.appendChild(footer); } catch(_) {}
+    }
+  }
+
+  function boot() {
+    attachFooterIntoWrap();
+    // Run again after common app events that may rebuild canvas / wrapper
+    try { document.addEventListener('ra-json-restore-end',  attachFooterIntoWrap); } catch(_){}
+    try { document.addEventListener('ra-collection-change', attachFooterIntoWrap); } catch(_){}
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { boot(); }, { once: true });
+  } else {
+    boot();
+  }
+
+  // Keep in sync on viewport changes
+  window.addEventListener('resize',            attachFooterIntoWrap);
+  window.addEventListener('orientationchange', () => setTimeout(attachFooterIntoWrap, 200));
+})();
