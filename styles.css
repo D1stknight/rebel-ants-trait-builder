@@ -44,11 +44,11 @@ input[type=range]{width:100%}
 .ra-collection-row #ra-col-using{flex-basis:100%; font-size:12px; opacity:.7}
 
 /* =========================================================
-   MOBILE UX (presentation-only)
-   - Square, centered canvas + matching checkerboard
+   MOBILE UX (presentation-only; mobile only)
+   - Square, centered canvas + checkerboard that matches the preview box
    - Quick‑Actions Dock
    - Sticky "Canvas" jumper
-   - Portrait & short-height landscape only
+   - Portrait & short-height landscape support
    ========================================================= */
 
 /* Touch hint for all buttons */
@@ -66,19 +66,18 @@ button, .btn { touch-action: manipulation; }
     margin: 0 !important;
   }
 
-  /* Center the canvas section without altering desktop grid */
+  /* Center the canvas section on mobile without changing desktop grid */
   .stage { display: flex; justify-content: center; }
 
-  /* Outer checkerboard frame. JS will set explicit width/height to match the scaled canvas. */
+  /* Checkerboard frame — JS sets explicit width/height to equal the preview box */
   .canvas-wrap {
-    display: inline-block;     /* shrink-wrap to width/height below */
+    display: inline-block;     /* shrink-wrap to width/height from JS */
     margin: 0 auto;            /* centered */
     max-width: 100vw;
-    overflow: visible;         /* no inner scrollbars on mobile */
+    overflow: visible;         /* no inner scrollbars */
   }
 
-  /* Fabric wrapper (contains lower/upper canvases).
-     We scale this with CSS so the visible canvas grows/shrinks as one piece. */
+  /* Fabric wrapper: we scale this visually (not Fabric zoom) */
   .canvas-container {
     transform-origin: top left;
     will-change: transform;
