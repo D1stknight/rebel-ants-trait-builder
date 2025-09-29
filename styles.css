@@ -45,7 +45,7 @@ input[type=range]{width:100%}
 
 /* =========================================================
    MOBILE UX (presentation-only; mobile only)
-   - Square, centered canvas + checkerboard that matches the preview box
+   - Square, centered canvas + checkerboard that matches visible canvas
    - Quick‑Actions Dock
    - Sticky "Canvas" jumper
    - Portrait & short-height landscape support
@@ -69,12 +69,13 @@ button, .btn { touch-action: manipulation; }
   /* Center the canvas section on mobile without changing desktop grid */
   .stage { display: flex; justify-content: center; }
 
-  /* Checkerboard frame — JS sets explicit width/height to equal the preview box */
+  /* Checkerboard frame — JS sets explicit width/height to match the visible canvas */
   .canvas-wrap {
-    display: inline-block;     /* shrink-wrap to width/height from JS */
-    margin: 0 auto;            /* centered */
+    position: relative;         /* ensures footer is centered and anchored inside */
+    display: inline-block;      /* shrink-wrap to width/height from JS */
+    margin: 0 auto;             /* centered */
     max-width: 100vw;
-    overflow: visible;         /* no inner scrollbars */
+    overflow: visible;          /* no inner scrollbars */
   }
 
   /* Fabric wrapper: we scale this visually (not Fabric zoom) */
