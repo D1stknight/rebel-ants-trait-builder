@@ -8060,34 +8060,123 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   MOBILE UX PACK (portrait & landscape) — JS (mobile-only)
+   MOBILE UX PACK — Preview-Synced Canvas (mobile only)
+   - Canvas & checkerboard match the Export preview box size
    - Quick‑Actions Dock (calls existing buttons; no logic changes)
-   - Square, centered canvas with matching checkerboard size
-   - CSS scale of Fabric wrapper (consistent size visually)
-   - Base uploads auto-fill canvas (square tokens will match exactly)
-   - Sticky "Canvas" jumper to scroll back to canvas section
+   - Auto "cover" fill of base uploads to the canvas
+   - Sticky "Canvas" jumper
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_MOBILE_PACK_V4__) return;
-  window.__RA_MOBILE_PACK_V4__ = true;
+  if (window.__RA_MOBILE_PREVIEW_SYNC_V1__) return;
+  window.__RA_MOBILE_PREVIEW_SYNC_V1__ = true;
 
   const SMALL_QUERY = '(max-width: 768px), (max-height: 500px)';
   const isSmall = () => window.matchMedia(SMALL_QUERY).matches;
 
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $ = (id) => document.getElementById(id);
 
-  /* ----------------------- helpers: containers ----------------------- */
+  /* ----------------------- containers ----------------------- */
   function containers(){
     const c = C(); if (!c || !c.upperCanvasEl) return null;
     const container = c.upperCanvasEl.parentElement;                      // .canvas-container
     const wrap = document.querySelector('.canvas-wrap') || container;     // checkerboard frame
     return { c, container, wrap };
   }
+  function dockHeight(){
+    const d = $('raMobileDock');
+    return d ? d.offsetHeight : 0;
+  }
+
+  /* ----------------------- size from preview ----------------------- */
+  function previewSquareSize(){
+    const img = $('exportPreview');                 // the preview image below Export
+    if (img && img.src){
+      const r = img.getBoundingClientRect();
+      const w = Math.round(r.width || img.clientWidth || 0);
+      const h = Math.round(r.height || img.clientHeight || 0);
+      const s = Math.min(w || 0, h || 0);
+      if (s && isFinite(s)) return s;
+    }
+    // Fallback when preview isn't present yet
+    const pad = 24;
+    const w = Math.max(240, (document.documentElement.clientWidth || window.innerWidth) - pad);
+    const h = Math.max(240, (window.innerHeight - dockHeight()) - pad);
+    return Math.min(w, h);
+  }
+
+  /* ----------------------- make canvas match preview ----------------------- */
+  function sizeCanvasToPreview(){
+    if (!isSmall()) return;
+    const refs = containers(); if (!refs) return;
+    const { c, container, wrap } = refs;
+
+    const baseW = c.getWidth()  || 0;
+    const baseH = c.getHeight() || 0;
+    if (!baseW || !baseH) return;
+
+    // Keep Fabric zoom neutral; we'll scale visually so coords/export stay correct
+    try { if (typeof window.setZoom === 'function') window.setZoom(1); else c.setZoom(1); } catch(_){}
+
+    // Target square side from preview
+    const target = Math.max(200, previewSquareSize());
+
+    // Compute scale to make the visible canvas side match the preview side,
+    // and never upscale above 1 (keeps sharpness & interaction)
+    const scale = Math.max(0.1, Math.min(1, target / Math.max(baseW, baseH)));
+
+    // Apply visual scaling to the Fabric wrapper (scales both lower & upper canvases)
+    container.style.transform = `scale(${scale})`;
+
+    // Checkerboard frame size must match the visible canvas + its padding (12px * 2)
+    const framePad = 24; // .canvas-wrap has 12px padding on each side
+    const frameSide = Math.round(Math.max(baseW, baseH) * scale + framePad);
+    wrap.style.width  = frameSide + 'px';
+    wrap.style.height = frameSide + 'px';
+  }
+
+  /* ----------------------- base uploads: cover fill ----------------------- */
+  function isSystem(o){
+    return !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
+  }
+  function looksLikeBaseImage(o){
+    if (!o) return false;
+    if (o._isBase) return true;
+    return (o.type === 'image' && !isSystem(o));
+  }
+  function coverFillBase(o){
+    if (!isSmall()) return;
+    const refs = containers(); if (!refs || !o) return;
+    const { c } = refs;
+    if (!looksLikeBaseImage(o)) return;
+
+    const cw = c.getWidth()  || 0;
+    const ch = c.getHeight() || 0;
+    const iw = o.width  || (o._originalElement && o._originalElement.width)  || 1;
+    const ih = o.height || (o._originalElement && o._originalElement.height) || 1;
+    if (!cw || !ch || !iw || !ih) return;
+
+    // "Cover" the canvas: square art matches exactly; non-square is centered and may crop
+    const s = Math.max(cw/iw, ch/ih);
+
+    if (isFinite(s) && s > 0){
+      o.set({ originX: 'center', originY: 'center', scaleX: s, scaleY: s });
+      try {
+        if (typeof o.setPositionByOrigin === 'function') {
+          o.setPositionByOrigin(new fabric.Point(cw/2, ch/2), 'center', 'center');
+        } else {
+          o.left = cw/2; o.top = ch/2;
+        }
+        o.setCoords();
+      } catch(_){}
+      try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+    }
+  }
 
   /* ----------------------- Quick‑Actions Dock ----------------------- */
   function clickById(id){
-    const el = document.getElementById(id);
+    const el = $(id);
     if (el) { el.click(); return true; }
     return false;
   }
@@ -8110,7 +8199,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   }
   function buildDock(){
     if (!isSmall()) return;
-    if (document.getElementById('raMobileDock')) return;
+    if ($('raMobileDock')) return;
 
     const dock = document.createElement('div');
     dock.id = 'raMobileDock';
@@ -8137,93 +8226,15 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     document.body.appendChild(dock);
   }
   function syncDock(){
-    const exists = !!document.getElementById('raMobileDock');
+    const exists = !!$('raMobileDock');
     if (isSmall() && !exists) buildDock();
-    if (!isSmall() && exists) document.getElementById('raMobileDock')?.remove();
-  }
-
-  /* ----------------------- Size, center, and match frames ----------------------- */
-  // We keep Fabric zoom at 1 for correctness, and visually scale the entire .canvas-container
-  // with CSS transform. Then we set .canvas-wrap width/height to the scaled canvas size + its padding,
-  // so the checkerboard frame exactly matches the visible canvas.
-  function dockHeight(){
-    const d = document.getElementById('raMobileDock');
-    return d ? d.offsetHeight : 0;
-  }
-
-  function sizeAndCenterCanvas(){
-    if (!isSmall()) return;
-    const refs = containers(); if (!refs) return;
-    const { c, container, wrap } = refs;
-
-    const baseW = c.getWidth()  || 0;
-    const baseH = c.getHeight() || 0;
-    if (!baseW || !baseH) return;
-
-    // Ensure Fabric zoom is neutral (we use CSS scale)
-    try { if (typeof window.setZoom === 'function') window.setZoom(1); else c.setZoom(1); } catch(_){}
-
-    const pad = 8;   // less padding => larger visual canvas
-    const rect = wrap.getBoundingClientRect ? wrap.getBoundingClientRect() : { top: 0, height: wrap.clientHeight||0 };
-    const availW = Math.max(200, Math.min(window.innerWidth,  (wrap.clientWidth || window.innerWidth)) - pad);
-    const availH = Math.max(240, window.innerHeight - rect.top - dockHeight() - pad);
-
-    // Scale to fit both width and height; don't upscale above 1
-    const scale = Math.max(0.1, Math.min(1, availW / baseW, availH / baseH));
-
-    // Apply CSS scale to Fabric wrapper
-    container.style.transform = `scale(${scale})`;
-
-    // Match checkerboard to the *scaled* canvas size + its 12px padding on each side
-    const framePad = 24; // .canvas-wrap has padding: 12px  (12 * 2)
-    const frameW = Math.round(baseW * scale + framePad);
-    const frameH = Math.round(baseH * scale + framePad);
-    wrap.style.width  = frameW + 'px';
-    wrap.style.height = frameH + 'px';
-  }
-
-  /* ----------------------- Base uploads: auto-fill canvas ----------------------- */
-  function isSystem(o){
-    return !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
-  }
-  function looksLikeBaseImage(o){
-    if (!o) return false;
-    if (o._isBase) return true;
-    return (o.type === 'image' && !isSystem(o));
-  }
-  function fillBaseToCanvas(o){
-    if (!isSmall()) return;
-    const refs = containers(); if (!refs || !o) return;
-    const { c } = refs;
-    if (!looksLikeBaseImage(o)) return;
-
-    const cw = c.getWidth()  || 0;
-    const ch = c.getHeight() || 0;
-    const iw = o.width  || (o._originalElement && o._originalElement.width)  || 1;
-    const ih = o.height || (o._originalElement && o._originalElement.height) || 1;
-    if (!cw || !ch || !iw || !ih) return;
-
-    // "Cover" the canvas: square tokens will exactly match; non-square images may crop evenly
-    const s = Math.max(cw/iw, ch/ih);
-
-    if (isFinite(s) && s > 0){
-      o.set({ originX: 'center', originY: 'center', scaleX: s, scaleY: s });
-      try {
-        if (typeof o.setPositionByOrigin === 'function') {
-          o.setPositionByOrigin(new fabric.Point(cw/2, ch/2), 'center', 'center');
-        } else {
-          o.left = cw/2; o.top = ch/2;
-        }
-        o.setCoords();
-      } catch(_){}
-      try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
-    }
+    if (!isSmall() && exists) $('raMobileDock')?.remove();
   }
 
   /* ----------------------- Sticky "Canvas" jumper ----------------------- */
   function ensureBackToCanvas(){
     if (!isSmall()) return null;
-    let btn = document.getElementById('raBackToCanvas');
+    let btn = $('raBackToCanvas');
     if (!btn){
       btn = document.createElement('button');
       btn.id = 'raBackToCanvas';
@@ -8252,21 +8263,37 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   function boot(){
     if (!isSmall()) return;     // Desktop unaffected
     buildDock();
-    sizeAndCenterCanvas();      // initial
-    setTimeout(sizeAndCenterCanvas, 250);
-    setTimeout(sizeAndCenterCanvas, 600);
     ensureBackToCanvas();
-    toggleBackToCanvas();
 
+    // Initial sizing + slight delays to catch late layout/previews
+    sizeCanvasToPreview();
+    setTimeout(sizeCanvasToPreview, 250);
+    setTimeout(sizeCanvasToPreview, 600);
+
+    // When objects change, keep size & fill in sync
     const refs = containers(); const c = refs && refs.c;
     if (c && c.on){
-      c.on('object:added',   e => { if (e && e.target) fillBaseToCanvas(e.target); setTimeout(sizeAndCenterCanvas, 0); });
-      c.on('object:removed', () => setTimeout(sizeAndCenterCanvas, 0));
-      c.on('object:modified',() => setTimeout(sizeAndCenterCanvas, 0));
+      c.on('object:added',   e => { if (e && e.target) coverFillBase(e.target); setTimeout(sizeCanvasToPreview, 0); });
+      c.on('object:removed', () => setTimeout(sizeCanvasToPreview, 0));
+      c.on('object:modified',() => setTimeout(sizeCanvasToPreview, 0));
     }
 
-    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sizeAndCenterCanvas, 0)); } catch(_){}
-    try { document.addEventListener('ra-collection-change', () => setTimeout(sizeAndCenterCanvas, 0)); } catch(_){}
+    // Recompute when your app restores/recomputes
+    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sizeCanvasToPreview, 0)); } catch(_){}
+    try { document.addEventListener('ra-collection-change', () => setTimeout(sizeCanvasToPreview, 0)); } catch(_){}
+
+    // When the Export preview loads/changes, sync canvas to it
+    const prev = $('exportPreview');
+    if (prev){
+      prev.addEventListener('load', () => { sizeCanvasToPreview(); }, { passive: true });
+      // If your code swaps src via JS, MutationObserver ensures we catch it
+      try {
+        const mo = new MutationObserver(() => sizeCanvasToPreview());
+        mo.observe(prev, { attributes: true, attributeFilter: ['src'] });
+      } catch(_){}
+    }
+
+    toggleBackToCanvas();
   }
 
   if (document.readyState === 'loading') {
@@ -8275,9 +8302,10 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 
+  // Keep layout in sync on rotations/resizes/scroll
   function syncAll(){
     syncDock();
-    sizeAndCenterCanvas();
+    sizeCanvasToPreview();
     toggleBackToCanvas();
   }
   window.addEventListener('resize',            syncAll);
