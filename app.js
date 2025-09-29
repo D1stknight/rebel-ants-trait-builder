@@ -8060,17 +8060,22 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   Mobile Quick‑Actions Dock (no logic changes)
-   - Always-on, thumb‑reachable actions
-   - Appears on narrow portrait OR short-height landscape
+   MOBILE UX PACK (portrait & landscape) — JS
+   - Quick‑Actions Dock (no logic changes; calls your existing buttons)
+   - Fit canvas to viewport on mobile (auto zoom)
+   - Scale base uploads to fit canvas on mobile
    ========================================================= */
 ;(() => {
-  if (window.__RA_MOBILE_DOCK__) return;
-  window.__RA_MOBILE_DOCK__ = true;
+  'use strict';
+  if (window.__RA_MOBILE_PACK_V2__) return;
+  window.__RA_MOBILE_PACK_V2__ = true;
 
-  const smallQuery = '(max-width: 768px), (max-height: 500px)';
-  const isSmall = () => window.matchMedia(smallQuery).matches;
+  const SMALL_QUERY = '(max-width: 768px), (max-height: 500px)';
+  const isSmall = () => window.matchMedia(SMALL_QUERY).matches;
 
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  /* ----------------------- Quick‑Actions Dock ----------------------- */
   function clickById(id){
     const el = document.getElementById(id);
     if (el) { el.click(); return true; }
@@ -8079,9 +8084,22 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   function call(fn, ...args){
     try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; }
   }
-  function scrollToSel(selList){
-    const el = document.querySelector(selList);
+  function scrollToSel(sel){
+    const el = document.querySelector(sel);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function triggerAddText(){
+    // Try common hooks first
+    if (clickById('addTextBtn')) return;
+    if (clickById('raAddTextBtn')) return;
+    if (typeof window.raAddTextPrime === 'function'){ window.raAddTextPrime(); return; }
+    if (window.raText && typeof window.raText.add === 'function'){ window.raText.add(); return; }
+    // Try any button that looks like "Add Text"
+    const btn = Array.from(document.querySelectorAll('button'))
+      .find(b => /add\s*text|text/i.test((b.textContent||'') + ' ' + (b.id||'')));
+    if (btn){ btn.click(); return; }
+    // Last‑resort custom signal (optional listeners can hook this)
+    document.dispatchEvent(new CustomEvent('ra-mobile-add-text'));
   }
 
   function buildDock(){
@@ -8103,7 +8121,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     dock.append(
       mk('Undo',     () => clickById('raUndoBtn')  || call(window.raHistory?.undo)),
       mk('Redo',     () => clickById('raRedoBtn')  || call(window.raHistory?.redo)),
-      mk('Text',     () => clickById('addTextBtn') || call(window.raAddTextPrime)),
+      mk('Text',     () => triggerAddText()),
       mk('Overlays', () => scrollToSel('#overlayGrid, .overlay-grid, .grid')),
       mk('Upload',   () => clickById('baseUpload')),
       mk('Export',   () => clickById('exportPng')  || call(window.raOpenNewTabViewer)),
@@ -8119,52 +8137,88 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     if (!isSmall() && exists) document.getElementById('raMobileDock')?.remove();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { buildDock(); }, { once: true });
-  } else {
-    buildDock();
+  /* ----------------------- Fit canvas to viewport ----------------------- */
+  function getDockHeight(){
+    const d = document.getElementById('raMobileDock');
+    return d ? d.offsetHeight : 0;
   }
 
-  window.addEventListener('resize', syncDock);
-  window.addEventListener('orientationchange', () => setTimeout(syncDock, 200));
-})();
-
-/* =========================================================
-   Mobile Fit‑to‑Width (auto zoom)
-   - Presentation‑only: computes a zoom so canvas fits the viewport width
-   - Never upscales above 100%
-   ========================================================= */
-;(() => {
-  if (window.__RA_MOBILE_FIT__) return;
-  window.__RA_MOBILE_FIT__ = true;
-
-  const smallQuery = '(max-width: 768px), (max-height: 500px)';
-  const isSmall = () => window.matchMedia(smallQuery).matches;
-
-  function fitToWidth(){
+  function fitCanvasToViewport(){
     if (!isSmall()) return;
-    const c = window.canvas;
-    if (!c || !c.upperCanvasEl) return;
+    const c = C(); if (!c || !c.upperCanvasEl) return;
 
     const container = c.upperCanvasEl.parentElement;
     const wrap = document.querySelector('.canvas-wrap') || container;
-    const base = c.getWidth(); // logical canvas size (e.g., 700)
-    if (!base) return;
 
-    const pad = 24; // a little breathing room
-    const innerW = (wrap ? wrap.clientWidth : container.clientWidth) || window.innerWidth;
-    const scale = Math.min(1, (innerW - pad) / base); // never upscale past 100%
+    const baseW = c.getWidth()  || 0;
+    const baseH = c.getHeight() || 0;
+    if (!baseW || !baseH) return;
 
-    if (!isFinite(scale) || scale <= 0) return;
-    try { window.setZoom ? window.setZoom(scale) : c.setZoom(scale); } catch(_){}
-    try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
-    const zv = document.getElementById('zoomVal'); if (zv) zv.textContent = Math.round(scale*100)+'%';
+    const pad = 16; // breathing room
+    const rect = wrap.getBoundingClientRect ? wrap.getBoundingClientRect() : { top: 0, height: wrap.clientHeight||0 };
+    const availW = Math.max(200, Math.min(window.innerWidth,  (wrap.clientWidth || window.innerWidth)) - pad);
+    let   availH = Math.max(200, window.innerHeight - rect.top - getDockHeight() - pad);
+
+    // Scale to fit BOTH width and height, but never above 100%
+    const scaleW = availW / baseW;
+    const scaleH = availH / baseH;
+    const scale  = Math.min(1, scaleW, scaleH);
+
+    if (isFinite(scale) && scale > 0){
+      try { window.setZoom ? window.setZoom(scale) : c.setZoom(scale); } catch(_){}
+      try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+      const zv = document.getElementById('zoomVal'); if (zv) zv.textContent = Math.round(scale*100) + '%';
+    }
   }
 
+  /* ----------------------- Scale base uploads to fit canvas ----------------------- */
+  function isSystem(o){
+    return !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
+  }
+  function looksLikeBaseImage(o){
+    if (!o) return false;
+    if (o._isBase) return true;
+    return (o.type === 'image' && !isSystem(o));
+  }
+  function scaleBaseToCanvas(o){
+    if (!isSmall()) return;
+    const c = C(); if (!c || !o) return;
+    if (!looksLikeBaseImage(o)) return;
+
+    const cw = c.getWidth()  || 0;
+    const ch = c.getHeight() || 0;
+    const iw = o.width  || (o._originalElement && o._originalElement.width)  || 1;
+    const ih = o.height || (o._originalElement && o._originalElement.height) || 1;
+    if (!cw || !ch || !iw || !ih) return;
+
+    const pad = 28; // margin inside canvas
+    const s = Math.min((cw - pad) / iw, (ch - pad) / ih);
+    if (isFinite(s) && s > 0){
+      o.set({ originX: 'center', originY: 'center', scaleX: s, scaleY: s });
+      try {
+        if (typeof o.setPositionByOrigin === 'function') {
+          o.setPositionByOrigin(new fabric.Point(cw/2, ch/2), 'center', 'center');
+        } else {
+          o.left = cw/2; o.top = ch/2;
+        }
+        o.setCoords();
+      } catch(_){}
+      try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+    }
+  }
+
+  /* ----------------------- Wire up (mobile‑only) ----------------------- */
   function boot(){
-    fitToWidth();                // initial
-    setTimeout(fitToWidth, 250); // after layout settles
-    setTimeout(fitToWidth, 600); // after images/fonts
+    if (!isSmall()) return;     // Desktop unaffected
+    buildDock();
+    fitCanvasToViewport();
+    setTimeout(fitCanvasToViewport, 250);  // after layout settles
+    setTimeout(fitCanvasToViewport, 600);  // after images/fonts
+    const c = C();
+    if (c && c.on){
+      c.on('object:added',   e => { if (e && e.target) scaleBaseToCanvas(e.target); setTimeout(fitCanvasToViewport, 0); });
+      c.on('object:removed', () => setTimeout(fitCanvasToViewport, 0));
+    }
   }
 
   if (document.readyState === 'loading') {
@@ -8173,6 +8227,11 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 
-  window.addEventListener('resize', fitToWidth);
-  window.addEventListener('orientationchange', () => setTimeout(fitToWidth, 200));
+  window.addEventListener('resize', () => {
+    syncDock();
+    fitCanvasToViewport();
+  });
+  window.addEventListener('orientationchange', () => {
+    setTimeout(() => { syncDock(); fitCanvasToViewport(); }, 200);
+  });
 })();
