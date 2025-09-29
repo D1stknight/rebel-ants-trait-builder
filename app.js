@@ -8059,12 +8059,17 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   bind();
 })();
 
-/* === Mobile Quick‑Actions Dock (no logic changes) === */
+/* =========================================================
+   Mobile Quick‑Actions Dock (no logic changes)
+   - Always-on, thumb‑reachable actions
+   - Appears on narrow portrait OR short-height landscape
+   ========================================================= */
 ;(() => {
   if (window.__RA_MOBILE_DOCK__) return;
   window.__RA_MOBILE_DOCK__ = true;
 
-  const isSmall = () => window.matchMedia('(max-width: 768px)').matches;
+  const smallQuery = '(max-width: 768px), (max-height: 500px)';
+  const isSmall = () => window.matchMedia(smallQuery).matches;
 
   function clickById(id){
     const el = document.getElementById(id);
@@ -8072,8 +8077,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return false;
   }
   function call(fn, ...args){
-    try { return (typeof fn === 'function') ? fn(...args) : false; }
-    catch(_){ return false; }
+    try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; }
   }
   function scrollToSel(selList){
     const el = document.querySelector(selList);
@@ -8099,26 +8103,76 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     dock.append(
       mk('Undo',     () => clickById('raUndoBtn')  || call(window.raHistory?.undo)),
       mk('Redo',     () => clickById('raRedoBtn')  || call(window.raHistory?.redo)),
-      mk('Text',     () => clickById('addTextBtn') || call(window.raAddTextPrime)), // falls back to your text add API if present
-      mk('Overlays', () => scrollToSel('#overlayGrid, .overlay-grid, .grid')),       // jumps to overlays grid section
-      mk('Upload',   () => clickById('baseUpload')),                                  // opens OS picker
-      mk('Export',   () => clickById('exportPng')   || call(window.raOpenNewTabViewer)),
-      mk('Clear',    () => clickById('clearCanvas') || call(window.raSafeClear, true))
+      mk('Text',     () => clickById('addTextBtn') || call(window.raAddTextPrime)),
+      mk('Overlays', () => scrollToSel('#overlayGrid, .overlay-grid, .grid')),
+      mk('Upload',   () => clickById('baseUpload')),
+      mk('Export',   () => clickById('exportPng')  || call(window.raOpenNewTabViewer)),
+      mk('Clear',    () => clickById('clearCanvas')|| call(window.raSafeClear, true))
     );
 
     document.body.appendChild(dock);
+  }
 
-    // Rebuild if screen size changes
-    window.addEventListener('resize', () => {
-      const exists = !!document.getElementById('raMobileDock');
-      if (isSmall() && !exists) buildDock();
-      if (!isSmall() && exists) document.getElementById('raMobileDock')?.remove();
-    });
+  function syncDock(){
+    const exists = !!document.getElementById('raMobileDock');
+    if (isSmall() && !exists) buildDock();
+    if (!isSmall() && exists) document.getElementById('raMobileDock')?.remove();
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', buildDock, { once: true });
+    document.addEventListener('DOMContentLoaded', () => { buildDock(); }, { once: true });
   } else {
     buildDock();
   }
+
+  window.addEventListener('resize', syncDock);
+  window.addEventListener('orientationchange', () => setTimeout(syncDock, 200));
+})();
+
+/* =========================================================
+   Mobile Fit‑to‑Width (auto zoom)
+   - Presentation‑only: computes a zoom so canvas fits the viewport width
+   - Never upscales above 100%
+   ========================================================= */
+;(() => {
+  if (window.__RA_MOBILE_FIT__) return;
+  window.__RA_MOBILE_FIT__ = true;
+
+  const smallQuery = '(max-width: 768px), (max-height: 500px)';
+  const isSmall = () => window.matchMedia(smallQuery).matches;
+
+  function fitToWidth(){
+    if (!isSmall()) return;
+    const c = window.canvas;
+    if (!c || !c.upperCanvasEl) return;
+
+    const container = c.upperCanvasEl.parentElement;
+    const wrap = document.querySelector('.canvas-wrap') || container;
+    const base = c.getWidth(); // logical canvas size (e.g., 700)
+    if (!base) return;
+
+    const pad = 24; // a little breathing room
+    const innerW = (wrap ? wrap.clientWidth : container.clientWidth) || window.innerWidth;
+    const scale = Math.min(1, (innerW - pad) / base); // never upscale past 100%
+
+    if (!isFinite(scale) || scale <= 0) return;
+    try { window.setZoom ? window.setZoom(scale) : c.setZoom(scale); } catch(_){}
+    try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+    const zv = document.getElementById('zoomVal'); if (zv) zv.textContent = Math.round(scale*100)+'%';
+  }
+
+  function boot(){
+    fitToWidth();                // initial
+    setTimeout(fitToWidth, 250); // after layout settles
+    setTimeout(fitToWidth, 600); // after images/fonts
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+
+  window.addEventListener('resize', fitToWidth);
+  window.addEventListener('orientationchange', () => setTimeout(fitToWidth, 200));
 })();
