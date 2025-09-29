@@ -48,7 +48,7 @@ input[type=range]{width:100%}
    - Quick‑Actions Dock (always reachable)
    - Responsive canvas wrapper
    - Larger touch targets
-   - Works for narrow portrait AND short-height landscape
+   - Portrait & short-height landscape support
    ========================================================= */
 
 /* Touch hint for all buttons */
@@ -57,7 +57,7 @@ button, .btn { touch-action: manipulation; }
 /* Show the dock + mobile refinements on narrow screens OR short-height landscape */
 @media (max-width: 768px), (max-height: 500px) {
 
-  /* If you previously made #raHistoryRow sticky, neutralize it on mobile to avoid two bars */
+  /* If a sticky history row exists anywhere, neutralize it on mobile to avoid two bars */
   #raHistoryRow {
     position: static !important;
     background: transparent !important;
