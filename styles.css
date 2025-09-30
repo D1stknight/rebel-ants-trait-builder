@@ -46,10 +46,8 @@ input[type=range]{width:100%}
 /* =========================================================
    MOBILE UX (presentation-only; mobile only)
    - Square, centered canvas + checkerboard that matches visible canvas
-   - Quick‑Actions Dock
-   - Sticky "Canvas" jumper + "Del Overlay" sticky
-   - Footer centered within the square (DOM footer)
-   - Portrait & short-height landscape support
+   - Footer centered inside the square (DOM footer)
+   - Quick‑Actions Dock + Sticky helpers
    ========================================================= */
 
 /* Touch hint for all buttons */
@@ -58,7 +56,7 @@ button, .btn { touch-action: manipulation; }
 /* Narrow portrait OR short-height landscape */
 @media (max-width: 768px), (max-height: 500px) {
 
-  /* If a sticky history row exists, neutralize it on mobile to avoid two bars */
+  /* Neutralize any sticky history row on mobile */
   #raHistoryRow {
     position: static !important;
     background: transparent !important;
@@ -67,38 +65,40 @@ button, .btn { touch-action: manipulation; }
     margin: 0 !important;
   }
 
-  /* Center the canvas section on mobile without changing desktop grid */
+  /* Center the canvas section on mobile */
   .stage { display: flex; justify-content: center; }
 
   /* Checkerboard frame — JS sets explicit width/height to match the visible canvas */
   .canvas-wrap {
-    position: relative;         /* ensures footer is centered/anchored inside */
-    display: inline-block;      /* shrink-wrap to width/height from JS */
-    margin: 0 auto;             /* centered */
+    position: relative;     /* footer anchor */
+    display: inline-block;  /* shrink-wrap to JS width/height */
+    margin: 0 auto;
     max-width: 100vw;
-    overflow: visible;          /* no inner scrollbars */
+    overflow: visible;
   }
 
-  /* Fabric wrapper: we scale this visually (not Fabric zoom) */
+  /* Fabric wrapper is scaled visually (not Fabric zoom) */
   .canvas-container {
     transform-origin: top left;
     will-change: transform;
   }
 
-  /* Footer: force horizontal centering inside the visible square */
+  /* Footer (DOM) — centered inside the visible square */
   #raFooterBarFinal {
     position: absolute !important;
-    left: 50%;
+    left: 50% !important;
+    right: auto !important;
     transform: translateX(-50%) !important;
-    bottom: 12px;                 /* tweak vertical offset if you want */
-    width: auto;
-    max-width: calc(100% - 24px); /* keep some side padding inside the square */
+    bottom: 12px;
+    width: max-content;
+    max-width: calc(100% - 24px);
     text-align: center;
     pointer-events: none;
     z-index: 9999;
+    white-space: nowrap;
   }
 
-  /* Bigger tap targets for common actions */
+  /* Bigger tap targets */
   #exportPng, #openNewTab, #clearCanvas, #baseUpload, #clearUpload,
   #zoomIn, #zoomOut, #zoomReset, #canvasSize {
     min-height: 44px;
@@ -118,7 +118,7 @@ button, .btn { touch-action: manipulation; }
     left: 0; right: 0;
     bottom: calc(env(safe-area-inset-bottom, 0px));
     display: grid;
-    grid-template-columns: repeat(7, 1fr);   /* Undo, Redo, Text, Overlays, Upload, Export, Clear */
+    grid-template-columns: repeat(7, 1fr);
     gap: 8px;
     padding: 10px 12px;
     background: rgba(11,12,16,0.92);
@@ -156,11 +156,11 @@ button, .btn { touch-action: manipulation; }
 
   .ra-back-to-canvas {
     right: 12px;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 10px); /* above dock, right */
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 10px);
   }
   .ra-del-overlay {
     left: 12px;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 10px);  /* above dock, left */
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 10px);
   }
 
   /* Reserve space so the dock doesn’t cover content */
@@ -169,7 +169,7 @@ button, .btn { touch-action: manipulation; }
   }
 }
 
-/* Ultra‑small phones: slightly tighter */
+/* Ultra‑small phones */
 @media (max-width: 420px) {
   .ra-mobile-dock { gap: 6px; padding: 8px 10px; }
   .ra-mobile-dock button { min-height: 42px; font-size: 12px; }
