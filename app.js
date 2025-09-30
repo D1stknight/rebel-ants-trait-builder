@@ -8354,3 +8354,77 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // Scroll: only toggle helper, no resize
   window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
 })();
+
+/* =========================================================
+   DESKTOP FREEZE — keep stage min‑width in sync with canvas size
+   - Desktop devices only (pointer:fine & not a mobile UA)
+   - No changes to Fabric zoom/size; this only feeds CSS vars
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_DESKTOP_FREEZE_SYNC__) return;
+  window.__RA_DESKTOP_FREEZE_SYNC__ = true;
+
+  const isDesktop =
+    () => window.matchMedia('(pointer: fine)').matches &&
+       !/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(navigator.userAgent||'');
+
+  if (!isDesktop()) return;
+
+  function applyVars(){
+    const root = document.documentElement;
+    const input = document.getElementById('canvasSize');
+    let canvasPx = 700;
+
+    if (input){
+      const v = parseInt(input.value,10);
+      if (Number.isFinite(v) && v > 0) canvasPx = v;
+    } else if (window.canvas && typeof window.canvas.getWidth === 'function'){
+      const w = window.canvas.getWidth(); if (w) canvasPx = w;
+    }
+
+    // stage padding must equal .canvas-wrap padding * 2; default is 24
+    const stagePad = 24;
+    root.style.setProperty('--canvas-min', canvasPx + 'px');
+    root.style.setProperty('--stage-min', (canvasPx + stagePad) + 'px');
+
+    // recompute app minimum width so the grid never collapses
+    const left = 320, right = 400, gap = 18;
+    const appMin = left + gap + (canvasPx + stagePad) + gap + right;
+    root.style.setProperty('--app-min', appMin + 'px');
+
+    // be sure no CSS transform lingers on desktop
+    try {
+      const cc = document.querySelector('.canvas-container');
+      if (cc) cc.style.transform = '';
+    } catch(_){}
+  }
+
+  function boot(){
+    applyVars();
+
+    // Update when the user changes the canvas size from the UI
+    const inp = document.getElementById('canvasSize');
+    if (inp && !inp.__raSyncCanvasVar){
+      inp.__raSyncCanvasVar = true;
+      inp.addEventListener('change', applyVars);
+      inp.addEventListener('input',  applyVars);
+    }
+
+    // Also refresh when Fabric becomes ready (in case this ran early)
+    if (!window.canvas){
+      const iv = setInterval(() => {
+        if (window.canvas && window.canvas.upperCanvasEl){ clearInterval(iv); applyVars(); }
+      }, 120);
+    }
+
+    // Keep values sane if someone resizes the window aggressively
+    window.addEventListener('resize', () => { if (isDesktop()) applyVars(); }, { passive:true });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
