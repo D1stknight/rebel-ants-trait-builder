@@ -8084,12 +8084,12 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
    * HEIGHT_JITTER_PX  → ignore tiny height deltas (mobile toolbars)
    * SMALL_QUERY       → mobile breakpoint (width OR short height)
    * ======================================================= */
-  const SIDE_MARGIN_X_PX = 10;
+  const SIDE_MARGIN_X_PX = 14;
   const VERTICAL_GAP_PX  = 14;
   const PORTRAIT_MULT    = 0.98;
   const LANDSCAPE_MULT   = 2.00;   // you liked 2.00 on landscape
   const MIN_SIDE_PX      = 300;
-  const FRAME_PAD_PX     = 24;
+  const FRAME_PAD_PX     = 30;
   const COVER_OVERSHOOT  = 1.04;
   const MAX_SCALE        = 2.00;
   const HEIGHT_JITTER_PX = 120;
