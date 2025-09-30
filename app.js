@@ -8060,48 +8060,45 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   MOBILE UX PACK — Fixed Square w/ Stable Footer (mobile only)
+   MOBILE UX PACK — Fixed Square + Visible-Only Reflow (mobile only)
    - Square canvas/checkerboard, centered, stable while scrolling
-   - CSS-scale Fabric wrapper (coords/export unchanged)
+   - Footer always centered (DOM), even after rotations
+   - Reflow only when canvas is visible (no jitter while off-screen)
    - Base uploads "cover" fill (with overshoot)
-   - Footer centered (DOM) + sticky Canvas + sticky Del Overlay
-   - Ignores small iOS toolbar "resize" jitters; reflows on real changes
+   - Quick‑Actions Dock + Sticky Canvas + Sticky Del Overlay
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_MOBILE_FIXED_SQUARE_V2__) return;
-  window.__RA_MOBILE_FIXED_SQUARE_V2__ = true;
+  if (window.__RA_MOBILE_FIXED_SQUARE_V3__) return;
+  window.__RA_MOBILE_FIXED_SQUARE_V3__ = true;
 
   /* === TWEAK HERE (mobile-only knobs) ======================
-   * SIDE_MARGIN_X_PX   → horizontal margin around the square
-   * VERTICAL_GAP_PX    → breathing room vs. viewport height
-   * PORTRAIT_MULT      → final size multiplier in portrait (≤ 2.0 if upscaling is ok)
-   * LANDSCAPE_MULT     → final size multiplier in landscape (≤ 2.0)
-   * MIN_SIDE_PX        → minimum visible side
-   * FRAME_PAD_PX       → equals .canvas-wrap padding * 2 (default 12px each side → 24)
-   * COVER_OVERSHOOT    → >1 grows uploads slightly to avoid edge slivers (e.g., 1.03..1.08)
-   * MAX_SCALE          → allow mild upscaling for landscape (e.g., 2.0)
-   * HEIGHT_JITTER_PX   → ignore mobile "resize" if height delta is under this (iOS URL bar)
-   * SMALL_QUERY        → mobile breakpoint (width OR short height)
+   * SIDE_MARGIN_X_PX  → horizontal margin around the square
+   * VERTICAL_GAP_PX   → breathing room vs. viewport height
+   * PORTRAIT_MULT     → final size multiplier in portrait (≤ MAX_SCALE)
+   * LANDSCAPE_MULT    → final size multiplier in landscape (≤ MAX_SCALE)
+   * MIN_SIDE_PX       → minimum visible side
+   * FRAME_PAD_PX      → equals .canvas-wrap padding * 2 (12px each → 24)
+   * COVER_OVERSHOOT   → >1 grows uploads to avoid edge slivers
+   * MAX_SCALE         → cap CSS upscaling (quality)
+   * HEIGHT_JITTER_PX  → ignore tiny height deltas (mobile toolbars)
+   * SMALL_QUERY       → mobile breakpoint (width OR short height)
    * ======================================================= */
   const SIDE_MARGIN_X_PX = 14;
   const VERTICAL_GAP_PX  = 14;
-  const PORTRAIT_MULT    = 0.98;   // you can adjust; keep <= MAX_SCALE * (base / side)
-  const LANDSCAPE_MULT   = 2.00;   // you said 2.00 felt perfect
+  const PORTRAIT_MULT    = 0.98;
+  const LANDSCAPE_MULT   = 2.00;   // you liked 2.00 on landscape
   const MIN_SIDE_PX      = 300;
   const FRAME_PAD_PX     = 24;
   const COVER_OVERSHOOT  = 1.04;
-  const MAX_SCALE        = 2.00;   // cap CSS upscaling to keep quality acceptable
-  const HEIGHT_JITTER_PX = 120;    // ignore tiny toolbar height changes
+  const MAX_SCALE        = 2.00;
+  const HEIGHT_JITTER_PX = 120;
   const SMALL_QUERY      = '(max-width: 768px), (max-height: 500px)';
-
-  /* ------------------------------------------------------- */
 
   const isSmall    = () => window.matchMedia(SMALL_QUERY).matches;
   const isPortrait = () => window.innerHeight >= window.innerWidth;
-
-  const C  = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-  const $I = (id) => document.getElementById(id);
+  const C          = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $I         = (id) => document.getElementById(id);
 
   /* ---------- containers ---------- */
   function containers(){
@@ -8110,22 +8107,33 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const wrap = document.querySelector('.canvas-wrap') || container;     // checkerboard frame
     return { c, container, wrap };
   }
-  function dockHeight(){ const d = $I('raMobileDock'); return d ? d.offsetHeight : 0; }
+  const dockHeight = () => ($I('raMobileDock')?.offsetHeight || 0);
 
-  /* ---------- stable viewport (ignore tiny iOS toolbar "resizes") ---------- */
+  /* ---------- viewport jitter guard ---------- */
   let lastW = 0, lastH = 0, lastO = 'p';
-  const deb = (fn, ms=120) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
-
+  const debounce = (fn, ms=120) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
   function significantResize(w, h, o){
     if (o !== lastO) return true;
     if (Math.abs(w - lastW) > 40) return true;
     if (Math.abs(h - lastH) > HEIGHT_JITTER_PX) return true;
     return false;
   }
-
   function rememberDims(w, h, o){ lastW = w; lastH = h; lastO = o; }
 
-  /* ---------- target visible square size (viewport-based) ---------- */
+  /* ---------- only reflow when canvas is actually visible ---------- */
+  let io, canvasVisible = true;
+  function watchVisibility(){
+    const refs = containers(); if (!refs) return;
+    if (!('IntersectionObserver' in window)) { canvasVisible = true; return; }
+    if (io) io.disconnect();
+    io = new IntersectionObserver((entries)=>{
+      canvasVisible = entries.some(e => e.isIntersecting && e.intersectionRatio > 0.05);
+      if (canvasVisible) reflow();  // snap back to perfect when user returns to canvas
+    }, { root: null, threshold: [0, 0.05, 0.5, 1] });
+    io.observe(refs.wrap);
+  }
+
+  /* ---------- target visible square size ---------- */
   function targetSide(){
     const wAvail = window.innerWidth  - SIDE_MARGIN_X_PX*2;
     const hAvail = window.innerHeight - dockHeight() - VERTICAL_GAP_PX;
@@ -8135,7 +8143,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return side;
   }
 
-  /* ---------- size canvas & checkerboard to target square ---------- */
+  /* ---------- size canvas & checkerboard; center footer ---------- */
   function sizeCanvasToViewport(){
     if (!isSmall()) return;
     const refs = containers(); if (!refs) return;
@@ -8145,7 +8153,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const baseH = c.getHeight() || 0;
     if (!baseW || !baseH) return;
 
-    // Keep Fabric zoom at 1; visually scale the wrapper
+    // Keep Fabric zoom at 1; visually scale wrapper
     try { (typeof window.setZoom === 'function') ? window.setZoom(1) : c.setZoom(1); } catch(_){}
 
     const side  = targetSide();
@@ -8154,57 +8162,48 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
     container.style.transform = `scale(${scale})`;
 
-    // Checkerboard frame must match visible canvas + its padding
+    // Checkerboard frame = scaled canvas side + wrap padding
     const frameSide = Math.round(Math.max(baseW, baseH) * scale + FRAME_PAD_PX);
     wrap.style.width  = frameSide + 'px';
     wrap.style.height = frameSide + 'px';
 
-    // Ensure footer sits inside the wrap (DOM footer) — re-parent if needed
+    // Ensure footer is a child of the wrap and centered
     const footer = document.getElementById('raFooterBarFinal');
-    if (footer && footer.parentElement !== wrap){
-      try { wrap.appendChild(footer); } catch(_){}
+    if (footer){
+      if (footer.parentElement !== wrap) { try { wrap.appendChild(footer); } catch(_){ } }
+      footer.style.left      = '50%';
+      footer.style.right     = 'auto';
+      footer.style.transform = 'translateX(-50%)';
     }
   }
 
   /* ---------- base uploads: cover fill with slight overshoot ---------- */
-  function isSystem(o){
-    return !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
-  }
-  function looksLikeBaseImage(o){
-    if (!o) return false;
-    if (o._isBase) return true;
-    return (o.type === 'image' && !isSystem(o));
-  }
+  const isSystem = (o) => !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
+  const isBaseish = (o) => !!o && (o._isBase || (o.type === 'image' && !isSystem(o)));
   function coverFillBase(o){
     if (!isSmall()) return;
     const refs = containers(); if (!refs || !o) return;
-    const { c } = refs;
-    if (!looksLikeBaseImage(o)) return;
+    const { c } = refs; if (!isBaseish(o)) return;
 
-    const cw = c.getWidth()  || 0;
-    const ch = c.getHeight() || 0;
+    const cw = c.getWidth()  || 0, ch = c.getHeight() || 0;
     const iw = o.width  || (o._originalElement && o._originalElement.width)  || 1;
     const ih = o.height || (o._originalElement && o._originalElement.height) || 1;
     if (!cw || !ch || !iw || !ih) return;
 
-    const cover = Math.max(cw/iw, ch/ih);
-    const s = cover * COVER_OVERSHOOT;
-
+    const s = Math.max(cw/iw, ch/ih) * COVER_OVERSHOOT;
     if (isFinite(s) && s > 0){
       o.set({ originX: 'center', originY: 'center', scaleX: s, scaleY: s });
       try {
         if (typeof o.setPositionByOrigin === 'function') {
           o.setPositionByOrigin(new fabric.Point(cw/2, ch/2), 'center', 'center');
-        } else {
-          o.left = cw/2; o.top = ch/2;
-        }
+        } else { o.left = cw/2; o.top = ch/2; }
         o.setCoords();
       } catch(_){}
       try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
     }
   }
 
-  /* ---------- Quick‑Actions Dock (uses your existing buttons/handlers) ---------- */
+  /* ---------- Quick‑Actions Dock ---------- */
   function clickById(id){ const el = $I(id); if (el) { el.click(); return true; } return false; }
   function call(fn, ...args){ try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; } }
   function scrollToSel(sel){ const el = document.querySelector(sel); if (el) el.scrollIntoView({ behavior:'smooth', block:'start' }); }
@@ -8256,7 +8255,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     if (!isSmall() && exists) $I('raMobileDock')?.remove();
   }
 
-  /* ---------- Sticky buttons: Canvas + Delete Overlay ---------- */
+  /* ---------- Sticky helpers ---------- */
   function ensureBackToCanvas(){
     if (!isSmall()) return null;
     let btn = $I('raBackToCanvas');
@@ -8283,7 +8282,6 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     if (fullyVisible) btn.classList.remove('show'); else btn.classList.add('show');
   }
 
-  // Remove selected overlay(s); if none selected, remove topmost non-system object (overlay/text)
   function ensureDelOverlay(){
     if (!isSmall()) return null;
     let btn = $I('raDelOverlayBtn');
@@ -8326,7 +8324,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     if (hasUserObj) btn.classList.add('show'); else btn.classList.remove('show');
   }
 
-  /* ---------- Wire up (mobile-only) ---------- */
+  /* ---------- wire up ---------- */
   function reflow(){
     sizeCanvasToViewport();
     toggleBackToCanvas();
@@ -8338,6 +8336,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     buildDock();
     ensureBackToCanvas();
     ensureDelOverlay();
+    watchVisibility();          // visibility-aware reflows
 
     // initial + settle
     reflow();
@@ -8351,7 +8350,6 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       c.on('object:modified',() => setTimeout(reflow, 0));
     }
 
-    // Recompute when app restores/recomputes
     try { document.addEventListener('ra-json-restore-end',  () => setTimeout(reflow, 0)); } catch(_){}
     try { document.addEventListener('ra-collection-change', () => setTimeout(reflow, 0)); } catch(_){}
   }
@@ -8362,32 +8360,23 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 
-  // Keep layout in sync on meaningful viewport changes (ignore tiny toolbar jitters)
-  const onResizeStable = debouncedResizeCheck();
+  // Only reflow on meaningful viewport changes AND when visible
+  const onResizeStable = debounce(() => {
+    if (!isSmall()) return;
+    const w = window.innerWidth, h = window.innerHeight, o = isPortrait() ? 'p' : 'l';
+    if (significantResize(w, h, o) && canvasVisible) {
+      rememberDims(w, h, o);
+      reflow();
+    }
+  }, 120);
+
+  rememberDims(window.innerWidth, window.innerHeight, isPortrait() ? 'p' : 'l');
+
   window.addEventListener('resize', onResizeStable);
   window.addEventListener('orientationchange', () => {
-    // orientation truly changed — accept new dims and reflow after settle
     rememberDims(window.innerWidth, window.innerHeight, isPortrait() ? 'p' : 'l');
-    setTimeout(reflow, 200);
+    setTimeout(() => { if (canvasVisible) reflow(); }, 220);
   });
-
-  // Only show/hide helper on scroll; don't resize on scroll
+  // Scroll: only toggle helper, no resize
   window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
-
-  function debouncedResizeCheck(){
-    const run = () => {
-      if (!isSmall()) return;
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      const o = isPortrait() ? 'p' : 'l';
-      if (significantResize(w, h, o)) {
-        rememberDims(w, h, o);
-        reflow();
-      }
-    };
-    return deb(run, 120);
-  }
-
-  // seed last dims so the first resize comparison has a baseline
-  rememberDims(window.innerWidth, window.innerHeight, isPortrait() ? 'p' : 'l');
 })();
