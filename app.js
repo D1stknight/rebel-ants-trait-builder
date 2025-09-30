@@ -8071,7 +8071,9 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   'use strict';
   if (window.__RA_MOBILE_REAL_RESIZE_V1__) return;
   window.__RA_MOBILE_REAL_RESIZE_V1__ = true;
-
+  const IS_COARSE = window.matchMedia('(pointer: coarse)').matches;
+  if (!IS_COARSE) return;   // Do not run mobile logic on desktop, ever
+   
   /* === MOBILE KNOBS (simple, adjust here) ==================
    * SIDE_MARGIN_X_PX  → horizontal margin around the square
    * VERTICAL_GAP_PX   → extra space above the dock
