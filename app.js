@@ -8085,7 +8085,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   const VERTICAL_GAP_PX  = 18;
   const PORTRAIT_FRAC    = 0.98;  // make smaller if it touches UI; larger if you want it bigger
   const LANDSCAPE_FRAC   = 1.70;  // use >1.0 to use more of the short edge on landscape
-  const MIN_SIDE_PX      = 320;
+  const MIN_SIDE_PX      = 400;
   const HEIGHT_JITTER_PX = 120;
   const SMALL_QUERY      = '(max-width: 768px), (max-height: 500px)';
 
