@@ -8058,3 +8058,297 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
   bind();
 })();
+
+/* =========================================================
+   MOBILE UX — Real Canvas Resize (no CSS transform)
+   - Resize the actual Fabric canvas to a viewport‑fit square
+   - Size checkerboard wrapper from live CSS (padding+border)
+   - Footer centered within wrapper
+   - Visibility‑aware + jitter‑guarded reflow (no jumpiness)
+   - Quick Dock + Canvas jumper + Del Overlay
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_MOBILE_REAL_RESIZE_V1__) return;
+  window.__RA_MOBILE_REAL_RESIZE_V1__ = true;
+
+  /* === MOBILE KNOBS (simple, adjust here) ==================
+   * SIDE_MARGIN_X_PX  → horizontal margin around the square
+   * VERTICAL_GAP_PX   → extra space above the dock
+   * PORTRAIT_FRAC     → fraction of available side to use in portrait
+   * LANDSCAPE_FRAC    → fraction of available side to use in landscape
+   * MIN_SIDE_PX       → safety floor for the square
+   * HEIGHT_JITTER_PX  → ignore tiny height changes from mobile toolbars
+   * SMALL_QUERY       → when this matches, mobile logic is active
+   * ======================================================= */
+  const SIDE_MARGIN_X_PX = 14;
+  const VERTICAL_GAP_PX  = 18;
+  const PORTRAIT_FRAC    = 0.98;  // make smaller if it touches UI; larger if you want it bigger
+  const LANDSCAPE_FRAC   = 1.70;  // use >1.0 to use more of the short edge on landscape
+  const MIN_SIDE_PX      = 400;
+  const HEIGHT_JITTER_PX = 120;
+  const SMALL_QUERY      = '(max-width: 768px), (max-height: 500px)';
+
+  const isSmall    = () => window.matchMedia(SMALL_QUERY).matches;
+  const isPortrait = () => window.innerHeight >= window.innerWidth;
+
+  const C  = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  const $I = (id) => document.getElementById(id);
+
+  /* ---------- helpers ---------- */
+  function containers(){
+    const c = C(); if (!c || !c.upperCanvasEl) return null;
+    const container = c.upperCanvasEl.parentElement;                      // .canvas-container
+    const wrap = document.querySelector('.canvas-wrap') || container;     // checkerboard frame
+    return { c, container, wrap };
+  }
+  const dockHeight = () => ($I('raMobileDock')?.offsetHeight || 0);
+
+  // Live CSS metrics for wrapper (prevents drift)
+  function wrapChrome(wrap){
+    const cs = getComputedStyle(wrap);
+    const padH = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) || 0;
+    const padV = parseFloat(cs.paddingTop)  + parseFloat(cs.paddingBottom) || 0;
+    const bH   = parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth) || 0;
+    const bV   = parseFloat(cs.borderTopWidth)  + parseFloat(cs.borderBottomWidth) || 0;
+    return { padH, padV, bH, bV };
+  }
+
+  /* ---------- stable viewport (ignore toolbar jitter) ---------- */
+  let lastW = 0, lastH = 0, lastO = 'p';
+  const debounce = (fn, ms=120) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
+  function significantResize(w, h, o){
+    if (o !== lastO) return true;
+    if (Math.abs(w - lastW) > 40) return true;
+    if (Math.abs(h - lastH) > HEIGHT_JITTER_PX) return true;
+    return false;
+  }
+  function rememberDims(w, h, o){ lastW = w; lastH = h; lastO = o; }
+
+  /* ---------- only reflow when canvas is visible ---------- */
+  let io, canvasVisible = true;
+  function watchVisibility(){
+    const refs = containers(); if (!refs) return;
+    if (!('IntersectionObserver' in window)) { canvasVisible = true; return; }
+    if (io) io.disconnect();
+    io = new IntersectionObserver((entries)=>{
+      canvasVisible = entries.some(e => e.isIntersecting && e.intersectionRatio > 0.05);
+      if (canvasVisible) reflow();  // snap correct when user returns to canvas
+    }, { root: null, threshold: [0, 0.05, 0.5, 1] });
+    io.observe(refs.wrap);
+  }
+
+  /* ---------- target square side (we resize the real canvas) ---------- */
+  function targetSide(){
+    const wAvail = window.innerWidth  - SIDE_MARGIN_X_PX*2;
+    const hAvail = window.innerHeight - dockHeight() - VERTICAL_GAP_PX;
+    let side = Math.min(wAvail, hAvail) * (isPortrait() ? PORTRAIT_FRAC : LANDSCAPE_FRAC);
+    side = Math.max(MIN_SIDE_PX, Math.floor(side));
+    return side;
+  }
+
+  /* ---------- resize canvas + match wrapper to canvas ---------- */
+  function sizeCanvasAndWrap(){
+    if (!isSmall()) return;
+    const refs = containers(); if (!refs) return;
+    const { c, wrap } = refs;
+
+    const side = targetSide();
+
+    // Resize the actual Fabric canvas (uses your RA resize helper to scale objects correctly)
+    try { (typeof window.setCanvasSize === 'function') ? window.setCanvasSize(side) : c.setWidth(side) & c.setHeight(side); } catch(_){}
+
+    // Match the checkerboard wrapper to the canvas outer size (content + padding + border)
+    const { padH, padV, bH, bV } = wrapChrome(wrap);
+    wrap.style.width  = (side + padH + bH) + 'px';
+    wrap.style.height = (side + padV + bV) + 'px';
+
+    // Footer: ensure inside wrapper and centered
+    const footer = document.getElementById('raFooterBarFinal');
+    if (footer && footer.parentElement !== wrap){
+      try { wrap.appendChild(footer); } catch(_){}
+    }
+  }
+
+  /* ---------- uploads: cover fill (slight overshoot to avoid slivers) ---------- */
+  const isSystem = (o) => !!(o && (o._raSys || o._isBgRect || o._raTokenId || o._rabrandbar));
+  const isBaseish = (o) => !!o && (o._isBase || (o.type === 'image' && !isSystem(o)));
+  function coverFillBase(o){
+    const refs = containers(); if (!refs || !o || !isSmall()) return;
+    const { c } = refs; if (!isBaseish(o)) return;
+
+    const cw = c.getWidth()  || 0, ch = c.getHeight() || 0;
+    const iw = o.width  || (o._originalElement && o._originalElement.width)  || 1;
+    const ih = o.height || (o._originalElement && o._originalElement.height) || 1;
+    if (!cw || !ch || !iw || !ih) return;
+
+    const cover = Math.max(cw/iw, ch/ih) * 1.04;  // small fixed overshoot is OK after real resize
+    o.set({ originX: 'center', originY: 'center', scaleX: cover, scaleY: cover });
+    try {
+      if (typeof o.setPositionByOrigin === 'function') {
+        o.setPositionByOrigin(new fabric.Point(cw/2, ch/2), 'center', 'center');
+      } else { o.left = cw/2; o.top = ch/2; }
+      o.setCoords();
+      c.requestRenderAll && c.requestRenderAll();
+    } catch(_){}
+  }
+
+  /* ---------- Quick Dock + Stickies ---------- */
+  function clickById(id){ const el = $I(id); if (el) { el.click(); return true; } return false; }
+  function call(fn, ...args){ try { return (typeof fn === 'function') ? fn(...args) : false; } catch(_){ return false; } }
+  function scrollToSel(sel){ const el = document.querySelector(sel); if (el) el.scrollIntoView({ behavior:'smooth', block:'start' }); }
+  function scrollToTextPanel(){
+    const candidates = ['#customText','#textPanel','#textTools','#customTextPanel','[data-panel="text"]','.text-tools','.text-panel'];
+    for (const sel of candidates){ const el = document.querySelector(sel); if (el){ el.scrollIntoView({ behavior:'smooth', block:'start' }); return true; } }
+    return false;
+  }
+
+  function buildDock(){
+    if (!isSmall() || $I('raMobileDock')) return;
+    const dock = document.createElement('div');
+    dock.id = 'raMobileDock';
+    dock.className = 'ra-mobile-dock';
+
+    const mk = (label, onTap) => { const b = document.createElement('button'); b.type='button'; b.textContent=label; b.addEventListener('click', e=>{e.preventDefault();e.stopPropagation();onTap();}); return b; };
+
+    dock.append(
+      mk('Undo',     () => clickById('raUndoBtn')  || call(window.raHistory?.undo)),
+      mk('Redo',     () => clickById('raRedoBtn')  || call(window.raHistory?.redo)),
+      mk('Text',     () => scrollToTextPanel() || clickById('addTextBtn') || call(window.raAddTextPrime)),
+      mk('Overlays', () => scrollToSel('#overlayGrid, .overlay-grid, .grid')),
+      mk('Upload',   () => clickById('baseUpload')),
+      mk('Export',   () => clickById('exportPng')  || call(window.raOpenNewTabViewer)),
+      mk('Clear',    () => clickById('clearCanvas')|| call(window.raSafeClear, true))
+    );
+    document.body.appendChild(dock);
+  }
+  function syncDock(){
+    const exists = !!$I('raMobileDock');
+    if (isSmall() && !exists) buildDock();
+    if (!isSmall() && exists) $I('raMobileDock')?.remove();
+  }
+
+  function ensureBackToCanvas(){
+    if (!isSmall()) return null;
+    let btn = $I('raBackToCanvas');
+    if (!btn){
+      btn = document.createElement('button');
+      btn.id = 'raBackToCanvas';
+      btn.className = 'ra-back-to-canvas';
+      btn.type = 'button';
+      btn.textContent = 'Canvas';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const refs = containers(); if (!refs) return;
+        refs.wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      document.body.appendChild(btn);
+    }
+    return btn;
+  }
+  function toggleBackToCanvas(){
+    const btn = ensureBackToCanvas(); if (!btn) return;
+    const refs = containers(); if (!refs) { btn.classList.remove('show'); return; }
+    const r = refs.wrap.getBoundingClientRect();
+    const fullyVisible = r.top >= 0 && r.bottom <= window.innerHeight;
+    if (fullyVisible) btn.classList.remove('show'); else btn.classList.add('show');
+  }
+
+  function ensureDelOverlay(){
+    if (!isSmall()) return null;
+    let btn = $I('raDelOverlayBtn');
+    if (!btn){
+      btn = document.createElement('button');
+      btn.id = 'raDelOverlayBtn';
+      btn.className = 'ra-del-overlay';
+      btn.type = 'button';
+      btn.textContent = 'Del Overlay';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const c = C(); if (!c) return;
+
+        const isOverlayCandidate = (o) =>
+          !!o && !isSystem(o) && !o._isBase && o.type !== 'line' && o.type !== 'circle';
+
+        let targets = (typeof c.getActiveObjects === 'function') ? c.getActiveObjects() : [];
+        targets = (targets || []).filter(isOverlayCandidate);
+
+        if (!targets.length){
+          const objs = (c.getObjects() || []).filter(isOverlayCandidate);
+          if (objs.length) targets = [objs[objs.length - 1]];
+        }
+
+        if (!targets.length) return;
+
+        try { targets.forEach(t => c.remove(t)); } catch(_){}
+        try { c.discardActiveObject && c.discardActiveObject(); } catch(_){}
+        try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+      });
+      document.body.appendChild(btn);
+    }
+    return btn;
+  }
+  function showDelOverlay(always=true){
+    const btn = ensureDelOverlay(); if (!btn) return;
+    if (always) { btn.classList.add('show'); return; }
+    const c = C(); if (!c) { btn.classList.remove('show'); return; }
+    const hasUserObj = (c.getObjects() || []).some(o => !isSystem(o) && !o._isBase);
+    if (hasUserObj) btn.classList.add('show'); else btn.classList.remove('show');
+  }
+
+  /* ---------- reflow ---------- */
+  function reflow(){
+    if (!isSmall()) return;
+    sizeCanvasAndWrap();
+    toggleBackToCanvas();
+    showDelOverlay();
+  }
+
+  function boot(){
+    if (!isSmall()) return;     // desktop untouched
+    buildDock();
+    ensureBackToCanvas();
+    ensureDelOverlay();
+    watchVisibility();
+
+    reflow();
+    setTimeout(reflow, 250);
+    setTimeout(reflow, 600);
+
+    const refs = containers(); const c = refs && refs.c;
+    if (c && c.on){
+      c.on('object:added',   e => { if (e && e.target) coverFillBase(e.target); setTimeout(reflow, 0); });
+      c.on('object:removed', () => setTimeout(reflow, 0));
+      c.on('object:modified',() => setTimeout(reflow, 0));
+    }
+
+    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(reflow, 0)); } catch(_){}
+    try { document.addEventListener('ra-collection-change', () => setTimeout(reflow, 0)); } catch(_){}
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+
+  // Only reflow on meaningful viewport changes
+  const onResizeStable = debounce(() => {
+    if (!isSmall()) return;
+    const w = window.innerWidth, h = window.innerHeight, o = isPortrait() ? 'p' : 'l';
+    if (significantResize(w, h, o) && canvasVisible) {
+      rememberDims(w, h, o);
+      reflow();
+    }
+  }, 120);
+
+  rememberDims(window.innerWidth, window.innerHeight, isPortrait() ? 'p' : 'l');
+
+  window.addEventListener('resize', onResizeStable);
+  window.addEventListener('orientationchange', () => {
+    rememberDims(window.innerWidth, window.innerHeight, isPortrait() ? 'p' : 'l');
+    setTimeout(() => { if (canvasVisible) reflow(); }, 220);
+  });
+  // Scroll: only toggle helper, no resize
+  window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
+})();
