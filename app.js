@@ -8355,3 +8355,157 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
 })();
 
+/* =========================================================
+   DESKTOP DEVICE FREEZE — keep UI identical while resizing
+   - Desktop only (device-based), mobile untouched
+   - Neutralizes mobile CSS on desktop devices even if viewport is tiny
+   - Clears inline sizing/transform, locks canvas size to desktop value
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_DESKTOP_DEVICE_FREEZE__) return;
+  window.__RA_DESKTOP_DEVICE_FREEZE__ = true;
+
+  // Robust desktop vs mobile detection (device-based, not viewport)
+  const UA = navigator.userAgent || '';
+  const isMobileUA =
+    (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
+
+  if (isMobileUA) return;           // <-- On real mobile/tablet: do nothing
+  document.documentElement.classList.add('ra-desktop-device');
+
+  // Inject a tiny CSS override that cancels mobile styles on desktop devices
+  try {
+    const css = `
+@media (max-width: 768px), (max-height: 500px){
+  html.ra-desktop-device .ra-mobile-dock,
+  html.ra-desktop-device .ra-back-to-canvas,
+  html.ra-desktop-device .ra-del-overlay { display:none !important; visibility:hidden !important; }
+  html.ra-desktop-device body { padding-bottom: 0 !important; }
+  html.ra-desktop-device .canvas-wrap { width:auto !important; height:auto !important; }
+  html.ra-desktop-device .canvas-container { transform:none !important; }
+}`;
+    const s = document.createElement('style');
+    s.id = 'raDesktopDeviceFreezeCSS';
+    s.textContent = css;
+    document.head.appendChild(s);
+  } catch (_) {}
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function wrapEl(){
+    // Prefer your checkerboard wrapper; fall back to canvas container ancestry
+    const wrap = document.querySelector('.canvas-wrap');
+    if (wrap) return wrap;
+    const c = C();
+    return c ? (c.upperCanvasEl?.parentElement?.parentElement || c.upperCanvasEl?.parentElement) : null;
+  }
+
+  function desktopTargetSize(){
+    const input = document.getElementById('canvasSize');
+    const v = parseInt(input ? input.value : '700', 10);
+    if (Number.isFinite(v) && v > 0) return v;
+    try { const cur = C()?.getWidth(); if (cur) return cur; } catch(_){}
+    return 700;
+  }
+
+  function clearInline(wrapper, container){
+    if (wrapper){
+      wrapper.style.width  = '';
+      wrapper.style.height = '';
+    }
+    if (container){
+      try { container.style.removeProperty('transform'); } catch(_){}
+      container.style.width  = '';
+      container.style.height = '';
+    }
+  }
+
+  function ensureFooter(wrapper){
+    const footer = document.getElementById('raFooterBarFinal');
+    if (footer && wrapper && footer.parentElement !== wrapper){
+      try { wrapper.appendChild(footer); } catch(_){}
+    }
+  }
+
+  // Enforce once; return true if canvas present
+  function enforceOnce(lockSize){
+    const c = C(); if (!c) return false;
+    const container = c.upperCanvasEl && c.upperCanvasEl.parentElement;
+    const wrap = wrapEl() || container;
+    if (!wrap || !container) return false;
+
+    // 1) Kill any inline sizing/transform left by mobile code
+    clearInline(wrap, container);
+
+    // 2) Lock canvas size to desktop value (no zoom changes)
+    const want = lockSize ?? desktopTargetSize();
+    const cw = c.getWidth ? c.getWidth() : 0;
+    const ch = c.getHeight ? c.getHeight() : 0;
+    if (want && (cw !== want || ch !== want)){
+      try {
+        if (typeof window.setCanvasSize === 'function') {
+          window.setCanvasSize(want);
+        } else if (typeof window.raResizeCanvasAndScale === 'function') {
+          window.raResizeCanvasAndScale(want);
+        } else {
+          c.setWidth(want); c.setHeight(want);
+        }
+      } catch(_){}
+    }
+
+    ensureFooter(wrap);
+    try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+    return true;
+  }
+
+  // Light RAF loop during active resize so our state "wins"
+  function stabilize(ms=450){
+    const start = performance.now();
+    const want = desktopTargetSize();
+    (function tick(){
+      enforceOnce(want);
+      if (performance.now() - start < ms) requestAnimationFrame(tick);
+    })();
+  }
+
+  // Wait until Fabric exists, then set up observers
+  (function waitForCanvas(){
+    const c = C();
+    if (!c) return setTimeout(waitForCanvas, 120);
+
+    // Initial lock
+    stabilize(350);
+
+    // Reflect changes if user intentionally updates the canvas size in UI
+    const sizeInput = document.getElementById('canvasSize');
+    if (sizeInput && !sizeInput.__raDesktopFreezeBound){
+      sizeInput.__raDesktopFreezeBound = true;
+      sizeInput.addEventListener('change', () => stabilize(300));
+    }
+
+    // If anything tries to write inline styles again, revert immediately
+    const wrapper = wrapEl();
+    const container = c.upperCanvasEl && c.upperCanvasEl.parentElement;
+
+    const mo = new MutationObserver(() => { stabilize(250); });
+    if (wrapper)   mo.observe(wrapper,   { attributes:true, attributeFilter:['style'] });
+    if (container) mo.observe(container, { attributes:true, attributeFilter:['style'] });
+
+    // If someone changes the canvas element size directly, revert
+    try {
+      const lower = c.lowerCanvasEl;
+      const attrObs = new MutationObserver(() => { stabilize(250); });
+      attrObs.observe(lower, { attributes:true, attributeFilter:['width','height'] });
+    } catch(_){}
+
+    // Desktop window resizes: keep it stable
+    window.addEventListener('resize', () => stabilize(400));
+    window.addEventListener('orientationchange', () => stabilize(500));
+
+    // App‑level layout events: restore once
+    try { document.addEventListener('ra-json-restore-end',  () => stabilize(300)); } catch(_){}
+    try { document.addEventListener('ra-collection-change', () => stabilize(300)); } catch(_){}
+  })();
+})();
