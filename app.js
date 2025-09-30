@@ -8086,9 +8086,9 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
    * ======================================================= */
   const SIDE_MARGIN_X_PX = 14;
   const VERTICAL_GAP_PX  = 14;
-  const PORTRAIT_MULT    = 0.98;
+  const PORTRAIT_MULT    = 0.90;
   const LANDSCAPE_MULT   = 2.00;   // you liked 2.00 on landscape
-  const MIN_SIDE_PX      = 200;
+  const MIN_SIDE_PX      = 300;
   const FRAME_PAD_PX     = 24;
   const COVER_OVERSHOOT  = 1.04;
   const MAX_SCALE        = 2.00;
