@@ -8352,3 +8352,114 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // Scroll: only toggle helper, no resize
   window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
 })();
+
+/* =========================================================
+   DESKTOP RESTORE GUARD — fixes "giant centered square" after window resize
+   - No changes on mobile; only acts when NOT matching the mobile breakpoint
+   - Clears mobile inline sizes and restores desktop canvas size/zoom/footer
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_DESKTOP_RESTORE_GUARD_V1__) return;
+  window.__RA_DESKTOP_RESTORE_GUARD_V1__ = true;
+
+  // Same breakpoint your mobile pack uses:
+  const SMALL_QUERY = '(max-width: 768px), (max-height: 500px)';
+  const mq = window.matchMedia(SMALL_QUERY);
+
+  const isDesktop = () => !mq.matches; // true when NOT small
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function wrapEl(){
+    // Prefer your checkerboard wrapper class if present
+    const wrap = document.querySelector('.canvas-wrap');
+    if (wrap) return wrap;
+    const c = C();
+    return c ? c.upperCanvasEl?.parentElement?.parentElement || c.upperCanvasEl?.parentElement : null;
+  }
+
+  function desiredDesktopSize(){
+    // What desktop size should be (UI drives truth)
+    const input = document.getElementById('canvasSize');
+    const v = parseInt(input ? input.value : '700', 10);
+    if (Number.isFinite(v) && v > 0) return v;
+    // fallback to current canvas width or default
+    try { const w = C()?.getWidth(); if (w) return w; } catch(_){}
+    return 700;
+  }
+
+  function restoreDesktopState(){
+    if (!isDesktop()) return;
+    const c = C(); const wrap = wrapEl();
+    if (!c || !wrap) return;
+
+    // 1) Clear mobile inline sizing on the wrapper (if any)
+    if (wrap.style.width || wrap.style.height){
+      wrap.style.width  = '';
+      wrap.style.height = '';
+    }
+
+    // 2) Restore canvas size to desktop value (uses your safe helper if available)
+    const want = desiredDesktopSize();
+    try {
+      if (typeof window.setCanvasSize === 'function') {
+        window.setCanvasSize(want);
+      } else {
+        c.setWidth(want); c.setHeight(want);
+      }
+    } catch(_){}
+
+    // 3) Normalize zoom & viewport
+    try {
+      if (typeof window.setZoom === 'function') window.setZoom(1);
+      else c.setZoom(1);
+      if (typeof c.setViewportTransform === 'function') c.setViewportTransform([1,0,0,1,0,0]);
+      const zv = document.getElementById('zoomVal'); if (zv) zv.textContent = '100%';
+    } catch(_){}
+
+    // 4) Ensure footer is inside wrapper and rely on desktop CSS to center it
+    const footer = document.getElementById('raFooterBarFinal');
+    if (footer && footer.parentElement !== wrap){
+      try { wrap.appendChild(footer); } catch(_){}
+    }
+
+    try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+  }
+
+  // Debounced handler for desktop resize only
+  const debounce = (fn, ms=120) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
+  const onDesktopResize = debounce(() => {
+    if (!isDesktop()) return;
+    const c = C(); const wrap = wrapEl(); if (!c || !wrap) return;
+
+    const want = desiredDesktopSize();
+    const staleInline = wrap.style.width || wrap.style.height;
+    const wrongSize = (c.getWidth && c.getWidth() !== want) || (c.getHeight && c.getHeight() !== want);
+
+    if (staleInline || wrongSize) restoreDesktopState();
+  }, 120);
+
+  function boot(){
+    if (isDesktop()) restoreDesktopState();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+
+  // If user dips into "small" then comes back to desktop → restore immediately
+  try {
+    const handler = (e) => { if (!e.matches) restoreDesktopState(); };
+    if (mq.addEventListener) mq.addEventListener('change', handler);
+    else if (mq.addListener) mq.addListener(handler); // Safari <14
+  } catch(_){}
+
+  // While staying on desktop, keep things tidy on resize
+  window.addEventListener('resize', onDesktopResize);
+
+  // Also restore after app-level events that may reflow layers
+  try { document.addEventListener('ra-json-restore-end',  () => { if (isDesktop()) restoreDesktopState(); }); } catch(_){}
+  try { document.addEventListener('ra-collection-change', () => { if (isDesktop()) restoreDesktopState(); }); } catch(_){}
+})();
