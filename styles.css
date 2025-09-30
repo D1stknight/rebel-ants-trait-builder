@@ -202,3 +202,26 @@ html.ra-desktop-hardlock .canvas-container {
   margin: 0 auto !important;                /* ensure horizontal centering */
   transform: none !important;               /* kill any leftover CSS transforms */
 }
+
+/* =========================================================
+   DESKTOP In‑Flow Canvas (no position:fixed) — device=desktop only
+   Keeps the canvas wrapper centered by normal flow.
+   ========================================================= */
+html.ra-desktop-inflow .stage {
+  display: block !important;               /* let the stage flow normally */
+  overflow: visible !important;
+}
+html.ra-desktop-inflow .canvas-wrap {
+  position: relative !important;           /* no absolute/fixed tricks */
+  display: inline-block !important;
+  margin: 0 auto !important;               /* center within stage */
+  left: auto !important; top: auto !important; right: auto !important; bottom: auto !important;
+  transform: none !important;
+  max-width: 100% !important;
+}
+html.ra-desktop-inflow .canvas-container {
+  position: relative !important;
+  margin: 0 auto !important;
+  left: auto !important; top: auto !important;
+  transform: none !important;
+}
