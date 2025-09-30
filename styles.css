@@ -178,50 +178,52 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP HARD‑LOCK — center + confine the canvas in the stage
-   (has effect only when html has class 'ra-desktop-hardlock')
+   DESKTOP FREEZE — fixed 3‑column grid + stage width lock
+   - Desktop devices only (pointer:fine)
+   - No impact on mobile
+   - When the viewport gets narrow, page shows a scrollbar —
+     layout & canvas do not move.
    ========================================================= */
-html.ra-desktop-hardlock .stage {
-  display: flex !important;
-  justify-content: center !important;
-  align-items: flex-start !important;
-  overflow: visible !important;             /* page handles scrolling */
-}
+@media (pointer: fine) {
+  :root{
+    /* Tweakables (desktop) */
+    --left-col: 320px;    /* left sidebar width */
+    --right-col: 400px;   /* right sidebar width */
+    --gap: 18px;          /* grid gap used in your app */
+    --stage-pad: 24px;    /* = .canvas-wrap padding * 2  (12px * 2 by default) */
+    --canvas-min: 700px;  /* initial canvas size; JS will keep this in sync */
+    --stage-min: calc(var(--canvas-min) + var(--stage-pad));
+    --app-min: calc(var(--left-col) + var(--gap) + var(--stage-min) + var(--gap) + var(--right-col));
+  }
 
-html.ra-desktop-hardlock .canvas-wrap {
-  display: inline-block !important;
-  margin: 0 auto !important;                /* center within stage */
-  max-width: 100% !important;               /* never spill outside the stage column */
-  overflow: hidden !important;              /* prevents covering side panels */
-}
+  /* Keep 3‑column grid at all viewport widths on desktop */
+  .app{
+    grid-template-columns: var(--left-col) 1fr var(--right-col) !important;
+    column-gap: var(--gap) !important;
+    min-width: var(--app-min) !important;    /* forces horizontal scroll instead of collapsing */
+    height: 100vh !important;
+  }
 
-html.ra-desktop-hardlock .canvas-container {
-  position: relative !important;            /* keep Fabric container in normal flow */
-  left: auto !important;
-  top: auto !important;
-  margin: 0 auto !important;                /* ensure horizontal centering */
-  transform: none !important;               /* kill any leftover CSS transforms */
-}
+  /* Middle column may not shrink below canvas + wrapper padding */
+  .stage{
+    min-width: var(--stage-min) !important;
+    overflow: visible !important;
+  }
 
-/* =========================================================
-   DESKTOP In‑Flow Canvas (no position:fixed) — device=desktop only
-   Keeps the canvas wrapper centered by normal flow.
-   ========================================================= */
-html.ra-desktop-inflow .stage {
-  display: block !important;               /* let the stage flow normally */
-  overflow: visible !important;
-}
-html.ra-desktop-inflow .canvas-wrap {
-  position: relative !important;           /* no absolute/fixed tricks */
-  display: inline-block !important;
-  margin: 0 auto !important;               /* center within stage */
-  left: auto !important; top: auto !important; right: auto !important; bottom: auto !important;
-  transform: none !important;
-  max-width: 100% !important;
-}
-html.ra-desktop-inflow .canvas-container {
-  position: relative !important;
-  margin: 0 auto !important;
-  left: auto !important; top: auto !important;
-  transform: none !important;
+  /* Canvas wrapper stays in normal flow and centered */
+  .canvas-wrap{
+    position: relative !important;
+    display: inline-block !important;
+    margin: 0 auto !important;
+    left: auto !important; top: auto !important; right: auto !important; bottom: auto !important;
+    transform: none !important;
+    max-width: 100% !important;
+  }
+
+  /* Fabric container must not carry transforms on desktop */
+  .canvas-container{
+    position: relative !important;
+    transform: none !important;
+    left: auto !important; top: auto !important;
+  }
 }
