@@ -176,3 +176,29 @@ button, .btn { touch-action: manipulation; }
   .ra-mobile-dock { gap: 6px; padding: 8px 10px; }
   .ra-mobile-dock button { min-height: 42px; font-size: 12px; }
 }
+
+/* =========================================================
+   DESKTOP HARD‑LOCK — center + confine the canvas in the stage
+   (has effect only when html has class 'ra-desktop-hardlock')
+   ========================================================= */
+html.ra-desktop-hardlock .stage {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  overflow: visible !important;             /* page handles scrolling */
+}
+
+html.ra-desktop-hardlock .canvas-wrap {
+  display: inline-block !important;
+  margin: 0 auto !important;                /* center within stage */
+  max-width: 100% !important;               /* never spill outside the stage column */
+  overflow: hidden !important;              /* prevents covering side panels */
+}
+
+html.ra-desktop-hardlock .canvas-container {
+  position: relative !important;            /* keep Fabric container in normal flow */
+  left: auto !important;
+  top: auto !important;
+  margin: 0 auto !important;                /* ensure horizontal centering */
+  transform: none !important;               /* kill any leftover CSS transforms */
+}
