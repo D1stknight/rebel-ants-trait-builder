@@ -8356,156 +8356,174 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP DEVICE FREEZE — keep UI identical while resizing
-   - Desktop only (device-based), mobile untouched
-   - Neutralizes mobile CSS on desktop devices even if viewport is tiny
-   - Clears inline sizing/transform, locks canvas size to desktop value
+   DESKTOP HARD‑LOCK — keep UI identical while resizing (desktop devices only)
+   - Freezes desktop 3‑column layout (CSS override) regardless of window size
+   - Hides any mobile UI that might appear on desktop
+   - Stubs matchMedia for mobile queries so mobile JS never runs on desktop
+   - Clears any leftover inline sizing from mobile and keeps desktop canvas size
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_DESKTOP_DEVICE_FREEZE__) return;
-  window.__RA_DESKTOP_DEVICE_FREEZE__ = true;
+  if (window.__RA_DESKTOP_HARDLOCK_V2__) return;
+  window.__RA_DESKTOP_HARDLOCK_V2__ = true;
 
-  // Robust desktop vs mobile detection (device-based, not viewport)
+  // Device detection (not viewport). We treat "pointer:fine" & non-mobile UA as desktop.
   const UA = navigator.userAgent || '';
   const isMobileUA =
     (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
+  const isFinePointer = window.matchMedia && window.matchMedia('(pointer: fine)').matches;
+  const IS_DESKTOP_DEVICE = isFinePointer && !isMobileUA;
 
-  if (isMobileUA) return;           // <-- On real mobile/tablet: do nothing
-  document.documentElement.classList.add('ra-desktop-device');
+  if (!IS_DESKTOP_DEVICE) return;  // Do nothing on phones/tablets
 
-  // Inject a tiny CSS override that cancels mobile styles on desktop devices
-  try {
+  // 1) Mark <html> so our overrides only apply on desktop devices.
+  document.documentElement.classList.add('ra-desktop-hardlock');
+
+  // 2) Inject high‑specificity CSS to override responsive collapse on desktop devices.
+  //    This neutralizes blocks like @media (max-width:1100px) that flip to single column,
+  //    and hides any mobile UI elements if they were injected.
+  (function injectCSS(){
+    if (document.getElementById('raDesktopHardlockCSS')) return;
     const css = `
-@media (max-width: 768px), (max-height: 500px){
-  html.ra-desktop-device .ra-mobile-dock,
-  html.ra-desktop-device .ra-back-to-canvas,
-  html.ra-desktop-device .ra-del-overlay { display:none !important; visibility:hidden !important; }
-  html.ra-desktop-device body { padding-bottom: 0 !important; }
-  html.ra-desktop-device .canvas-wrap { width:auto !important; height:auto !important; }
-  html.ra-desktop-device .canvas-container { transform:none !important; }
-}`;
+/* Desktop hard‑lock: keep 3‑column layout no matter viewport size */
+html.ra-desktop-hardlock, html.ra-desktop-hardlock body { overflow-x: auto; }
+html.ra-desktop-hardlock .app {
+  grid-template-columns: 320px 1fr 400px !important;
+  height: 100vh !important;
+  min-width: 1200px !important;  /* ensures layout doesn't collapse; adjust if your desktop min width differs */
+}
+/* Undo any reordering that mobile/tablet CSS might do */
+html.ra-desktop-hardlock .panel.right,
+html.ra-desktop-hardlock .stage,
+html.ra-desktop-hardlock .panel.left { order: initial !important; }
+
+/* Keep canvas wrapper unconstrained on desktop */
+html.ra-desktop-hardlock .canvas-wrap {
+  max-width: none !important;
+  overflow: visible !important;
+}
+
+/* Hide any mobile-only helpers if they were created */
+html.ra-desktop-hardlock #raMobileDock,
+html.ra-desktop-hardlock #raBackToCanvas,
+html.ra-desktop-hardlock #raDelOverlayBtn {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Make sure no transform-scaling leaks onto desktop */
+html.ra-desktop-hardlock .canvas-container {
+  transform: none !important;
+}
+`;
     const s = document.createElement('style');
-    s.id = 'raDesktopDeviceFreezeCSS';
+    s.id = 'raDesktopHardlockCSS';
     s.textContent = css;
     document.head.appendChild(s);
-  } catch (_) {}
+  })();
 
+  // 3) Stub matchMedia for the specific mobile queries so desktop-side JS never "thinks" it is small.
+  //    (Affects JS only; CSS media queries still exist, but are overridden by the CSS block above.)
+  (function stubMobileMatchMedia(){
+    const orig = window.matchMedia ? window.matchMedia.bind(window) : null;
+    if (!orig) return;
+    window.__RA_ORIG_MATCHMEDIA__ = orig;
+
+    window.matchMedia = function(q){
+      try {
+        const str = (typeof q === 'string' ? q : q.media || '').replace(/\s+/g,'').toLowerCase();
+        // Common mobile queries used in your code:
+        const hitsMobile =
+          str.includes('(max-width:768px)') ||
+          str.includes('(max-height:500px)') ||
+          str.includes('(max-width:420px)');
+        if (hitsMobile) {
+          // Always return a "non-matching" MQL stub on desktop devices
+          return {
+            media: typeof q === 'string' ? q : q.media,
+            matches: false,
+            onchange: null,
+            addListener(){}, removeListener(){},
+            addEventListener(){}, removeEventListener(){},
+            dispatchEvent(){ return true; }
+          };
+        }
+      } catch(_) {}
+      return window.__RA_ORIG_MATCHMEDIA__(q);
+    };
+  })();
+
+  // 4) Desktop normalizer: remove mobile inline sizing and keep desktop canvas size.
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
-
   function wrapEl(){
-    // Prefer your checkerboard wrapper; fall back to canvas container ancestry
     const wrap = document.querySelector('.canvas-wrap');
     if (wrap) return wrap;
     const c = C();
     return c ? (c.upperCanvasEl?.parentElement?.parentElement || c.upperCanvasEl?.parentElement) : null;
   }
-
-  function desktopTargetSize(){
+  function desktopSize(){
     const input = document.getElementById('canvasSize');
     const v = parseInt(input ? input.value : '700', 10);
     if (Number.isFinite(v) && v > 0) return v;
     try { const cur = C()?.getWidth(); if (cur) return cur; } catch(_){}
     return 700;
   }
-
   function clearInline(wrapper, container){
-    if (wrapper){
-      wrapper.style.width  = '';
-      wrapper.style.height = '';
-    }
+    if (wrapper){ wrapper.style.width=''; wrapper.style.height=''; }
     if (container){
       try { container.style.removeProperty('transform'); } catch(_){}
-      container.style.width  = '';
-      container.style.height = '';
+      container.style.width=''; container.style.height='';
     }
   }
-
-  function ensureFooter(wrapper){
-    const footer = document.getElementById('raFooterBarFinal');
-    if (footer && wrapper && footer.parentElement !== wrapper){
-      try { wrapper.appendChild(footer); } catch(_){}
-    }
-  }
-
-  // Enforce once; return true if canvas present
-  function enforceOnce(lockSize){
-    const c = C(); if (!c) return false;
+  function normalizeDesktop(){
+    const c = C(); if (!c) return;
     const container = c.upperCanvasEl && c.upperCanvasEl.parentElement;
     const wrap = wrapEl() || container;
-    if (!wrap || !container) return false;
 
-    // 1) Kill any inline sizing/transform left by mobile code
+    // Kill any inline sizing/transform left by mobile logic
     clearInline(wrap, container);
 
-    // 2) Lock canvas size to desktop value (no zoom changes)
-    const want = lockSize ?? desktopTargetSize();
+    // Lock canvas to desktop size (no zoom changes)
+    const want = desktopSize();
     const cw = c.getWidth ? c.getWidth() : 0;
     const ch = c.getHeight ? c.getHeight() : 0;
     if (want && (cw !== want || ch !== want)){
       try {
-        if (typeof window.setCanvasSize === 'function') {
-          window.setCanvasSize(want);
-        } else if (typeof window.raResizeCanvasAndScale === 'function') {
-          window.raResizeCanvasAndScale(want);
-        } else {
-          c.setWidth(want); c.setHeight(want);
-        }
+        if (typeof window.setCanvasSize === 'function')      window.setCanvasSize(want);
+        else if (typeof window.raResizeCanvasAndScale === 'function') window.raResizeCanvasAndScale(want);
+        else { c.setWidth(want); c.setHeight(want); }
       } catch(_){}
     }
 
-    ensureFooter(wrap);
-    try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
-    return true;
-  }
-
-  // Light RAF loop during active resize so our state "wins"
-  function stabilize(ms=450){
-    const start = performance.now();
-    const want = desktopTargetSize();
-    (function tick(){
-      enforceOnce(want);
-      if (performance.now() - start < ms) requestAnimationFrame(tick);
-    })();
-  }
-
-  // Wait until Fabric exists, then set up observers
-  (function waitForCanvas(){
-    const c = C();
-    if (!c) return setTimeout(waitForCanvas, 120);
-
-    // Initial lock
-    stabilize(350);
-
-    // Reflect changes if user intentionally updates the canvas size in UI
-    const sizeInput = document.getElementById('canvasSize');
-    if (sizeInput && !sizeInput.__raDesktopFreezeBound){
-      sizeInput.__raDesktopFreezeBound = true;
-      sizeInput.addEventListener('change', () => stabilize(300));
+    // Ensure footer is inside wrapper (CSS centers it)
+    const footer = document.getElementById('raFooterBarFinal');
+    if (footer && wrap && footer.parentElement !== wrap){
+      try { wrap.appendChild(footer); } catch(_){}
     }
 
-    // If anything tries to write inline styles again, revert immediately
-    const wrapper = wrapEl();
-    const container = c.upperCanvasEl && c.upperCanvasEl.parentElement;
+    try { c.requestRenderAll && c.requestRenderAll(); } catch(_){}
+  }
 
-    const mo = new MutationObserver(() => { stabilize(250); });
-    if (wrapper)   mo.observe(wrapper,   { attributes:true, attributeFilter:['style'] });
-    if (container) mo.observe(container, { attributes:true, attributeFilter:['style'] });
+  // 5) Keep the desktop state stable during aggressive window drags
+  const debounce = (fn, ms=120) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
+  const stabilize = (ms=400) => {
+    const start = performance.now();
+    (function tick(){
+      normalizeDesktop();
+      if (performance.now() - start < ms) requestAnimationFrame(tick);
+    })();
+  };
 
-    // If someone changes the canvas element size directly, revert
-    try {
-      const lower = c.lowerCanvasEl;
-      const attrObs = new MutationObserver(() => { stabilize(250); });
-      attrObs.observe(lower, { attributes:true, attributeFilter:['width','height'] });
-    } catch(_){}
+  function boot(){ stabilize(350); }
 
-    // Desktop window resizes: keep it stable
-    window.addEventListener('resize', () => stabilize(400));
-    window.addEventListener('orientationchange', () => stabilize(500));
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
 
-    // App‑level layout events: restore once
-    try { document.addEventListener('ra-json-restore-end',  () => stabilize(300)); } catch(_){}
-    try { document.addEventListener('ra-collection-change', () => stabilize(300)); } catch(_){}
-  })();
+  window.addEventListener('resize',            debounce(() => stabilize(400), 80));
+  window.addEventListener('orientationchange', debounce(() => stabilize(500), 80));
+
+  // Also after app-level events
+  try { document.addEventListener('ra-json-restore-end',  () => stabilize(300)); } catch(_){}
+  try { document.addEventListener('ra-collection-change', () => stabilize(300)); } catch(_){}
 })();
