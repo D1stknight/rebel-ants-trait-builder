@@ -178,78 +178,68 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP FREEZE — fixed 3‑column grid + stage width lock
-   - Desktop devices only (pointer:fine)
-   - No impact on mobile
-   - When the viewport gets narrow, page shows a scrollbar —
-     layout & canvas do not move.
+   DESKTOP COLUMNS‑LOCK — left & right fixed; middle free
+   - Desktop only (pointer:fine). Mobile unaffected.
+   - Locks panel widths so the middle never bleeds into them.
+   - The page gets a horizontal scrollbar if the viewport
+     is narrower than the 3‑column minimum width.
+   - Middle column stays in normal flow (scrolls naturally).
    ========================================================= */
 @media (pointer: fine) {
   :root{
-    /* Tweakables (desktop) */
-    --left-col: 320px;    /* left sidebar width */
-    --right-col: 400px;   /* right sidebar width */
-    --gap: 18px;          /* grid gap used in your app */
-    --stage-pad: 24px;    /* = .canvas-wrap padding * 2  (12px * 2 by default) */
-    --canvas-min: 700px;  /* initial canvas size; JS will keep this in sync */
-    --stage-min: calc(var(--canvas-min) + var(--stage-pad));
-    --app-min: calc(var(--left-col) + var(--gap) + var(--stage-min) + var(--gap) + var(--right-col));
+    /* Tweak here if your panel sizes/gap change */
+    --ra-left-w:   320px;   /* left panel width */
+    --ra-right-w:  400px;   /* right panel width */
+    --ra-gap:       18px;   /* grid gap between columns */
+    --ra-wrap-pad:  12px;   /* .canvas-wrap padding (CSS) */
+    --ra-mid-min:  700px;   /* fallback min canvas logical size (JS will update) */
   }
 
-  /* Keep 3‑column grid at all viewport widths on desktop */
-  .app{
-    grid-template-columns: var(--left-col) 1fr var(--right-col) !important;
-    column-gap: var(--gap) !important;
-    min-width: var(--app-min) !important;    /* forces horizontal scroll instead of collapsing */
-    height: 100vh !important;
+  /* Lock the grid and its minimum width */
+  html.ra-desktop-cols .app{
+    display: grid !important;
+    grid-template-columns: var(--ra-left-w) minmax(calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2), 1fr) var(--ra-right-w)) !important;
+    column-gap: var(--ra-gap) !important;
+    align-items: start !important;
+
+    /* The minimum total width keeps columns from overlapping
+       when the viewport is narrower; page will scroll horizontally. */
+    min-width: calc(
+      var(--ra-left-w) +
+      var(--ra-right-w) +
+      (var(--ra-gap) * 2) +
+      (var(--ra-mid-min) + var(--ra-wrap-pad)*2)
+    ) !important;
   }
 
-  /* Middle column may not shrink below canvas + wrapper padding */
-  .stage{
-    min-width: var(--stage-min) !important;
+  /* Hard lock the side panels so they never shrink */
+  html.ra-desktop-cols .panel.left{
+    width: var(--ra-left-w) !important;
+    min-width: var(--ra-left-w) !important;
+  }
+  html.ra-desktop-cols .panel.right{
+    width: var(--ra-right-w) !important;
+    min-width: var(--ra-right-w) !important;
+  }
+
+  /* Middle column (stage) stays in normal flow; just ensure its
+     content has at least the room the canvas needs. */
+  html.ra-desktop-cols .stage{
+    position: relative !important;
+    min-width: calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2) !important;
     overflow: visible !important;
   }
 
-  /* Canvas wrapper stays in normal flow and centered */
-  .canvas-wrap{
+  /* The canvas wrapper sits centered and scrolls with the page. */
+  html.ra-desktop-cols .stage .canvas-wrap{
     position: relative !important;
-    display: inline-block !important;
     margin: 0 auto !important;
-    left: auto !important; top: auto !important; right: auto !important; bottom: auto !important;
     transform: none !important;
-    max-width: 100% !important;
+    /* padding is already represented by --ra-wrap-pad */
   }
 
-  /* Fabric container must not carry transforms on desktop */
-  .canvas-container{
-    position: relative !important;
+  /* Make sure Fabric doesn't apply a transform scale on desktop */
+  html.ra-desktop-cols .canvas-container{
     transform: none !important;
-    left: auto !important; top: auto !important;
-  }
-}
-
-/* =========================================================
-   DESKTOP FLOW (simple aligner) — desktop only
-   - Middle square scrolls with the page (no sticky)
-   - JS sets --flow2-top once to align with side panels
-   - Mobile unaffected
-   ========================================================= */
-@media (pointer: fine) {
-  html.ra-desktop-flow2 .stage{
-    position: relative !important;
-    overflow: visible !important;
-  }
-  html.ra-desktop-flow2 .stage .canvas-wrap{
-    position: relative !important;   /* in normal flow */
-    top: auto !important;
-    left: auto !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
-    margin-top: var(--flow2-top, 0px) !important;  /* set by JS */
-    transform: none !important;
-    z-index: 5;
-  }
-  html.ra-desktop-flow2 .canvas-container{
-    transform: none !important;      /* avoid any transform side effects */
   }
 }
