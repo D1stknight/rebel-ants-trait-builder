@@ -252,3 +252,12 @@ button, .btn { touch-action: manipulation; }
     z-index: 1;                         /* sit above backgrounds if needed */
   }
 }
+
+/* Sticky needs the page to scroll. On desktop sticky mode,
+   let the grid be taller than the viewport if content is long. */
+@media (pointer: fine) {
+  html.ra-desktop-sticky .app {
+    height: auto !important;
+    min-height: 100vh !important;
+  }
+}
