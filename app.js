@@ -8428,3 +8428,38 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 })();
+
+/* =========================================================
+   DESKTOP STICKY MODE bootstrap (no Fabric size/zoom changes)
+   - Enables sticky on desktop devices
+   - Helpers to toggle and adjust offset while testing:
+       window.raStickyModeOn()
+       window.raStickyModeOff()
+       window.raSetStickyTop(px)
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_STICKY_MODE__) return;
+  window.__RA_STICKY_MODE__ = true;
+
+  const isDesktop = () =>
+    window.matchMedia('(pointer: fine)').matches &&
+    !/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(navigator.userAgent||'');
+
+  function on(){ document.documentElement.classList.add('ra-desktop-sticky'); }
+  function off(){ document.documentElement.classList.remove('ra-desktop-sticky'); }
+  function setTop(px){ document.documentElement.style.setProperty('--sticky-top', (px|0)+'px'); }
+
+  function boot(){ if (isDesktop()) on(); }   // enable by default on desktop
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+
+  // Expose small testers
+  window.raStickyModeOn = on;
+  window.raStickyModeOff = off;
+  window.raSetStickyTop = setTop;
+})();
