@@ -229,27 +229,27 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP ANCHORED (absolute-only, high-priority override)
-   - Desktop only (pointer:fine)
-   - Lets JS drive top/left using CSS variables
-   - Does not touch mobile
+   DESKTOP FLOW (simple aligner) — desktop only
+   - Middle square scrolls with the page (no sticky)
+   - JS sets --flow2-top once to align with side panels
+   - Mobile unaffected
    ========================================================= */
 @media (pointer: fine) {
-  html.ra-desktop-anchored .stage{
-    position: relative !important;      /* anchor for absolute positioning */
+  html.ra-desktop-flow2 .stage{
+    position: relative !important;
     overflow: visible !important;
   }
-  /* Hard override: give control back to us even if Freeze set other rules */
-  html.ra-desktop-anchored .stage .canvas-wrap{
-    position: absolute !important;
-    top: var(--st-top, 0px) !important;
-    left: var(--st-left, 0px) !important;
-    margin: 0 !important;
+  html.ra-desktop-flow2 .stage .canvas-wrap{
+    position: relative !important;   /* in normal flow */
+    top: auto !important;
+    left: auto !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    margin-top: var(--flow2-top, 0px) !important;  /* set by JS */
     transform: none !important;
     z-index: 5;
   }
-  /* Be sure Fabric's inner container isn't transform-scaled on desktop */
-  html.ra-desktop-anchored .canvas-container{
-    transform: none !important;
+  html.ra-desktop-flow2 .canvas-container{
+    transform: none !important;      /* avoid any transform side effects */
   }
 }
