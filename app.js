@@ -8430,52 +8430,16 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP STICKY MODE bootstrap (no Fabric size/zoom changes)
-   - Enables sticky on desktop devices
-   - Helpers to toggle and adjust offset while testing:
-       window.raStickyModeOn()
-       window.raStickyModeOff()
-       window.raSetStickyTop(px)
-   ========================================================= */
-;(() => {
-  'use strict';
-  if (window.__RA_STICKY_MODE__) return;
-  window.__RA_STICKY_MODE__ = true;
-
-  const isDesktop = () =>
-    window.matchMedia('(pointer: fine)').matches &&
-    !/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(navigator.userAgent||'');
-
-  function on(){ document.documentElement.classList.add('ra-desktop-sticky'); }
-  function off(){ document.documentElement.classList.remove('ra-desktop-sticky'); }
-  function setTop(px){ document.documentElement.style.setProperty('--sticky-top', (px|0)+'px'); }
-
-  function boot(){ if (isDesktop()) on(); }   // enable by default on desktop
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
-
-  // Expose small testers
-  window.raStickyModeOn = on;
-  window.raStickyModeOff = off;
-  window.raSetStickyTop = setTop;
-})();
-
-/* =========================================================
-   DESKTOP STICKY — PADDING CALIBRATOR (column scroller)
+   DESKTOP FLOW + OFFSET CALIBRATOR
    - Desktop only (pointer:fine, not mobile UA)
-   - Uses real .stage padding to guarantee the square can reach:
-     • TOP: align with the side panels’ top cards
-     • BOTTOM: align with the lowest side content
-   - No Fabric size/zoom changes
+   - Aligns canvas square with side panels at the top
+   - Adds bottom padding so you can scroll to the curved section
+   - No Fabric size/zoom changes; mobile unaffected
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_STICKY_PAD_CALIB__) return;
-  window.__RA_STICKY_PAD_CALIB__ = true;
+  if (window.__RA_DESKTOP_FLOW_CALIB__) return;
+  window.__RA_DESKTOP_FLOW_CALIB__ = true;
 
   const UA = navigator.userAgent || '';
   const isMobileUA =
@@ -8483,66 +8447,65 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
 
-  const $ = sel => document.querySelector(sel);
-  const setVar = (name, px) => document.documentElement.style.setProperty(name, (px|0)+'px');
+  const $ = s => document.querySelector(s);
+  const setVar = (k, px) => document.documentElement.style.setProperty(k, (px|0) + 'px');
+
+  function offStickyOnFlow(){
+    // Ensure we’re in FLOW mode (and not sticky)
+    document.documentElement.classList.remove('ra-desktop-sticky');
+    document.documentElement.classList.add('ra-desktop-flow');
+  }
 
   function parts(){
-    const stage = $('.stage');
-    const wrap  = $('.canvas-wrap');
-    const left  = $('.panel.left');
-    const right = $('.panel.right');
-    return { stage, wrap, left, right };
+    return {
+      stage: $('.stage'),
+      wrap:  $('.canvas-wrap'),
+      left:  $('.panel.left'),
+      right: $('.panel.right')
+    };
   }
 
   function calibrate(){
     if (!isDesktop()) return;
-    if (!document.documentElement.classList.contains('ra-desktop-sticky')) return;
+    offStickyOnFlow();
 
     const { stage, wrap, left, right } = parts();
     if (!stage || !wrap) return;
 
-    // ----- TOP alignment -----
-    // Reference top = top of first side panel (prefer right, then left).
-    const ref = right || left || null;
+    // ---- TOP: align with side panels' top (prefer right, fall back left) ----
+    const ref = right || left;
+    if (ref){
+      const pageY = window.scrollY || 0;
+      const refTop   = ref.getBoundingClientRect().top   + pageY;
+      const stageTop = stage.getBoundingClientRect().top + pageY;
 
-    const pageY   = window.scrollY || window.pageYOffset || 0;
-    const stageTopPage = stage.getBoundingClientRect().top + pageY;
-    const refTopPage   = ref ? (ref.getBoundingClientRect().top + pageY) : stageTopPage;
+      // Desired vertical offset so canvas top matches side panels’ top
+      const flowTop = Math.round(refTop - stageTop);
+      setVar('--flow-top', flowTop);
+    } else {
+      setVar('--flow-top', 0);
+    }
 
-    // Make the sticky square's top meet the side panels' top:
-    // top(sticky) = stageTop + paddingTop + stickyTop  → set stickyTop accordingly
-    // We keep padding-top minimal (0) and let stickyTop be negative/positive as needed.
-    const stickyTop = Math.round(refTopPage - stageTopPage); // can be negative
-    setVar('--sticky-top', stickyTop);
-
-    // Minimal top padding (you can bump this if you want a fixed offset from the very top)
-    setVar('--stage-pad-top', 0);
-
-    // ----- BOTTOM alignment -----
-    // Ensure the stage can scroll enough so the sticky square reaches the bottom
-    // of the tallest side column (wallet/overlays/etc.).
-    const sideBottomPage = Math.max(
-      left  ? left.getBoundingClientRect().bottom  + pageY : 0,
-      right ? right.getBoundingClientRect().bottom + pageY : 0
+    // ---- BOTTOM: ensure we can scroll far enough to line up with bottom content ----
+    const sideBottom = Math.max(
+      left  ? left.getBoundingClientRect().bottom  : 0,
+      right ? right.getBoundingClientRect().bottom : 0
     );
+    const stageBottomNow = stage.getBoundingClientRect().bottom;
 
-    // Current bottom of stage content (includes padding)
-    const stageBottomPage = stageTopPage + stage.scrollHeight;
+    // If side columns extend below the stage's current bottom,
+    // add extra padding so we can scroll there.
+    const extraBottom = Math.max(0, Math.round(sideBottom - stageBottomNow) + 16);
+    setVar('--flow-bottom-pad', extraBottom);
 
-    // Extra padding needed at the bottom so the stage scroll range matches sides
-    const extraBottom = Math.max(0, Math.round(sideBottomPage - stageBottomPage) + 16);
-    setVar('--stage-pad-bottom', extraBottom);
-
-    // Defensive: ensure no transform sneaks onto Fabric on desktop
+    // Defensive: no transforms on Fabric container
     try { $('.canvas-container')?.style.removeProperty('transform'); } catch(_){}
   }
 
   function boot(){
     if (!isDesktop()) return;
-    // Initial pass
     calibrate();
 
-    // Recalibrate when layout might change
     let raf = 0;
     const schedule = () => {
       if (raf) cancelAnimationFrame(raf);
@@ -8552,11 +8515,11 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     window.addEventListener('resize', schedule, { passive:true });
     window.addEventListener('orientationchange', schedule, { passive:true });
 
-    // App-specific events that may reflow things
+    // App-specific layout changes
     document.addEventListener('ra-json-restore-end', schedule);
     document.addEventListener('ra-collection-change', schedule);
 
-    // A couple of late passes for fonts/images
+    // Late passes for fonts/images
     setTimeout(calibrate, 200);
     setTimeout(calibrate, 600);
   }
@@ -8568,7 +8531,6 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   }
 
   // Optional manual nudges from the console
-  window.raStickyPadTop     = px => setVar('--stage-pad-top', px);
-  window.raStickyPadBottom  = px => setVar('--stage-pad-bottom', px);
-  window.raSetStickyTop     = px => setVar('--sticky-top', px);
+  window.raFlowTop       = px => setVar('--flow-top', px);
+  window.raFlowBottomPad = px => setVar('--flow-bottom-pad', px);
 })();
