@@ -229,49 +229,40 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP STICKY — Column scroller + calibrated top/bottom range
+   DESKTOP STICKY — Padding variant (column scroller)
    - Desktop only (pointer:fine)
-   - The middle column (.stage) scrolls; .canvas-wrap sticks inside it
-   - Top/bottom spacers are variables so we can align with side panels
+   - The middle column (.stage) scrolls
+   - The canvas wrapper (.canvas-wrap) is sticky inside that column
+   - We use real padding on .stage (no pseudo-elements) so the
+     square can reach true top/bottom alignment without “vanishing”
    ========================================================= */
 @media (pointer: fine) {
   :root{
-    --sticky-top: 0px;              /* 0 = align square's top with side cards; adjust if desired */
-    --stage-top-spacer: 0px;        /* auto-set by JS; room above the sticky square */
-    --stage-bottom-spacer: 0px;     /* auto-set by JS; room below the sticky square */
+    --sticky-top: 0px;            /* JS will set this; you can tweak later */
+    --stage-pad-top: 0px;         /* JS sets; top breathing room in .stage */
+    --stage-pad-bottom: 0px;      /* JS sets; bottom breathing room in .stage */
   }
 
-  /* The STAGE is the scroller on desktop sticky mode */
   html.ra-desktop-sticky .stage{
     position: relative !important;
     height: 100vh !important;
     max-height: 100vh !important;
-    overflow: auto !important;              /* column scrolls, not the page */
+    overflow: auto !important;         /* column is the scroller */
     overscroll-behavior: contain;
+    padding-top: var(--stage-pad-top) !important;
+    padding-bottom: var(--stage-pad-bottom) !important;
   }
 
-  /* Invisible spacers to let the sticky square reach true top/bottom alignment */
-  html.ra-desktop-sticky .stage::before{
-    content: ""; display: block;
-    height: var(--stage-top-spacer);
-  }
-  html.ra-desktop-sticky .stage::after{
-    content: ""; display: block;
-    height: var(--stage-bottom-spacer);
-  }
-
-  /* The canvas wrapper sticks inside the stage scroller, centered */
   html.ra-desktop-sticky .canvas-wrap{
     position: sticky !important;
     top: var(--sticky-top) !important;
     margin-left: auto !important;
-    margin-right: auto !important;
+    margin-right: auto !important;     /* keep centered in the column */
     left: auto !important; right: auto !important; bottom: auto !important;
     transform: none !important;
-    z-index: 3;
+    z-index: 5;                         /* stay above subtle backgrounds */
   }
 
-  /* Ensure Fabric container is not transformed on desktop */
   html.ra-desktop-sticky .canvas-container{
     transform: none !important;
     left: auto !important; top: auto !important;
