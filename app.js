@@ -8430,98 +8430,152 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP FLOW + OFFSET CALIBRATOR
-   - Desktop only (pointer:fine, not mobile UA)
-   - Aligns canvas square with side panels at the top
-   - Adds bottom padding so you can scroll to the curved section
-   - No Fabric size/zoom changes; mobile unaffected
+   DESKTOP ANCHORED‑STICKY — precise top/bottom clamp (desktop only)
+   - No Fabric size/zoom changes
+   - Keeps the canvas square aligned with side columns' top and bottom
+   - Switches .canvas-wrap among ABSOLUTE(top) ↔ FIXED(sticky) ↔ ABSOLUTE(bottom)
+   - Mobile untouched
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_DESKTOP_FLOW_CALIB__) return;
-  window.__RA_DESKTOP_FLOW_CALIB__ = true;
+  if (window.__RA_DESKTOP_ANCHORED_STICKY__) return;
+  window.__RA_DESKTOP_ANCHORED_STICKY__ = true;
 
+  // Desktop device (not viewport) — do nothing on phones/tablets
   const UA = navigator.userAgent || '';
   const isMobileUA =
     (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
+  if (!isDesktop()) return;
 
-  const $ = s => document.querySelector(s);
-  const setVar = (k, px) => document.documentElement.style.setProperty(k, (px|0) + 'px');
+  // --- TUNABLES (small nudges only; leave 0 unless you need tiny visual tweaks)
+  const TOP_NUDGE_PX    = 0;   // + down, - up  (align with the top row of side columns)
+  const BOTTOM_CUSHION  = 16;  // extra room so it can meet the very bottom comfortably
+  const LEFT_NUDGE_PX   = 0;   // tiny horizontal nudge if needed
 
-  function offStickyOnFlow(){
-    // Ensure we’re in FLOW mode (and not sticky)
-    document.documentElement.classList.remove('ra-desktop-sticky');
-    document.documentElement.classList.add('ra-desktop-flow');
+  const $ = (s) => document.querySelector(s);
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function els(){
+    const stage = $('.stage');
+    const wrap  = $('.canvas-wrap') ||
+                  (C()?.upperCanvasEl?.parentElement?.parentElement) || null;
+    const cont  = C()?.upperCanvasEl?.parentElement || null;
+    const left  = $('.panel.left');
+    const right = $('.panel.right');
+    return { stage, wrap, cont, left, right };
   }
 
-  function parts(){
-    return {
-      stage: $('.stage'),
-      wrap:  $('.canvas-wrap'),
-      left:  $('.panel.left'),
-      right: $('.panel.right')
-    };
+  function clearConflictingInline(){
+    const { wrap, cont } = els();
+    if (cont){
+      cont.style.removeProperty('transform');
+      cont.style.removeProperty('left');
+      cont.style.removeProperty('top');
+      cont.style.position = 'relative';
+    }
+    if (wrap){
+      // We'll control position/coords explicitly below
+      wrap.style.marginLeft = 'auto';
+      wrap.style.marginRight = 'auto';
+    }
   }
 
-  function calibrate(){
-    if (!isDesktop()) return;
-    offStickyOnFlow();
+  function clamp(val, a, b){ return Math.min(Math.max(val, a), b); }
 
-    const { stage, wrap, left, right } = parts();
+  function update(){
+    const E = els();
+    const { stage, wrap, left, right } = E;
     if (!stage || !wrap) return;
 
-    // ---- TOP: align with side panels' top (prefer right, fall back left) ----
-    const ref = right || left;
-    if (ref){
-      const pageY = window.scrollY || 0;
-      const refTop   = ref.getBoundingClientRect().top   + pageY;
-      const stageTop = stage.getBoundingClientRect().top + pageY;
+    // Reference TOP = top of first visible side panel (prefer right, then left)
+    const refTopEl = right || left || stage;
+    const refRect  = refTopEl.getBoundingClientRect();
 
-      // Desired vertical offset so canvas top matches side panels’ top
-      const flowTop = Math.round(refTop - stageTop);
-      setVar('--flow-top', flowTop);
-    } else {
-      setVar('--flow-top', 0);
-    }
+    // Stage geometry in both viewport and page coords
+    const stRect = stage.getBoundingClientRect();
+    const pageY  = window.scrollY || 0;
+    const stageTopPage = stRect.top + pageY;
 
-    // ---- BOTTOM: ensure we can scroll far enough to line up with bottom content ----
-    const sideBottom = Math.max(
-      left  ? left.getBoundingClientRect().bottom  : 0,
-      right ? right.getBoundingClientRect().bottom : 0
+    // Canvas wrapper size
+    const wrapW = wrap.offsetWidth  || 0;
+    const wrapH = wrap.offsetHeight || 0;
+
+    // Right/left columns' bottom (tallest wins)
+    const rRect = right ? right.getBoundingClientRect() : null;
+    const lRect = left  ? left.getBoundingClientRect()  : null;
+    const sideBottomPage = Math.max(
+      rRect ? (rRect.bottom + pageY) : 0,
+      lRect ? (lRect.bottom + pageY) : 0
     );
-    const stageBottomNow = stage.getBoundingClientRect().bottom;
 
-    // If side columns extend below the stage's current bottom,
-    // add extra padding so we can scroll there.
-    const extraBottom = Math.max(0, Math.round(sideBottom - stageBottomNow) + 16);
-    setVar('--flow-bottom-pad', extraBottom);
+    // Compute hard clamps for the wrapper's TOP in page coordinates:
+    const topClampPage    = (refTopEl === stage ? stageTopPage : (refRect.top + pageY)) + TOP_NUDGE_PX;
+    const bottomClampPage = (sideBottomPage || (stageTopPage + stage.scrollHeight)) - wrapH - BOTTOM_CUSHION;
 
-    // Defensive: no transforms on Fabric container
-    try { $('.canvas-container')?.style.removeProperty('transform'); } catch(_){}
+    // Desired viewport‑aligned top (while "sticking"): match the side panels' current viewport top
+    const desiredViewportTop = refRect.top + TOP_NUDGE_PX;
+
+    // Scroll thresholds where we switch modes:
+    // Before this scrollY → place absolute at TOP
+    const fixStartScrollY  = topClampPage - desiredViewportTop;
+    // After this scrollY  → place absolute at BOTTOM
+    const fixEndScrollY    = bottomClampPage - desiredViewportTop;
+
+    const scrollY = pageY;
+
+    // Horizontal centering for both modes
+    const stageWidth = stRect.width || stage.clientWidth || 0;
+    const leftAbs    = Math.round((stageWidth - wrapW)/2) + LEFT_NUDGE_PX;               // for ABSOLUTE (relative to stage)
+    const leftFix    = Math.round(stRect.left + (stageWidth - wrapW)/2) + LEFT_NUDGE_PX; // for FIXED (relative to viewport)
+
+    if (scrollY <= fixStartScrollY){
+      // --- TOP: Absolute inside the stage, locked to the clamp
+      wrap.style.position = 'absolute';
+      wrap.style.top  = Math.round(topClampPage - stageTopPage) + 'px';
+      wrap.style.left = leftAbs + 'px';
+    } else if (scrollY >= fixEndScrollY){
+      // --- BOTTOM: Absolute inside the stage at bottom clamp
+      wrap.style.position = 'absolute';
+      wrap.style.top  = Math.round(bottomClampPage - stageTopPage) + 'px';
+      wrap.style.left = leftAbs + 'px';
+    } else {
+      // --- STICKY RANGE: Fixed in the viewport, aligned to the reference top
+      wrap.style.position = 'fixed';
+      wrap.style.top  = Math.round(desiredViewportTop) + 'px';
+      wrap.style.left = leftFix + 'px';
+    }
+  }
+
+  // Throttle with RAF
+  let ticking = false;
+  function onScrollOrResize(){
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => { ticking = false; update(); });
   }
 
   function boot(){
-    if (!isDesktop()) return;
-    calibrate();
+    clearConflictingInline();
+    update();
+    // settle loop to win races during initial layout
+    let t0 = performance.now();
+    (function settle(){
+      update();
+      if (performance.now() - t0 < 300) requestAnimationFrame(settle);
+    })();
 
-    let raf = 0;
-    const schedule = () => {
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(calibrate);
-    };
+    window.addEventListener('scroll', onScrollOrResize, { passive:true });
+    window.addEventListener('resize', onScrollOrResize, { passive:true });
+    window.addEventListener('orientationchange', onScrollOrResize, { passive:true });
 
-    window.addEventListener('resize', schedule, { passive:true });
-    window.addEventListener('orientationchange', schedule, { passive:true });
-
-    // App-specific layout changes
-    document.addEventListener('ra-json-restore-end', schedule);
-    document.addEventListener('ra-collection-change', schedule);
-
-    // Late passes for fonts/images
-    setTimeout(calibrate, 200);
-    setTimeout(calibrate, 600);
+    // Recompute after app reflows
+    try { document.addEventListener('ra-json-restore-end',  onScrollOrResize); } catch(_){}
+    try { document.addEventListener('ra-collection-change', onScrollOrResize); } catch(_){}
+    // late passes for fonts/images
+    setTimeout(update, 200);
+    setTimeout(update, 600);
   }
 
   if (document.readyState === 'loading') {
@@ -8530,7 +8584,6 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 
-  // Optional manual nudges from the console
-  window.raFlowTop       = px => setVar('--flow-top', px);
-  window.raFlowBottomPad = px => setVar('--flow-bottom-pad', px);
+  // Expose tiny nudges for quick testing from console (desktop only)
+  window.raDesktopStickyNudgeTop  = (px)=>{ /* +down, -up */ const n=+(px||0); window.__RA_ST_NUDGE_TOP__=n; };
 })();
