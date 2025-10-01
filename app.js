@@ -8358,66 +8358,52 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 /* =========================================================
    DESKTOP COLUMNS‑LOCK Sync (no Fabric size/zoom changes)
    - Desktop only (pointer:fine, not mobile UA)
-   - Keeps --ra-mid-min in sync with the logical canvas size
-   - Applies the .ra-desktop-cols class to activate the CSS
+   - Keeps --ra-mid-min in sync with current canvas size
+   - Activates the CSS via html.ra-desktop-cols
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_DESK_COLS_LOCK__) return;
-  window.__RA_DESK_COLS_LOCK__ = true;
+  if (window.__RA_DESK_COLS_LOCK_V2__) return;
+  window.__RA_DESK_COLS_LOCK_V2__ = true;
 
   const UA = navigator.userAgent || '';
   const isMobileUA =
     (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
-
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
   if (!isDesktop()) return;
 
-  function setVar(name, valuePx){
-    document.documentElement.style.setProperty(name, `${Math.max(1, valuePx|0)}px`);
-  }
-
+  function setVar(name, px){ document.documentElement.style.setProperty(name, `${Math.max(1, px|0)}px`); }
   function canvasLogicalWidth(){
-    // Prefer Fabric logical width; fall back to 700
     try{
       if (window.canvas && typeof window.canvas.getWidth === 'function'){
         const w = window.canvas.getWidth();
         if (Number.isFinite(w) && w > 0) return w;
       }
     }catch(_){}
-    return 700;
+    return 700; // fallback
   }
 
   function sync(){
-    // 1) Make sure desktop columns-lock mode is on
     document.documentElement.classList.add('ra-desktop-cols');
-
-    // 2) Sync the middle column minimum to the canvas logical size
-    const w = canvasLogicalWidth();
-    setVar('--ra-mid-min', w);
+    setVar('--ra-mid-min', canvasLogicalWidth());
   }
 
   function boot(){
     sync();
-    // Sync when canvas size changes via your UI
+    // Re‑sync when canvas size changes through UI
     const sizeEl = document.getElementById('canvasSize');
     if (sizeEl && !sizeEl.__raColsLockBound){
       sizeEl.__raColsLockBound = true;
       sizeEl.addEventListener('change', () => setTimeout(sync, 0));
     }
-
-    // Also re-sync after restores/JSON loads or app reflows
+    // Re‑sync after restores / collection switches / late layout
     try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sync, 0)); } catch(_){}
     try { document.addEventListener('ra-collection-change', () => setTimeout(sync, 0)); } catch(_){}
-    // Late passes (fonts/images settling)
     setTimeout(sync, 200);
     setTimeout(sync, 600);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
 })();
