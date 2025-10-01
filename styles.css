@@ -229,41 +229,37 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP STICKY — Padding variant (column scroller)
-   - Desktop only (pointer:fine)
-   - The middle column (.stage) scrolls
-   - The canvas wrapper (.canvas-wrap) is sticky inside that column
-   - We use real padding on .stage (no pseudo-elements) so the
-     square can reach true top/bottom alignment without “vanishing”
+   DESKTOP FLOW + OFFSET (no sticky) — desktop only
+   - Middle column scrolls with the page normally
+   - Canvas wrapper remains in normal flow, centered
+   - A CSS var controls a calibrated top offset
    ========================================================= */
 @media (pointer: fine) {
   :root{
-    --sticky-top: 0px;            /* JS will set this; you can tweak later */
-    --stage-pad-top: 0px;         /* JS sets; top breathing room in .stage */
-    --stage-pad-bottom: 0px;      /* JS sets; bottom breathing room in .stage */
+    --flow-top: 0px;            /* JS sets this to align with side panels */
+    --flow-bottom-pad: 0px;     /* JS sets extra room to reach bottom */
   }
 
-  html.ra-desktop-sticky .stage{
+  html.ra-desktop-flow .stage{
     position: relative !important;
-    height: 100vh !important;
-    max-height: 100vh !important;
-    overflow: auto !important;         /* column is the scroller */
-    overscroll-behavior: contain;
-    padding-top: var(--stage-pad-top) !important;
-    padding-bottom: var(--stage-pad-bottom) !important;
+    height: auto !important;            /* use page scroll, not a column scroller */
+    min-height: 100vh !important;
+    overflow: visible !important;
+    padding-bottom: var(--flow-bottom-pad) !important;  /* room to reach curved section */
   }
 
-  html.ra-desktop-sticky .canvas-wrap{
-    position: sticky !important;
-    top: var(--sticky-top) !important;
+  html.ra-desktop-flow .canvas-wrap{
+    position: relative !important;
     margin-left: auto !important;
-    margin-right: auto !important;     /* keep centered in the column */
-    left: auto !important; right: auto !important; bottom: auto !important;
+    margin-right: auto !important;      /* keep centered in the column */
+    top: 0 !important; left: auto !important; right: auto !important;
     transform: none !important;
-    z-index: 5;                         /* stay above subtle backgrounds */
+    /* calibrated offset so the square sits level with the side panels */
+    margin-top: var(--flow-top) !important;
+    z-index: 5;
   }
 
-  html.ra-desktop-sticky .canvas-container{
+  html.ra-desktop-flow .canvas-container{
     transform: none !important;
     left: auto !important; top: auto !important;
   }
