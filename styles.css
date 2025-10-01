@@ -229,38 +229,19 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP FLOW + OFFSET (no sticky) — desktop only
-   - Middle column scrolls with the page normally
-   - Canvas wrapper remains in normal flow, centered
-   - A CSS var controls a calibrated top offset
+   DESKTOP ANCHORED‑STICKY (polyfill base) — desktop only
+   - Does not affect mobile
+   - Lets JS control positioning without fighting other rules
    ========================================================= */
 @media (pointer: fine) {
-  :root{
-    --flow-top: 0px;            /* JS sets this to align with side panels */
-    --flow-bottom-pad: 0px;     /* JS sets extra room to reach bottom */
-  }
-
-  html.ra-desktop-flow .stage{
-    position: relative !important;
-    height: auto !important;            /* use page scroll, not a column scroller */
-    min-height: 100vh !important;
+  .stage{
+    position: relative !important;     /* anchor for absolute mode */
     overflow: visible !important;
-    padding-bottom: var(--flow-bottom-pad) !important;  /* room to reach curved section */
   }
-
-  html.ra-desktop-flow .canvas-wrap{
-    position: relative !important;
-    margin-left: auto !important;
-    margin-right: auto !important;      /* keep centered in the column */
-    top: 0 !important; left: auto !important; right: auto !important;
-    transform: none !important;
-    /* calibrated offset so the square sits level with the side panels */
-    margin-top: var(--flow-top) !important;
-    z-index: 5;
+  .canvas-wrap{
+    will-change: top, left !important; /* smoother updates while scrolling */
+    z-index: 5;                        /* stay above subtle backgrounds */
   }
-
-  html.ra-desktop-flow .canvas-container{
-    transform: none !important;
-    left: auto !important; top: auto !important;
-  }
+  /* Be sure Fabric container isn't transform-scaled on desktop */
+  .canvas-container{ transform: none !important; }
 }
