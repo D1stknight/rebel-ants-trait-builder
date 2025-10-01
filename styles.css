@@ -229,35 +229,37 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP STICKY (stage‑scoped)
-   - Desktop devices only (pointer:fine)
-   - Keeps the canvas wrapper sticky within the middle column
-   - Horizontal centering preserved (margin: 0 auto)
-   - Adjust --sticky-top to change the offset from the top
+   DESKTOP STICKY — Column‑scroller variant (pointer:fine)
+   - The middle column (.stage) becomes the scrolling container
+   - The canvas wrapper (.canvas-wrap) is sticky inside that column
+   - Mobile is unaffected
    ========================================================= */
 @media (pointer: fine) {
-  :root { --sticky-top: 24px; }   /* tweak during testing */
+  :root { --sticky-top: 24px; }  /* adjust live with raSetStickyTop(…) if you want */
 
+  /* The STAGE becomes the scroller on desktop when sticky mode is on */
   html.ra-desktop-sticky .stage {
-    position: relative !important;     /* anchor context for safe layout */
-    overflow: visible !important;      /* sticky needs visible ancestors */
+    position: relative !important;
+    height: 100vh !important;     /* keep column the height of the viewport */
+    max-height: 100vh !important;
+    overflow: auto !important;     /* <-- make this the scrolling container */
+    overscroll-behavior: contain;  /* no page bounce while scrolling stage */
   }
+
+  /* The canvas wrapper sticks inside the stage scroller */
   html.ra-desktop-sticky .canvas-wrap {
     position: sticky !important;
     top: var(--sticky-top) !important;
-    margin-left: auto !important;
-    margin-right: auto !important;     /* keep centered in the column */
-    left: auto !important; right: auto !important; top: auto; bottom: auto;
+    margin-left: auto !important;   /* keep centered in the column */
+    margin-right: auto !important;
+    left: auto !important; right: auto !important; bottom: auto !important;
     transform: none !important;
-    z-index: 1;                         /* sit above backgrounds if needed */
+    z-index: 1;
   }
-}
 
-/* Sticky needs the page to scroll. On desktop sticky mode,
-   let the grid be taller than the viewport if content is long. */
-@media (pointer: fine) {
-  html.ra-desktop-sticky .app {
-    height: auto !important;
-    min-height: 100vh !important;
+  /* Ensure Fabric wrapper carries no transform on desktop */
+  html.ra-desktop-sticky .canvas-container {
+    transform: none !important;
+    left: auto !important; top: auto !important;
   }
 }
