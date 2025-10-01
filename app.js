@@ -8356,139 +8356,63 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP FREEZE — keep stage min‑width in sync with canvas size
-   - Desktop devices only (pointer:fine & not a mobile UA)
-   - No changes to Fabric zoom/size; this only feeds CSS vars
-   ========================================================= */
-;(() => {
-  'use strict';
-  if (window.__RA_DESKTOP_FREEZE_SYNC__) return;
-  window.__RA_DESKTOP_FREEZE_SYNC__ = true;
-
-  const isDesktop =
-    () => window.matchMedia('(pointer: fine)').matches &&
-       !/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(navigator.userAgent||'');
-
-  if (!isDesktop()) return;
-
-  function applyVars(){
-    const root = document.documentElement;
-    const input = document.getElementById('canvasSize');
-    let canvasPx = 700;
-
-    if (input){
-      const v = parseInt(input.value,10);
-      if (Number.isFinite(v) && v > 0) canvasPx = v;
-    } else if (window.canvas && typeof window.canvas.getWidth === 'function'){
-      const w = window.canvas.getWidth(); if (w) canvasPx = w;
-    }
-
-    // stage padding must equal .canvas-wrap padding * 2; default is 24
-    const stagePad = 24;
-    root.style.setProperty('--canvas-min', canvasPx + 'px');
-    root.style.setProperty('--stage-min', (canvasPx + stagePad) + 'px');
-
-    // recompute app minimum width so the grid never collapses
-    const left = 320, right = 400, gap = 18;
-    const appMin = left + gap + (canvasPx + stagePad) + gap + right;
-    root.style.setProperty('--app-min', appMin + 'px');
-
-    // be sure no CSS transform lingers on desktop
-    try {
-      const cc = document.querySelector('.canvas-container');
-      if (cc) cc.style.transform = '';
-    } catch(_){}
-  }
-
-  function boot(){
-    applyVars();
-
-    // Update when the user changes the canvas size from the UI
-    const inp = document.getElementById('canvasSize');
-    if (inp && !inp.__raSyncCanvasVar){
-      inp.__raSyncCanvasVar = true;
-      inp.addEventListener('change', applyVars);
-      inp.addEventListener('input',  applyVars);
-    }
-
-    // Also refresh when Fabric becomes ready (in case this ran early)
-    if (!window.canvas){
-      const iv = setInterval(() => {
-        if (window.canvas && window.canvas.upperCanvasEl){ clearInterval(iv); applyVars(); }
-      }, 120);
-    }
-
-    // Keep values sane if someone resizes the window aggressively
-    window.addEventListener('resize', () => { if (isDesktop()) applyVars(); }, { passive:true });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
-})();
-
-/* =========================================================
-   DESKTOP FLOW (simple aligner)
+   DESKTOP COLUMNS‑LOCK Sync (no Fabric size/zoom changes)
    - Desktop only (pointer:fine, not mobile UA)
-   - Aligns the middle square with side panels at the top,
-     then lets it scroll normally with the page.
-   - Adds a bit of bottom padding so you can reach the curved
-     section without the square getting clipped.
+   - Keeps --ra-mid-min in sync with the logical canvas size
+   - Applies the .ra-desktop-cols class to activate the CSS
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_DESKTOP_FLOW2__) return;
-  window.__RA_DESKTOP_FLOW2__ = true;
+  if (window.__RA_DESK_COLS_LOCK__) return;
+  window.__RA_DESK_COLS_LOCK__ = true;
 
   const UA = navigator.userAgent || '';
   const isMobileUA =
     (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
+
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
   if (!isDesktop()) return;
 
-  const $ = s => document.querySelector(s);
-  const setRootVar = (name, px) => document.documentElement.style.setProperty(name, (px|0) + 'px');
+  function setVar(name, valuePx){
+    document.documentElement.style.setProperty(name, `${Math.max(1, valuePx|0)}px`);
+  }
 
-  function calibrate(){
-    const stage = $('.stage');
-    const wrap  = stage ? stage.querySelector('.canvas-wrap') : null;
-    const left  = $('.panel.left');
-    const right = $('.panel.right');
-    if (!stage || !wrap) return;
+  function canvasLogicalWidth(){
+    // Prefer Fabric logical width; fall back to 700
+    try{
+      if (window.canvas && typeof window.canvas.getWidth === 'function'){
+        const w = window.canvas.getWidth();
+        if (Number.isFinite(w) && w > 0) return w;
+      }
+    }catch(_){}
+    return 700;
+  }
 
-    // Enable flow mode on desktop
-    document.documentElement.classList.remove('ra-desktop-anchored', 'ra-desktop-sticky');
-    document.documentElement.classList.add('ra-desktop-flow2');
+  function sync(){
+    // 1) Make sure desktop columns-lock mode is on
+    document.documentElement.classList.add('ra-desktop-cols');
 
-    // Align the square's top with the top of the side panels (prefer right then left)
-    const ref = right || left || stage;
-    const refTop  = ref.getBoundingClientRect().top;
-    const stageTop= stage.getBoundingClientRect().top;
-    const mt = Math.round(refTop - stageTop);       // margin-top to align
-    setRootVar('--flow2-top', mt);
-
-    // Ensure we can scroll to the very bottom content (curved section)
-    const sideBottom = Math.max(
-      right ? right.getBoundingClientRect().bottom : 0,
-      left  ? left.getBoundingClientRect().bottom  : 0
-    );
-    const stageBottom = stage.getBoundingClientRect().bottom;
-    const extra = Math.max(0, Math.round(sideBottom - stageBottom) + 16);
-    stage.style.paddingBottom = extra ? (extra + 'px') : '';
+    // 2) Sync the middle column minimum to the canvas logical size
+    const w = canvasLogicalWidth();
+    setVar('--ra-mid-min', w);
   }
 
   function boot(){
-    calibrate();
-    // Re‑calibrate on resize or layout changes (but we do NOT track scroll)
-    window.addEventListener('resize', calibrate, { passive:true });
-    window.addEventListener('orientationchange', () => setTimeout(calibrate, 200), { passive:true });
-    document.addEventListener('ra-json-restore-end', calibrate);
-    document.addEventListener('ra-collection-change', calibrate);
-    setTimeout(calibrate, 200);
-    setTimeout(calibrate, 600);
+    sync();
+    // Sync when canvas size changes via your UI
+    const sizeEl = document.getElementById('canvasSize');
+    if (sizeEl && !sizeEl.__raColsLockBound){
+      sizeEl.__raColsLockBound = true;
+      sizeEl.addEventListener('change', () => setTimeout(sync, 0));
+    }
+
+    // Also re-sync after restores/JSON loads or app reflows
+    try { document.addEventListener('ra-json-restore-end',  () => setTimeout(sync, 0)); } catch(_){}
+    try { document.addEventListener('ra-collection-change', () => setTimeout(sync, 0)); } catch(_){}
+    // Late passes (fonts/images settling)
+    setTimeout(sync, 200);
+    setTimeout(sync, 600);
   }
 
   if (document.readyState === 'loading') {
