@@ -181,29 +181,30 @@ button, .btn { touch-action: manipulation; }
    DESKTOP COLUMNS‑LOCK — left & right fixed; middle free
    - Desktop only (pointer:fine). Mobile unaffected.
    - Locks panel widths so the middle never bleeds into them.
-   - The page gets a horizontal scrollbar if the viewport
-     is narrower than the 3‑column minimum width.
-   - Middle column stays in normal flow (scrolls naturally).
+   - Page gets a horizontal scrollbar if viewport < min grid width.
+   - Middle (stage) stays in normal flow and scrolls naturally.
    ========================================================= */
 @media (pointer: fine) {
   :root{
-    /* Tweak here if your panel sizes/gap change */
+    /* TUNE THESE to match your layout */
     --ra-left-w:   320px;   /* left panel width */
     --ra-right-w:  400px;   /* right panel width */
-    --ra-gap:       18px;   /* grid gap between columns */
-    --ra-wrap-pad:  12px;   /* .canvas-wrap padding (CSS) */
-    --ra-mid-min:  700px;   /* fallback min canvas logical size (JS will update) */
+    --ra-gap:       18px;   /* grid column gap */
+    --ra-wrap-pad:  12px;   /* .canvas-wrap padding (must match CSS) */
+    --ra-mid-min:  700px;   /* fallback; JS will sync to canvas size */
   }
 
-  /* Lock the grid and its minimum width */
+  /* 3 fixed columns; NOTE: no stray parenthesis */
   html.ra-desktop-cols .app{
     display: grid !important;
-    grid-template-columns: var(--ra-left-w) minmax(calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2), 1fr) var(--ra-right-w)) !important;
+    grid-template-columns:
+      var(--ra-left-w)
+      minmax(calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2), 1fr)
+      var(--ra-right-w) !important;
     column-gap: var(--ra-gap) !important;
     align-items: start !important;
 
-    /* The minimum total width keeps columns from overlapping
-       when the viewport is narrower; page will scroll horizontally. */
+    /* Prevents overlap when window is narrow → horizontal scrollbar */
     min-width: calc(
       var(--ra-left-w) +
       var(--ra-right-w) +
@@ -212,33 +213,19 @@ button, .btn { touch-action: manipulation; }
     ) !important;
   }
 
-  /* Hard lock the side panels so they never shrink */
-  html.ra-desktop-cols .panel.left{
-    width: var(--ra-left-w) !important;
-    min-width: var(--ra-left-w) !important;
-  }
-  html.ra-desktop-cols .panel.right{
-    width: var(--ra-right-w) !important;
-    min-width: var(--ra-right-w) !important;
-  }
+  /* Explicitly assign each area to a column so auto-placement can't shuffle them */
+  html.ra-desktop-cols .panel.left  { grid-column: 1 !important; width: var(--ra-left-w)  !important; min-width: var(--ra-left-w)  !important; }
+  html.ra-desktop-cols .stage       { grid-column: 2 !important; position: relative !important; min-width: calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2) !important; overflow: visible !important; }
+  html.ra-desktop-cols .panel.right { grid-column: 3 !important; width: var(--ra-right-w) !important; min-width: var(--ra-right-w) !important; }
 
-  /* Middle column (stage) stays in normal flow; just ensure its
-     content has at least the room the canvas needs. */
-  html.ra-desktop-cols .stage{
-    position: relative !important;
-    min-width: calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2) !important;
-    overflow: visible !important;
-  }
-
-  /* The canvas wrapper sits centered and scrolls with the page. */
+  /* Canvas wrapper stays centered and scrolls with the page */
   html.ra-desktop-cols .stage .canvas-wrap{
     position: relative !important;
     margin: 0 auto !important;
     transform: none !important;
-    /* padding is already represented by --ra-wrap-pad */
   }
 
-  /* Make sure Fabric doesn't apply a transform scale on desktop */
+  /* Ensure Fabric doesn't apply transform scale on desktop */
   html.ra-desktop-cols .canvas-container{
     transform: none !important;
   }
