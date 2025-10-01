@@ -8463,3 +8463,103 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   window.raStickyModeOff = off;
   window.raSetStickyTop = setTop;
 })();
+
+/* =========================================================
+   DESKTOP STICKY — Top/Bottom calibrator for the stage scroller
+   - Desktop only (pointer:fine, not mobile UA)
+   - Computes spacers so the sticky square can align with side panels
+   - Exposes helpers for manual tweaks if you want to fine-tune
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_STICKY_CALIB_V1__) return;
+  window.__RA_STICKY_CALIB_V1__ = true;
+
+  const UA = navigator.userAgent || '';
+  const isMobileUA =
+    (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
+  const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
+
+  function setVar(name, px){
+    document.documentElement.style.setProperty(name, (px|0) + 'px');
+  }
+
+  function el(sel){ return document.querySelector(sel); }
+
+  // Find columns once
+  function parts(){
+    const stage = el('.stage');
+    const left  = el('.panel.left')  || null;
+    const right = el('.panel.right') || null;
+    return { stage, left, right };
+  }
+
+  // Make the sticky square able to reach the same TOP as the side panels
+  function calibrateTop(){
+    const { stage, left, right } = parts();
+    if (!stage) return;
+
+    // Use whichever side panel exists (prefer right)
+    const ref = right || left;
+    if (!ref) { setVar('--stage-top-spacer', 0); return; }
+
+    // Distance between the top of the stage content and the top of the side panel
+    const stageTopPage = stage.getBoundingClientRect().top + window.scrollY;
+    const refTopPage   = ref.getBoundingClientRect().top + window.scrollY;
+    const delta = Math.max(0, Math.round(refTopPage - stageTopPage));
+
+    setVar('--stage-top-spacer', delta);
+  }
+
+  // Make the sticky square able to reach the same BOTTOM range as the tallest side
+  function calibrateBottom(){
+    const { stage, left, right } = parts();
+    if (!stage) return;
+
+    const siblingsHeight = Math.max(left?.scrollHeight || 0, right?.scrollHeight || 0);
+    const inner = stage.scrollHeight;
+    // Extra space to let the sticky reach down; add a small cushion
+    const extra = Math.max(0, siblingsHeight - inner) + 16;
+
+    setVar('--stage-bottom-spacer', extra);
+  }
+
+  function calibrateAll(){
+    if (!document.documentElement.classList.contains('ra-desktop-sticky')) return;
+    calibrateTop();
+    calibrateBottom();
+  }
+
+  function boot(){
+    if (!isDesktop()) return;
+
+    // Align square's top with side panels by default
+    document.documentElement.style.setProperty('--sticky-top', '0px');
+
+    calibrateAll();
+
+    // Recalibrate on resize and after async layout changes
+    let raf = 0;
+    const schedule = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(calibrateAll);
+    };
+    window.addEventListener('resize', schedule, { passive: true });
+    document.addEventListener('ra-json-restore-end', schedule);
+    document.addEventListener('ra-collection-change', schedule);
+    setTimeout(calibrateAll, 200);
+    setTimeout(calibrateAll, 600);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+
+  // Optional manual tweaks from console
+  window.raSetStageTopSpacer = (px) => setVar('--stage-top-spacer', px);
+  window.raSetStageBottomSpacer = (px) => setVar('--stage-bottom-spacer', px);
+  window.raSetStickyTop = (px) => document.documentElement.style.setProperty('--sticky-top', (px|0)+'px');
+})();
