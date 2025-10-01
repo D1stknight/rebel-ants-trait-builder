@@ -8430,19 +8430,18 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP ANCHORED — container-scroll aware (viewport math)
+   DESKTOP FLOW (simple aligner)
    - Desktop only (pointer:fine, not mobile UA)
-   - Listens to window + container scrollers (.app, .stage)
-   - Uses only getBoundingClientRect() math → works regardless
-     of which element actually scrolls
-   - No Fabric size/zoom changes; mobile untouched
+   - Aligns the middle square with side panels at the top,
+     then lets it scroll normally with the page.
+   - Adds a bit of bottom padding so you can reach the curved
+     section without the square getting clipped.
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_DESKTOP_ANCHOR_V3__) return;
-  window.__RA_DESKTOP_ANCHOR_V3__ = true;
+  if (window.__RA_DESKTOP_FLOW2__) return;
+  window.__RA_DESKTOP_FLOW2__ = true;
 
-  // Desktop detection (device, not viewport)
   const UA = navigator.userAgent || '';
   const isMobileUA =
     (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
@@ -8450,115 +8449,46 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
   if (!isDesktop()) return;
 
-  // Fine-tuning (keep 0 unless you need tiny visual nudges)
-  const TOP_NUDGE_PX   = 0;    // + moves square a bit down at the top, - moves up
-  const BOTTOM_PAD_PX  = 16;   // cushion to comfortably reach the bottom
-  const LEFT_NUDGE_PX  = 0;    // small horizontal tweak if needed
-
   const $ = s => document.querySelector(s);
-  const setVar = (el, name, px) => el && el.style.setProperty(name, (px|0) + 'px');
+  const setRootVar = (name, px) => document.documentElement.style.setProperty(name, (px|0) + 'px');
 
-  function parts(){
+  function calibrate(){
     const stage = $('.stage');
     const wrap  = stage ? stage.querySelector('.canvas-wrap') : null;
-    const app   = $('.app');
     const left  = $('.panel.left');
     const right = $('.panel.right');
-    return { stage, wrap, app, left, right };
-  }
-
-  function clearConflicts(){
-    // Remove any inline transform the Fabric container might have
-    const cont = (window.canvas && window.canvas.upperCanvasEl)
-      ? window.canvas.upperCanvasEl.parentElement : null;
-    try { cont && cont.style && cont.style.removeProperty('transform'); } catch(_){}
-  }
-
-  function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
-
-  function update(){
-    const { stage, wrap, left, right } = parts();
     if (!stage || !wrap) return;
 
-    // Ensure desktop-anchored class is on (CSS override you already added)
-    document.documentElement.classList.add('ra-desktop-anchored');
+    // Enable flow mode on desktop
+    document.documentElement.classList.remove('ra-desktop-anchored', 'ra-desktop-sticky');
+    document.documentElement.classList.add('ra-desktop-flow2');
 
-    // Rects in *viewport* coordinates (no pageY needed)
-    const stRect   = stage.getBoundingClientRect();
-    const wrRect   = wrap.getBoundingClientRect();
-    const rRect    = right ? right.getBoundingClientRect() : null;
-    const lRect    = left  ? left.getBoundingClientRect()  : null;
+    // Align the square's top with the top of the side panels (prefer right then left)
+    const ref = right || left || stage;
+    const refTop  = ref.getBoundingClientRect().top;
+    const stageTop= stage.getBoundingClientRect().top;
+    const mt = Math.round(refTop - stageTop);       // margin-top to align
+    setRootVar('--flow2-top', mt);
 
-    // Reference top: prefer right, then left, else stage
-    const refTopV  = (rRect ? rRect.top : (lRect ? lRect.top : stRect.top)) + TOP_NUDGE_PX;
-
-    // Desired top for the wrapper in *stage-local* coordinates:
-    // desiredLocalTop = desiredViewportTop - stageViewportTop
-    const desiredLocalTop = refTopV - stRect.top;
-
-    // Hard clamps in *stage-local* coordinates:
-    // 1) Top clamp: align wrapper's top with the reference top
-    const topClampLocal = refTopV - stRect.top;
-
-    // 2) Bottom clamp: wrapper bottom meets the tallest side's bottom
-    const sideBottomV = Math.max(
-      rRect ? rRect.bottom : 0,
-      lRect ? lRect.bottom : 0
+    // Ensure we can scroll to the very bottom content (curved section)
+    const sideBottom = Math.max(
+      right ? right.getBoundingClientRect().bottom : 0,
+      left  ? left.getBoundingClientRect().bottom  : 0
     );
-    const wrapH = wrRect.height || wrap.offsetHeight || 0;
-    const bottomClampLocal = (sideBottomV - stRect.top) - wrapH - BOTTOM_PAD_PX;
-
-    // Compute final local top (clamped)
-    const finalLocalTop = Math.round( clamp(desiredLocalTop, topClampLocal, bottomClampLocal) );
-
-    // Horizontal centering within the stage
-    const stageW = stRect.width || stage.clientWidth || 0;
-    const wrapW  = wrRect.width  || wrap.offsetWidth  || 0;
-    const finalLeft = Math.round((stageW - wrapW)/2) + LEFT_NUDGE_PX;
-
-    // Drive via CSS variables consumed by your anchored CSS override
-    setVar(wrap, '--st-top',  finalLocalTop);
-    setVar(wrap, '--st-left', finalLeft);
-  }
-
-  // Add scroll listeners to all likely scrollers
-  function bindScrollers(){
-    const { app, stage } = parts();
-    const seen = new Set();
-
-    function onScroll(){
-      // throttle with rAF
-      if (onScroll._ticking) return;
-      onScroll._ticking = true;
-      requestAnimationFrame(() => { onScroll._ticking = false; update(); });
-    }
-
-    const add = (el) => {
-      if (!el || seen.has(el)) return;
-      seen.add(el);
-      try { el.addEventListener('scroll', onScroll, { passive:true }); } catch(_){}
-    };
-
-    add(window);                        // viewport scroll (desktop pages)
-    add(document);                      // safety
-    add(document.scrollingElement);     // <html> or <body> depending on UA
-    add(app);                           // your 3‑column grid container (often the scroller in “Freeze”)
-    add(stage);                         // middle column (if ever made a scroller)
-
-    // also update on resize/layout changes
-    try { window.addEventListener('resize', onScroll, { passive:true }); } catch(_){}
-    try { window.addEventListener('orientationchange', onScroll, { passive:true }); } catch(_){}
-    try { document.addEventListener('ra-json-restore-end',  onScroll); } catch(_){}
-    try { document.addEventListener('ra-collection-change', onScroll); } catch(_){}
+    const stageBottom = stage.getBoundingClientRect().bottom;
+    const extra = Math.max(0, Math.round(sideBottom - stageBottom) + 16);
+    stage.style.paddingBottom = extra ? (extra + 'px') : '';
   }
 
   function boot(){
-    clearConflicts();
-    bindScrollers();
-    // Initial + a couple of late passes (fonts/images)
-    update();
-    setTimeout(update, 200);
-    setTimeout(update, 600);
+    calibrate();
+    // Re‑calibrate on resize or layout changes (but we do NOT track scroll)
+    window.addEventListener('resize', calibrate, { passive:true });
+    window.addEventListener('orientationchange', () => setTimeout(calibrate, 200), { passive:true });
+    document.addEventListener('ra-json-restore-end', calibrate);
+    document.addEventListener('ra-collection-change', calibrate);
+    setTimeout(calibrate, 200);
+    setTimeout(calibrate, 600);
   }
 
   if (document.readyState === 'loading') {
