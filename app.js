@@ -8430,16 +8430,17 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP ANCHORED (absolute-only engine)
+   DESKTOP ANCHORED — container-scroll aware (viewport math)
    - Desktop only (pointer:fine, not mobile UA)
-   - Moves the middle square vertically with page scroll
-   - Clamps to the top/bottom of the side columns
-   - No Fabric size/zoom changes
+   - Listens to window + container scrollers (.app, .stage)
+   - Uses only getBoundingClientRect() math → works regardless
+     of which element actually scrolls
+   - No Fabric size/zoom changes; mobile untouched
    ========================================================= */
 ;(() => {
   'use strict';
-  if (window.__RA_DESKTOP_ANCHOR_V2__) return;
-  window.__RA_DESKTOP_ANCHOR_V2__ = true;
+  if (window.__RA_DESKTOP_ANCHOR_V3__) return;
+  window.__RA_DESKTOP_ANCHOR_V3__ = true;
 
   // Desktop detection (device, not viewport)
   const UA = navigator.userAgent || '';
@@ -8449,29 +8450,28 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
   if (!isDesktop()) return;
 
-  // Small fine-tuning knobs (leave at 0 unless you need tiny visual nudges)
-  const TOP_NUDGE_PX   = 0;   // + moves the square a bit down at the top, - moves up
-  const BOTTOM_PAD_PX  = 16;  // cushion so it can reach the very bottom comfortably
-  const LEFT_NUDGE_PX  = 0;   // tiny horizontal nudge if needed
+  // Fine-tuning (keep 0 unless you need tiny visual nudges)
+  const TOP_NUDGE_PX   = 0;    // + moves square a bit down at the top, - moves up
+  const BOTTOM_PAD_PX  = 16;   // cushion to comfortably reach the bottom
+  const LEFT_NUDGE_PX  = 0;    // small horizontal tweak if needed
 
   const $ = s => document.querySelector(s);
-  const setElVar = (el, name, px) => el && el.style.setProperty(name, (px|0) + 'px');
+  const setVar = (el, name, px) => el && el.style.setProperty(name, (px|0) + 'px');
 
   function parts(){
     const stage = $('.stage');
-    const wrap  = $('.stage .canvas-wrap') || null;
+    const wrap  = stage ? stage.querySelector('.canvas-wrap') : null;
+    const app   = $('.app');
     const left  = $('.panel.left');
     const right = $('.panel.right');
-    return { stage, wrap, left, right };
+    return { stage, wrap, app, left, right };
   }
 
   function clearConflicts(){
-    // Remove any inline transforms that might fight absolute positioning.
+    // Remove any inline transform the Fabric container might have
     const cont = (window.canvas && window.canvas.upperCanvasEl)
       ? window.canvas.upperCanvasEl.parentElement : null;
-    try {
-      cont && cont.style && cont.style.removeProperty('transform');
-    } catch(_){}
+    try { cont && cont.style && cont.style.removeProperty('transform'); } catch(_){}
   }
 
   function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
@@ -8480,81 +8480,83 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const { stage, wrap, left, right } = parts();
     if (!stage || !wrap) return;
 
-    // Make sure our desktop-anchored mode class is on
+    // Ensure desktop-anchored class is on (CSS override you already added)
     document.documentElement.classList.add('ra-desktop-anchored');
 
-    const pageY = window.scrollY || 0;
+    // Rects in *viewport* coordinates (no pageY needed)
+    const stRect   = stage.getBoundingClientRect();
+    const wrRect   = wrap.getBoundingClientRect();
+    const rRect    = right ? right.getBoundingClientRect() : null;
+    const lRect    = left  ? left.getBoundingClientRect()  : null;
 
-    // Use right column as the top reference if present, else left, else stage
-    const refTopEl = right || left || stage;
-    const refRect  = refTopEl.getBoundingClientRect();
+    // Reference top: prefer right, then left, else stage
+    const refTopV  = (rRect ? rRect.top : (lRect ? lRect.top : stRect.top)) + TOP_NUDGE_PX;
 
-    // Stage geometry in page coords
-    const stRect        = stage.getBoundingClientRect();
-    const stageTopPage  = stRect.top + pageY;
+    // Desired top for the wrapper in *stage-local* coordinates:
+    // desiredLocalTop = desiredViewportTop - stageViewportTop
+    const desiredLocalTop = refTopV - stRect.top;
 
-    // Wrapper size
-    const wrapW = wrap.offsetWidth  || 0;
-    const wrapH = wrap.offsetHeight || 0;
+    // Hard clamps in *stage-local* coordinates:
+    // 1) Top clamp: align wrapper's top with the reference top
+    const topClampLocal = refTopV - stRect.top;
+
+    // 2) Bottom clamp: wrapper bottom meets the tallest side's bottom
+    const sideBottomV = Math.max(
+      rRect ? rRect.bottom : 0,
+      lRect ? lRect.bottom : 0
+    );
+    const wrapH = wrRect.height || wrap.offsetHeight || 0;
+    const bottomClampLocal = (sideBottomV - stRect.top) - wrapH - BOTTOM_PAD_PX;
+
+    // Compute final local top (clamped)
+    const finalLocalTop = Math.round( clamp(desiredLocalTop, topClampLocal, bottomClampLocal) );
 
     // Horizontal centering within the stage
-    const stageWidth = stRect.width || stage.clientWidth || 0;
-    const leftAbs    = Math.round((stageWidth - wrapW) / 2) + LEFT_NUDGE_PX;
+    const stageW = stRect.width || stage.clientWidth || 0;
+    const wrapW  = wrRect.width  || wrap.offsetWidth  || 0;
+    const finalLeft = Math.round((stageW - wrapW)/2) + LEFT_NUDGE_PX;
 
-    // Bottom clamp = the lowest point among side columns
-    const rRect = right ? right.getBoundingClientRect() : null;
-    const lRect = left  ? left.getBoundingClientRect()  : null;
-    const sideBottomPage = Math.max(
-      rRect ? (rRect.bottom + pageY) : 0,
-      lRect ? (lRect.bottom + pageY) : 0
-    );
-
-    // If side columns are missing, fall back to stage's scroll height
-    const stageBottomFallback = stageTopPage + (stage.scrollHeight || (stRect.height || 0));
-
-    // Hard clamps for the wrapper's TOP in *page* coordinates:
-    const topClampPage    = (refRect.top + pageY) + TOP_NUDGE_PX;
-    const bottomClampPage = (sideBottomPage || stageBottomFallback) - wrapH - BOTTOM_PAD_PX;
-
-    // Target top so that the square tracks the reference's viewport top position
-    // We stay in normal page flow by converting viewport target into stage coordinates.
-    const desiredViewportTop = refRect.top + TOP_NUDGE_PX;          // viewport Y
-    const targetTopPage      = pageY + desiredViewportTop;          // page Y
-    const topPage            = clamp(targetTopPage, topClampPage, bottomClampPage);
-
-    // Convert page top → stage-local top for absolute positioning
-    const topLocal = Math.round(topPage - stageTopPage);
-
-    // Drive via CSS variables (high-priority CSS uses them with !important)
-    setElVar(wrap, '--st-top',  topLocal);
-    setElVar(wrap, '--st-left', leftAbs);
+    // Drive via CSS variables consumed by your anchored CSS override
+    setVar(wrap, '--st-top',  finalLocalTop);
+    setVar(wrap, '--st-left', finalLeft);
   }
 
-  let ticking = false;
-  function onScrollResize(){
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(() => { ticking = false; update(); });
+  // Add scroll listeners to all likely scrollers
+  function bindScrollers(){
+    const { app, stage } = parts();
+    const seen = new Set();
+
+    function onScroll(){
+      // throttle with rAF
+      if (onScroll._ticking) return;
+      onScroll._ticking = true;
+      requestAnimationFrame(() => { onScroll._ticking = false; update(); });
+    }
+
+    const add = (el) => {
+      if (!el || seen.has(el)) return;
+      seen.add(el);
+      try { el.addEventListener('scroll', onScroll, { passive:true }); } catch(_){}
+    };
+
+    add(window);                        // viewport scroll (desktop pages)
+    add(document);                      // safety
+    add(document.scrollingElement);     // <html> or <body> depending on UA
+    add(app);                           // your 3‑column grid container (often the scroller in “Freeze”)
+    add(stage);                         // middle column (if ever made a scroller)
+
+    // also update on resize/layout changes
+    try { window.addEventListener('resize', onScroll, { passive:true }); } catch(_){}
+    try { window.addEventListener('orientationchange', onScroll, { passive:true }); } catch(_){}
+    try { document.addEventListener('ra-json-restore-end',  onScroll); } catch(_){}
+    try { document.addEventListener('ra-collection-change', onScroll); } catch(_){}
   }
 
   function boot(){
     clearConflicts();
+    bindScrollers();
+    // Initial + a couple of late passes (fonts/images)
     update();
-    // Settle a bit while layout/fonts/images load
-    let t0 = performance.now();
-    (function settle(){
-      update();
-      if (performance.now() - t0 < 300) requestAnimationFrame(settle);
-    })();
-
-    window.addEventListener('scroll', onScrollResize, { passive:true });
-    window.addEventListener('resize', onScrollResize, { passive:true });
-    window.addEventListener('orientationchange', onScrollResize, { passive:true });
-
-    // App reflow events
-    document.addEventListener('ra-json-restore-end',  onScrollResize);
-    document.addEventListener('ra-collection-change', onScrollResize);
-
     setTimeout(update, 200);
     setTimeout(update, 600);
   }
@@ -8564,10 +8566,4 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   } else {
     boot();
   }
-
-  // Optional micro-tuning from console:
-  // (change constants at top for permanent values)
-  window.raDeskAnchorNudgeTop   = (px)=>console.warn('Set TOP_NUDGE_PX in code to', px);
-  window.raDeskAnchorBottomPad  = (px)=>console.warn('Set BOTTOM_PAD_PX in code to', px);
-  window.raDeskAnchorLeftNudge  = (px)=>console.warn('Set LEFT_NUDGE_PX in code to', px);
 })();
