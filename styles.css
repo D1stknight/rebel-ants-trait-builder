@@ -227,3 +227,28 @@ button, .btn { touch-action: manipulation; }
     left: auto !important; top: auto !important;
   }
 }
+
+/* =========================================================
+   DESKTOP STICKY (stage‑scoped)
+   - Desktop devices only (pointer:fine)
+   - Keeps the canvas wrapper sticky within the middle column
+   - Horizontal centering preserved (margin: 0 auto)
+   - Adjust --sticky-top to change the offset from the top
+   ========================================================= */
+@media (pointer: fine) {
+  :root { --sticky-top: 24px; }   /* tweak during testing */
+
+  html.ra-desktop-sticky .stage {
+    position: relative !important;     /* anchor context for safe layout */
+    overflow: visible !important;      /* sticky needs visible ancestors */
+  }
+  html.ra-desktop-sticky .canvas-wrap {
+    position: sticky !important;
+    top: var(--sticky-top) !important;
+    margin-left: auto !important;
+    margin-right: auto !important;     /* keep centered in the column */
+    left: auto !important; right: auto !important; top: auto; bottom: auto;
+    transform: none !important;
+    z-index: 1;                         /* sit above backgrounds if needed */
+  }
+}
