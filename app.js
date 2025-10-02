@@ -9195,3 +9195,214 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
   log('Enhancer loaded (will keep default size at 700).');
 })();
+
+/* ===============================================================
+   RA_TOKEN_ID_HISTORY_FIX_V1
+   Fixes Token ID label duplication / freeze / undo desync issues.
+
+   PROBLEMS ADDRESSED
+   ------------------
+   1. Token ID label (_raTokenId) excluded from history snapshots → moving it
+      then doing an undo after adding other objects resurrects an older copy.
+   2. JSON / undo restore can leave multiple token ID objects (visual duplicate).
+   3. Global pointer (window.idLabel) can become stale after restore → style
+      controls mutate a detached Fabric object → apparent "freeze".
+   4. Layer / ordering passes may run while a stale object reference exists.
+
+   STRATEGY
+   --------
+   A. Enforce singleton: anytime objects change, we remove duplicates, keep one.
+   B. Rebind global window.idLabel to the surviving instance after every change.
+   C. Debounced history snapshot when the token ID is moved / modified (even if
+      core history logic treats it as a “system” object).
+   D. Wrap undo/redo (if exported) so cleanup runs immediately after.
+   E. Provide a manual force repair: window.raTokenIdRepair()
+   F. Non‑intrusive: no edits to existing functions; additive only.
+
+   SAFE TO REMOVE: Delete this whole IIFE if ever obsolete.
+   =============================================================== */
+(function RA_TOKEN_ID_HISTORY_FIX_V1(){
+  if (window.__RA_TOKEN_ID_HISTORY_FIX_V1__) return;
+  window.__RA_TOKEN_ID_HISTORY_FIX_V1__ = true;
+
+  const DEBOUNCE_MS = 420;   // coalesce rapid drags / transforms
+  let moveTimer = null;
+  let canvasReadyTimer = null;
+
+  function log(...a){ /* uncomment for debugging:
+     console.log('[TOKEN_ID_FIX]', ...a); */ }
+
+  function C(){
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+
+  function tokenIdObjects(c){
+    c = c || C();
+    if (!c) return [];
+    return (c.getObjects()||[]).filter(o => o && o._raTokenId);
+  }
+
+  function pickSurvivor(list){
+    if (!list.length) return null;
+    // Choose the topmost (last in stacking order) – keeps recent user interaction
+    return list[list.length - 1];
+  }
+
+  function removeDuplicates(c){
+    c = c || C();
+    if (!c) return null;
+    const all = tokenIdObjects(c);
+    if (all.length <= 1) return all[0] || null;
+    const keep = pickSurvivor(all);
+    all.forEach(o=>{
+      if (o !== keep){
+        try { c.remove(o); } catch(_) {}
+      }
+    });
+    try { c.requestRenderAll(); } catch(_) {}
+    return keep;
+  }
+
+  function rebindGlobal(c){
+    c = c || C();
+    const objs = tokenIdObjects(c);
+    const single = objs[0] || null;
+    if (single){
+      window.idLabel = single; // maintain existing global naming convention
+      window.idLabel._raTokenId = true; // enforce flag
+    } else {
+      if (window.idLabel && !c?.contains(window.idLabel)){
+        // stale reference – clear it
+        delete window.idLabel;
+      }
+    }
+    return single;
+  }
+
+  function ensureSingleton(c){
+    const kept = removeDuplicates(c);
+    rebindGlobal(c);
+    return kept;
+  }
+
+  /* ------------- History Snapshot Integration ------------- */
+  function snapshotLabel(reason='Token ID Move'){
+    const c = C();
+    if (!c) return;
+    const label = tokenIdObjects(c)[0];
+    if (!label) return;
+
+    // Try the most likely snapshot APIs in descending order
+    const fn =
+        window.forceSnapshot ||
+        (window.raHistory && (window.raHistory.forceSnapshot || window.raHistory.push)) ||
+        window.push ||
+        null;
+    if (typeof fn === 'function'){
+      try { fn(reason); } catch(e){ log('Snapshot fn error', e); }
+    }
+  }
+
+  function scheduleSnapshot(){
+    clearTimeout(moveTimer);
+    moveTimer = setTimeout(()=> snapshotLabel('Token ID Move'), DEBOUNCE_MS);
+  }
+
+  /* ------------- Event Wiring ------------- */
+  function wireCanvas(c){
+    if (!c || c.__raTokenIdPatched) return;
+    c.__raTokenIdPatched = true;
+
+    // Core Fabric mutation events
+    c.on('object:added',   e=>{ const o=e.target; if (o && o._raTokenId){ ensureSingleton(c); } else { // after batch add (undo/redo) do a next-tick cleanup
+        queueMicrotask(()=>ensureSingleton(c));
+      }
+    });
+    c.on('object:removed', ()=> queueMicrotask(()=>ensureSingleton(c)));
+    c.on('object:modified', e=>{
+      const o = e.target;
+      if (o && o._raTokenId){
+        ensureSingleton(c);
+        scheduleSnapshot();
+      }
+    });
+    c.on('selection:created', ()=> ensureSingleton(c));
+    c.on('selection:updated', ()=> ensureSingleton(c));
+
+    // Safety net: periodic late fix if something slipped (low overhead)
+    let periodic = 0;
+    const periodicCheck = ()=>{
+      if (periodic++ > 1200){ // ~2 mins if every 100ms
+        return;
+      }
+      try { ensureSingleton(c); } catch(_) {}
+      setTimeout(periodicCheck, 100);
+    };
+    setTimeout(periodicCheck, 1000);
+  }
+
+  /* ------------- Undo / Redo Wrappers (if exported) ------------- */
+  function wrapUndoRedo(name){
+    const fn = window[name];
+    if (typeof fn === 'function' && !fn.__raTokenIdWrapped){
+      window[name] = function wrappedUndoRedo(){
+        const res = fn.apply(this, arguments);
+        try {
+          // Give JSON restore a moment to finish internal adds
+          setTimeout(()=>{ ensureSingleton(C()); }, 30);
+        } catch(_) {}
+        return res;
+      };
+      window[name].__raTokenIdWrapped = true;
+    }
+  }
+  wrapUndoRedo('undo');
+  wrapUndoRedo('redo');
+
+  /* ------------- Public Repair / Debug ------------- */
+  function repair(){
+    const c = C(); if (!c) return;
+    ensureSingleton(c);
+    log('Repair executed');
+  }
+  window.raTokenIdRepair = repair;
+
+  window.raTokenIdDebug = function(){
+    const c = C();
+    const list = tokenIdObjects(c);
+    return {
+      count: list.length,
+      ids: list.map(o=>o.__uid || o.__internalId || o._fabricId || '(no-id)'),
+      hasGlobal: !!window.idLabel,
+      globalOnCanvas: !!(window.idLabel && c && c.contains(window.idLabel))
+    };
+  };
+
+  /* ------------- Wait for Canvas ------------- */
+  function waitCanvas(tries=0){
+    const c = C();
+    if (c){
+      wireCanvas(c);
+      // Initial cleanup if multiple created earlier
+      setTimeout(()=>ensureSingleton(c), 50);
+      return;
+    }
+    if (tries < 60){
+      canvasReadyTimer = setTimeout(()=>waitCanvas(tries+1), 250);
+    }
+  }
+  waitCanvas();
+
+  /* ------------- Also hook after any JSON load if custom event exists ------------- */
+  // If your code dispatches a custom event after JSON restore, we catch it.
+  window.addEventListener('ra-json-restored', ()=> {
+    setTimeout(()=> ensureSingleton(C()), 40);
+  });
+
+  // Defensive: after large export or canvas size change events (if they exist)
+  ['ra-canvas-resized','ra-base-loaded','ra-overlay-added'].forEach(ev=>{
+    window.addEventListener(ev, ()=> setTimeout(()=>ensureSingleton(C()), 25));
+  });
+
+  log('Token ID history fix initialized.');
+})();
