@@ -9197,212 +9197,297 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* ===============================================================
-   RA_TOKEN_ID_HISTORY_FIX_V1
-   Fixes Token ID label duplication / freeze / undo desync issues.
-
-   PROBLEMS ADDRESSED
-   ------------------
-   1. Token ID label (_raTokenId) excluded from history snapshots → moving it
-      then doing an undo after adding other objects resurrects an older copy.
-   2. JSON / undo restore can leave multiple token ID objects (visual duplicate).
-   3. Global pointer (window.idLabel) can become stale after restore → style
-      controls mutate a detached Fabric object → apparent "freeze".
-   4. Layer / ordering passes may run while a stale object reference exists.
-
-   STRATEGY
-   --------
-   A. Enforce singleton: anytime objects change, we remove duplicates, keep one.
-   B. Rebind global window.idLabel to the surviving instance after every change.
-   C. Debounced history snapshot when the token ID is moved / modified (even if
-      core history logic treats it as a “system” object).
-   D. Wrap undo/redo (if exported) so cleanup runs immediately after.
-   E. Provide a manual force repair: window.raTokenIdRepair()
-   F. Non‑intrusive: no edits to existing functions; additive only.
-
-   SAFE TO REMOVE: Delete this whole IIFE if ever obsolete.
+   RA_TOKEN_ID_LABEL_STABLE_V2
+   Comprehensive stability patch for Token ID label:
+     - Prevents duplicate / ghost instances after undo/redo
+     - Ensures label stays selectable & bound to window.idLabel
+     - Adds debounced history snapshots for moves & style changes
+     - Rebinds after JSON restore & history operations
+     - Provides manual repair & debug utilities
+   Remove older RA_TOKEN_ID_HISTORY_FIX_V1 before adding this.
    =============================================================== */
-(function RA_TOKEN_ID_HISTORY_FIX_V1(){
-  if (window.__RA_TOKEN_ID_HISTORY_FIX_V1__) return;
-  window.__RA_TOKEN_ID_HISTORY_FIX_V1__ = true;
+(function RA_TOKEN_ID_LABEL_STABLE_V2(){
+  if (window.__RA_TOKEN_ID_LABEL_STABLE_V2__) return;
+  window.__RA_TOKEN_ID_LABEL_STABLE_V2__ = true;
 
-  const DEBOUNCE_MS = 420;   // coalesce rapid drags / transforms
+  const DEBOUNCE_MS = 420;
   let moveTimer = null;
+  let baselineSnapDone = false;
   let canvasReadyTimer = null;
-
-  function log(...a){ /* uncomment for debugging:
-     console.log('[TOKEN_ID_FIX]', ...a); */ }
 
   function C(){
     return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
   }
 
+  function log(){ /* Uncomment for debugging
+    console.log('[TOKEN_ID_V2]', ...arguments);
+  */ }
+
+  /* ---------- Core Helpers ---------- */
   function tokenIdObjects(c){
     c = c || C();
     if (!c) return [];
-    return (c.getObjects()||[]).filter(o => o && o._raTokenId);
+    try { return (c.getObjects()||[]).filter(o=>o && o._raTokenId); } catch(_){ return []; }
   }
 
   function pickSurvivor(list){
     if (!list.length) return null;
-    // Choose the topmost (last in stacking order) – keeps recent user interaction
+    // Keep the topmost (last in stacking order)
     return list[list.length - 1];
   }
 
-  function removeDuplicates(c){
+  function ensureSelectable(o){
+    if (!o) return;
+    o.selectable = true;
+    o.evented = true;
+    o.hasControls = true;
+    if (typeof o.set === 'function'){
+      try { o.set({ selectable:true, evented:true }); } catch(_){}
+    }
+  }
+
+  function removeDuplicatesAndRebind(c){
     c = c || C();
     if (!c) return null;
-    const all = tokenIdObjects(c);
-    if (all.length <= 1) return all[0] || null;
-    const keep = pickSurvivor(all);
-    all.forEach(o=>{
+    const list = tokenIdObjects(c);
+    if (list.length === 0){
+      if (window.idLabel && !c.contains(window.idLabel)){
+        delete window.idLabel;
+      }
+      return null;
+    }
+    let keep = pickSurvivor(list);
+    list.forEach(o=>{
       if (o !== keep){
-        try { c.remove(o); } catch(_) {}
+        try { c.remove(o); } catch(_){}
       }
     });
-    try { c.requestRenderAll(); } catch(_) {}
+    // Rebind global pointer
+    window.idLabel = keep;
+    keep._raTokenId = true;
+    ensureSelectable(keep);
+    try { c.requestRenderAll(); } catch(_){}
     return keep;
   }
 
-  function rebindGlobal(c){
-    c = c || C();
-    const objs = tokenIdObjects(c);
-    const single = objs[0] || null;
-    if (single){
-      window.idLabel = single; // maintain existing global naming convention
-      window.idLabel._raTokenId = true; // enforce flag
-    } else {
-      if (window.idLabel && !c?.contains(window.idLabel)){
-        // stale reference – clear it
-        delete window.idLabel;
-      }
+  function repair(){
+    const c = C(); if (!c) return;
+    removeDuplicatesAndRebind(c);
+  }
+
+  /* ---------- History Snapshot Integration ---------- */
+  function historyPushFn(){
+    if (typeof window.forceSnapshot === 'function') return window.forceSnapshot;
+    if (window.raHistory){
+      if (typeof window.raHistory.forceSnapshot === 'function') return window.raHistory.forceSnapshot;
+      if (typeof window.raHistory.push === 'function') return window.raHistory.push;
     }
-    return single;
+    if (typeof window.push === 'function') return window.push;
+    return null;
   }
 
-  function ensureSingleton(c){
-    const kept = removeDuplicates(c);
-    rebindGlobal(c);
-    return kept;
-  }
-
-  /* ------------- History Snapshot Integration ------------- */
-  function snapshotLabel(reason='Token ID Move'){
+  function snapshot(reason){
+    const fn = historyPushFn();
     const c = C();
-    if (!c) return;
-    const label = tokenIdObjects(c)[0];
-    if (!label) return;
-
-    // Try the most likely snapshot APIs in descending order
-    const fn =
-        window.forceSnapshot ||
-        (window.raHistory && (window.raHistory.forceSnapshot || window.raHistory.push)) ||
-        window.push ||
-        null;
-    if (typeof fn === 'function'){
-      try { fn(reason); } catch(e){ log('Snapshot fn error', e); }
+    if (!fn || !c) return;
+    try {
+      fn(reason);
+    } catch(e){
+      log('Snapshot error', e);
     }
   }
 
-  function scheduleSnapshot(){
+  function scheduleMoveSnapshot(){
     clearTimeout(moveTimer);
-    moveTimer = setTimeout(()=> snapshotLabel('Token ID Move'), DEBOUNCE_MS);
+    moveTimer = setTimeout(()=> snapshot('Token ID Move'), DEBOUNCE_MS);
   }
 
-  /* ------------- Event Wiring ------------- */
-  function wireCanvas(c){
-    if (!c || c.__raTokenIdPatched) return;
-    c.__raTokenIdPatched = true;
+  function baselineSnapshotOnce(){
+    if (baselineSnapDone) return;
+    baselineSnapDone = true;
+    snapshot('Token ID Baseline');
+  }
 
-    // Core Fabric mutation events
-    c.on('object:added',   e=>{ const o=e.target; if (o && o._raTokenId){ ensureSingleton(c); } else { // after batch add (undo/redo) do a next-tick cleanup
-        queueMicrotask(()=>ensureSingleton(c));
+  /* ---------- Event Wiring on Canvas ---------- */
+  function wireCanvas(c){
+    if (!c || c.__raTokenIdV2Patched) return;
+    c.__raTokenIdV2Patched = true;
+
+    c.on('object:added', e=>{
+      const o = e.target;
+      if (o && o._raTokenId){
+        removeDuplicatesAndRebind(c);
+        baselineSnapshotOnce();
+      } else {
+        // After batch adds (undo/redo), do a microtask cleanup
+        queueMicrotask(()=> removeDuplicatesAndRebind(c));
       }
     });
-    c.on('object:removed', ()=> queueMicrotask(()=>ensureSingleton(c)));
+
+    c.on('object:removed', ()=>{
+      queueMicrotask(()=> removeDuplicatesAndRebind(c));
+    });
+
     c.on('object:modified', e=>{
       const o = e.target;
       if (o && o._raTokenId){
-        ensureSingleton(c);
-        scheduleSnapshot();
+        ensureSelectable(o);
+        removeDuplicatesAndRebind(c);
+        scheduleMoveSnapshot();
       }
     });
-    c.on('selection:created', ()=> ensureSingleton(c));
-    c.on('selection:updated', ()=> ensureSingleton(c));
 
-    // Safety net: periodic late fix if something slipped (low overhead)
-    let periodic = 0;
-    const periodicCheck = ()=>{
-      if (periodic++ > 1200){ // ~2 mins if every 100ms
-        return;
+    // If style panels update font/size/color via direct global idLabel →
+    // we run a passive poll after render to ensure pointer validity.
+    c.on('after:render', ()=>{
+      if (window.idLabel && !c.contains(window.idLabel)){
+        removeDuplicatesAndRebind(c);
       }
-      try { ensureSingleton(c); } catch(_) {}
-      setTimeout(periodicCheck, 100);
-    };
-    setTimeout(periodicCheck, 1000);
+    });
+
+    c.on('selection:created', ()=> {
+      if (window.idLabel && !c.contains(window.idLabel)){
+        removeDuplicatesAndRebind(c);
+      }
+    });
+    c.on('selection:updated', ()=> {
+      if (window.idLabel && !c.contains(window.idLabel)){
+        removeDuplicatesAndRebind(c);
+      }
+    });
+
+    // Periodic lightweight guard (stops after ~90s)
+    let ticks = 0;
+    function periodic(){
+      if (ticks++ > 900) return;
+      try { removeDuplicatesAndRebind(c); } catch(_){}
+      setTimeout(periodic, 100);
+    }
+    setTimeout(periodic, 1000);
   }
 
-  /* ------------- Undo / Redo Wrappers (if exported) ------------- */
+  /* ---------- Undo / Redo Wrappers ---------- */
   function wrapUndoRedo(name){
     const fn = window[name];
-    if (typeof fn === 'function' && !fn.__raTokenIdWrapped){
-      window[name] = function wrappedUndoRedo(){
-        const res = fn.apply(this, arguments);
-        try {
-          // Give JSON restore a moment to finish internal adds
-          setTimeout(()=>{ ensureSingleton(C()); }, 30);
-        } catch(_) {}
-        return res;
-      };
-      window[name].__raTokenIdWrapped = true;
-    }
+    if (typeof fn !== 'function' || fn.__raTokenIdV2Wrapped) return;
+    window[name] = function(){
+      const r = fn.apply(this, arguments);
+      // Let restore finish then cleanup
+      setTimeout(()=> { removeDuplicatesAndRebind(C()); }, 40);
+      setTimeout(()=> { removeDuplicatesAndRebind(C()); }, 160); // second pass for async add bursts
+      return r;
+    };
+    window[name].__raTokenIdV2Wrapped = true;
   }
   wrapUndoRedo('undo');
   wrapUndoRedo('redo');
 
-  /* ------------- Public Repair / Debug ------------- */
-  function repair(){
-    const c = C(); if (!c) return;
-    ensureSingleton(c);
-    log('Repair executed');
-  }
-  window.raTokenIdRepair = repair;
+  /* ---------- JSON Restore Hook (Heuristic) ---------- */
+  // If your code dispatches a custom event after loadFromJSON, catch it
+  window.addEventListener('ra-json-restored', ()=>{
+    setTimeout(()=> removeDuplicatesAndRebind(C()), 50);
+    setTimeout(()=> removeDuplicatesAndRebind(C()), 150);
+  });
 
+  /* ---------- Public Utilities ---------- */
+  window.raTokenIdRepair = repair;
   window.raTokenIdDebug = function(){
     const c = C();
-    const list = tokenIdObjects(c);
+    const objs = tokenIdObjects(c);
     return {
-      count: list.length,
-      ids: list.map(o=>o.__uid || o.__internalId || o._fabricId || '(no-id)'),
+      count: objs.length,
       hasGlobal: !!window.idLabel,
-      globalOnCanvas: !!(window.idLabel && c && c.contains(window.idLabel))
+      globalOnCanvas: !!(window.idLabel && c && c.contains(window.idLabel)),
+      objectIds: objs.map(o=>o.__uid || o.__internalId || o.id || '(no-id)')
     };
   };
+  window.raTokenIdForceSnapshot = function(label){
+    snapshot(label || 'Token ID Manual Snapshot');
+  };
+  window.raTokenIdSelect = function(){
+    const c = C(); if (!c) return;
+    const label = tokenIdObjects(c)[0];
+    if (label){
+      c.setActiveObject(label);
+      c.requestRenderAll();
+      return true;
+    }
+    return false;
+  };
 
-  /* ------------- Wait for Canvas ------------- */
+  /* ---------- Canvas Wait / Init ---------- */
   function waitCanvas(tries=0){
     const c = C();
     if (c){
       wireCanvas(c);
-      // Initial cleanup if multiple created earlier
-      setTimeout(()=>ensureSingleton(c), 50);
+      // Initial cleanup passes
+      setTimeout(()=> removeDuplicatesAndRebind(c), 30);
+      setTimeout(()=> removeDuplicatesAndRebind(c), 120);
       return;
     }
-    if (tries < 60){
-      canvasReadyTimer = setTimeout(()=>waitCanvas(tries+1), 250);
+    if (tries < 80){
+      canvasReadyTimer = setTimeout(()=> waitCanvas(tries+1), 200);
     }
   }
   waitCanvas();
 
-  /* ------------- Also hook after any JSON load if custom event exists ------------- */
-  // If your code dispatches a custom event after JSON restore, we catch it.
-  window.addEventListener('ra-json-restored', ()=> {
-    setTimeout(()=> ensureSingleton(C()), 40);
-  });
+  /* ---------- Global Style Input Patching (Passive) ----------
+     If your style inputs mutate idLabel directly, we tap into set calls here
+     by defining a proxy once we have a valid object (light approach). */
+  (function patchIdLabelSetter(){
+    let applied = false;
+    Object.defineProperty(window, '__raIdLabelProxyApplied', {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: false
+    });
 
-  // Defensive: after large export or canvas size change events (if they exist)
-  ['ra-canvas-resized','ra-base-loaded','ra-overlay-added'].forEach(ev=>{
-    window.addEventListener(ev, ()=> setTimeout(()=>ensureSingleton(C()), 25));
-  });
+    const check = ()=>{
+      const c = C();
+      if (!c) return;
+      if (!window.idLabel || !c.contains(window.idLabel)) return;
 
-  log('Token ID history fix initialized.');
+      if (applied) return;
+      applied = true;
+
+      // Monkey-patch set() to auto snapshot on style changes
+      if (typeof window.idLabel.set === 'function' && !window.idLabel.__raSetPatched){
+        const origSet = window.idLabel.set;
+        window.idLabel.set = function(k,v){
+          const result = origSet.call(this, k, v);
+            if (typeof k === 'string'){
+              if (/font|fill|stroke|align|text|shadow|color|size/i.test(k)){
+                scheduleMoveSnapshot();
+              }
+            } else if (k && typeof k === 'object'){
+              const keys = Object.keys(k).join(',');
+              if (/(font|fill|stroke|align|text|shadow|color|size)/i.test(keys)){
+                scheduleMoveSnapshot();
+              }
+            }
+          return result;
+        };
+        window.idLabel.__raSetPatched = true;
+      }
+    };
+
+    // Poll a few times early; then rely on events
+    let attempts = 0;
+    function poll(){
+      check();
+      if (attempts++ < 50) setTimeout(poll, 200);
+    }
+    poll();
+
+    // Also after each repair
+    const origRepair = window.raTokenIdRepair;
+    window.raTokenIdRepair = function(){
+      origRepair();
+      applied = false;
+      setTimeout(check, 30);
+    };
+  })();
+
+  log('Token ID Stable V2 patch initialized.');
 })();
