@@ -178,87 +178,38 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP STAGE WELD + VERTICAL SCROLL (mobile untouched)
-   - Keeps left/right columns fixed in the 3‑col grid
-   - Middle (.stage) is centered and scrolls with the page
-   - Checkerboard (.canvas-wrap) and Fabric wrapper (.canvas-container)
-     are always the exact same square size (from --ra-csize).
-   ========================================================= */
-
-@media (pointer: fine) {
-  /* Let the page scroll vertically; still a 3‑column grid */
-  .app {
-    height: auto !important;         /* allow natural page height */
-    min-height: 100vh !important;    /* keep full-viewport baseline */
-  }
-
-  /* Middle column (the stage cell) stays in column 2 and aligns to the top */
-  .stage {
-    grid-column: 2 !important;
-    align-self: start !important;
-    place-self: start center !important; /* centered horizontally, top aligned */
-    position: relative !important;
-    z-index: auto !important;
-  }
-
-  /* ---- Size weld: checkerboard & Fabric wrapper always match ---- */
-  .canvas-wrap {
-    position: relative !important;
-    width: var(--ra-csize, 700px) !important;
-    height: var(--ra-csize, 700px) !important;
-    margin: 0 auto !important;
-    transform: none !important;      /* cancel any legacy transforms */
-  }
-
-  /* Fabric attaches a wrapper .canvas-container around <canvas>. Match it. */
-  .canvas-container {
-    width: var(--ra-csize, 700px) !important;
-    height: var(--ra-csize, 700px) !important;
-    transform: none !important;
-  }
-
-  /* The <canvas> element itself follows the wrapper size */
-  #c {
-    width: 100% !important;
-    height: 100% !important;
-    display: block;
-  }
-}
-
-/* =========================================================
-   DESKTOP PIN v5 — lock the stage into the middle column and
-   make the stage (not the inner canvas) the scrolling container.
-   Desktop only (pointer:fine); mobile untouched.
+   DESKTOP: stage row that spans all 3 columns (mobile untouched)
    ========================================================= */
 @media (pointer: fine) {
-  html.ra-desk-pin .app {
-    /* keep 3 fixed columns; no auto “reflow” to a different column */
-    display: grid;
-    grid-auto-flow: row !important;
-    column-gap: 18px;
-    align-items: start;
-    /* Your existing column widths; adjust if you ever change sidebars */
-    grid-template-columns: 320px minmax(var(--stage-min, 700px), 1fr) 400px;
+  /* Tell the grid we have a top row for the stage */
+  .app.ra-has-stage-row {
+    /* Keep your existing 3-column grid; just make sure rows can grow */
+    grid-auto-rows: auto;
   }
 
-  /* Hard-force the stage into the center column. The .ra-force class
-     is added by JS; the !important wins over any legacy rules. */
-  html.ra-desk-pin .app > .stage.ra-force {
-    grid-column: 2 !important;
-    /* The stage is the ONLY scroller so the checkerboard + canvas move together */
-    overflow: auto;
-    /* How tall the stage can be before it scrolls (tweak the 140px if needed) */
-    max-height: calc(100vh - var(--stage-top-pad, 140px));
-    align-self: start;
+  /* The full-width row that contains the stage */
+  .stage-row {
+    grid-column: 1 / -1;      /* span all columns */
     position: relative;
-    z-index: 0;
-    /* This ensures the stage itself gets the scrollbars rather than children */
-    -webkit-overflow-scrolling: touch; /* harmless on desktop */
+    z-index: 5;               /* under modals, above backgrounds */
+    padding: 0;
   }
 
-  /* Make sure the checkerboard container does not create a second scroll area */
-  html.ra-desk-pin .app > .stage.ra-force .canvas-wrap {
-    overflow: visible !important;
-    max-height: none !important;
+  /* Center the stage inside the row */
+  .stage-row .stage {
+    position: static !important;   /* kill any fixed/absolute from old patches */
+    transform: none !important;
+    margin: 0 auto;                /* center */
+    width: var(--ra-csize, 700px); /* width driven by JS (Fabric size) */
+    max-width: 100%;
   }
+
+  /* Ensure the checkerboard wrapper matches the same width */
+  .stage-row .canvas-wrap {
+    width: var(--ra-csize, 700px);
+    margin: 0 auto;
+  }
+
+  /* Safety: the right panel should not overlap the stage row */
+  .panel.right { z-index: 1; }
 }
