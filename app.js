@@ -8356,131 +8356,112 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP STAGE WELD SYNC — keep CSS --ra-csize in sync with Fabric
-   (desktop only; mobile untouched)
+   DESKTOP STAGE ROW (isolate + center the canvas)
+   - Desktop only (pointer:fine; not mobile UA)
+   - Creates a full-width row at the top of the .app grid
+     and moves the existing .stage into it.
+   - Keeps --ra-csize in sync with Fabric canvas width.
    ========================================================= */
-(() => {
-  if (window.__RA_DESKTOP_WELD_SYNC__) return;
-  window.__RA_DESKTOP_WELD_SYNC__ = true;
+;(() => {
+  if (window.__RA_STAGE_ROW_V1__) return;
+  window.__RA_STAGE_ROW_V1__ = true;
 
-  const isDesktop = () =>
-    matchMedia('(pointer: fine)').matches &&
-    !/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isDesktop =
+    window.matchMedia && window.matchMedia('(pointer:fine)').matches &&
+    !/Mobi|Android/i.test(navigator.userAgent || '');
 
-  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+  if (!isDesktop) return;
 
-  function setVar(px){
-    document.documentElement.style.setProperty('--ra-csize', `${px}px`);
+  function getApp() {
+    return document.querySelector('.app');
   }
 
-  function syncNow(){
-    if (!isDesktop()) return;
-    const c = C();
-    if (!c) return;
-    const w = c.getWidth ? c.getWidth() : 700;
-    if (w && isFinite(w)) setVar(w);
+  function getStage() {
+    // Your middle wrapper is usually ".stage". Fallback: parent of ".canvas-wrap".
+    const s = document.querySelector('.stage');
+    if (s) return s;
+    const cw = document.querySelector('.canvas-wrap');
+    return cw ? cw.parentElement : null;
   }
 
-  // Patch setCanvasSize so whenever you change the logical canvas, CSS follows
-  const prevSetCanvasSize = window.setCanvasSize;
-  window.setCanvasSize = function patchedSetCanvasSize(n){
-    try { if (typeof prevSetCanvasSize === 'function') prevSetCanvasSize(n); }
-    finally { syncNow(); }
-  };
+  function ensureRow() {
+    const app = getApp();
+    if (!app) return null;
 
-  // Also catch your resize helper if present
-  if (typeof window.raResizeCanvasAndScale === 'function'){
-    const prev = window.raResizeCanvasAndScale;
-    window.raResizeCanvasAndScale = function(n){
-      try { prev(n); } finally { syncNow(); }
-    };
-  }
-
-  // Run once after DOM + Fabric ready
-  function boot(){
-    if (!isDesktop()) return;
-    const c = C();
-    if (c) { syncNow(); return; }
-    setTimeout(boot, 120);
-  }
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
-})();
-
-/* =========================================================
-   DESKTOP PIN v5 — anchor stage in column 2 and unify scroll
-   (desktop only; mobile untouched)
-   ========================================================= */
-(() => {
-  if (window.__RA_DESK_PIN_V5__) return;
-  window.__RA_DESK_PIN_V5__ = true;
-
-  function isDesktop() {
-    // Good enough guard so mobile patches are not touched
-    return matchMedia('(pointer:fine)').matches;
-  }
-
-  function applyPin() {
-    if (!isDesktop()) return;
-
-    document.documentElement.classList.add('ra-desk-pin');
-
-    const c = document.getElementById('c');
-    if (!c) return;
-
-    // Find the stage (the element that wraps the checkerboard/canvas block)
-    const stage = c.closest('.stage') || c.parentElement;
-    if (!stage) return;
-
-    // Force middle column and make stage the only scroller
-    stage.classList.add('ra-force');
-    stage.style.gridColumn = '2';
-    stage.style.alignSelf = 'start';
-    stage.style.overflow = 'auto';
-    stage.style.maxHeight = 'calc(100vh - var(--stage-top-pad, 140px))';
-    stage.style.position = 'relative';
-
-    // Ensure the inner checkerboard wrapper doesn’t create its own scrollbars
-    const wrap = stage.querySelector('.canvas-wrap');
-    if (wrap) {
-      wrap.style.overflow = 'visible';
-      wrap.style.maxHeight = 'none';
-      wrap.style.position = 'relative';
-      wrap.style.transform = 'none';
-      wrap.style.left = '';
-      wrap.style.right = '';
-      wrap.style.top = '';
+    let row = app.querySelector('.stage-row');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'stage-row';
+      // Put the row as the FIRST grid item so it sits above everything
+      app.insertBefore(row, app.firstElementChild || null);
+      app.classList.add('ra-has-stage-row');
     }
+    return row;
+  }
 
-    // In case some legacy script tries to shove the stage to col 3 later,
-    // keep a light guard that re-applies column 2.
-    const app = stage.closest('.app');
-    if (app && !app.__deskPinGuard) {
-      const mo = new MutationObserver(() => {
-        const cs = getComputedStyle(stage);
-        if (cs.gridColumnStart !== '2') {
-          stage.style.gridColumn = '2';
-        }
-        // If someone accidentally put a transform on the wrap, clear it.
-        const w = stage.querySelector('.canvas-wrap');
-        if (w && getComputedStyle(w).transform !== 'none') {
-          w.style.transform = 'none';
-        }
-      });
-      mo.observe(app, { attributes: true, subtree: true, attributeFilter: ['style', 'class'] });
-      app.__deskPinGuard = mo;
+  function moveStageIntoRow() {
+    const app = getApp();
+    const row = ensureRow();
+    const stage = getStage();
+    if (!app || !row || !stage) return;
+
+    // Neutralize any grid/position left by previous experiments
+    try {
+      stage.style.gridColumn = 'auto';
+      stage.style.gridRow = 'auto';
+      stage.style.position = 'static';
+      stage.style.transform = 'none';
+      stage.style.margin = '0 auto';
+    } catch(_) {}
+
+    // Append the stage into the full-width row
+    if (stage.parentElement !== row) {
+      row.appendChild(stage);
     }
+  }
+
+  function syncCanvasSizeVar() {
+    // Use Fabric canvas width when available; fallback to the size input.
+    let px = 0;
+    try {
+      if (window.canvas && typeof window.canvas.getWidth === 'function') {
+        px = window.canvas.getWidth() || 0;
+      }
+    } catch(_) {}
+
+    if (!px) {
+      const inp = document.getElementById('canvasSize');
+      const v = parseInt(inp && inp.value || '700', 10);
+      px = (Number.isFinite(v) && v > 0) ? v : 700;
+    }
+    document.documentElement.style.setProperty('--ra-csize', px + 'px');
   }
 
   function boot() {
-    applyPin();
-    // Run again after layout settles, and on resize
-    setTimeout(applyPin, 0);
-    setTimeout(applyPin, 120);
-    window.addEventListener('resize', () => setTimeout(applyPin, 0), { passive: true });
+    moveStageIntoRow();
+    syncCanvasSizeVar();
+
+    // Re-sync when user changes the canvas size input
+    const sizeEl = document.getElementById('canvasSize');
+    if (sizeEl && !sizeEl.__raStageRowBound) {
+      sizeEl.__raStageRowBound = true;
+      sizeEl.addEventListener('change', syncCanvasSizeVar);
+    }
+
+    // Hook into any custom setCanvasSize function to keep CSS var updated
+    if (window.setCanvasSize && !window.setCanvasSize.__raStageRowPatched) {
+      const orig = window.setCanvasSize;
+      window.setCanvasSize = function() {
+        const r = orig.apply(this, arguments);
+        try { syncCanvasSizeVar(); } catch(_) {}
+        return r;
+      };
+      window.setCanvasSize.__raStageRowPatched = true;
+    }
+
+    // If Fabric gets created a bit later, do one more sync
+    setTimeout(syncCanvasSizeVar, 300);
+    setTimeout(syncCanvasSizeVar, 1200);
   }
 
   if (document.readyState === 'loading') {
