@@ -8435,17 +8435,17 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP CENTER‑STAGE FORCE v4
+   DESKTOP CENTER‑STAGE FORCE v5 (outermost grid aware)
    - Desktop only (pointer:fine; not mobile UA)
-   - Pins the *real* grid child that contains <canvas id="c">
-     into the middle column (2) and keeps it in normal flow.
-   - Neutralizes any leftover position:fixed/absolute on wrappers
-     and re-neutralizes if another script tries to set them again.
-   - Works alongside your DESKTOP 3‑COLUMN LOCK CSS/JS.
+   - Finds the OUTERMOST .app (3‑column) grid ancestor, not
+     the nearest grid, and pins the stage into column 2.
+   - Neutralizes any leftover position:fixed/absolute/transform
+     on wrappers and keeps them neutral via MutationObserver.
+   - Works alongside your "DESKTOP 3‑COLUMN LOCK" CSS/JS.
    ========================================================= */
 ;(() => {
-  if (window.__RA_CENTER_STAGE_FIX_V4__) return;
-  window.__RA_CENTER_STAGE_FIX_V4__ = true;
+  if (window.__RA_CENTER_STAGE_FIX_V5__) return;
+  window.__RA_CENTER_STAGE_FIX_V5__ = true;
 
   const UA = navigator.userAgent || '';
   const isMobileUA =
@@ -8454,28 +8454,36 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
   if (!isDesktop()) return;
 
+  function $(sel, r=document){ return r.querySelector(sel); }
+
   function getCanvas(){ return document.getElementById('c') || document.querySelector('canvas'); }
 
-  function nearestGridAncestor(node){
+  // Collect ALL grid ancestors up to <body>, then pick the OUTERMOST,
+  // preferring one with the .app class (your 3‑column shell).
+  function topGridAncestor(node){
+    const list = [];
     let n = node && node.parentElement;
-    while (n){
-      const disp = (getComputedStyle(n).display || '').toLowerCase();
-      if (disp.includes('grid')) return n;
+    while (n && n !== document.body){
+      const cs = getComputedStyle(n);
+      if ((cs.display || '').toLowerCase().includes('grid')) list.push(n);
       n = n.parentElement;
     }
-    return null;
+    if (!list.length) return null;
+    const app = list.find(el => el.classList && el.classList.contains('app'));
+    return app || list[list.length - 1]; // outermost grid
   }
 
+  // Ensure we act on the direct child of the TOP grid that contains the canvas
   function gridItemForCanvas(){
-    const cnv  = getCanvas();              if (!cnv)  return null;
-    const grid = nearestGridAncestor(cnv); if (!grid) return null;
+    const cnv = getCanvas();                if (!cnv)  return null;
+    const grid = topGridAncestor(cnv);      if (!grid) return null;
+    const kids = Array.from(grid.children); if (!kids.length) return null;
 
-    // Direct child of the grid that contains the canvas
-    const kids = Array.from(grid.children);
-    const direct = kids.find(k => k.contains(cnv));
-    if (direct) return direct;
+    // First try: a direct child that contains the canvas
+    let item = kids.find(k => k.contains(cnv)) || null;
+    if (item) return item;
 
-    // Fallback: climb until parent is a direct child of grid
+    // Fallback: climb up from canvas until parent is a direct child of TOP grid
     let p = cnv;
     while (p && p.parentElement && p.parentElement !== grid) p = p.parentElement;
     return (p && p.parentElement === grid) ? p : null;
@@ -8484,14 +8492,10 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   function resetFlow(el){
     if (!el) return;
     const s = el.style;
-    // Hard reset of anything that can float it out of the grid flow
-    s.position = 'static';
+    s.position  = 'static';
     s.left = s.right = s.top = s.bottom = s.inset = '';
     s.transform = 'none';
-    s.marginLeft = 'auto';
-    s.marginRight = 'auto';
-    s.marginTop = '0';
-    s.marginBottom = '0';
+    s.margin = '0 auto';
     s.zIndex = 'auto';
     s.willChange = 'auto';
   }
@@ -8499,7 +8503,6 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   function guardAgainstReapply(el){
     if (!el || el.__raFlowGuard) return;
     const mo = new MutationObserver(() => {
-      // If someone re-applies fixed/absolute, neutralize again
       const cs = getComputedStyle(el);
       if (/(fixed|absolute)/i.test(cs.position) || cs.transform !== 'none'){
         resetFlow(el);
@@ -8509,56 +8512,61 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     el.__raFlowGuard = mo;
   }
 
-  function normalizeWrapper(item){
+  function normalizeStage(item){
+    // Neutralize the stage grid child itself
     resetFlow(item);
-    // Typical Fabric wrappers we may need to neutralize
+    item.style.alignSelf   = 'start';
+    item.style.justifySelf = 'center';
+    item.style.gridColumn  = '2 / span 1';   // <— lock into middle column
+
+    // Typical Fabric shells to neutralize
     const wrap = item.querySelector('.canvas-wrap')      || item;
     const cont = item.querySelector('.canvas-container') || null;
+
     resetFlow(wrap);
     resetFlow(cont);
+
+    // Make sure width is sane and centered under your 3‑col shell
+    wrap.style.width     = 'auto';
+    wrap.style.maxWidth  = '100%';
 
     guardAgainstReapply(item);
     guardAgainstReapply(wrap);
     guardAgainstReapply(cont);
-
-    item.style.alignSelf   = 'start';
-    item.style.justifySelf = 'center';
   }
 
   function pinSidePanels(item){
-    const grid  = item.parentElement;
+    const grid  = item && item.parentElement;
+    if (!grid) return;
     const left  = grid.querySelector('.panel.left');
     const right = grid.querySelector('.panel.right');
-    if (left)  { left.style.gridColumn  = '1 / span 1'; resetFlow(left); }
-    if (right) { right.style.gridColumn = '3 / span 1'; resetFlow(right); }
+    if (left)  { left.style.gridColumn  = '1 / span 1'; resetFlow(left);  left.style.alignSelf='start'; }
+    if (right) { right.style.gridColumn = '3 / span 1'; resetFlow(right); right.style.alignSelf='start'; }
   }
 
-  function forceCenter(){
+  function apply(){
     if (!isDesktop()) return;
     const item = gridItemForCanvas();
     if (!item) return;
-
-    // Force the real canvas-holding grid child into the middle column
-    item.style.gridColumn = '2 / span 1';
-    normalizeWrapper(item);
+    normalizeStage(item);
     pinSidePanels(item);
   }
 
   function boot(){
-    forceCenter();
+    // First pass + late passes (in case other scripts restyle later)
+    apply();
+    setTimeout(apply, 60);
+    setTimeout(apply, 180);
+    setTimeout(apply, 400);
 
-    // Re-apply when layout changes
-    window.addEventListener('resize', () => setTimeout(forceCenter, 0), { passive:true });
-    document.addEventListener('ra-json-restore-end',  forceCenter);
-    document.addEventListener('ra-collection-change', forceCenter);
+    // Layout changes
+    window.addEventListener('resize', () => setTimeout(apply, 0), { passive:true });
+    document.addEventListener('ra-json-restore-end',  apply);
+    document.addEventListener('ra-collection-change', apply);
 
-    // Watch DOM in case a layout script repositions things
-    new MutationObserver(() => setTimeout(forceCenter, 0))
-      .observe(document.body, {childList:true, subtree:true});
-
-    // Late passes
-    setTimeout(forceCenter, 150);
-    setTimeout(forceCenter, 400);
+    // Observe DOM for reflows that might re‑wrap the stage
+    new MutationObserver(() => setTimeout(apply, 0))
+      .observe(document.body, { childList:true, subtree:true });
   }
 
   if (document.readyState === 'loading') {
