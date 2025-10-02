@@ -8435,16 +8435,17 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP CENTER‑STAGE FORCE v3
+   DESKTOP CENTER‑STAGE FORCE v4
    - Desktop only (pointer:fine; not mobile UA)
-   - Auto-detects the grid container and the grid child that
-     *actually* contains <canvas id="c">, then pins that child
-     to column 2 so it scrolls normally with the page.
+   - Pins the *real* grid child that contains <canvas id="c">
+     into the middle column (2) and keeps it in normal flow.
+   - Neutralizes any leftover position:fixed/absolute on wrappers
+     and re-neutralizes if another script tries to set them again.
    - Works alongside your DESKTOP 3‑COLUMN LOCK CSS/JS.
    ========================================================= */
 ;(() => {
-  if (window.__RA_CENTER_STAGE_FIX_V3__) return;
-  window.__RA_CENTER_STAGE_FIX_V3__ = true;
+  if (window.__RA_CENTER_STAGE_FIX_V4__) return;
+  window.__RA_CENTER_STAGE_FIX_V4__ = true;
 
   const UA = navigator.userAgent || '';
   const isMobileUA =
@@ -8453,11 +8454,8 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
   if (!isDesktop()) return;
 
-  function getCanvas(){
-    return document.getElementById('c') || document.querySelector('canvas');
-  }
+  function getCanvas(){ return document.getElementById('c') || document.querySelector('canvas'); }
 
-  // Find the nearest ancestor of node that has display:grid (or inline-grid)
   function nearestGridAncestor(node){
     let n = node && node.parentElement;
     while (n){
@@ -8468,47 +8466,71 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return null;
   }
 
-  // Find the direct child of grid that contains the canvas (robust containment check)
   function gridItemForCanvas(){
     const cnv  = getCanvas();              if (!cnv)  return null;
     const grid = nearestGridAncestor(cnv); if (!grid) return null;
 
+    // Direct child of the grid that contains the canvas
     const kids = Array.from(grid.children);
-    // Prefer a child that *contains* the canvas
-    const containing = kids.find(k => k.contains(cnv));
-    if (containing) return containing;
+    const direct = kids.find(k => k.contains(cnv));
+    if (direct) return direct;
 
-    // Fallback: if Fabric wrapped deeply, climb until parent is a direct child
+    // Fallback: climb until parent is a direct child of grid
     let p = cnv;
     while (p && p.parentElement && p.parentElement !== grid) p = p.parentElement;
     return (p && p.parentElement === grid) ? p : null;
   }
 
-  function pinColumns(item){
-    // Ensure side panels (if they exist) are pinned as well
-    const grid  = item.parentElement;
-    const left  = grid.querySelector('.panel.left');
-    const right = grid.querySelector('.panel.right');
+  function resetFlow(el){
+    if (!el) return;
+    const s = el.style;
+    // Hard reset of anything that can float it out of the grid flow
+    s.position = 'static';
+    s.left = s.right = s.top = s.bottom = s.inset = '';
+    s.transform = 'none';
+    s.marginLeft = 'auto';
+    s.marginRight = 'auto';
+    s.marginTop = '0';
+    s.marginBottom = '0';
+    s.zIndex = 'auto';
+    s.willChange = 'auto';
+  }
 
-    if (left)  { left.style.gridColumn  = '1 / span 1'; left.style.position = 'relative'; left.style.zIndex='0'; }
-    if (right) { right.style.gridColumn = '3 / span 1'; right.style.position= 'relative'; right.style.zIndex='0'; }
+  function guardAgainstReapply(el){
+    if (!el || el.__raFlowGuard) return;
+    const mo = new MutationObserver(() => {
+      // If someone re-applies fixed/absolute, neutralize again
+      const cs = getComputedStyle(el);
+      if (/(fixed|absolute)/i.test(cs.position) || cs.transform !== 'none'){
+        resetFlow(el);
+      }
+    });
+    mo.observe(el, { attributes:true, attributeFilter:['style','class'] });
+    el.__raFlowGuard = mo;
   }
 
   function normalizeWrapper(item){
-    // Kill transforms that can visually “move” the canvas
-    const wrap = item.querySelector('.canvas-wrap');
-    if (wrap){
-      wrap.style.margin    = '0 auto';
-      wrap.style.transform = 'none';
-    }
-    const cc = item.querySelector('.canvas-container');
-    if (cc) cc.style.transform = 'none';
+    resetFlow(item);
+    // Typical Fabric wrappers we may need to neutralize
+    const wrap = item.querySelector('.canvas-wrap')      || item;
+    const cont = item.querySelector('.canvas-container') || null;
+    resetFlow(wrap);
+    resetFlow(cont);
 
-    // Ensure the grid item starts at the top of its track
-    item.style.alignSelf  = 'start';
-    item.style.marginTop  = '0';
-    item.style.position   = item.style.position || 'relative';
-    item.style.zIndex     = '1';
+    guardAgainstReapply(item);
+    guardAgainstReapply(wrap);
+    guardAgainstReapply(cont);
+
+    item.style.alignSelf   = 'start';
+    item.style.justifySelf = 'center';
+  }
+
+  function pinSidePanels(item){
+    const grid  = item.parentElement;
+    const left  = grid.querySelector('.panel.left');
+    const right = grid.querySelector('.panel.right');
+    if (left)  { left.style.gridColumn  = '1 / span 1'; resetFlow(left); }
+    if (right) { right.style.gridColumn = '3 / span 1'; resetFlow(right); }
   }
 
   function forceCenter(){
@@ -8516,25 +8538,25 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     const item = gridItemForCanvas();
     if (!item) return;
 
-    // Put the real canvas-holding grid item in column 2
+    // Force the real canvas-holding grid child into the middle column
     item.style.gridColumn = '2 / span 1';
     normalizeWrapper(item);
-    pinColumns(item);
+    pinSidePanels(item);
   }
 
   function boot(){
     forceCenter();
 
-    // Re-apply when things move/change
+    // Re-apply when layout changes
     window.addEventListener('resize', () => setTimeout(forceCenter, 0), { passive:true });
     document.addEventListener('ra-json-restore-end',  forceCenter);
     document.addEventListener('ra-collection-change', forceCenter);
 
-    // Watch DOM changes (late inserts, async UI)
+    // Watch DOM in case a layout script repositions things
     new MutationObserver(() => setTimeout(forceCenter, 0))
       .observe(document.body, {childList:true, subtree:true});
 
-    // Late passes for fonts/images
+    // Late passes
     setTimeout(forceCenter, 150);
     setTimeout(forceCenter, 400);
   }
