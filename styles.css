@@ -178,36 +178,49 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP GRID v4 — lock three columns & pin stage to middle
-   (desktop only; mobile untouched)
+   DESKTOP STAGE WELD + VERTICAL SCROLL (mobile untouched)
+   - Keeps left/right columns fixed in the 3‑col grid
+   - Middle (.stage) is centered and scrolls with the page
+   - Checkerboard (.canvas-wrap) and Fabric wrapper (.canvas-container)
+     are always the exact same square size (from --ra-csize).
    ========================================================= */
+
 @media (pointer: fine) {
-  /* Force a 3-col layout that never collapses on desktop */
+  /* Let the page scroll vertically; still a 3‑column grid */
   .app {
-    display: grid !important;
-    grid-auto-flow: row !important;
-    grid-template-columns: 320px minmax(var(--raMidMin, 760px), 1fr) 400px !important;
-    grid-template-areas: "left mid right" !important;
-    align-items: start !important;
-    justify-items: stretch !important;
+    height: auto !important;         /* allow natural page height */
+    min-height: 100vh !important;    /* keep full-viewport baseline */
   }
 
-  /* Explicit areas — simpler than column numbers and more robust */
-  .panel.left  { grid-area: left  !important; }
-  .stage       { grid-area: mid   !important; }
-  .panel.right { grid-area: right !important; }
-
-  /* Keep the stage predictable */
+  /* Middle column (the stage cell) stays in column 2 and aligns to the top */
   .stage {
+    grid-column: 2 !important;
+    align-self: start !important;
+    place-self: start center !important; /* centered horizontally, top aligned */
     position: relative !important;
-    transform: none !important;
-    margin: 0 auto !important;   /* center inner content within the mid track */
-    z-index: 1;                   /* under the right rail if it ever overflows */
+    z-index: auto !important;
   }
 
-  /* The checkerboard wrapper typically has padding — keep it centered */
+  /* ---- Size weld: checkerboard & Fabric wrapper always match ---- */
   .canvas-wrap {
+    position: relative !important;
+    width: var(--ra-csize, 700px) !important;
+    height: var(--ra-csize, 700px) !important;
     margin: 0 auto !important;
-    max-width: none !important;
+    transform: none !important;      /* cancel any legacy transforms */
+  }
+
+  /* Fabric attaches a wrapper .canvas-container around <canvas>. Match it. */
+  .canvas-container {
+    width: var(--ra-csize, 700px) !important;
+    height: var(--ra-csize, 700px) !important;
+    transform: none !important;
+  }
+
+  /* The <canvas> element itself follows the wrapper size */
+  #c {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
   }
 }
