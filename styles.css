@@ -178,92 +178,40 @@ button, .btn { touch-action: manipulation; }
 }
 
 /* =========================================================
-   DESKTOP: stage row that spans all 3 columns (mobile untouched)
+   DESKTOP GROUND FIX (final) — 3 fixed columns + centered stage
+   Desktop only (pointer:fine). Mobile is untouched.
    ========================================================= */
 @media (pointer: fine) {
-  /* Tell the grid we have a top row for the stage */
-  .app.ra-has-stage-row {
-    /* Keep your existing 3-column grid; just make sure rows can grow */
-    grid-auto-rows: auto;
-  }
-
-  /* The full-width row that contains the stage */
-  .stage-row {
-    grid-column: 1 / -1;      /* span all columns */
-    position: relative;
-    z-index: 5;               /* under modals, above backgrounds */
-    padding: 0;
-  }
-
-  /* Center the stage inside the row */
-  .stage-row .stage {
-    position: static !important;   /* kill any fixed/absolute from old patches */
-    transform: none !important;
-    margin: 0 auto;                /* center */
-    width: var(--ra-csize, 700px); /* width driven by JS (Fabric size) */
-    max-width: 100%;
-  }
-
-  /* Ensure the checkerboard wrapper matches the same width */
-  .stage-row .canvas-wrap {
-    width: var(--ra-csize, 700px);
-    margin: 0 auto;
-  }
-
-  /* Safety: the right panel should not overlap the stage row */
-  .panel.right { z-index: 1; }
-}
-
-/* =========================================================
-   DESKTOP HARDLOCK v6 — fixed 3 columns, stage pinned center
-   (desktop only; mobile untouched)
-   ========================================================= */
-@media (pointer: fine) {
-  html.ra-hardlock { 
-    --gap: 18px;            /* column gap; match your theme */
-    --left: 320px;          /* left panel width */
-    --right: 400px;         /* right panel width */
-    /* --stageW is set from JS to help min-width; safe default below */
-    --stageW: 740px;
-  }
-
-  html.ra-hardlock .app{
-    /* Force the 3-col grid even when viewport is narrow */
+  /* Turn on this mode by adding .ra-desk to <html> (JS below) */
+  html.ra-desk .app {
+    /* Fixed, predictable 3‑col grid */
     display: grid !important;
-    grid-template-columns: var(--left) max-content var(--right) !important;
-    column-gap: var(--gap) !important;
-    align-items: start !important;
+    grid-template-columns: 320px minmax(700px, 1fr) 400px !important;
+    column-gap: 24px !important;
 
-    /* Prevent mobile collapse: when the window is too narrow,
-       we keep grid width and provide a horizontal scrollbar. */
-    min-width: calc(var(--left) + var(--right) + var(--gap)*2 + var(--stageW)) !important;
-    width: auto !important;
-    overflow-x: auto !important;
-
-    /* Let the page scroll naturally; no sticky here */
-    height: auto !important;
+    /* Critical: prevent the middle track from collapsing to 0 */
+    min-width: 1468px !important; /* 320 + 700 + 400 + 24*2 */
+    width: 100% !important;
+    margin: 0 auto !important;
   }
 
-  /* Explicit column placement (overrides any re-ordering rules) */
-  html.ra-hardlock .panel.left  { grid-column: 1 !important; order: 0 !important; }
-  html.ra-hardlock .stage       { grid-column: 2 !important; order: 0 !important; position: relative !important; z-index: 1; }
-  html.ra-hardlock .panel.right { grid-column: 3 !important; order: 0 !important; }
+  /* Explicit column placement so nothing can “float” */
+  html.ra-desk .panel.left  { grid-column: 1 !important; }
+  html.ra-desk .stage       { grid-column: 2 !important; place-self: start center !important; }
+  html.ra-desk .panel.right { grid-column: 3 !important; }
 
-  /* Kill any accidental fixed/absolute/transform on stage wrappers */
-  html.ra-hardlock .stage,
-  html.ra-hardlock .stage > *,
-  html.ra-hardlock .canvas-wrap {
-    position: static !important;
+  /* Keep the checkerboard wrapper and Fabric wrapper unified and centered */
+  html.ra-desk .canvas-wrap {
+    position: relative !important;
+    width:  var(--ra-csize, 700px) !important;
+    height: var(--ra-csize, 700px) !important;
+    margin: 0 auto !important;
+  }
+  html.ra-desk .canvas-container {
+    position: relative !important;
     transform: none !important;
-    top: auto !important; right: auto !important; bottom: auto !important; left: auto !important;
-  }
-
-  /* Keep checkerboard + black square unified and centered */
-  html.ra-hardlock .canvas-wrap { margin: 0 auto !important; }
-
-  /* Neutralize “mobile reorder” rules that may exist elsewhere */
-  html.ra-hardlock .panel,
-  html.ra-hardlock .stage {
-    grid-row: auto !important;
+    inset: 0 auto auto 0 !important; /* top:0; left:0; reset others */
+    width: 100% !important;
+    height: 100% !important;
   }
 }
