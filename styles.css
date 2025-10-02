@@ -176,3 +176,71 @@ button, .btn { touch-action: manipulation; }
   .ra-mobile-dock { gap: 6px; padding: 8px 10px; }
   .ra-mobile-dock button { min-height: 42px; font-size: 12px; }
 }
+
+/* =========================================================
+   DESKTOP 3‑COLUMN LOCK (clean)
+   - Desktop only (pointer:fine). Mobile is untouched.
+   - Left & right columns are fixed; middle column is free
+     and scrolls with the page.
+   - When the viewport is narrower than min grid width,
+     the page gets a horizontal scrollbar (no reflow).
+   ========================================================= */
+@media (pointer: fine) {
+  :root{
+    /* TUNE THESE to match your UI */
+    --ra-left-w:   320px;   /* left panel width */
+    --ra-right-w:  400px;   /* right panel width */
+    --ra-gap:       18px;   /* grid column gap */
+    --ra-wrap-pad:  12px;   /* .canvas-wrap padding (must match your CSS) */
+    --ra-mid-min:  700px;   /* fallback; JS will sync to actual canvas size */
+  }
+
+  /* 3 fixed columns; middle min width depends on canvas size */
+  html.ra-desktop-3col .app{
+    display: grid !important;
+    grid-template-columns:
+      var(--ra-left-w)
+      minmax(calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2), 1fr)
+      var(--ra-right-w) !important;
+    column-gap: var(--ra-gap) !important;
+    align-items: start !important;
+
+    /* Ensure the grid never collapses → horizontal scroll if too narrow */
+    min-width: calc(
+      var(--ra-left-w) +
+      var(--ra-right-w) +
+      (var(--ra-gap) * 2) +
+      (var(--ra-mid-min) + var(--ra-wrap-pad)*2)
+    ) !important;
+  }
+
+  /* Pin each section to its column so auto-placement can’t shuffle them */
+  html.ra-desktop-3col .panel.left  {
+    grid-column: 1 !important;
+    width: var(--ra-left-w)  !important;
+    min-width: var(--ra-left-w)  !important;
+  }
+  html.ra-desktop-3col .stage{
+    grid-column: 2 !important;
+    position: relative !important;
+    min-width: calc(var(--ra-mid-min) + var(--ra-wrap-pad)*2) !important;
+    overflow: visible !important;
+  }
+  html.ra-desktop-3col .panel.right {
+    grid-column: 3 !important;
+    width: var(--ra-right-w) !important;
+    min-width: var(--ra-right-w) !important;
+  }
+
+  /* Middle canvas wrapper stays centered and scrolls normally */
+  html.ra-desktop-3col .stage .canvas-wrap{
+    position: relative !important;
+    margin: 0 auto !important;
+    transform: none !important;
+  }
+
+  /* Make sure Fabric doesn’t impose a transform on desktop */
+  html.ra-desktop-3col .canvas-container{
+    transform: none !important;
+  }
+}
