@@ -8354,3 +8354,222 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // Scroll: only toggle helper, no resize
   window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
 })();
+
+/* ============================================================
+   RA_DESKTOP_STICKY_COLUMNS_V1
+   Variant B (sticky side panels + internally scrolling middle)
+   + canvas unfix (prevents overlapping) + horizontal no‑collapse row.
+   Desktop only (pointer:fine). Mobile code remains untouched.
+   Revert:  desktopLayoutRevert()
+   Reapply: desktopLayoutApply()
+   ============================================================ */
+(function RA_DESKTOP_STICKY_COLUMNS_V1(){
+  if (window.__RA_DESKTOP_STICKY_COLUMNS_V1__) return;
+  window.__RA_DESKTOP_STICKY_COLUMNS_V1__ = true;
+
+  // Abort for real mobile / touch devices
+  if (matchMedia('(pointer: coarse)').matches) return;
+
+  var SNAP = {
+    parent:null,parentStyle:'',
+    stage:null, stageStyle:'',
+    left:null,  leftStyle:'',
+    right:null, rightStyle:'',
+    canvasCard:null, canvasCardStyle:'',
+    mobileStyles:[],
+    cssTag:null,
+    resizeHandler:null,
+    orientHandler:null
+  };
+
+  var MOBILE_STYLE_IDS = ['ra-mobile-flow-css-v29','ra-mobile-css-fit-v4-style'];
+  var CSS_ID = 'deskStickyColumnsCSS_V1';
+
+  function disableMobileCSS(){
+    MOBILE_STYLE_IDS.forEach(function(id){
+      var el = document.getElementById(id);
+      if (el && !el.__deskDisabled){
+        el.__deskDisabled = { disabled: el.disabled };
+        el.disabled = true;
+        SNAP.mobileStyles.push(el);
+      }
+    });
+  }
+  function restoreMobileCSS(){
+    SNAP.mobileStyles.forEach(function(el){
+      if (el.__deskDisabled){
+        el.disabled = el.__deskDisabled.disabled;
+        delete el.__deskDisabled;
+      }
+    });
+  }
+
+  function unfixCanvas(){
+    if (window.__RA_UNFIX_CANVAS){
+      try { window.__RA_UNFIX_CANVAS(); return; } catch(_){}
+    }
+    var c = document.getElementById('c');
+    if (!c) return;
+    var card = c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper');
+    if (card){
+      if (!SNAP.canvasCard){
+        SNAP.canvasCard = card;
+        SNAP.canvasCardStyle = card.getAttribute('style') || '';
+      }
+      ['position','top','left','right','width','zIndex','transform','margin'].forEach(function(p){
+        card.style[p]='';
+      });
+      var ghost = document.getElementById('raCanvasGhost');
+      if (ghost) ghost.remove();
+    }
+  }
+
+  function findNodes(){
+    var stage = document.querySelector('main.stage');
+    if (!stage) return null;
+    var left  = document.querySelector('aside.panel.left');
+    var right = document.querySelector('aside.panel.right');
+    var parent = stage.parentElement;
+
+    // Ascend if side panels not siblings of stage
+    if (parent && (left || right)){
+      var up = parent;
+      while (up && up !== document.body){
+        var ok = true;
+        [stage,left,right].forEach(function(n){
+          if (n && !up.contains(n)) ok=false;
+        });
+        if (ok) { parent = up; break; }
+        up = up.parentElement;
+      }
+    }
+    return { parent:parent, stage:stage, left:left, right:right };
+  }
+
+  function injectCSS(){
+    if (document.getElementById(CSS_ID)) return;
+    var st = document.createElement('style');
+    st.id = CSS_ID;
+    st.textContent =
+      '/* Desktop sticky three-column layout */' +
+      '.desk-flex-host{display:flex!important;flex-wrap:nowrap!important;align-items:flex-start;gap:16px;overflow-x:auto;overflow-y:visible;}' +
+      '.desk-flex-host>aside.panel.left,.desk-flex-host>aside.panel.right{' +
+      'flex:0 0 280px;min-width:260px;max-width:320px;box-sizing:border-box;position:sticky;top:8px;' +
+      'max-height:calc(100vh - 16px);overflow:auto;scrollbar-width:thin;' +
+      '}' +
+      '.desk-flex-host>main.stage{' +
+      'flex:1 1 auto;min-width:600px;box-sizing:border-box;position:relative;' +
+      'overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;max-height:calc(100vh - 12px);' +
+      '}' +
+      '@media (pointer: fine){#ra-mobile-stage-host,#ra-mobile-stage-frame{display:none!important;}}';
+    document.head.appendChild(st);
+    SNAP.cssTag = st;
+  }
+
+  function applyLayout(){
+    var nodes = findNodes();
+    if (!nodes || !nodes.parent || !nodes.stage) return;
+
+    SNAP.parent = nodes.parent;
+    SNAP.stage  = nodes.stage;
+    SNAP.left   = nodes.left;
+    SNAP.right  = nodes.right;
+
+    if (SNAP.parentStyle === '') SNAP.parentStyle = SNAP.parent.getAttribute('style') || '';
+    if (SNAP.stageStyle  === '') SNAP.stageStyle  = SNAP.stage.getAttribute('style')  || '';
+    if (SNAP.left && SNAP.leftStyle === '')   SNAP.leftStyle  = SNAP.left.getAttribute('style')  || '';
+    if (SNAP.right && SNAP.rightStyle === '') SNAP.rightStyle = SNAP.right.getAttribute('style') || '';
+
+    SNAP.parent.classList.add('desk-flex-host');
+    SNAP.parent.style.alignItems = 'flex-start';
+
+    SNAP.stage.setAttribute('data-mid','1');
+    SNAP.stage.style.maxHeight = 'calc(100vh - 12px)';
+    SNAP.stage.style.overflowY = 'auto';
+    SNAP.stage.style.overflowX = 'hidden';
+    SNAP.stage.style.position  = SNAP.stage.style.position || 'relative';
+
+    if (SNAP.left){
+      SNAP.left.setAttribute('data-side','1');
+      SNAP.left.style.maxHeight = 'calc(100vh - 16px)';
+      SNAP.left.style.overflowY = 'auto';
+    }
+    if (SNAP.right){
+      SNAP.right.setAttribute('data-side','1');
+      SNAP.right.style.maxHeight = 'calc(100vh - 16px)';
+      SNAP.right.style.overflowY = 'auto';
+    }
+    updateHeights();
+  }
+
+  function updateHeights(){
+    if (SNAP.stage && SNAP.stage.getAttribute('data-mid')==='1'){
+      SNAP.stage.style.maxHeight = 'calc(100vh - 12px)';
+    }
+    if (SNAP.left && SNAP.left.getAttribute('data-side')==='1'){
+      SNAP.left.style.maxHeight = 'calc(100vh - 16px)';
+    }
+    if (SNAP.right && SNAP.right.getAttribute('data-side')==='1'){
+      SNAP.right.style.maxHeight = 'calc(100vh - 16px)';
+    }
+  }
+
+  function bindResize(){
+    if (SNAP.resizeHandler) return;
+    SNAP.resizeHandler = function(){ updateHeights(); };
+    SNAP.orientHandler = function(){ setTimeout(updateHeights, 120); };
+    window.addEventListener('resize', SNAP.resizeHandler, { passive:true });
+    window.addEventListener('orientationchange', SNAP.orientHandler, { passive:true });
+  }
+
+  function applyAll(){
+    // (Optional width threshold – uncomment if you only want below a size)
+    // if (window.innerWidth > 1400) return; 
+
+    disableMobileCSS();
+    unfixCanvas();
+    injectCSS();
+    applyLayout();
+    bindResize();
+  }
+
+  function revertAll(){
+    window.removeEventListener('resize', SNAP.resizeHandler || function(){});
+    window.removeEventListener('orientationchange', SNAP.orientHandler || function(){});
+
+    if (SNAP.stage){
+      if (SNAP.stageStyle === '') SNAP.stage.removeAttribute('style');
+      else SNAP.stage.setAttribute('style', SNAP.stageStyle);
+      SNAP.stage.removeAttribute('data-mid');
+    }
+    if (SNAP.left){
+      if (SNAP.leftStyle === '') SNAP.left.removeAttribute('style');
+      else SNAP.left.setAttribute('style', SNAP.leftStyle);
+      SNAP.left.removeAttribute('data-side');
+    }
+    if (SNAP.right){
+      if (SNAP.rightStyle === '') SNAP.right.removeAttribute('style');
+      else SNAP.right.setAttribute('style', SNAP.rightStyle);
+      SNAP.right.removeAttribute('data-side');
+    }
+    if (SNAP.parent){
+      SNAP.parent.classList.remove('desk-flex-host');
+      if (SNAP.parentStyle === '') SNAP.parent.removeAttribute('style');
+      else SNAP.parent.setAttribute('style', SNAP.parentStyle);
+    }
+    if (SNAP.canvasCard){
+      if (SNAP.canvasCardStyle === '') SNAP.canvasCard.removeAttribute('style');
+      else SNAP.canvasCard.setAttribute('style', SNAP.canvasCardStyle);
+    }
+    restoreMobileCSS();
+  }
+
+  window.desktopLayoutRevert = revertAll;
+  window.desktopLayoutApply  = applyAll;
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', applyAll, { once:true });
+  } else {
+    applyAll();
+  }
+})();
