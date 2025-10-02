@@ -275,3 +275,71 @@ button, .btn { touch-action: manipulation; }
     transform: none !important;
   }
 }
+
+/* =========================================================
+   DESKTOP PAGE SCROLL RESTORE — scroll outside the square
+   (desktop only; mobile untouched)
+   ========================================================= */
+@media (pointer:fine) {
+
+  /* Let the PAGE (html/body) be the scroll container */
+  html.ra-desk,
+  html.ra-desk body {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow-y: auto !important;   /* <— critical: re-enable vertical scroll */
+    overflow-x: hidden;            /* keep horizontal tidy */
+  }
+
+  /* The grid itself must not trap scroll */
+  html.ra-desk .app {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow: visible !important;  /* no inner scrollbars here */
+  }
+
+  /* Stage stays in column 2; no sticky/fixed tricks */
+  html.ra-desk .stage {
+    grid-column: 2 / 3 !important;
+    justify-self: center !important;
+    align-self: start !important;
+    position: relative !important;
+    display: grid !important;
+    justify-items: center !important;
+    margin-block: 24px;            /* small breathing room so you can scroll past */
+  }
+
+  /* Never allow inner wrappers to capture scroll */
+  html.ra-desk .stage .canvas-wrap,
+  html.ra-desk .stage .canvas-container {
+    overflow: visible !important;  /* the square itself never scrolls */
+  }
+
+  /* Checkerboard square defines size; centers in the middle column */
+  html.ra-desk .stage .canvas-wrap {
+    position: relative !important;
+    width:  var(--ra-csize,700px) !important;
+    height: var(--ra-csize,700px) !important;
+    margin: 0 auto !important;
+    left: auto !important; right: auto !important;
+    top:  auto !important; bottom: auto !important;
+    transform: none !important;
+  }
+
+  /* Fabric container fills the square and doesn’t scroll */
+  html.ra-desk .stage .canvas-container {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    transform: none !important;
+  }
+
+  /* Inner canvases sit at (0,0) */
+  html.ra-desk .stage .upper-canvas,
+  html.ra-desk .stage canvas {
+    position: absolute !important;
+    left: 0 !important; top: 0 !important;
+    transform: none !important;
+  }
+}
