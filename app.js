@@ -8642,3 +8642,83 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 })();
+
+/* =========================================================
+   DESKTOP PIN v5 — anchor stage in column 2 and unify scroll
+   (desktop only; mobile untouched)
+   ========================================================= */
+(() => {
+  if (window.__RA_DESK_PIN_V5__) return;
+  window.__RA_DESK_PIN_V5__ = true;
+
+  function isDesktop() {
+    // Good enough guard so mobile patches are not touched
+    return matchMedia('(pointer:fine)').matches;
+  }
+
+  function applyPin() {
+    if (!isDesktop()) return;
+
+    document.documentElement.classList.add('ra-desk-pin');
+
+    const c = document.getElementById('c');
+    if (!c) return;
+
+    // Find the stage (the element that wraps the checkerboard/canvas block)
+    const stage = c.closest('.stage') || c.parentElement;
+    if (!stage) return;
+
+    // Force middle column and make stage the only scroller
+    stage.classList.add('ra-force');
+    stage.style.gridColumn = '2';
+    stage.style.alignSelf = 'start';
+    stage.style.overflow = 'auto';
+    stage.style.maxHeight = 'calc(100vh - var(--stage-top-pad, 140px))';
+    stage.style.position = 'relative';
+
+    // Ensure the inner checkerboard wrapper doesn’t create its own scrollbars
+    const wrap = stage.querySelector('.canvas-wrap');
+    if (wrap) {
+      wrap.style.overflow = 'visible';
+      wrap.style.maxHeight = 'none';
+      wrap.style.position = 'relative';
+      wrap.style.transform = 'none';
+      wrap.style.left = '';
+      wrap.style.right = '';
+      wrap.style.top = '';
+    }
+
+    // In case some legacy script tries to shove the stage to col 3 later,
+    // keep a light guard that re-applies column 2.
+    const app = stage.closest('.app');
+    if (app && !app.__deskPinGuard) {
+      const mo = new MutationObserver(() => {
+        const cs = getComputedStyle(stage);
+        if (cs.gridColumnStart !== '2') {
+          stage.style.gridColumn = '2';
+        }
+        // If someone accidentally put a transform on the wrap, clear it.
+        const w = stage.querySelector('.canvas-wrap');
+        if (w && getComputedStyle(w).transform !== 'none') {
+          w.style.transform = 'none';
+        }
+      });
+      mo.observe(app, { attributes: true, subtree: true, attributeFilter: ['style', 'class'] });
+      app.__deskPinGuard = mo;
+    }
+  }
+
+  function boot() {
+    applyPin();
+    // Run again after layout settles, and on resize
+    setTimeout(applyPin, 0);
+    setTimeout(applyPin, 120);
+    window.addEventListener('resize', () => setTimeout(applyPin, 0), { passive: true });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+})();
