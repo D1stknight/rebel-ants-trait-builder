@@ -8496,3 +8496,94 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 })();
+
+/* =========================================================
+   DESKTOP GRID v4 ENFORCER — keep stage in the middle column
+   - Desktop only (pointer:fine)
+   - No mobile impact
+   - Clears inline grid styles that can push stage into column 3
+   - Keeps --raMidMin in sync with canvas width (+ padding)
+   ========================================================= */
+(() => {
+  if (window.__RA_DESKTOP_GRID_V4__) return;
+  window.__RA_DESKTOP_GRID_V4__ = true;
+
+  const isDesktop = () =>
+    matchMedia('(pointer: fine)').matches &&
+    !/Mobile|Android|iP(ad|hone|od)|IEMobile|Windows Phone/i.test(navigator.userAgent || '');
+
+  const $ = (s, r = document) => r.querySelector(s);
+
+  function midMinFromCanvas() {
+    // canvas logical width + a little breathing room to cover wrap padding
+    let w = 760;
+    try { if (window.canvas && typeof canvas.getWidth === 'function') w = canvas.getWidth() || w; } catch(_) {}
+    const PAD = 48; // adjust if your .canvas-wrap padding changes
+    return (w + PAD) + 'px';
+  }
+
+  function scrubInlineGrid(el) {
+    if (!el || el.nodeType !== 1) return;
+    const s = el.style;
+    // Nuke inline grid placement that can override CSS
+    if (s.gridColumn || s.gridColumnStart || s.gridColumnEnd || s.gridArea) {
+      s.gridColumn = '';
+      s.gridColumnStart = '';
+      s.gridColumnEnd = '';
+      s.gridArea = '';
+    }
+    // Keep it in normal flow
+    if (s.position === 'fixed') s.position = '';
+    if (s.transform && s.transform !== 'none') s.transform = 'none';
+  }
+
+  function enforce() {
+    if (!isDesktop()) return;
+
+    const app   = $('.app');
+    const left  = $('.panel.left');
+    const right = $('.panel.right');
+    const stage = $('.stage');
+
+    if (!app || !stage || !left || !right) return;
+
+    // Ensure DOM order: left, stage, right
+    try {
+      const kids = Array.from(app.children);
+      const iL = kids.indexOf(left);
+      const iS = kids.indexOf(stage);
+      const iR = kids.indexOf(right);
+      if (iL !== -1 && iR !== -1 && (iS < iL || iS > iR)) {
+        app.insertBefore(stage, right); // place stage immediately before the right panel
+      }
+    } catch(_){}
+
+    // Kill any inline grid placement that can hijack the column
+    scrubInlineGrid(stage);
+
+    // Feed CSS the minimum center track width (canvas + padding)
+    try {
+      document.documentElement.style.setProperty('--raMidMin', midMinFromCanvas());
+    } catch(_){}
+  }
+
+  // Run now
+  enforce();
+
+  // Keep it fresh on: resize, canvas size change, and suspicious mutations
+  window.addEventListener('resize', enforce);
+
+  // If your app exposes a canvas-size change, listen to it; else poll a bit
+  let lastW = -1;
+  setInterval(() => {
+    let w = -1;
+    try { w = (window.canvas && canvas.getWidth && canvas.getWidth()) || -1; } catch(_){}
+    if (w > 0 && w !== lastW) { lastW = w; enforce(); }
+  }, 600);
+
+  // MutationObserver: if some script sets inline grid/position, we scrub again
+  try {
+    const mo = new MutationObserver(enforce);
+    mo.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['style', 'class'] });
+  } catch(_){}
+})();
