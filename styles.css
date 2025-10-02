@@ -215,3 +215,54 @@ button, .btn { touch-action: manipulation; }
     height: 100% !important;
   }
 }
+
+/* =========================================================
+   DESKTOP CENTER LOCK (hard override) — stage in col 2,
+   neutralize wrapper offsets, unify sizes
+   (desktop only; mobile untouched)
+   ========================================================= */
+@media (pointer:fine) {
+  html.ra-desk .app {
+    /* 3 fixed desktop columns; scroll horizontally if window too small */
+    grid-template-columns: 320px minmax(0, 1fr) 400px !important;
+    column-gap: 24px !important;
+    min-width: calc(320px + var(--ra-csize,700px) + 400px + 48px) !important;
+  }
+
+  /* Stage is the middle column occupant */
+  html.ra-desk .stage {
+    grid-column: 2 / 3 !important;
+    justify-self: center !important;
+    align-self: start !important;
+    display: grid !important;
+    justify-items: center !important;   /* center children horizontally */
+  }
+
+  /* --- Nuke any offsets the wrappers may have picked up --- */
+  html.ra-desk .stage .canvas-wrap,
+  html.ra-desk .stage .canvas-container,
+  html.ra-desk .stage .upper-canvas,
+  html.ra-desk .stage canvas {
+    position: relative !important;
+    left: auto !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: auto !important;
+    transform: none !important;
+    float: none !important;
+  }
+
+  /* Checkerboard wrapper: the square we want centered & sized */
+  html.ra-desk .stage .canvas-wrap {
+    width:  var(--ra-csize,700px) !important;
+    height: var(--ra-csize,700px) !important;
+    margin: 0 auto !important;          /* center in the stage cell */
+  }
+
+  /* Fabric’s container fills the square exactly */
+  html.ra-desk .stage .canvas-container {
+    width: 100% !important;
+    height: 100% !important;
+    overflow: visible !important;        /* keep watermark/footer visible */
+  }
+}
