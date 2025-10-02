@@ -8435,74 +8435,97 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP CENTER‑STAGE FIX — force the canvas grid item into column 2
+   DESKTOP CENTER‑STAGE FORCE v2 — put the real canvas grid item in column 2
    - Desktop only (pointer:fine; not mobile UA)
-   - No changes to mobile, Fabric zoom/size, or your panels
-   - Works alongside your current desktop CSS (whatever is there)
+   - Works with any grid container (auto-detects the nearest grid ancestor)
+   - Keeps middle column scrolling normally; prevents “behind Export” overlap
    ========================================================= */
 ;(() => {
-  if (window.__RA_CENTER_STAGE_FIX__) return;
-  window.__RA_CENTER_STAGE_FIX__ = true;
+  if (window.__RA_CENTER_STAGE_FIX_V2__) return;
+  window.__RA_CENTER_STAGE_FIX_V2__ = true;
 
   const UA = navigator.userAgent || '';
   const isMobileUA =
     (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
   const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
+  if (!isDesktop()) return;
 
-  // Change this if your grid container has a different class than ".app"
-  const getGrid = () => document.querySelector('.app');
-  const getCanvas = () => document.getElementById('c') || document.querySelector('canvas');
-
-  // Climb up from <canvas> until we reach the child that sits directly under the grid container
-  function gridItemForCanvas() {
-    const grid = getGrid();
-    const cnv  = getCanvas();
-    if (!grid || !cnv) return null;
-    let node = cnv;
-    while (node && node.parentElement && node.parentElement !== grid) {
-      node = node.parentElement;
-    }
-    return (node && node.parentElement === grid) ? node : null;
+  function getCanvas(){
+    return document.getElementById('c') || document.querySelector('canvas');
   }
 
-  function placeCenter() {
-    if (!isDesktop()) return;
+  // Walk up from <canvas> to find the nearest ancestor with display:grid
+  function nearestGridAncestor(start){
+    let n = start;
+    while (n && n.parentElement){
+      n = n.parentElement;
+      try {
+        const disp = getComputedStyle(n).display || '';
+        if (disp.includes('grid')) return n;
+      } catch(_) {}
+    }
+    return null;
+  }
 
+  // Return the immediate child of the grid that contains the canvas
+  function gridItemForCanvas(){
+    const cnv = getCanvas(); if (!cnv) return null;
+    const grid = nearestGridAncestor(cnv); if (!grid) return null;
+
+    let item = cnv;
+    while (item && item.parentElement !== grid){
+      item = item.parentElement;
+    }
+    return (item && item.parentElement === grid) ? item : null;
+  }
+
+  function forceCenter(){
     const item = gridItemForCanvas();
     if (!item) return;
 
-    // Put the canvas grid item in the middle column and ensure it behaves like normal flow
+    // Put the canvas-holding grid item in the middle column and ensure normal flow
     item.style.gridColumn = '2 / span 1';
-    if (!item.style.position) item.style.position = 'relative';
-    item.style.zIndex = '0';
+    item.style.position   = item.style.position || 'relative';
+    item.style.zIndex     = '1'; // above sibling backgrounds if needed
 
-    // Make sure the wrapper is centered and not transformed
+    // Center wrapper and kill any transforms that make it look offset/hidden
     const wrap = item.querySelector('.canvas-wrap');
-    if (wrap) {
-      wrap.style.marginLeft = 'auto';
+    if (wrap){
+      wrap.style.marginLeft  = 'auto';
       wrap.style.marginRight = 'auto';
-      wrap.style.transform = 'none';
+      wrap.style.transform   = 'none';
     }
-
-    // Fabric sometimes leaves a transform on its container; neutralize it for layout
     const cc = item.querySelector('.canvas-container');
     if (cc) cc.style.transform = 'none';
+
+    // If your panels have these classes, pin them to 1 and 3 as a safety net
+    const grid = item.parentElement;
+    const left  = grid.querySelector('.panel.left');
+    const right = grid.querySelector('.panel.right');
+    if (left)  { left.style.gridColumn = '1 / span 1'; left.style.position='relative'; left.style.zIndex='0'; }
+    if (right) { right.style.gridColumn= '3 / span 1'; right.style.position='relative'; right.style.zIndex='0'; }
   }
 
-  function boot() {
-    placeCenter();
-    // Re‑apply after common app events / resizes
-    window.addEventListener('resize', placeCenter, { passive: true });
-    document.addEventListener('ra-json-restore-end',  placeCenter);
-    document.addEventListener('ra-collection-change', placeCenter);
-    // Late passes (fonts/images/layout)
-    setTimeout(placeCenter, 150);
-    setTimeout(placeCenter, 400);
+  function boot(){
+    forceCenter();
+
+    // Re-apply on layout changes / resizes
+    window.addEventListener('resize', () => setTimeout(forceCenter, 0), { passive:true });
+    document.addEventListener('ra-json-restore-end',  forceCenter);
+    document.addEventListener('ra-collection-change', forceCenter);
+
+    // Mutation observer to catch late DOM moves
+    new MutationObserver(() => { setTimeout(forceCenter, 0); })
+      .observe(document.body, { childList: true, subtree: true });
+
+    // Late passes for fonts/images
+    setTimeout(forceCenter, 150);
+    setTimeout(forceCenter, 400);
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
   } else {
     boot();
   }
