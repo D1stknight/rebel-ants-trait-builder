@@ -8356,159 +8356,62 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP STAGE ROW (isolate + center the canvas)
-   - Desktop only (pointer:fine; not mobile UA)
-   - Creates a full-width row at the top of the .app grid
-     and moves the existing .stage into it.
-   - Keeps --ra-csize in sync with Fabric canvas width.
+   DESKTOP GROUND FIX (final) — activator + safety
+   - Adds .ra-desk to <html> on desktop
+   - Ensures stage is inside the grid and clears rogue inline styles
+   - Keeps --ra-csize in sync with Fabric so the checkerboard matches
    ========================================================= */
-;(() => {
-  if (window.__RA_STAGE_ROW_V1__) return;
-  window.__RA_STAGE_ROW_V1__ = true;
-
-  const isDesktop =
-    window.matchMedia && window.matchMedia('(pointer:fine)').matches &&
-    !/Mobi|Android/i.test(navigator.userAgent || '');
-
+(function () {
+  const isDesktop = window.matchMedia && matchMedia('(pointer:fine)').matches;
   if (!isDesktop) return;
 
-  function getApp() {
-    return document.querySelector('.app');
+  // Activate desktop mode for the CSS above
+  document.documentElement.classList.add('ra-desk');
+
+  const app   = document.querySelector('.app');
+  const stage = document.querySelector('.stage');
+  if (!app || !stage) return;
+
+  // Make sure stage actually lives in the grid container
+  if (stage.parentElement !== app) {
+    try { app.insertBefore(stage, app.children[1] || null); } catch (_) {}
   }
 
-  function getStage() {
-    // Your middle wrapper is usually ".stage". Fallback: parent of ".canvas-wrap".
-    const s = document.querySelector('.stage');
-    if (s) return s;
-    const cw = document.querySelector('.canvas-wrap');
-    return cw ? cw.parentElement : null;
+  // Clear inline styles that can shove the stage into the wrong column
+  ['position','left','right','top','bottom','transform','gridColumn','gridArea','placeSelf','margin']
+    .forEach(k => { try { stage.style[k] = ''; } catch(_) {} });
+
+  // Keep the checkerboard and Fabric wrappers neutral and centered
+  const wrap = document.querySelector('.canvas-wrap');
+  const fab  = document.querySelector('.canvas-container');
+  [wrap, fab].forEach(el => {
+    if (!el) return;
+    ['position','left','right','top','bottom','transform','gridColumn','gridArea','margin']
+      .forEach(k => { try { el.style[k] = ''; } catch(_) {} });
+  });
+
+  // Feed the CSS variable so both wrappers match the real Fabric size
+  function syncCSize() {
+    const size = (window.canvas && typeof window.canvas.getWidth === 'function')
+      ? window.canvas.getWidth()
+      : 700;
+    document.documentElement.style.setProperty('--ra-csize', size + 'px');
   }
+  syncCSize();
 
-  function ensureRow() {
-    const app = getApp();
-    if (!app) return null;
-
-    let row = app.querySelector('.stage-row');
-    if (!row) {
-      row = document.createElement('div');
-      row.className = 'stage-row';
-      // Put the row as the FIRST grid item so it sits above everything
-      app.insertBefore(row, app.firstElementChild || null);
-      app.classList.add('ra-has-stage-row');
-    }
-    return row;
-  }
-
-  function moveStageIntoRow() {
-    const app = getApp();
-    const row = ensureRow();
-    const stage = getStage();
-    if (!app || !row || !stage) return;
-
-    // Neutralize any grid/position left by previous experiments
+  // If something later mutates the grid or node positions, correct it
+  const mo = new MutationObserver(() => {
+    // Prevent the middle track from collapsing if another rule sneaks in
+    try { app.style.minWidth = '1468px'; } catch(_) {}
+    // Ensure stage is still column 2
     try {
-      stage.style.gridColumn = 'auto';
-      stage.style.gridRow = 'auto';
-      stage.style.position = 'static';
-      stage.style.transform = 'none';
-      stage.style.margin = '0 auto';
+      const gcs = getComputedStyle(stage);
+      if (gcs.gridColumnStart !== '2') stage.style.gridColumn = '2';
     } catch(_) {}
+    syncCSize();
+  });
+  mo.observe(app, { attributes:true, childList:true, subtree:true });
 
-    // Append the stage into the full-width row
-    if (stage.parentElement !== row) {
-      row.appendChild(stage);
-    }
-  }
-
-  function syncCanvasSizeVar() {
-    // Use Fabric canvas width when available; fallback to the size input.
-    let px = 0;
-    try {
-      if (window.canvas && typeof window.canvas.getWidth === 'function') {
-        px = window.canvas.getWidth() || 0;
-      }
-    } catch(_) {}
-
-    if (!px) {
-      const inp = document.getElementById('canvasSize');
-      const v = parseInt(inp && inp.value || '700', 10);
-      px = (Number.isFinite(v) && v > 0) ? v : 700;
-    }
-    document.documentElement.style.setProperty('--ra-csize', px + 'px');
-  }
-
-  function boot() {
-    moveStageIntoRow();
-    syncCanvasSizeVar();
-
-    // Re-sync when user changes the canvas size input
-    const sizeEl = document.getElementById('canvasSize');
-    if (sizeEl && !sizeEl.__raStageRowBound) {
-      sizeEl.__raStageRowBound = true;
-      sizeEl.addEventListener('change', syncCanvasSizeVar);
-    }
-
-    // Hook into any custom setCanvasSize function to keep CSS var updated
-    if (window.setCanvasSize && !window.setCanvasSize.__raStageRowPatched) {
-      const orig = window.setCanvasSize;
-      window.setCanvasSize = function() {
-        const r = orig.apply(this, arguments);
-        try { syncCanvasSizeVar(); } catch(_) {}
-        return r;
-      };
-      window.setCanvasSize.__raStageRowPatched = true;
-    }
-
-    // If Fabric gets created a bit later, do one more sync
-    setTimeout(syncCanvasSizeVar, 300);
-    setTimeout(syncCanvasSizeVar, 1200);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
-  } else {
-    boot();
-  }
-})();
-
-/* =========================================================
-   DESKTOP HARDLOCK v6 bootstrap — adds class + keeps --stageW in sync
-   (desktop only; mobile untouched)
-   ========================================================= */
-(function(){
-  const isDesktop = matchMedia('(pointer:fine)').matches && !/Mobi|Android/i.test(navigator.userAgent);
-  if (!isDesktop) return;
-
-  // Turn on desktop hardlock
-  document.documentElement.classList.add('ra-hardlock');
-
-  // Keep CSS --stageW aligned with the checkerboard wrapper width
-  function syncStageW(){
-    const wrap = document.querySelector('.stage .canvas-wrap');
-    // Fallback ensures grid won’t collapse if wrap temporarily missing
-    const w = wrap ? wrap.offsetWidth : 740;
-    document.documentElement.style.setProperty('--stageW', w + 'px');
-  }
-
-  const boot = () => { syncStageW(); setTimeout(syncStageW, 50); setTimeout(syncStageW, 300); };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
-  } else {
-    boot();
-  }
-
-  // Re-sync on viewport changes
-  window.addEventListener('resize', syncStageW);
-
-  // If your UI lets users change the canvas size, re-sync after it happens
-  const re = () => syncStageW();
-  try {
-    if (window.canvas && typeof window.canvas.on === 'function') {
-      canvas.on('object:added', re);
-      canvas.on('object:removed', re);
-      canvas.on('object:modified', re);
-    }
-    const sizeInput = document.getElementById('canvasSize');
-    if (sizeInput) sizeInput.addEventListener('change', re);
-  } catch(_) {}
+  // Also resync size on window resize (if you allow size controls on desktop)
+  try { window.addEventListener('resize', syncCSize); } catch(_) {}
 })();
