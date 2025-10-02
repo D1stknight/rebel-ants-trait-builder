@@ -8470,3 +8470,45 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 })();
+
+/* =========================================================
+   DESKTOP HARDLOCK v6 bootstrap — adds class + keeps --stageW in sync
+   (desktop only; mobile untouched)
+   ========================================================= */
+(function(){
+  const isDesktop = matchMedia('(pointer:fine)').matches && !/Mobi|Android/i.test(navigator.userAgent);
+  if (!isDesktop) return;
+
+  // Turn on desktop hardlock
+  document.documentElement.classList.add('ra-hardlock');
+
+  // Keep CSS --stageW aligned with the checkerboard wrapper width
+  function syncStageW(){
+    const wrap = document.querySelector('.stage .canvas-wrap');
+    // Fallback ensures grid won’t collapse if wrap temporarily missing
+    const w = wrap ? wrap.offsetWidth : 740;
+    document.documentElement.style.setProperty('--stageW', w + 'px');
+  }
+
+  const boot = () => { syncStageW(); setTimeout(syncStageW, 50); setTimeout(syncStageW, 300); };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+
+  // Re-sync on viewport changes
+  window.addEventListener('resize', syncStageW);
+
+  // If your UI lets users change the canvas size, re-sync after it happens
+  const re = () => syncStageW();
+  try {
+    if (window.canvas && typeof window.canvas.on === 'function') {
+      canvas.on('object:added', re);
+      canvas.on('object:removed', re);
+      canvas.on('object:modified', re);
+    }
+    const sizeInput = document.getElementById('canvasSize');
+    if (sizeInput) sizeInput.addEventListener('change', re);
+  } catch(_) {}
+})();
