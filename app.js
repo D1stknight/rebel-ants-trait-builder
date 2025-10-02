@@ -8587,3 +8587,58 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     mo.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['style', 'class'] });
   } catch(_){}
 })();
+
+/* =========================================================
+   DESKTOP STAGE WELD SYNC — keep CSS --ra-csize in sync with Fabric
+   (desktop only; mobile untouched)
+   ========================================================= */
+(() => {
+  if (window.__RA_DESKTOP_WELD_SYNC__) return;
+  window.__RA_DESKTOP_WELD_SYNC__ = true;
+
+  const isDesktop = () =>
+    matchMedia('(pointer: fine)').matches &&
+    !/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  function C(){ return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null; }
+
+  function setVar(px){
+    document.documentElement.style.setProperty('--ra-csize', `${px}px`);
+  }
+
+  function syncNow(){
+    if (!isDesktop()) return;
+    const c = C();
+    if (!c) return;
+    const w = c.getWidth ? c.getWidth() : 700;
+    if (w && isFinite(w)) setVar(w);
+  }
+
+  // Patch setCanvasSize so whenever you change the logical canvas, CSS follows
+  const prevSetCanvasSize = window.setCanvasSize;
+  window.setCanvasSize = function patchedSetCanvasSize(n){
+    try { if (typeof prevSetCanvasSize === 'function') prevSetCanvasSize(n); }
+    finally { syncNow(); }
+  };
+
+  // Also catch your resize helper if present
+  if (typeof window.raResizeCanvasAndScale === 'function'){
+    const prev = window.raResizeCanvasAndScale;
+    window.raResizeCanvasAndScale = function(n){
+      try { prev(n); } finally { syncNow(); }
+    };
+  }
+
+  // Run once after DOM + Fabric ready
+  function boot(){
+    if (!isDesktop()) return;
+    const c = C();
+    if (c) { syncNow(); return; }
+    setTimeout(boot, 120);
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
