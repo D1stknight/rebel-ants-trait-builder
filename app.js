@@ -8433,3 +8433,77 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     boot();
   }
 })();
+
+/* =========================================================
+   DESKTOP CENTER‑STAGE FIX — force the canvas grid item into column 2
+   - Desktop only (pointer:fine; not mobile UA)
+   - No changes to mobile, Fabric zoom/size, or your panels
+   - Works alongside your current desktop CSS (whatever is there)
+   ========================================================= */
+;(() => {
+  if (window.__RA_CENTER_STAGE_FIX__) return;
+  window.__RA_CENTER_STAGE_FIX__ = true;
+
+  const UA = navigator.userAgent || '';
+  const isMobileUA =
+    (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
+  const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
+
+  // Change this if your grid container has a different class than ".app"
+  const getGrid = () => document.querySelector('.app');
+  const getCanvas = () => document.getElementById('c') || document.querySelector('canvas');
+
+  // Climb up from <canvas> until we reach the child that sits directly under the grid container
+  function gridItemForCanvas() {
+    const grid = getGrid();
+    const cnv  = getCanvas();
+    if (!grid || !cnv) return null;
+    let node = cnv;
+    while (node && node.parentElement && node.parentElement !== grid) {
+      node = node.parentElement;
+    }
+    return (node && node.parentElement === grid) ? node : null;
+  }
+
+  function placeCenter() {
+    if (!isDesktop()) return;
+
+    const item = gridItemForCanvas();
+    if (!item) return;
+
+    // Put the canvas grid item in the middle column and ensure it behaves like normal flow
+    item.style.gridColumn = '2 / span 1';
+    if (!item.style.position) item.style.position = 'relative';
+    item.style.zIndex = '0';
+
+    // Make sure the wrapper is centered and not transformed
+    const wrap = item.querySelector('.canvas-wrap');
+    if (wrap) {
+      wrap.style.marginLeft = 'auto';
+      wrap.style.marginRight = 'auto';
+      wrap.style.transform = 'none';
+    }
+
+    // Fabric sometimes leaves a transform on its container; neutralize it for layout
+    const cc = item.querySelector('.canvas-container');
+    if (cc) cc.style.transform = 'none';
+  }
+
+  function boot() {
+    placeCenter();
+    // Re‑apply after common app events / resizes
+    window.addEventListener('resize', placeCenter, { passive: true });
+    document.addEventListener('ra-json-restore-end',  placeCenter);
+    document.addEventListener('ra-collection-change', placeCenter);
+    // Late passes (fonts/images/layout)
+    setTimeout(placeCenter, 150);
+    setTimeout(placeCenter, 400);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+})();
