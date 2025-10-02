@@ -8354,3 +8354,82 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // Scroll: only toggle helper, no resize
   window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
 })();
+
+/* =========================================================
+   DESKTOP 3‑COLUMN LOCK sync
+   - Desktop only (pointer:fine, not mobile UA)
+   - Keeps --ra-mid-min in sync with current Fabric canvas width
+   - Activates the CSS class: html.ra-desktop-3col
+   - No Fabric size/zoom changes. Mobile untouched.
+   ========================================================= */
+;(() => {
+  'use strict';
+  if (window.__RA_DESKTOP_3COL__) return;
+  window.__RA_DESKTOP_3COL__ = true;
+
+  const UA = navigator.userAgent || '';
+  const isMobileUA =
+    (navigator.userAgentData && navigator.userAgentData.mobile === true) ||
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Windows Phone|Opera Mini/i.test(UA);
+  const isDesktop = () => window.matchMedia('(pointer: fine)').matches && !isMobileUA;
+  if (!isDesktop()) return;
+
+  const root = document.documentElement;
+  const setVar = (name, px) => root.style.setProperty(name, `${Math.max(1, px|0)}px`);
+
+  function canvasLogicalWidth(){
+    try{
+      if (window.canvas && typeof window.canvas.getWidth === 'function'){
+        const w = window.canvas.getWidth();
+        if (Number.isFinite(w) && w > 0) return w;
+      }
+    }catch(_){}
+    return 700; // fallback
+  }
+
+  function activate(){
+    // Remove any previous desktop mode classes to avoid conflicts
+    root.classList.remove(
+      'ra-desktop-anchored',
+      'ra-desktop-sticky',
+      'ra-desktop-flow',
+      'ra-desktop-flow2',
+      'ra-desktop-cols'
+    );
+    root.classList.add('ra-desktop-3col');
+
+    // Sync middle min width to current canvas size
+    setVar('--ra-mid-min', canvasLogicalWidth());
+
+    // Clear any inline transforms Fabric may have put on its wrapper
+    try{
+      const cont = window.canvas?.upperCanvasEl?.parentElement;
+      if (cont?.style) cont.style.removeProperty('transform');
+    }catch(_){}
+  }
+
+  function boot(){
+    activate();
+
+    // Re‑sync when canvas size UI changes
+    const sizeEl = document.getElementById('canvasSize');
+    if (sizeEl && !sizeEl.__ra3colBound){
+      sizeEl.__ra3colBound = true;
+      sizeEl.addEventListener('change', () => setTimeout(activate, 0));
+    }
+
+    // Re‑sync after restores/collection switches/late layout
+    document.addEventListener('ra-json-restore-end',  activate);
+    document.addEventListener('ra-collection-change', activate);
+    window.addEventListener('resize', () => setTimeout(activate, 0), { passive:true });
+
+    setTimeout(activate, 200);  // fonts/images settle
+    setTimeout(activate, 600);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();
