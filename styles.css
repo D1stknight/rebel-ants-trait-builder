@@ -224,3 +224,41 @@ button, .btn { touch-action: manipulation; }
     display: block;
   }
 }
+
+/* =========================================================
+   DESKTOP PIN v5 — lock the stage into the middle column and
+   make the stage (not the inner canvas) the scrolling container.
+   Desktop only (pointer:fine); mobile untouched.
+   ========================================================= */
+@media (pointer: fine) {
+  html.ra-desk-pin .app {
+    /* keep 3 fixed columns; no auto “reflow” to a different column */
+    display: grid;
+    grid-auto-flow: row !important;
+    column-gap: 18px;
+    align-items: start;
+    /* Your existing column widths; adjust if you ever change sidebars */
+    grid-template-columns: 320px minmax(var(--stage-min, 700px), 1fr) 400px;
+  }
+
+  /* Hard-force the stage into the center column. The .ra-force class
+     is added by JS; the !important wins over any legacy rules. */
+  html.ra-desk-pin .app > .stage.ra-force {
+    grid-column: 2 !important;
+    /* The stage is the ONLY scroller so the checkerboard + canvas move together */
+    overflow: auto;
+    /* How tall the stage can be before it scrolls (tweak the 140px if needed) */
+    max-height: calc(100vh - var(--stage-top-pad, 140px));
+    align-self: start;
+    position: relative;
+    z-index: 0;
+    /* This ensures the stage itself gets the scrollbars rather than children */
+    -webkit-overflow-scrolling: touch; /* harmless on desktop */
+  }
+
+  /* Make sure the checkerboard container does not create a second scroll area */
+  html.ra-desk-pin .app > .stage.ra-force .canvas-wrap {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+}
