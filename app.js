@@ -9914,18 +9914,27 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   Saving Controls card — collect Undo/Redo/Save/Restore (+×)
-   - All devices (desktop + tablet + phone)
-   - No logic changes; we only reparent the existing buttons
+   Saving Controls (proxy version)
+   - Creates a blue card and adds PROXY buttons there
+   - Proxies call the original Undo/Redo/Save/Restore buttons
+   - Keeps labels (e.g. "Undo (3)") and disabled state in sync
+   - Hides the original row so you don’t see duplicates
    ========================================================= */
 (function(){
-  if (document.getElementById('raSaveControlsCard')) return;
+  if (window.__RA_SAVE_CARD_PROXY__) return;
+  window.__RA_SAVE_CARD_PROXY__ = true;
 
-  // Find a good host panel to insert into (right panel if present, else the first panel)
-  const right = document.querySelector('aside.panel.right') || document.querySelector('.panel.right');
-  const anyPanel = right || document.querySelector('aside.panel') || document.querySelector('.panel') || document.body;
+  // 1) Where to place the new card (right panel, just above Export)
+  const rightPanel =
+    document.querySelector('aside.panel.right') ||
+    document.querySelector('.panel.right') ||
+    document.querySelector('aside.panel') ||
+    document.querySelector('.panel') || document.body;
 
-  // Build the card
+  const exportBlock = Array.from(rightPanel.querySelectorAll('section, .card, .box'))
+    .find(el => /\bexport\b/i.test(el.textContent || ''));
+
+  // 2) Build the card
   const card = document.createElement('section');
   card.id = 'raSaveControlsCard';
   card.innerHTML = `
@@ -9933,37 +9942,104 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     <div class="ra-sc-row" id="raScBtns"></div>
     <div class="ra-sc-note" id="raScNote"></div>
   `;
-
-  // Try to position it just above the Export block; otherwise add to the top of the chosen panel
-  const exportBlock = Array.from(anyPanel.querySelectorAll('section, .card, .box'))
-    .find(el => /\bexport\b/i.test(el.textContent || ''));
-  anyPanel.insertBefore(card, exportBlock || anyPanel.firstChild);
+  rightPanel.insertBefore(card, exportBlock || rightPanel.firstChild);
 
   const btnRow = card.querySelector('#raScBtns');
   const note   = card.querySelector('#raScNote');
 
-  // Helper: find a button anywhere in the chosen panel (fallback to document) by its text prefix.
-  function takeBtn(labelStart){
-    const scope = anyPanel || document;
-    const btn = Array.from(scope.querySelectorAll('button'))
-      .find(b => (b.textContent || '').trim().toLowerCase().startsWith(labelStart));
-    if (btn) btnRow.appendChild(btn);
-    return !!btn;
+  // 3) Helpers to find originals & normalize their text
+  function norm(t){ return (t||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+  function keyForText(t){
+    t = norm(t).replace(/\(\d+\)/g,'').trim(); // strip counts: "undo (3)" -> "undo"
+    if (t.startsWith('undo')) return 'undo';
+    if (t.startsWith('redo')) return 'redo';
+    if (t.startsWith('save draft')) return 'save';
+    if (t.startsWith('restore draft')) return 'restore';
+    if (t === '×' || t === 'x') return 'close';
+    return '';
+  }
+  function findButtons(scope){
+    const candidates = Array.from((scope||document).querySelectorAll('button, [role="button"], a.button, .btn'));
+    const map = {};
+    candidates.forEach(el=>{
+      const k = keyForText(el.textContent || el.getAttribute('aria-label') || '');
+      if (k && !map[k]) map[k] = el;
+    });
+    return map;
   }
 
-  // Order inside the card
-  takeBtn('undo');
-  takeBtn('redo');
-  takeBtn('save draft');
-  takeBtn('restore draft');
+  // 4) Get originals (prefer right panel, then whole doc)
+  let originals = findButtons(rightPanel);
+  if (!originals.undo || !originals.redo || !originals.save || !originals.restore){
+    originals = findButtons(document);
+  }
 
-  // History close / tiny × if present
-  const closeBtn = Array.from((anyPanel || document).querySelectorAll('button'))
-    .find(b => (b.textContent || '').trim() === '×' || (b.getAttribute('aria-label') || '').toLowerCase().includes('close'));
-  if (closeBtn) btnRow.appendChild(closeBtn);
+  // 5) Create PROXY buttons that click the originals
+  function makeProxy(orig, fallbackLabel){
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn'; // use your global .btn styling; remove if you don’t want it
+    const setFromOrig = () => {
+      const txt = (orig && (orig.textContent || orig.getAttribute('aria-label'))) || fallbackLabel;
+      b.textContent = (txt || fallbackLabel || '').trim();
+      const dis = !!(orig && (orig.disabled || orig.getAttribute('aria-disabled') === 'true'));
+      b.disabled = dis;
+    };
+    setFromOrig();
+    b.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (orig && typeof orig.click === 'function') orig.click();
+    });
+    // keep text/disabled in sync even if app re-renders
+    if (orig){
+      const mo = new MutationObserver(setFromOrig);
+      mo.observe(orig, { attributes:true, childList:true, subtree:true, characterData:true });
+    }
+    return b;
+  }
 
-  // If there's a "History 1 / 1 – …" label, tuck it under the buttons
-  const historyLabel = Array.from((anyPanel || document).querySelectorAll('*'))
+  const proxies = [];
+  if (originals.undo)     proxies.push(makeProxy(originals.undo,     'Undo'));
+  if (originals.redo)     proxies.push(makeProxy(originals.redo,     'Redo'));
+  if (originals.save)     proxies.push(makeProxy(originals.save,     'Save Draft'));
+  if (originals.restore)  proxies.push(makeProxy(originals.restore,  'Restore Draft'));
+  if (originals.close)    proxies.push(makeProxy(originals.close,    '×'));
+
+  proxies.forEach(b => btnRow.appendChild(b));
+
+  // 6) Mirror the “History …” label (if present) under the buttons
+  const historyLabel = Array.from(document.querySelectorAll('*'))
     .find(el => /\bhistory\s*\d+\s*\/\s*\d+/i.test(el.textContent || ''));
-  if (historyLabel) note.appendChild(historyLabel);
+  if (historyLabel){
+    const histSpan = document.createElement('div');
+    histSpan.style.userSelect = 'none';
+    const syncHist = () => { histSpan.textContent = historyLabel.textContent.trim(); };
+    syncHist();
+    note.appendChild(histSpan);
+    const mo = new MutationObserver(syncHist);
+    mo.observe(historyLabel, { childList:true, subtree:true, characterData:true });
+  }
+
+  // 7) Hide the original button row (but keep the DOM, so logic remains intact)
+  function hideOriginalRow(){
+    const targets = [originals.undo, originals.redo, originals.save, originals.restore].filter(Boolean);
+    if (targets.length < 2) return; // not enough to find a common row
+    // find the lowest common ancestor inside the Selection panel
+    const within = rightPanel || document;
+    function ancestors(el){
+      const arr = []; while (el && el !== document) { arr.push(el); el = el.parentElement; } return arr;
+    }
+    const chains = targets.map(ancestors);
+    let common = chains[0].find(n => chains.every(ch => ch.includes(n)));
+    // keep the smallest row-like ancestor
+    while (common && common.parentElement && common.parentElement !== within &&
+           common.parentElement.querySelectorAll('button').length === targets.length){
+      common = common.parentElement;
+    }
+    if (common){
+      common.style.display = 'none';
+      common.setAttribute('data-ra-save-row', 'hidden');
+    }
+  }
+  hideOriginalRow();
 })();
