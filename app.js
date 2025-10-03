@@ -9912,3 +9912,58 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     multiEnforce(card);
   };
 })();
+
+/* =========================================================
+   Saving Controls card — collect Undo/Redo/Save/Restore (+×)
+   - All devices (desktop + tablet + phone)
+   - No logic changes; we only reparent the existing buttons
+   ========================================================= */
+(function(){
+  if (document.getElementById('raSaveControlsCard')) return;
+
+  // Find a good host panel to insert into (right panel if present, else the first panel)
+  const right = document.querySelector('aside.panel.right') || document.querySelector('.panel.right');
+  const anyPanel = right || document.querySelector('aside.panel') || document.querySelector('.panel') || document.body;
+
+  // Build the card
+  const card = document.createElement('section');
+  card.id = 'raSaveControlsCard';
+  card.innerHTML = `
+    <div class="ra-sc-title">Saving Controls</div>
+    <div class="ra-sc-row" id="raScBtns"></div>
+    <div class="ra-sc-note" id="raScNote"></div>
+  `;
+
+  // Try to position it just above the Export block; otherwise add to the top of the chosen panel
+  const exportBlock = Array.from(anyPanel.querySelectorAll('section, .card, .box'))
+    .find(el => /\bexport\b/i.test(el.textContent || ''));
+  anyPanel.insertBefore(card, exportBlock || anyPanel.firstChild);
+
+  const btnRow = card.querySelector('#raScBtns');
+  const note   = card.querySelector('#raScNote');
+
+  // Helper: find a button anywhere in the chosen panel (fallback to document) by its text prefix.
+  function takeBtn(labelStart){
+    const scope = anyPanel || document;
+    const btn = Array.from(scope.querySelectorAll('button'))
+      .find(b => (b.textContent || '').trim().toLowerCase().startsWith(labelStart));
+    if (btn) btnRow.appendChild(btn);
+    return !!btn;
+  }
+
+  // Order inside the card
+  takeBtn('undo');
+  takeBtn('redo');
+  takeBtn('save draft');
+  takeBtn('restore draft');
+
+  // History close / tiny × if present
+  const closeBtn = Array.from((anyPanel || document).querySelectorAll('button'))
+    .find(b => (b.textContent || '').trim() === '×' || (b.getAttribute('aria-label') || '').toLowerCase().includes('close'));
+  if (closeBtn) btnRow.appendChild(closeBtn);
+
+  // If there's a "History 1 / 1 – …" label, tuck it under the buttons
+  const historyLabel = Array.from((anyPanel || document).querySelectorAll('*'))
+    .find(el => /\bhistory\s*\d+\s*\/\s*\d+/i.test(el.textContent || ''));
+  if (historyLabel) note.appendChild(historyLabel);
+})();
