@@ -9912,3 +9912,39 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     multiEnforce(card);
   };
 })();
+
+/* =========================================================
+   DESKTOP — tag native history buttons for blue styling
+   - Finds Undo, Redo, Save Draft, Restore Draft, and "x"
+   - Adds .ra-blue-btn class so the CSS above can style them
+   - No DOM moves. No proxies. Mobile untouched.
+   ========================================================= */
+(function () {
+  if (!matchMedia('(pointer:fine)').matches) return;   // desktop only
+  const right = document.querySelector('aside.panel.right') || document.querySelector('.panel.right');
+  if (!right) return;
+
+  // If a previous "Saving Controls" card is around, remove it (cleanup).
+  const oldCard = document.getElementById('raSaveControlsCard');
+  if (oldCard) oldCard.remove();
+
+  // Helper: find a button by starting text (case-insensitive)
+  const byText = (root, starts) => {
+    const want = String(starts).toLowerCase();
+    return Array.from(root.querySelectorAll('button')).find(b => {
+      const t = (b.textContent || '').trim().toLowerCase();
+      return t.startsWith(want); // works for "undo (0)", "redo (3)", etc.
+    }) || null;
+  };
+
+  // Tag the four main buttons
+  ['undo', 'redo', 'save draft', 'restore draft'].forEach(txt => {
+    const btn = byText(right, txt);
+    if (btn) btn.classList.add('ra-blue-btn');
+  });
+
+  // Tag the small "x" next to the history line (if present)
+  // It might be a button or an anchor; check both.
+  const xBtn = Array.from(right.querySelectorAll('button, a')).find(el => (el.textContent || '').trim() === 'x');
+  if (xBtn) xBtn.classList.add('ra-blue-btn');
+})();
