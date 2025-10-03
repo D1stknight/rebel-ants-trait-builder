@@ -176,3 +176,49 @@ button, .btn { touch-action: manipulation; }
   .ra-mobile-dock { gap: 6px; padding: 8px 10px; }
   .ra-mobile-dock button { min-height: 42px; font-size: 12px; }
 }
+
+/* =========================================================
+   Saving Controls card — all devices
+   ========================================================= */
+:root{
+  /* Tweak these three to adjust the blue gradient look */
+  --ra-save-start: #3b82f6;  /* blue 500 */
+  --ra-save-end:   #22d3ee;  /* cyan 400 */
+  --ra-save-border: rgba(59,130,246,.35);
+}
+
+#raSaveControlsCard{
+  background: linear-gradient(135deg,
+              color-mix(in oklab, var(--ra-save-start) 36%, transparent),
+              color-mix(in oklab, var(--ra-save-end)   26%, transparent));
+  border: 1px solid var(--ra-save-border);
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.28);
+}
+
+#raSaveControlsCard .ra-sc-title{
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: .2px;
+  color: #dbeafe;  /* light blue title */
+  margin-bottom: 8px;
+}
+
+#raSaveControlsCard .ra-sc-row{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Optional: make buttons fill the card width on narrow screens */
+@media (max-width: 480px){
+  #raSaveControlsCard .ra-sc-row > button{ flex: 1 1 48%; }
+}
+
+#raSaveControlsCard .ra-sc-note{
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: .72;
+}
