@@ -9935,7 +9935,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     undo:    'Undo',
     redo:    'Redo',
     save:    'Save Draft',
-    restore: 'Restore',
+    restore: 'Restore Draft',
     close:   'X'
   };
 
