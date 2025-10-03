@@ -9737,69 +9737,40 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   } catch(_){}
 })();
 
-/* ================================================================
-   RA_CURVED_TOGGLE_REVERSIBLE_V3
-   Reversible Curved Text + Initial Radius = 250 (reliable)
-   ---------------------------------------------------------------
-   Fixes:
-     - Allows unchecking the Curved checkbox to revert to original straight text.
-     - Forces first-time curved activation to use radius 250 (instead of ~650).
-     - Preserves edits to the text while curved (restored when reverting).
-     - Restores original styling (font, size, fill, stroke, strokeWidth, spacing-ish via charSpacing, position, angle).
-     - Updates the Custom Text message input to match restored plain text.
-     - Adds history snapshots (“Curved On”, “Curved Off”) if a snapshot API exists.
-   Non-destructive: does not alter existing toCurved / toLinear / buildCurved logic.
-   Remove previous curved enhancement blocks before adding this.
+/* ===============================================================
+   RA_CURVED_RADIUS_250_ONLY_V1
+   Purpose: Force the Curved text feature to use Radius = 250 every time
+            the "Curved" checkbox is turned ON (no other behavior changes).
+   - Does NOT alter / add reversible logic.
+   - Leaves existing curved / linear conversion code untouched.
+   - Works by:
+       1. Capturing the checkbox change event in the CAPTURE phase so
+          we set the radius slider BEFORE the original handler runs.
+       2. Fires input/change events so readUI() returns 250.
+       3. After the curved object is created (which may be async),
+          re‑enforces radius=250 a few times (40/120/240ms) in case
+          legacy code overwrites it.
+   - Public helper: window.raForceCurvedRadius250()
+   - Safe to include multiple times (guarded).
+   =============================================================== */
+(function RA_CURVED_RADIUS_250_ONLY_V1(){
+  if (window.__RA_CURVED_RADIUS_250_ONLY_V1__) return;
+  window.__RA_CURVED_RADIUS_250_ONLY_V1__ = true;
 
-   Public helpers:
-     raCurvedV3Debug()
-     raCurvedV3ForceCurve()
-     raCurvedV3ForceLinear()
-     raCurvedV3ForceRadius(val)
-   ================================================================ */
-(function RA_CURVED_TOGGLE_REVERSIBLE_V3(){
-  if (window.__RA_CURVED_TOGGLE_REVERSIBLE_V3__) return;
-  window.__RA_CURVED_TOGGLE_REVERSIBLE_V3__ = true;
+  const TARGET_RADIUS = 250;
 
-  /* -------------- Canvas / Snapshot Utilities -------------- */
   const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  function snapshot(label){
-    const fn =
-      window.forceSnapshot ||
-      (window.raHistory && (window.raHistory.forceSnapshot || window.raHistory.push)) ||
-      window.push || null;
-    if (typeof fn === 'function'){
-      try { fn(label); } catch(_){}
-    }
-  }
+  function log(){ /* Uncomment for debug:
+    console.log('[CURVE250]', ...arguments); */ }
 
-  function isSystem(o){
-    return !!(o && (o._isBase || o._isBgRect || o._raSys || o._raTokenId));
-  }
-
-  function isCurved(o){
-    return !!(o && (o._raCurved || o.data?.raType === 'curvedText' || o.raCurve));
-  }
-
-  function newestUserText(){
-    const c = C(); if (!c) return null;
-    const objs = c.getObjects()||[];
-    for (let i=objs.length-1;i>=0;i--){
-      const o = objs[i];
-      if (!o || isSystem(o)) continue;
-      if (isCurved(o)) return o;
-      if (o.type === 'text' || o.type === 'textbox') return o;
-    }
-    return null;
-  }
-
-  /* -------------- DOM Lookups -------------- */
+  /* ------------ DOM Finders ------------ */
   function findCustomTextCard(){
     const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
       .find(el => /custom text/i.test(el.textContent||''));
     return h ? (h.closest('.card') || h.parentElement) : null;
   }
+
   function findCurvedCheckbox(card){
     if (!card) return null;
     return Array.from(card.querySelectorAll('input[type="checkbox"]'))
@@ -9808,28 +9779,26 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
         return lab && /curved/i.test(lab.textContent||'');
       }) || null;
   }
+
   function findRadiusSlider(card){
     if (!card) return null;
-    const label = Array.from(card.querySelectorAll('label,span,div'))
+    // Look for label containing "Radius"
+    const lbl = Array.from(card.querySelectorAll('label,span,div'))
       .find(el => /radius/i.test(el.textContent||''));
-    if (label){
-      let scope = label.parentElement;
+    if (lbl){
+      let scope = lbl.parentElement;
       for (let i=0;i<4 && scope && !scope.querySelector('input[type="range"]');i++){
         scope = scope.parentElement;
       }
       if (scope){
-        // Choose range that likely is radius (value > 100) else first
+        // Pick the first range with value >= 100 (likely the radius) else first
         const ranges = Array.from(scope.querySelectorAll('input[type="range"]'));
-        const likely = ranges.find(r => parseInt(r.value,10) >= 200);
+        const likely = ranges.find(r => parseInt(r.value,10) >= 100);
         return likely || ranges[0] || null;
       }
     }
-    // fallback
+    // Fallback: any range
     return card.querySelector('input[type="range"]');
-  }
-  function findMessageInput(card){
-    if (!card) return null;
-    return card.querySelector('textarea, input[type="text"], input:not([type])');
   }
 
   function fireValueChange(el){
@@ -9838,224 +9807,96 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
   }
 
-  /* -------------- Backup / Restore -------------- */
-  function buildBackup(o){
-    if (!o) return null;
-    return {
-      text: o.text,
-      fontFamily: o.fontFamily,
-      fontSize: o.fontSize,
-      fill: o.fill,
-      stroke: o.stroke,
-      strokeWidth: o.strokeWidth,
-      charSpacing: o.charSpacing,
-      left: o.left,
-      top: o.top,
-      angle: o.angle,
-      scaleX: o.scaleX,
-      scaleY: o.scaleY,
-      originX: o.originX,
-      originY: o.originY,
-      opacity: ('opacity' in o ? o.opacity : 1),
-      shadow: o.shadow || null,
-      textAlign: o.textAlign
-    };
-  }
-
-  function restoreLinearFromBackup(backup){
-    const c = C(); if (!c || !window.fabric || !fabric.Text || !backup) return null;
-    const t = new fabric.Text(backup.text || '', {
-      fontFamily: backup.fontFamily,
-      fontSize: backup.fontSize,
-      fill: backup.fill,
-      stroke: backup.stroke,
-      strokeWidth: backup.strokeWidth,
-      charSpacing: backup.charSpacing,
-      left: backup.left,
-      top: backup.top,
-      angle: backup.angle,
-      scaleX: backup.scaleX,
-      scaleY: backup.scaleY,
-      originX: backup.originX,
-      originY: backup.originY,
-      opacity: backup.opacity,
-      shadow: backup.shadow,
-      textAlign: backup.textAlign
-    });
-    c.add(t);
-    try { c.setActiveObject(t); } catch(_){}
-    t.setCoords && t.setCoords();
-    c.requestRenderAll();
-    return t;
-  }
-
-  /* -------------- Radius Override -------------- */
-  function enforceRadius250(card){
+  /* ------------ Radius Enforcement ------------ */
+  function setRadiusOnSlider(card){
     const slider = findRadiusSlider(card);
-    if (!slider) return;
-    if (parseInt(slider.value,10) !== 250){
-      slider.value = 250;
+    if (!slider) return false;
+    if (parseInt(slider.value,10) !== TARGET_RADIUS){
+      slider.value = TARGET_RADIUS;
       fireValueChange(slider);
-      // Re-enforce a couple times (if original code overwrites soon after)
-      setTimeout(()=> { if (parseInt(slider.value,10)!==250){ slider.value=250; fireValueChange(slider);} }, 80);
-      setTimeout(()=> { if (parseInt(slider.value,10)!==250){ slider.value=250; fireValueChange(slider);} }, 160);
+      return true;
+    }
+    return false;
+  }
+
+  function isCurved(o){
+    return !!(o && (o._raCurved || o.data?.raType === 'curvedText' || o.raCurve));
+  }
+
+  function enforceOnActive(){
+    const c = C(); if (!c) return;
+    const o = c.getActiveObject && c.getActiveObject();
+    if (o && isCurved(o) && o.raCurve){
+      if (o.raCurve.radius !== TARGET_RADIUS){
+        // Rebuild positions quickly by mimicking existing build logic formula if possible
+        o.raCurve.radius = TARGET_RADIUS;
+        // If your original code has a function to reflow (e.g. reflectUI or updateCurved),
+        // call it here. Otherwise we reposition children directly:
+        const kids = o._objects || [];
+        const { arc, start, spacing, inward } = o.raCurve;
+        const text = o.raCurve.text || extractText(o);
+        const chars = kids.length === text.length ? kids : null;
+        if (chars){
+          const N = chars.length || 1;
+            const step = (N>1 ? arc/(N-1) : 0) + (spacing/Math.max(TARGET_RADIUS,1))*(180/Math.PI);
+            const startDeg = start - arc/2;
+            for (let i=0;i<N;i++){
+              const ang = (startDeg + i*step) * Math.PI/180;
+              const ch = chars[i];
+              ch.left  = TARGET_RADIUS * Math.cos(ang);
+              ch.top   = TARGET_RADIUS * Math.sin(ang);
+              ch.angle = (startDeg + i*step) + (inward ? -90 : 90);
+              ch.setCoords && ch.setCoords();
+            }
+          o.setCoords && o.setCoords();
+          try { c.requestRenderAll(); } catch(_){}
+        }
+      }
     }
   }
 
-  /* -------------- Conversion Actions -------------- */
-  // We rely on existing global toCurved / toLinear if present; otherwise we fallback
-  function existingToCurved(o){
-    if (typeof window.toCurved === 'function') { try { window.toCurved(o); return true; } catch(_){ } }
-    return false;
-  }
-  function existingToLinear(g){
-    if (typeof window.toLinear === 'function') { try { window.toLinear(g); return true; } catch(_){ } }
-    return false;
-  }
-
-  function extractTextFromCurved(curved){
+  function extractText(curved){
     if (!curved) return '';
-    if (curved.text) return curved.text;
+    if (curved.raCurve && curved.raCurve.text) return curved.raCurve.text;
     if (Array.isArray(curved._objects)){
-      return curved._objects.map(ch => (ch && ch.text) ? ch.text : '').join('');
+      return curved._objects.map(ch => ch.text || '').join('');
     }
     return '';
   }
 
-  /* -------------- Main Toggle Logic -------------- */
-  function handleEnable(card, checkbox){
-    const c = C(); if (!c) return;
-    let active = c.getActiveObject();
-    if (!active || isSystem(active)) {
-      active = newestUserText();
-      if (active) { try { c.setActiveObject(active); } catch(_){ } }
-    }
-    if (!active) { checkbox.checked = false; return; }
-    if (isCurved(active)) {
-      // Already curved; just enforce radius
-      enforceRadius250(card);
-      return;
-    }
-
-    // Save backup only once per original object
-    if (!active._raCurvedBackup){
-      active._raCurvedBackup = buildBackup(active);
-    }
-
-    // Force UI radius to 250 before conversion
-    enforceRadius250(card);
-
-    // Convert using existing routine if available
-    if (!existingToCurved(active)){
-      // Fallback: build curved manually using available buildCurved if defined
-      if (typeof window.buildCurved === 'function'){
-        try {
-          const opts = { radius:250, arc:180, start:0, spacing:0, inward:false, style:{
-            fontFamily: active.fontFamily, fontSize: active.fontSize,
-            fill: active.fill, stroke: active.stroke, strokeWidth: active.strokeWidth
-          }};
-          const curved = window.buildCurved(active.text || '', opts);
-          // Position new curved where the old was
-            const ctr = active.getCenterPoint ? active.getCenterPoint() : { x: active.left||0, y: active.top||0 };
-            curved.left = ctr.x; curved.top = ctr.y;
-            curved.setCoords && curved.setCoords();
-            c.remove(active); c.add(curved); c.setActiveObject(curved);
-            curved._raCurved = true;
-            c.requestRenderAll();
-        } catch(_){}
-      }
-    }
-
-    // Re-enforce radius after conversion
-    setTimeout(()=>enforceRadius250(card), 60);
-    setTimeout(()=>enforceRadius250(card), 140);
-
-    snapshot('Curved On');
+  function multiEnforce(card){
+    // Set slider BEFORE original handler runs (capture), then re‑enforce after object creation
+    setRadiusOnSlider(card);
+    [40,120,240].forEach(delay=>{
+      setTimeout(()=>{
+        setRadiusOnSlider(card);
+        enforceOnActive();
+      }, delay);
+    });
   }
 
-  function handleDisable(card){
-    const c = C(); if (!c) return;
-    let active = c.getActiveObject();
-    if (!active || !isCurved(active)){
-      // find any curved object
-      const objs = c.getObjects()||[];
-      active = objs.find(o=>isCurved(o));
-      if (active) { try { c.setActiveObject(active); } catch(_){ } }
-    }
-    if (!active || !isCurved(active)) return;
-
-    // Determine text to preserve
-    const finalText = extractTextFromCurved(active) || (active._raCurvedBackup?.text) || '';
-
-    // Use existing toLinear if available (it should handle styleFromUI),
-    // BUT we want to restore original styling, so we will rebuild manually if needed.
-    let restored = false;
-    if (existingToLinear(active)){
-      restored = true;
-      // existing toLinear likely added a new Fabric.Text and selected it
-      const newActive = c.getActiveObject();
-      if (newActive && (newActive.type==='text' || newActive.type==='textbox')){
-        // Overwrite with finalText (in case existing logic used old)
-        if (finalText && newActive.text !== finalText){
-          newActive.set('text', finalText);
-          newActive.setCoords && newActive.setCoords();
-        }
-        if (active._raCurvedBackup){
-          // Restore styling if not already identical
-          const b = active._raCurvedBackup;
-          ['fontFamily','fontSize','fill','stroke','strokeWidth','charSpacing','opacity','textAlign'].forEach(k=>{
-            if (b[k] != null && newActive[k] !== b[k]) newActive.set(k, b[k]);
-          });
-          newActive.left = b.left; newActive.top = b.top;
-          newActive.angle = b.angle;
-          newActive.scaleX = b.scaleX; newActive.scaleY = b.scaleY;
-        }
-        newActive.setCoords && newActive.setCoords();
-        c.requestRenderAll();
-      }
-    } else {
-      // Manual rebuild
-      const backup = active._raCurvedBackup || buildBackup(active);
-      if (backup){
-        backup.text = finalText || backup.text;
-        try { c.remove(active); } catch(_){}
-        restored = !!restoreLinearFromBackup(backup);
-      }
-    }
-
-    if (restored){
-      // Update message input UI
-      const msg = findMessageInput(card);
-      if (msg){
-        msg.value = finalText;
-        fireValueChange(msg);
-      }
-      snapshot('Curved Off');
-    }
-  }
-
-  /* -------------- Wiring -------------- */
+  /* ------------ Wiring ------------ */
   function wire(){
     const card = findCustomTextCard();
     if (!card){ retry(); return; }
     const curvedCB = findCurvedCheckbox(card);
     if (!curvedCB){ retry(); return; }
-    if (curvedCB.__raCurvedV3) return;
-    curvedCB.__raCurvedV3 = true;
+    if (curvedCB.__raRadius250) return;
+    curvedCB.__raRadius250 = true;
 
-    curvedCB.addEventListener('change', ()=>{
+    // Capture-phase so we run BEFORE existing change handlers
+    curvedCB.addEventListener('change', (e)=>{
       if (curvedCB.checked){
-        handleEnable(card, curvedCB);
-      } else {
-        handleDisable(card);
+        multiEnforce(card);
       }
-    });
+    }, true);
 
+    log('Curved radius=250 enforcement wired.');
   }
 
-  function retry(count=0){
-    if (count>60) return;
-    setTimeout(()=>wire(count+1), 250);
+  function retry(i=0){
+    if (i>60) return;
+    setTimeout(()=>wire(i+1), 250);
   }
 
   if (document.readyState === 'loading'){
@@ -10064,49 +9905,10 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     wire();
   }
 
-  /* -------------- Public Helpers -------------- */
-  window.raCurvedV3Debug = function(){
-    const c = C();
-    const active = c && c.getActiveObject();
-    return {
-      activeType: active ? active.type : null,
-      activeIsCurved: !!(active && isCurved(active)),
-      hasBackup: !!(active && active._raCurvedBackup),
-      backup: active && active._raCurvedBackup ? { text: active._raCurvedBackup.text, fontSize: active._raCurvedBackup.fontSize } : null
-    };
-  };
-  window.raCurvedV3ForceCurve = function(){
+  /* ------------ Public Helper ------------ */
+  window.raForceCurvedRadius250 = function(){
     const card = findCustomTextCard();
-    const cb = findCurvedCheckbox(card);
-    if (!cb) return;
-    if (!cb.checked){
-      cb.checked = true;
-      cb.dispatchEvent(new Event('change', { bubbles:true }));
-    } else {
-      enforceRadius250(card);
-    }
+    if (!card) return;
+    multiEnforce(card);
   };
-  window.raCurvedV3ForceLinear = function(){
-    const card = findCustomTextCard();
-    const cb = findCurvedCheckbox(card);
-    if (!cb) return;
-    if (cb.checked){
-      cb.checked = false;
-      cb.dispatchEvent(new Event('change', { bubbles:true }));
-    } else {
-      handleDisable(card);
-    }
-  };
-  window.raCurvedV3ForceRadius = function(v){
-    const card = findCustomTextCard();
-    enforceRadius250(card);
-    if (typeof v === 'number' && v !== 250){
-      const slider = findRadiusSlider(card);
-      if (slider){
-        slider.value = v;
-        fireValueChange(slider);
-      }
-    }
-  };
-
 })();
