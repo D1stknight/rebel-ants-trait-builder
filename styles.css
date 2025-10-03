@@ -235,30 +235,87 @@ button, .btn { touch-action: manipulation; }
   padding: 8px 10px;           /* was 10px 12px */
 }
 
-#raSaveControlsCard .ra-proxy {
-  min-height: 32px;            /* was 38px */
-  font-size: 12px;             /* was 13px */
-  padding: 6px 8px;            /* was 8px 10px */
-  white-space: nowrap;         /* prevent wrapping */
-  overflow: hidden; 
-  text-overflow: ellipsis;     /* keep labels tidy if narrow */
+/* =========================================================
+   Saving Controls v2 (desktop-friendly)
+   - 3 rows: [Undo | Redo], [Save Draft | Restore Draft], [× | History …]
+   - Blue gradient card; works at narrow widths
+   ========================================================= */
+#raSaveControlsCard{
+  --ra-sc-bg1:#1a2a6c; --ra-sc-bg2:#1b3352; /* tweak if you want a different blue */
+  margin-top: 10px;
+  background: linear-gradient(135deg,var(--ra-sc-bg1),var(--ra-sc-bg2));
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.25) inset, 0 1px 0 rgba(255,255,255,.04);
+}
+#raSaveControlsCard .ra-card-title{
+  font: 600 12px/1.1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color: #eaf2ff;
+  letter-spacing:.2px;
+  margin: 0 0 8px 0;
+  opacity:.9;
 }
 
-/* Top row: 2 buttons, shrink minimum width a bit + tighter gap */
-#raSaveControlsCard .ra-sc-rowTop {
-  grid-template-columns: repeat(2, minmax(110px, 1fr));  /* was 120px */
-  gap: 6px;                                              /* was 8px */
+/* Rows */
+#raSaveControlsCard .ra-sc-row{ display:grid; gap:8px; margin-bottom:8px; }
+#raSaveControlsCard .ra-sc-row:last-child{ margin-bottom:0; }
+
+/* Row 1: Undo | Redo  */
+#raSaveControlsCard .ra-sc-rowTop{
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
 }
 
-/* Bottom row: 3 buttons, shrink minimum width + tighter gap */
-#raSaveControlsCard .ra-sc-rowBottom {
-  grid-template-columns: repeat(3, minmax(78px, 1fr));   /* was 84px */
-  gap: 6px;                                              /* was 8px */
+/* Row 2: Save Draft | Restore Draft */
+#raSaveControlsCard .ra-sc-rowMid{
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
 }
 
-/* Optional: on narrower desktops/tablets, make them a touch smaller again */
-@media (max-width: 980px) {
-  #raSaveControlsCard .ra-sc-rowTop    { grid-template-columns: repeat(2, minmax(96px, 1fr)); }
-  #raSaveControlsCard .ra-sc-rowBottom { grid-template-columns: repeat(3, minmax(70px, 1fr)); }
-  #raSaveControlsCard .ra-proxy { min-height: 30px; font-size: 12px; padding: 5px 7px; }
+/* Row 3: × | History label */
+#raSaveControlsCard .ra-sc-rowBottom{
+  grid-template-columns: auto 1fr;  /* small × button + flexible history label */
+  align-items:center;
+  column-gap:8px;
+}
+
+/* Proxy buttons */
+#raSaveControlsCard .ra-proxy{
+  appearance:none; border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+  color:#e6ecff;
+  border-radius:10px;
+  min-height:38px; font-size:13px; line-height:1.1;
+  padding:8px 10px; cursor:pointer;
+  transition:transform .06s ease, background .12s ease, border-color .12s ease;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+#raSaveControlsCard .ra-proxy:hover{ background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.22); }
+#raSaveControlsCard .ra-proxy:active{ transform: translateY(1px); }
+
+/* Emphasize the "×" (danger-ish) */
+#raSaveControlsCard .ra-proxy.ra-warn{
+  border-color: rgba(255,77,77,.45);
+  background: rgba(255,77,77,.10);
+  color: #ffe3e3;
+}
+
+/* History pill */
+#raSaveControlsCard .ra-history{
+  display:flex; align-items:center; justify-content:center;
+  min-height:38px; padding:8px 10px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.18);
+  color:#eaf2ff; font-size:12px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+
+/* Narrow desktops/tablets: let buttons shrink a bit */
+@media (max-width: 980px){
+  #raSaveControlsCard .ra-sc-rowTop,
+  #raSaveControlsCard .ra-sc-rowMid{
+    grid-template-columns: repeat(2, minmax(100px, 1fr));
+  }
+  #raSaveControlsCard .ra-proxy{ min-height:34px; font-size:12px; padding:6px 8px; }
+  #raSaveControlsCard .ra-history{ min-height:34px; font-size:12px; padding:6px 8px; }
 }
