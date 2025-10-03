@@ -9912,3 +9912,148 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     multiEnforce(card);
   };
 })();
+
+/* =========================================================
+   Saving Controls v2
+   - Builds a 3-row card in the right panel
+   - Proxies to your existing buttons/functions
+   - Mirrors the live "History 1/1 – …" label into the card
+   ========================================================= */
+(function(){
+  const CARD_ID = 'raSaveControlsCard';
+  if (document.getElementById(CARD_ID)) return;
+
+  function qs(s,root){ return (root||document).querySelector(s); }
+  function qsa(s,root){ return Array.from((root||document).querySelectorAll(s)); }
+
+  const right = qs('aside.panel.right') || qs('.panel.right');
+  if (!right) return;
+
+  // Build card
+  const card = document.createElement('div');
+  card.id = CARD_ID;
+  card.innerHTML = `
+    <div class="ra-card-title">Saving Controls</div>
+    <div class="ra-sc-row ra-sc-rowTop">
+      <button class="ra-proxy" data-action="undo">Undo</button>
+      <button class="ra-proxy" data-action="redo">Redo</button>
+    </div>
+    <div class="ra-sc-row ra-sc-rowMid">
+      <button class="ra-proxy" data-action="save">Save Draft</button>
+      <button class="ra-proxy" data-action="restore">Restore Draft</button>
+    </div>
+    <div class="ra-sc-row ra-sc-rowBottom">
+      <button class="ra-proxy ra-warn" data-action="clear">×</button>
+      <div class="ra-history" id="raHistoryStatus">History —</div>
+    </div>
+  `;
+
+  // Place card just above Export (fallback: append to right panel)
+  const exportCard =
+      qs('.export, [data-card="export"]', right) ||
+      qsa('.card, section').find(n => /export/i.test(n.textContent||''));
+  if (exportCard && exportCard.parentElement === right){
+    right.insertBefore(card, exportCard);
+  } else {
+    right.appendChild(card);
+  }
+
+  // ---- Helpers: click existing UI or call fallbacks ----
+  function clickById(id){
+    const el = id && document.getElementById(id);
+    if (el) { el.click(); return true; }
+    return false;
+  }
+  function clickByText(scope, starts){
+    const lc = starts.toLowerCase();
+    for (const b of qsa('button', scope)){
+      const t = (b.textContent||'').trim().toLowerCase();
+      if (t.startsWith(lc)) { b.click(); return true; }
+    }
+    return false;
+  }
+  function call(path){
+    try{
+      const fn = path.split('.').reduce((o,k)=>o && o[k], window);
+      if (typeof fn === 'function'){ fn(); return true; }
+    }catch(_){}
+    return false;
+  }
+
+  // Map actions -> ways to trigger
+  const triggers = {
+    undo(){
+      return clickById('undoBtn') ||
+             clickByText(right,'undo') ||
+             call('raHistory.undo') ||
+             call('history.undo');
+    },
+    redo(){
+      return clickById('redoBtn') ||
+             clickByText(right,'redo') ||
+             call('raHistory.redo') ||
+             call('history.redo');
+    },
+    save(){
+      return clickById('saveDraft') ||
+             clickByText(right,'save draft') ||
+             call('raHistory.saveDraft') ||
+             call('drafts.save');
+    },
+    restore(){
+      return clickById('restoreDraft') ||
+             clickByText(right,'restore') ||
+             call('raHistory.restoreDraft') ||
+             call('drafts.restore');
+    },
+    clear(){
+      // The small "x" button near the old history line
+      return clickById('historyClose') ||
+             clickByText(right,'x') ||
+             call('raHistory.clear') ||
+             call('history.clear');
+    }
+  };
+
+  // Wire proxy buttons
+  card.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.ra-proxy');
+    if (!btn) return;
+    const act = btn.getAttribute('data-action');
+    if (act && typeof triggers[act] === 'function'){
+      e.preventDefault(); e.stopPropagation();
+      triggers[act]();
+      // after an action, try to resync labels soon
+      setTimeout(syncLabels, 60);
+    }
+  });
+
+  // Mirror "History n/m – …" + copy Undo/Redo counts if present
+  const status = qs('#raHistoryStatus', card);
+
+  function findHistorySource(){
+    // Look in right panel for something that looks like "History 3 / 8"
+    const nodes = qsa('*', right);
+    return nodes.find(n => /history\s+\d+\s*\/\s*\d+/i.test((n.textContent||'')));
+  }
+  function syncLabels(){
+    // History line
+    const src = findHistorySource();
+    if (src){
+      const txt = (src.textContent||'').trim();
+      if (txt && status) status.textContent = txt;
+    }
+    // Copy Undo/Redo counts if your original shows "(n)"
+    const undoSrc = qsa('button', right).find(b => /^undo\s*\(/i.test((b.textContent||'')));
+    const redoSrc = qsa('button', right).find(b => /^redo\s*\(/i.test((b.textContent||'')));
+    if (undoSrc) qs('[data-action="undo"]', card).textContent = undoSrc.textContent.trim();
+    if (redoSrc) qs('[data-action="redo"]', card).textContent = redoSrc.textContent.trim();
+  }
+
+  // Observe right panel for text changes to keep status live
+  const mo = new MutationObserver(()=> syncLabels());
+  mo.observe(right, { childList:true, subtree:true, characterData:true });
+
+  // Initial sync
+  syncLabels();
+})();
