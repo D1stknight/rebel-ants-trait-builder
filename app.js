@@ -9912,3 +9912,145 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     multiEnforce(card);
   };
 })();
+
+/* =========================================================
+   Saving Controls v2.1 (perf fix)
+   - Same UI as v2
+   - Watches only the History line (not the whole panel)
+   - Throttled with rAF; no full-panel "*" scans per change
+   ========================================================= */
+(function(){
+  const CARD_ID = 'raSaveControlsCard';
+  if (document.getElementById(CARD_ID)) return;
+
+  const $  = (s, r) => (r||document).querySelector(s);
+  const $$ = (s, r) => Array.from((r||document).querySelectorAll(s));
+
+  // Right panel
+  const right = $('aside.panel.right') || $('.panel.right');
+  if (!right) return;
+
+  // --- Build card ---
+  const card = document.createElement('div');
+  card.id = CARD_ID;
+  card.innerHTML = `
+    <div class="ra-card-title">Saving Controls</div>
+    <div class="ra-sc-row ra-sc-rowTop">
+      <button class="ra-proxy" data-action="undo">Undo</button>
+      <button class="ra-proxy" data-action="redo">Redo</button>
+    </div>
+    <div class="ra-sc-row ra-sc-rowMid">
+      <button class="ra-proxy" data-action="save">Save Draft</button>
+      <button class="ra-proxy" data-action="restore">Restore Draft</button>
+    </div>
+    <div class="ra-sc-row ra-sc-rowBottom">
+      <button class="ra-proxy ra-warn" data-action="clear">×</button>
+      <div class="ra-history" id="raHistoryStatus">History —</div>
+    </div>
+  `;
+
+  // Place just above the Export card when possible
+  const exportCard = Array.from(right.children).find(n => /export/i.test(n.textContent||''));
+  right.insertBefore(card, exportCard || null);
+
+  // --- Proxy helpers ---
+  function clickById(id){ const el = id && document.getElementById(id); if (el){ el.click(); return true; } return false; }
+  function clickByText(scope, starts){
+    const lc = starts.toLowerCase();
+    for (const b of $$('button', scope)){
+      const t = (b.textContent||'').trim().toLowerCase();
+      if (t.startsWith(lc)) { b.click(); return true; }
+    }
+    return false;
+  }
+  function call(path){
+    try{ const fn = path.split('.').reduce((o,k)=>o && o[k], window); if (typeof fn === 'function'){ fn(); return true; } }catch(_){}
+    return false;
+  }
+
+  const triggers = {
+    undo(){ return clickById('undoBtn') || clickByText(right,'undo') || call('raHistory.undo') || call('history.undo'); },
+    redo(){ return clickById('redoBtn') || clickByText(right,'redo') || call('raHistory.redo') || call('history.redo'); },
+    save(){ return clickById('saveDraft') || clickByText(right,'save draft') || call('raHistory.saveDraft') || call('drafts.save'); },
+    restore(){ return clickById('restoreDraft') || clickByText(right,'restore') || call('raHistory.restoreDraft') || call('drafts.restore'); },
+    clear(){ return clickById('historyClose') || clickByText(right,'x') || call('raHistory.clear') || call('history.clear'); }
+  };
+
+  card.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.ra-proxy'); if (!btn) return;
+    const act = btn.getAttribute('data-action');
+    if (act && typeof triggers[act] === 'function'){
+      e.preventDefault(); e.stopPropagation();
+      triggers[act]();
+      scheduleSync();   // refresh counts/label soon after
+    }
+  });
+
+  // --- Status sync (fast) ---
+  const statusEl = $('#raHistoryStatus', card);
+
+  // Find the original "History n/m – …" line once, near the existing action area
+  function locateHistoryNode(){
+    // Restrict search to likely containers (cuts work down massively)
+    const containers = $$('.card, section, div', right);
+    for (const box of containers){
+      // Stop early in small boxes
+      if ((box.textContent||'').length < 12) continue;
+      const match = $$('#', box).length; // force engine to walk minimally (no-op selector)
+      const n = Array.from(box.childNodes).find(node =>
+        node.nodeType === 3 && /history\s+\d+\s*\/\s*\d+/i.test(node.textContent || '')
+      ) || Array.from(box.querySelectorAll('*')).find(el =>
+        /history\s+\d+\s*\/\s*\d+/i.test((el.textContent||''))
+      );
+      if (n) return n.nodeType === 3 ? n.parentNode : n;
+    }
+    return null;
+  }
+
+  let historyNode = null;
+  let mo = null;
+  let raf = 0;
+
+  function scheduleSync(){
+    if (raf) return;
+    raf = requestAnimationFrame(()=>{ raf = 0; syncLabels(); });
+  }
+
+  function watchHistoryNode(){
+    if (mo){ mo.disconnect(); mo = null; }
+    historyNode = locateHistoryNode();
+    if (historyNode){
+      mo = new MutationObserver(scheduleSync);
+      mo.observe(historyNode, { childList:true, characterData:true, subtree:true });
+    }
+  }
+
+  function syncLabels(){
+    if (!statusEl) return;
+
+    if (!historyNode || !document.body.contains(historyNode)){
+      watchHistoryNode(); // (re)locate if it moved
+    }
+    if (historyNode){
+      const txt = (historyNode.textContent||'').trim();
+      if (txt) statusEl.textContent = txt;
+    }
+
+    // Copy Undo/Redo counts from existing buttons if they show “(n)”
+    const undoBtn = $$('button', right).find(b => /^undo\s*\(/i.test((b.textContent||'')));
+    const redoBtn = $$('button', right).find(b => /^redo\s*\(/i.test((b.textContent||'')));
+    if (undoBtn) card.querySelector('[data-action="undo"]').textContent = undoBtn.textContent.trim();
+    if (redoBtn) card.querySelector('[data-action="redo"]').textContent = redoBtn.textContent.trim();
+  }
+
+  // Light event hooks to keep it fresh without heavy observers
+  right.addEventListener('click', scheduleSync, {capture:true, passive:true});
+  right.addEventListener('input', scheduleSync, {capture:true, passive:true});
+
+  // First run
+  watchHistoryNode();
+  syncLabels();
+
+  // Optional: expose a cleanup for debugging
+  window.__raSaveControlsDestroy = () => { if (mo) mo.disconnect(); card.remove(); };
+})();
