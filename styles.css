@@ -261,3 +261,8 @@ button, .btn { touch-action: manipulation; }
   #raSaveControlsCard .ra-proxy{ min-height:34px; font-size:12px; padding:6px 8px; }
   #raSaveControlsCard .ra-history{ min-height:34px; font-size:12px; padding:6px 8px; }
 }
+
+/* Optional: use your original 3‑stop blue gradient */
+#raSaveControlsCard{
+  background: linear-gradient(135deg, #1f3b86 0%, #2563eb 45%, #1f7ae5 100%);
+}
