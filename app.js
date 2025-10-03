@@ -9914,160 +9914,146 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   Saving Controls (Proxy v3 — 2+3 layout, includes “X”)
-   - Desktop only (pointer:fine)  <-- remove this check to run on mobile too
-   - Builds a blue card with proxy buttons:
-       Top row: Undo, Redo
-       Bottom:  Save Draft, Restore Draft, X
-   - Proxies click the originals; originals are hidden
-   - Labels/counters/disabled state stay in sync
+   Saving Controls v2
+   - Builds a 3-row card in the right panel
+   - Proxies to your existing buttons/functions
+   - Mirrors the live "History 1/1 – …" label into the card
    ========================================================= */
 (function(){
-  if (window.__RA_SAVE_CARD_PROXY_V3__) return;
-  window.__RA_SAVE_CARD_PROXY_V3__ = true;
+  const CARD_ID = 'raSaveControlsCard';
+  if (document.getElementById(CARD_ID)) return;
 
-  // Desktop only safeguard. Remove the next line if you want it on mobile too.
-  
-  // Clean older attempts
-  document.getElementById('raSaveControlsCard')?.remove();
+  function qs(s,root){ return (root||document).querySelector(s); }
+  function qsa(s,root){ return Array.from((root||document).querySelectorAll(s)); }
 
-  const LABELS = {
-    undo:    'Undo',
-    redo:    'Redo',
-    save:    'Save Draft',
-    restore: 'Restore Draft',
-    close:   'X'
+  const right = qs('aside.panel.right') || qs('.panel.right');
+  if (!right) return;
+
+  // Build card
+  const card = document.createElement('div');
+  card.id = CARD_ID;
+  card.innerHTML = `
+    <div class="ra-card-title">Saving Controls</div>
+    <div class="ra-sc-row ra-sc-rowTop">
+      <button class="ra-proxy" data-action="undo">Undo</button>
+      <button class="ra-proxy" data-action="redo">Redo</button>
+    </div>
+    <div class="ra-sc-row ra-sc-rowMid">
+      <button class="ra-proxy" data-action="save">Save Draft</button>
+      <button class="ra-proxy" data-action="restore">Restore Draft</button>
+    </div>
+    <div class="ra-sc-row ra-sc-rowBottom">
+      <button class="ra-proxy ra-warn" data-action="clear">×</button>
+      <div class="ra-history" id="raHistoryStatus">History —</div>
+    </div>
+  `;
+
+  // Place card just above Export (fallback: append to right panel)
+  const exportCard =
+      qs('.export, [data-card="export"]', right) ||
+      qsa('.card, section').find(n => /export/i.test(n.textContent||''));
+  if (exportCard && exportCard.parentElement === right){
+    right.insertBefore(card, exportCard);
+  } else {
+    right.appendChild(card);
+  }
+
+  // ---- Helpers: click existing UI or call fallbacks ----
+  function clickById(id){
+    const el = id && document.getElementById(id);
+    if (el) { el.click(); return true; }
+    return false;
+  }
+  function clickByText(scope, starts){
+    const lc = starts.toLowerCase();
+    for (const b of qsa('button', scope)){
+      const t = (b.textContent||'').trim().toLowerCase();
+      if (t.startsWith(lc)) { b.click(); return true; }
+    }
+    return false;
+  }
+  function call(path){
+    try{
+      const fn = path.split('.').reduce((o,k)=>o && o[k], window);
+      if (typeof fn === 'function'){ fn(); return true; }
+    }catch(_){}
+    return false;
+  }
+
+  // Map actions -> ways to trigger
+  const triggers = {
+    undo(){
+      return clickById('undoBtn') ||
+             clickByText(right,'undo') ||
+             call('raHistory.undo') ||
+             call('history.undo');
+    },
+    redo(){
+      return clickById('redoBtn') ||
+             clickByText(right,'redo') ||
+             call('raHistory.redo') ||
+             call('history.redo');
+    },
+    save(){
+      return clickById('saveDraft') ||
+             clickByText(right,'save draft') ||
+             call('raHistory.saveDraft') ||
+             call('drafts.save');
+    },
+    restore(){
+      return clickById('restoreDraft') ||
+             clickByText(right,'restore') ||
+             call('raHistory.restoreDraft') ||
+             call('drafts.restore');
+    },
+    clear(){
+      // The small "x" button near the old history line
+      return clickById('historyClose') ||
+             clickByText(right,'x') ||
+             call('raHistory.clear') ||
+             call('history.clear');
+    }
   };
 
-  const RIGHT_PANEL = document.querySelector('aside.panel.right, .panel.right') || document.querySelector('aside.panel, .panel');
-
-  function clickEl(el){
-    if (!el) return;
-    try { el.click(); return; } catch(_){}
-    try {
-      const evt = new MouseEvent('click', { bubbles:true, cancelable:true, view:window });
-      el.dispatchEvent(evt);
-    } catch(_){}
-  }
-
-  function keyFromText(el){
-    const raw = (el.textContent || el.getAttribute('aria-label') || el.title || '').trim();
-    const t   = raw.toLowerCase();
-    if (/^undo\b/.test(t))                return 'undo';
-    if (/^redo\b/.test(t))                return 'redo';
-    if (/^save\b/.test(t) || /save draft/.test(t)) return 'save';
-    if (/^restore\b/.test(t) || /restore draft/.test(t)) return 'restore';
-    if (raw === 'x' || raw === '×' || t === 'close')    return 'close';
-    return '';
-  }
-
-  function findOriginals(){
-    const scope = RIGHT_PANEL || document;
-    const selectors = 'button, [role="button"], a.button, .btn, .pill';
-    const all = Array.from(scope.querySelectorAll(selectors));
-    const map = {};
-    all.forEach(el => {
-      const k = keyFromText(el);
-      if (k && !map[k]) map[k] = el;
-    });
-    return map;
-  }
-
-  function buildCard(){
-    const card = document.createElement('section');
-    card.id = 'raSaveControlsCard';
-    card.innerHTML = `
-      <div class="ra-sc-title">Saving Controls</div>
-      <div class="ra-sc-rowTop" id="raScRowTop"></div>
-      <div class="ra-sc-rowBottom" id="raScRowBottom"></div>
-    `;
-    // insert before Export if present
-    const host = RIGHT_PANEL || document.body;
-    const exportBlock = Array.from(host.querySelectorAll('section, .card, .box'))
-      .find(el => /\bexport\b/i.test(el.textContent || ''));
-    host.insertBefore(card, exportBlock || host.firstChild);
-    return card;
-  }
-
-  function makeProxy(orig, label){
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'ra-proxy';
-    const sync = () => {
-      const txt = (orig && (orig.textContent || orig.getAttribute('aria-label'))) || label;
-      btn.textContent = (txt || label).trim();
-      btn.disabled = !!(orig && (orig.disabled || orig.getAttribute('aria-disabled') === 'true'));
-    };
-    sync();
-    btn.addEventListener('click', (e) => {
+  // Wire proxy buttons
+  card.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.ra-proxy');
+    if (!btn) return;
+    const act = btn.getAttribute('data-action');
+    if (act && typeof triggers[act] === 'function'){
       e.preventDefault(); e.stopPropagation();
-      if (orig) clickEl(orig);
-    });
-    if (orig){
-      const mo = new MutationObserver(sync);
-      mo.observe(orig, { attributes:true, childList:true, subtree:true, characterData:true });
+      triggers[act]();
+      // after an action, try to resync labels soon
+      setTimeout(syncLabels, 60);
     }
-    return { btn, sync };
+  });
+
+  // Mirror "History n/m – …" + copy Undo/Redo counts if present
+  const status = qs('#raHistoryStatus', card);
+
+  function findHistorySource(){
+    // Look in right panel for something that looks like "History 3 / 8"
+    const nodes = qsa('*', right);
+    return nodes.find(n => /history\s+\d+\s*\/\s*\d+/i.test((n.textContent||'')));
+  }
+  function syncLabels(){
+    // History line
+    const src = findHistorySource();
+    if (src){
+      const txt = (src.textContent||'').trim();
+      if (txt && status) status.textContent = txt;
+    }
+    // Copy Undo/Redo counts if your original shows "(n)"
+    const undoSrc = qsa('button', right).find(b => /^undo\s*\(/i.test((b.textContent||'')));
+    const redoSrc = qsa('button', right).find(b => /^redo\s*\(/i.test((b.textContent||'')));
+    if (undoSrc) qs('[data-action="undo"]', card).textContent = undoSrc.textContent.trim();
+    if (redoSrc) qs('[data-action="redo"]', card).textContent = redoSrc.textContent.trim();
   }
 
-  function hideOriginal(el){
-    if (!el) return;
-    el.style.display = 'none';
-    el.setAttribute('data-ra-hidden', '1');
-  }
+  // Observe right panel for text changes to keep status live
+  const mo = new MutationObserver(()=> syncLabels());
+  mo.observe(right, { childList:true, subtree:true, characterData:true });
 
-  function ensure(){
-    const originals = findOriginals();
-    // Need at least one of the five
-    if (!originals.undo && !originals.redo && !originals.save && !originals.restore && !originals.close) return false;
-
-    const card = document.getElementById('raSaveControlsCard') || buildCard();
-    const rowTop = card.querySelector('#raScRowTop');
-    const rowBot = card.querySelector('#raScRowBottom');
-    rowTop.innerHTML = ''; rowBot.innerHTML = '';
-
-    // Build proxies (top: Undo, Redo)
-    if (originals.undo) {
-      const {btn} = makeProxy(originals.undo, LABELS.undo);
-      rowTop.appendChild(btn);
-      hideOriginal(originals.undo);
-    }
-    if (originals.redo) {
-      const {btn} = makeProxy(originals.redo, LABELS.redo);
-      rowTop.appendChild(btn);
-      hideOriginal(originals.redo);
-    }
-
-    // Bottom row: Save, Restore, X
-    if (originals.save) {
-      const {btn} = makeProxy(originals.save, LABELS.save);
-      rowBot.appendChild(btn);
-      hideOriginal(originals.save);
-    }
-    if (originals.restore) {
-      const {btn} = makeProxy(originals.restore, LABELS.restore);
-      rowBot.appendChild(btn);
-      hideOriginal(originals.restore);
-    }
-    if (originals.close) {
-      // Always show as “X” for consistency
-      const {btn} = makeProxy(originals.close, LABELS.close);
-      btn.textContent = LABELS.close;
-      rowBot.appendChild(btn);
-      hideOriginal(originals.close);
-    }
-
-    return true;
-  }
-
-  // Try now; if Selection re-renders later, keep it in sync
-  if (!ensure()){
-    const obs = new MutationObserver(() => { if (ensure()) obs.disconnect(); });
-    obs.observe(document.body, { childList:true, subtree:true });
-    setTimeout(() => obs.disconnect(), 10000);
-  } else {
-    // Also watch for later panel refreshes
-    const obs2 = new MutationObserver(() => ensure());
-    obs2.observe(RIGHT_PANEL || document.body, { childList:true, subtree:true });
-  }
+  // Initial sync
+  syncLabels();
 })();
