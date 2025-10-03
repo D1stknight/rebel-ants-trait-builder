@@ -8071,7 +8071,9 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   'use strict';
   if (window.__RA_MOBILE_REAL_RESIZE_V1__) return;
   window.__RA_MOBILE_REAL_RESIZE_V1__ = true;
-
+  const IS_COARSE = window.matchMedia('(pointer: coarse)').matches;
+  if (!IS_COARSE) return;   // Do not run mobile logic on desktop, ever
+   
   /* === MOBILE KNOBS (simple, adjust here) ==================
    * SIDE_MARGIN_X_PX  → horizontal margin around the square
    * VERTICAL_GAP_PX   → extra space above the dock
@@ -8351,4 +8353,1562 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   });
   // Scroll: only toggle helper, no resize
   window.addEventListener('scroll', () => toggleBackToCanvas(), { passive: true });
+})();
+
+/* ============================================================
+   RA_DESKTOP_STICKY_COLUMNS_V1
+   Variant B (sticky side panels + internally scrolling middle)
+   + canvas unfix (prevents overlapping) + horizontal no‑collapse row.
+   Desktop only (pointer:fine). Mobile code remains untouched.
+   Revert:  desktopLayoutRevert()
+   Reapply: desktopLayoutApply()
+   ============================================================ */
+(function RA_DESKTOP_STICKY_COLUMNS_V1(){
+  if (window.__RA_DESKTOP_STICKY_COLUMNS_V1__) return;
+  window.__RA_DESKTOP_STICKY_COLUMNS_V1__ = true;
+
+  // Abort for real mobile / touch devices
+  if (matchMedia('(pointer: coarse)').matches) return;
+
+  var SNAP = {
+    parent:null,parentStyle:'',
+    stage:null, stageStyle:'',
+    left:null,  leftStyle:'',
+    right:null, rightStyle:'',
+    canvasCard:null, canvasCardStyle:'',
+    mobileStyles:[],
+    cssTag:null,
+    resizeHandler:null,
+    orientHandler:null
+  };
+
+  var MOBILE_STYLE_IDS = ['ra-mobile-flow-css-v29','ra-mobile-css-fit-v4-style'];
+  var CSS_ID = 'deskStickyColumnsCSS_V1';
+
+  function disableMobileCSS(){
+    MOBILE_STYLE_IDS.forEach(function(id){
+      var el = document.getElementById(id);
+      if (el && !el.__deskDisabled){
+        el.__deskDisabled = { disabled: el.disabled };
+        el.disabled = true;
+        SNAP.mobileStyles.push(el);
+      }
+    });
+  }
+  function restoreMobileCSS(){
+    SNAP.mobileStyles.forEach(function(el){
+      if (el.__deskDisabled){
+        el.disabled = el.__deskDisabled.disabled;
+        delete el.__deskDisabled;
+      }
+    });
+  }
+
+  function unfixCanvas(){
+    if (window.__RA_UNFIX_CANVAS){
+      try { window.__RA_UNFIX_CANVAS(); return; } catch(_){}
+    }
+    var c = document.getElementById('c');
+    if (!c) return;
+    var card = c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper');
+    if (card){
+      if (!SNAP.canvasCard){
+        SNAP.canvasCard = card;
+        SNAP.canvasCardStyle = card.getAttribute('style') || '';
+      }
+      ['position','top','left','right','width','zIndex','transform','margin'].forEach(function(p){
+        card.style[p]='';
+      });
+      var ghost = document.getElementById('raCanvasGhost');
+      if (ghost) ghost.remove();
+    }
+  }
+
+  function findNodes(){
+    var stage = document.querySelector('main.stage');
+    if (!stage) return null;
+    var left  = document.querySelector('aside.panel.left');
+    var right = document.querySelector('aside.panel.right');
+    var parent = stage.parentElement;
+
+    // Ascend if side panels not siblings of stage
+    if (parent && (left || right)){
+      var up = parent;
+      while (up && up !== document.body){
+        var ok = true;
+        [stage,left,right].forEach(function(n){
+          if (n && !up.contains(n)) ok=false;
+        });
+        if (ok) { parent = up; break; }
+        up = up.parentElement;
+      }
+    }
+    return { parent:parent, stage:stage, left:left, right:right };
+  }
+
+  function injectCSS(){
+    if (document.getElementById(CSS_ID)) return;
+    var st = document.createElement('style');
+    st.id = CSS_ID;
+    st.textContent =
+      '/* Desktop sticky three-column layout */' +
+      '.desk-flex-host{display:flex!important;flex-wrap:nowrap!important;align-items:flex-start;gap:16px;overflow-x:auto;overflow-y:visible;}' +
+      '.desk-flex-host>aside.panel.left,.desk-flex-host>aside.panel.right{' +
+      'flex:0 0 280px;min-width:260px;max-width:320px;box-sizing:border-box;position:sticky;top:8px;' +
+      'max-height:calc(100vh - 16px);overflow:auto;scrollbar-width:thin;' +
+      '}' +
+      '.desk-flex-host>main.stage{' +
+      'flex:1 1 auto;min-width:600px;box-sizing:border-box;position:relative;' +
+      'overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;max-height:calc(100vh - 12px);' +
+      '}' +
+      '@media (pointer: fine){#ra-mobile-stage-host,#ra-mobile-stage-frame{display:none!important;}}';
+    document.head.appendChild(st);
+    SNAP.cssTag = st;
+  }
+
+  function applyLayout(){
+    var nodes = findNodes();
+    if (!nodes || !nodes.parent || !nodes.stage) return;
+
+    SNAP.parent = nodes.parent;
+    SNAP.stage  = nodes.stage;
+    SNAP.left   = nodes.left;
+    SNAP.right  = nodes.right;
+
+    if (SNAP.parentStyle === '') SNAP.parentStyle = SNAP.parent.getAttribute('style') || '';
+    if (SNAP.stageStyle  === '') SNAP.stageStyle  = SNAP.stage.getAttribute('style')  || '';
+    if (SNAP.left && SNAP.leftStyle === '')   SNAP.leftStyle  = SNAP.left.getAttribute('style')  || '';
+    if (SNAP.right && SNAP.rightStyle === '') SNAP.rightStyle = SNAP.right.getAttribute('style') || '';
+
+    SNAP.parent.classList.add('desk-flex-host');
+    SNAP.parent.style.alignItems = 'flex-start';
+
+    SNAP.stage.setAttribute('data-mid','1');
+    SNAP.stage.style.maxHeight = 'calc(100vh - 12px)';
+    SNAP.stage.style.overflowY = 'auto';
+    SNAP.stage.style.overflowX = 'hidden';
+    SNAP.stage.style.position  = SNAP.stage.style.position || 'relative';
+
+    if (SNAP.left){
+      SNAP.left.setAttribute('data-side','1');
+      SNAP.left.style.maxHeight = 'calc(100vh - 16px)';
+      SNAP.left.style.overflowY = 'auto';
+    }
+    if (SNAP.right){
+      SNAP.right.setAttribute('data-side','1');
+      SNAP.right.style.maxHeight = 'calc(100vh - 16px)';
+      SNAP.right.style.overflowY = 'auto';
+    }
+    updateHeights();
+  }
+
+  function updateHeights(){
+    if (SNAP.stage && SNAP.stage.getAttribute('data-mid')==='1'){
+      SNAP.stage.style.maxHeight = 'calc(100vh - 12px)';
+    }
+    if (SNAP.left && SNAP.left.getAttribute('data-side')==='1'){
+      SNAP.left.style.maxHeight = 'calc(100vh - 16px)';
+    }
+    if (SNAP.right && SNAP.right.getAttribute('data-side')==='1'){
+      SNAP.right.style.maxHeight = 'calc(100vh - 16px)';
+    }
+  }
+
+  function bindResize(){
+    if (SNAP.resizeHandler) return;
+    SNAP.resizeHandler = function(){ updateHeights(); };
+    SNAP.orientHandler = function(){ setTimeout(updateHeights, 120); };
+    window.addEventListener('resize', SNAP.resizeHandler, { passive:true });
+    window.addEventListener('orientationchange', SNAP.orientHandler, { passive:true });
+  }
+
+  function applyAll(){
+    // (Optional width threshold – uncomment if you only want below a size)
+    // if (window.innerWidth > 1400) return; 
+
+    disableMobileCSS();
+    unfixCanvas();
+    injectCSS();
+    applyLayout();
+    bindResize();
+  }
+
+  function revertAll(){
+    window.removeEventListener('resize', SNAP.resizeHandler || function(){});
+    window.removeEventListener('orientationchange', SNAP.orientHandler || function(){});
+
+    if (SNAP.stage){
+      if (SNAP.stageStyle === '') SNAP.stage.removeAttribute('style');
+      else SNAP.stage.setAttribute('style', SNAP.stageStyle);
+      SNAP.stage.removeAttribute('data-mid');
+    }
+    if (SNAP.left){
+      if (SNAP.leftStyle === '') SNAP.left.removeAttribute('style');
+      else SNAP.left.setAttribute('style', SNAP.leftStyle);
+      SNAP.left.removeAttribute('data-side');
+    }
+    if (SNAP.right){
+      if (SNAP.rightStyle === '') SNAP.right.removeAttribute('style');
+      else SNAP.right.setAttribute('style', SNAP.rightStyle);
+      SNAP.right.removeAttribute('data-side');
+    }
+    if (SNAP.parent){
+      SNAP.parent.classList.remove('desk-flex-host');
+      if (SNAP.parentStyle === '') SNAP.parent.removeAttribute('style');
+      else SNAP.parent.setAttribute('style', SNAP.parentStyle);
+    }
+    if (SNAP.canvasCard){
+      if (SNAP.canvasCardStyle === '') SNAP.canvasCard.removeAttribute('style');
+      else SNAP.canvasCard.setAttribute('style', SNAP.canvasCardStyle);
+    }
+    restoreMobileCSS();
+  }
+
+  window.desktopLayoutRevert = revertAll;
+  window.desktopLayoutApply  = applyAll;
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', applyAll, { once:true });
+  } else {
+    applyAll();
+  }
+})();
+
+/* ============================================================
+   RA_IPAD_STICKY_LAYOUT_V1
+   iPad–only (NOT phones, NOT desktop) three–column sticky layout
+   + animated sizing + portrait rotate hint overlay.
+
+   WHAT IT DOES (iPad only):
+     • Disables existing mobile flow CSS so layout doesn’t collapse.
+     • Creates a horizontal non‑collapsing flex row:
+          [ aside.panel.left ] [ main.stage ] [ aside.panel.right ]
+     • Sidebars become sticky (independent scroll), middle column scrolls internally.
+     • Responsive per orientation (portrait vs landscape) with smooth transitions (180ms).
+     • Split view narrow widths auto‑shrink sidebars; horizontal scroll if still too narrow.
+     • Portrait rotate overlay encourages landscape (daily “don’t show again” + session dismiss).
+     • Respects prefers-reduced-motion (disables transitions / animation).
+     • Safe revert / reapply / debug utilities:
+         ipadLayoutRevert(), ipadLayoutApply(), ipadLayoutDebug()
+       Force test on desktop: add ?forceIpad=1 to URL.
+
+   DOES NOT TOUCH:
+     • Desktop sticky layout (pointer:fine) you already added.
+     • Phone (true mobile) layout & scripts.
+   ============================================================ */
+(function RA_IPAD_STICKY_LAYOUT_V1(){
+  if (window.__RA_IPAD_STICKY_LAYOUT_V1__) return;
+  window.__RA_IPAD_STICKY_LAYOUT_V1__ = true;
+
+  /* ---------- Detection ---------- */
+  function isIPad(){
+    var ua = navigator.userAgent || '';
+    var force = /[?&]forceIpad=1\b/i.test(location.search);
+    if (force) return true;
+    var legacy = /iPad/i.test(ua);
+    var touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+    var tabletBand = Math.min(screen.width, screen.height) >= 650; // exclude iPhones
+    return (legacy || touchMac) && tabletBand;
+  }
+  if (!isIPad()) return; // Abort: not iPad
+
+  /* ---------- Config Profiles ---------- */
+  var PROFILE = {
+    portrait: { sideBase:260, sideMin:250, sideMax:270, midMin:580, stickyTop:8 },
+    landscape:{ sideBase:290, sideMin:280, sideMax:300, midMin:700, stickyTop:8 },
+    narrow:   { sideBase:240, midMin:520, stickyTop:6 } // split view fallback
+  };
+  var TRANSITION_MS = 180;
+  var EASE = 'cubic-bezier(.4,.14,.3,1)';
+
+  /* ---------- Snapshot / State ---------- */
+  var SNAP = {
+    applied:false,
+    parent:null,parentStyle:'',
+    stage:null, stageStyle:'',
+    left:null,leftStyle:'',
+    right:null,rightStyle:'',
+    canvasCard:null, canvasCardStyle:'',
+    cssTag:null,
+    mobileStyles:[],
+    resizeHandler:null,
+    orientHandler:null,
+    animClass:'ipad-transition'
+  };
+
+  var MOBILE_STYLE_IDS = ['ra-mobile-flow-css-v29','ra-mobile-css-fit-v4-style'];
+
+  /* ---------- Utilities ---------- */
+  function disableMobileCSS(){
+    MOBILE_STYLE_IDS.forEach(function(id){
+      var el = document.getElementById(id);
+      if (el && !el.__ipadDisabled){
+        el.__ipadDisabled = { disabled: el.disabled };
+        el.disabled = true;
+        SNAP.mobileStyles.push(el);
+      }
+    });
+  }
+  function restoreMobileCSS(){
+    SNAP.mobileStyles.forEach(function(el){
+      if (el.__ipadDisabled){
+        el.disabled = el.__ipadDisabled.disabled;
+        delete el.__ipadDisabled;
+      }
+    });
+  }
+  function unfixCanvasCard(){
+    if (window.__RA_UNFIX_CANVAS){
+      try { window.__RA_UNFIX_CANVAS(); return; } catch(_){}
+    }
+    var c = document.getElementById('c');
+    if (!c) return;
+    var card = c.closest('.card, .panel, .box, .canvas-card, .content, .canvas-wrapper');
+    if (card){
+      if (!SNAP.canvasCard){
+        SNAP.canvasCard = card;
+        SNAP.canvasCardStyle = card.getAttribute('style') || '';
+      }
+      ['position','top','left','right','width','zIndex','transform','margin'].forEach(function(p){ card.style[p]=''; });
+      var ghost = document.getElementById('raCanvasGhost'); if (ghost) ghost.remove();
+    }
+  }
+  function findNodes(){
+    var stage = document.querySelector('main.stage');
+    if (!stage) return null;
+    var left  = document.querySelector('aside.panel.left');
+    var right = document.querySelector('aside.panel.right');
+    var parent = stage.parentElement;
+    // Ascend if panels not direct siblings
+    if (parent && (left || right)){
+      var up = parent;
+      while (up && up !== document.body){
+        var allInside = true;
+        [stage,left,right].forEach(function(n){
+          if (n && !up.contains(n)) allInside = false;
+        });
+        if (allInside){ parent = up; break; }
+        up = up.parentElement;
+      }
+    }
+    return { parent:parent, stage:stage, left:left, right:right };
+  }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+  function portrait(){ return window.innerHeight >= window.innerWidth; }
+
+  /* ---------- CSS Injection ---------- */
+  function injectCSS(){
+    if (SNAP.cssTag) return;
+    var st = document.createElement('style');
+    st.id = 'ipadStickyLayoutCSS_V1';
+    st.textContent =
+      '/* iPad sticky layout */' +
+      '.ipad-flex-host{display:flex!important;flex-wrap:nowrap!important;align-items:flex-start;gap:16px;overflow-x:auto;overflow-y:visible;}' +
+      '.ipad-flex-host > aside.panel.left,' +
+      '.ipad-flex-host > aside.panel.right{' +
+        'flex:0 0 var(--ipad-side-width,260px);min-width:var(--ipad-side-width,260px);max-width:var(--ipad-side-width,260px);' +
+        'box-sizing:border-box;position:sticky;top:var(--ipad-sticky-top,8px);' +
+        'max-height:calc(100vh - var(--ipad-side-offset,16px));overflow:auto;scrollbar-width:thin;' +
+        'background-clip:padding-box;' +
+        'transition: width '+TRANSITION_MS+'ms '+EASE+', max-height '+TRANSITION_MS+'ms '+EASE+', top '+TRANSITION_MS+'ms '+EASE+';' +
+      '}' +
+      '.ipad-flex-host > main.stage{' +
+        'flex:1 1 auto;min-width:var(--ipad-mid-min,600px);box-sizing:border-box;position:relative;' +
+        'overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;' +
+        'max-height:calc(100vh - var(--ipad-mid-offset,12px));' +
+        'transition: max-height '+TRANSITION_MS+'ms '+EASE+', min-width '+TRANSITION_MS+'ms '+EASE+';' +
+      '}' +
+      /* Transitions toggle class */
+      '.ipad-transition *,' +
+      '.ipad-transition.ipad-flex-host > aside.panel.left,' +
+      '.ipad-transition.ipad-flex-host > aside.panel.right,' +
+      '.ipad-transition.ipad-flex-host > main.stage{' +
+         'will-change:width,max-height,transform,opacity;' +
+      '}' +
+      /* Reduced motion */ +
+      '@media (prefers-reduced-motion: reduce){' +
+        '.ipad-transition *{transition:none!important;animation:none!important;}' +
+      '}' +
+      /* Optional subtle gradient edges for scroll hint */ +
+      '.ipad-scroll-fade::after{' +
+        'content:"";position:absolute;left:0;right:0;top:0;height:12px;pointer-events:none;' +
+        'background:linear-gradient(to bottom,rgba(0,0,0,.25),rgba(0,0,0,0));' +
+      '}' +
+      '.ipad-scroll-fade::before{' +
+        'content:"";position:absolute;left:0;right:0;bottom:0;height:14px;pointer-events:none;' +
+        'background:linear-gradient(to top,rgba(0,0,0,.25),rgba(0,0,0,0));' +
+      '}' +
+      /* Hide original mobile stage host if present */ +
+      '@media (pointer:coarse){#ra-mobile-stage-host,#ra-mobile-stage-frame{display:none!important;}}';
+    document.head.appendChild(st);
+    SNAP.cssTag = st;
+  }
+
+  /* ---------- Apply Layout ---------- */
+  function applyStructure(){
+    var nodes = findNodes();
+    if (!nodes || !nodes.parent || !nodes.stage) return false;
+
+    SNAP.parent = nodes.parent;
+    SNAP.stage  = nodes.stage;
+    SNAP.left   = nodes.left;
+    SNAP.right  = nodes.right;
+
+    if (SNAP.parentStyle === '') SNAP.parentStyle = SNAP.parent.getAttribute('style') || '';
+    if (SNAP.stageStyle  === '') SNAP.stageStyle  = SNAP.stage.getAttribute('style')  || '';
+    if (SNAP.left && SNAP.leftStyle === '')   SNAP.leftStyle  = SNAP.left.getAttribute('style')  || '';
+    if (SNAP.right && SNAP.rightStyle === '') SNAP.rightStyle = SNAP.right.getAttribute('style') || '';
+
+    SNAP.parent.classList.add('ipad-flex-host', SNAP.animClass);
+    SNAP.parent.style.alignItems = 'flex-start';
+
+    if (SNAP.stage){
+      SNAP.stage.setAttribute('data-ipad-mid','1');
+      SNAP.stage.classList.add('ipad-scroll-fade');
+    }
+    if (SNAP.left)  SNAP.left.setAttribute('data-ipad-side','1');
+    if (SNAP.right) SNAP.right.setAttribute('data-ipad-side','1');
+
+    return true;
+  }
+
+  /* ---------- Dimension / Orientation Logic ---------- */
+  function computeProfile(){
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var isPortrait = portrait();
+    var base = isPortrait ? PROFILE.portrait : PROFILE.landscape;
+    // Narrow override: when split view or very narrow
+    var narrowCut = 900;
+    if (w < narrowCut){
+      base = {
+        sideBase: PROFILE.narrow.sideBase,
+        sideMin: PROFILE.narrow.sideBase,
+        sideMax: PROFILE.narrow.sideBase,
+        midMin: PROFILE.narrow.midMin,
+        stickyTop: PROFILE.narrow.stickyTop
+      };
+    }
+    return { w:w, h:h, isPortrait:isPortrait, cfg:base };
+  }
+
+  function applyDimensions(animated){
+    if (!SNAP.parent || !SNAP.stage) return;
+    var info = computeProfile();
+    var sideW = clamp(info.cfg.sideBase, info.cfg.sideMin, info.cfg.sideMax);
+    var midMin = info.cfg.midMin;
+    var stickyTop = info.cfg.stickyTop;
+
+    // Set CSS custom props on parent for simpler formulas
+    SNAP.parent.style.setProperty('--ipad-side-width', sideW+'px');
+    SNAP.parent.style.setProperty('--ipad-mid-min', midMin+'px');
+    SNAP.parent.style.setProperty('--ipad-sticky-top', stickyTop+'px');
+    SNAP.parent.style.setProperty('--ipad-mid-offset','12px');
+    SNAP.parent.style.setProperty('--ipad-side-offset','16px');
+
+    // Horizontal overflow decision
+    var totalMin = sideW * ((SNAP.left?1:0)+(SNAP.right?1:0)) + midMin + 16*2; // + gaps approx
+    if (info.w < totalMin){
+      SNAP.parent.style.overflowX = 'auto';
+    } else {
+      SNAP.parent.style.overflowX = 'auto'; // keep scroll if needed; consistent
+    }
+
+    if (animated){
+      // Add transition class if not present
+      SNAP.parent.classList.add(SNAP.animClass);
+    }
+  }
+
+  /* ---------- Resize / Orientation Handlers ---------- */
+  var resizeTimer = null;
+  function scheduleResize(){
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function(){
+      applyDimensions(true);
+    }, 70);
+  }
+  function orientationHandler(){
+    // Clear session portrait hint dismissal so overlay can re-show if user returns
+    __ROTATE_HINT && __ROTATE_HINT.resetSession && __ROTATE_HINT.resetSession();
+    setTimeout(function(){ applyDimensions(true); evaluateRotateHint(); }, 140);
+  }
+
+  /* ---------- Rotate Hint Overlay ---------- */
+  var __ROTATE_HINT = (function(){
+    var overlay, panel;
+    var LS_KEY_BLOCK = 'ipadRotateHintBlockDay';
+    var dismissedSession = false;
+
+    function blockedToday(){
+      try{
+        var stamp = localStorage.getItem(LS_KEY_BLOCK);
+        if (!stamp) return false;
+        return stamp === new Date().toISOString().slice(0,10);
+      }catch(_){ return false; }
+    }
+    function blockToday(){
+      try{
+        localStorage.setItem(LS_KEY_BLOCK, new Date().toISOString().slice(0,10));
+      }catch(_){}
+    }
+    function build(){
+      if (overlay) return;
+      overlay = document.createElement('div');
+      overlay.id = 'ipadRotateHint';
+      overlay.setAttribute('role','dialog');
+      overlay.style.cssText = [
+        'position:fixed','inset:0','z-index:999999','display:flex',
+        'align-items:center','justify-content:center',
+        'background:rgba(0,0,0,.38)','padding:env(safe-area-inset-top,12px) 16px 16px',
+        'opacity:0','pointer-events:none','transition:opacity 160ms ease'
+      ].join(';');
+      panel = document.createElement('div');
+      panel.style.cssText = [
+        'background:#121418','color:#eef2f6','max-width:380px','width:100%',
+        'border:1px solid #2b3138','border-radius:18px','padding:24px 22px',
+        'box-shadow:0 10px 38px -6px rgba(0,0,0,.55),0 2px 6px -1px rgba(0,0,0,.4)',
+        'font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',
+        'transform:translateY(8px)','opacity:0',
+        'transition:opacity 180ms '+EASE+',transform 180ms '+EASE
+      ].join(';');
+      panel.innerHTML =
+        '<div style="font-size:17px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+          '<span style="font-size:24px;">🔄</span> Rotate for best experience' +
+        '</div>' +
+        '<div style="font-size:14px;opacity:.86;margin-bottom:18px;">Landscape gives you more editing space & keeps panels visible.</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:10px;">' +
+          '<button id="ipadHintOk" style="flex:1 1 auto;background:#2563eb;border:0;color:#fff;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer;">Got it</button>' +
+          '<button id="ipadHintDismiss" style="flex:1 1 auto;background:#1f242a;border:1px solid #343b44;color:#d1d5db;padding:10px 14px;border-radius:10px;cursor:pointer;">Dismiss</button>' +
+          '<button id="ipadHintToday" style="flex:1 1 100%;background:#151a1f;border:1px solid #30363d;color:#9ca3af;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer;">Don\'t show again today</button>' +
+        '</div>';
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+        overlay.style.transition='none';
+        panel.style.transition='none';
+      }
+
+      overlay.addEventListener('click', function(e){ if (e.target === overlay) hide();});
+      document.getElementById('ipadHintOk').onclick = hide;
+      document.getElementById('ipadHintDismiss').onclick = function(){ dismissedSession = true; hide(); };
+      document.getElementById('ipadHintToday').onclick = function(){ blockToday(); hide(); };
+    }
+    var showing = false;
+    function show(){
+      if (showing) return;
+      build();
+      showing = true;
+      overlay.style.pointerEvents='auto';
+      requestAnimationFrame(function(){
+        overlay.style.opacity='1';
+        panel.style.opacity='1';
+        panel.style.transform='translateY(0)';
+      });
+    }
+    function hide(){
+      if (!showing) return;
+      showing = false;
+      overlay.style.opacity='0';
+      overlay.style.pointerEvents='none';
+      panel.style.opacity='0';
+      panel.style.transform='translateY(8px)';
+    }
+    function evaluate(){
+      if (!portrait()){ hide(); return; }
+      if (blockedToday() || dismissedSession) { hide(); return; }
+      show();
+    }
+    function resetSession(){ dismissedSession = false; }
+    return { evaluate:evaluate, hide:hide, show:show, resetSession:resetSession };
+  })();
+
+  function evaluateRotateHint(){
+    __ROTATE_HINT.evaluate();
+  }
+
+  /* ---------- Apply Entire Layout ---------- */
+  function applyAll(){
+    if (SNAP.applied) return;
+    disableMobileCSS();
+    unfixCanvasCard();
+    injectCSS();
+    var ok = applyStructure();
+    if (!ok){ retry(); return; }
+    applyDimensions(false);
+    // Add transitions after first paint to avoid initial animation flash
+    requestAnimationFrame(function(){ applyDimensions(true); });
+    SNAP.applied = true;
+    window.addEventListener('resize', scheduleResize, { passive:true });
+    window.addEventListener('orientationchange', orientationHandler, { passive:true });
+    evaluateRotateHint();
+  }
+
+  function retry(){
+    var attempts = 0;
+    var iv = setInterval(function(){
+      if (attempts++ > 40){ clearInterval(iv); return; }
+      var ok = applyStructure();
+      if (ok){
+        applyDimensions(false);
+        requestAnimationFrame(function(){ applyDimensions(true); });
+        SNAP.applied = true;
+        window.addEventListener('resize', scheduleResize, { passive:true });
+        window.addEventListener('orientationchange', orientationHandler, { passive:true });
+        evaluateRotateHint();
+        clearInterval(iv);
+      }
+    }, 150);
+  }
+
+  /* ---------- Revert ---------- */
+  function revertAll(){
+    if (!SNAP.applied) return;
+    window.removeEventListener('resize', scheduleResize);
+    window.removeEventListener('orientationchange', orientationHandler);
+
+    if (SNAP.stage){
+      if (SNAP.stageStyle === '') SNAP.stage.removeAttribute('style'); else SNAP.stage.setAttribute('style', SNAP.stageStyle);
+      SNAP.stage.removeAttribute('data-ipad-mid');
+      SNAP.stage.classList.remove('ipad-scroll-fade');
+    }
+    if (SNAP.left){
+      if (SNAP.leftStyle === '') SNAP.left.removeAttribute('style'); else SNAP.left.setAttribute('style', SNAP.leftStyle);
+      SNAP.left.removeAttribute('data-ipad-side');
+    }
+    if (SNAP.right){
+      if (SNAP.rightStyle === '') SNAP.right.removeAttribute('style'); else SNAP.right.setAttribute('style', SNAP.rightStyle);
+      SNAP.right.removeAttribute('data-ipad-side');
+    }
+    if (SNAP.parent){
+      SNAP.parent.classList.remove('ipad-flex-host', SNAP.animClass);
+      if (SNAP.parentStyle === '') SNAP.parent.removeAttribute('style'); else SNAP.parent.setAttribute('style', SNAP.parentStyle);
+    }
+    if (SNAP.canvasCard){
+      if (SNAP.canvasCardStyle === '') SNAP.canvasCard.removeAttribute('style'); else SNAP.canvasCard.setAttribute('style', SNAP.canvasCardStyle);
+    }
+    restoreMobileCSS();
+    SNAP.applied = false;
+  }
+
+  /* ---------- Debug ---------- */
+  function debug(){
+    var info = computeProfile();
+    console.table([{
+      width: info.w,
+      height: info.h,
+      portrait: info.isPortrait,
+      sideBase: info.cfg.sideBase,
+      midMin: info.cfg.midMin,
+      stickyTop: info.cfg.stickyTop,
+      applied: SNAP.applied
+    }]);
+    return { SNAP: SNAP, profile: info };
+  }
+
+  /* ---------- Public API ---------- */
+  window.ipadLayoutApply = function(){ if (!SNAP.applied) applyAll(); };
+  window.ipadLayoutRevert = revertAll;
+  window.ipadLayoutDebug = debug;
+  window.ipadRotateHintShow = function(){ __ROTATE_HINT.show(); };
+  window.ipadRotateHintHide = function(){ __ROTATE_HINT.hide(); };
+
+  /* ---------- Kickoff ---------- */
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', applyAll, { once:true });
+  } else {
+    applyAll();
+  }
+})();
+
+/* ===============================================================
+   RA_CANVAS_SIZE_500_ENHANCER_v1
+   Adds a new 500 canvas size option WITHOUT changing existing defaults.
+   - Inserts <option value="500">500</option> before 700 in #canvasSize select
+   - Adds a quick button (id="raSize500") before the 700 button (if a 700 button is found)
+   - Keeps 700 as the default (does NOT auto‑select 500)
+   - Attempts normal setCanvasSize(500). If the original implementation rejects
+     (e.g. whitelist), a fallback manual resize/scaling routine runs.
+   - Safe to include multiple times (guarded); no effect on mobile/desktop logic.
+   - Public helper: window.raSetCanvas500()
+
+   To remove later: delete this whole block.
+   =============================================================== */
+(function RA_CANVAS_SIZE_500_ENHANCER_v1(){
+  if (window.__RA_CANVAS_SIZE_500__) return;
+  window.__RA_CANVAS_SIZE_500__ = true;
+
+  const SIZE_VALUE = 500;
+  const SIZE_LABEL = '500';
+
+  function log(...a){ try{ console.log('[SIZE500]', ...a);}catch(_){} }
+
+  function whenReady(fn){
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once:true });
+    } else {
+      fn();
+    }
+  }
+
+  function getCanvas(){
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+
+  /* -------- 1. Insert into the size <select id="canvasSize"> -------- */
+  function insertSelectOption(){
+    const sel = document.getElementById('canvasSize');
+    if (!sel) { log('No #canvasSize select found yet. Retrying…'); return false; }
+
+    // Avoid duplicate
+    if ([...sel.options].some(o => parseInt(o.value,10) === SIZE_VALUE)){
+      log('Option already present.');
+      return true;
+    }
+
+    // Find the 700 option to insert before
+    const before = [...sel.options].find(o => o.value === '700');
+    const opt = document.createElement('option');
+    opt.value = String(SIZE_VALUE);
+    opt.textContent = SIZE_LABEL;
+
+    if (before && before.parentNode === sel){
+      sel.insertBefore(opt, before);
+    } else {
+      // fallback: append at top
+      sel.insertBefore(opt, sel.firstChild);
+    }
+    log('Inserted 500 option.');
+    return true;
+  }
+
+  /* -------- 2. Insert a quick button before the 700 button (if present) -------- */
+  function insertQuickButton(){
+    // Heuristic: look for a button whose textContent is '700'
+    const btn700 = Array.from(document.querySelectorAll('button, .btn'))
+      .find(b => b && b.textContent && b.textContent.trim() === '700');
+
+    if (!btn700){
+      log('700 button not found (maybe not rendered yet).');
+      return false;
+    }
+
+    // Avoid duplicate
+    if (document.getElementById('raSize500')){
+      log('Quick button already exists.');
+      return true;
+    }
+
+    const btn = document.createElement('button');
+    btn.type='button';
+    btn.id='raSize500';
+    btn.textContent=SIZE_LABEL;
+    btn.className = btn700.className || 'btn small';
+    btn.style.minWidth = (btn.style.minWidth || '').includes('0') ? '' : btn.style.minWidth;
+    btn.addEventListener('click', ()=> window.raSetCanvas500());
+
+    btn700.parentNode.insertBefore(btn, btn700);
+    log('Inserted quick 500 button.');
+    return true;
+  }
+
+  /* -------- 3. Wrapper to set size 500 (normal path or fallback) -------- */
+  function fallbackManualResize(){
+    const c = getCanvas();
+    if (!c) return;
+    const oldW = c.getWidth ? c.getWidth() : 0;
+    if (!oldW || oldW === SIZE_VALUE) return;
+
+    const scale = SIZE_VALUE / oldW;
+    try {
+      c.getObjects().forEach(o=>{
+        // Skip system / background objects similar to patterns in your code
+        if (o._isBgRect || o._raSys) return;
+        o.scaleX *= scale;
+        o.scaleY *= scale;
+        o.left   *= scale;
+        o.top    *= scale;
+        if (o.width && o.height && o.setCoords) o.setCoords();
+      });
+    } catch(e){
+      log('Fallback scale error', e);
+    }
+    try {
+      c.setWidth(SIZE_VALUE);
+      c.setHeight(SIZE_VALUE);
+    } catch(_) {}
+    try { c.requestRenderAll(); } catch(_){}
+    log('Applied manual fallback resize to 500.');
+  }
+
+  function canDetectRejection(){
+    // If setCanvasSize source shows an explicit whitelist we can decide to fallback earlier
+    try {
+      if (typeof window.setCanvasSize !== 'function') return false;
+      const src = window.setCanvasSize.toString();
+      return /\b(700|900|1024|1200)\b/.test(src) && !/500\b/.test(src);
+    } catch(_) { return false; }
+  }
+
+  function setSize500(){
+    if (typeof window.setCanvasSize === 'function'){
+      const before = getCanvas();
+      const beforeW = before ? before.getWidth() : null;
+
+      // Call original
+      try { window.setCanvasSize(SIZE_VALUE); } catch(e){ log('Original setCanvasSize threw', e); }
+
+      const after = getCanvas();
+      const afterW = after ? after.getWidth() : null;
+
+      // If not changed OR rejection likely, run fallback
+      if (!afterW || afterW === beforeW || afterW !== SIZE_VALUE || canDetectRejection()){
+        fallbackManualResize();
+      } else {
+        log('setCanvasSize accepted 500.');
+      }
+    } else {
+      // setCanvasSize not defined yet: fallback now
+      fallbackManualResize();
+    }
+  }
+
+  window.raSetCanvas500 = setSize500;
+
+  /* -------- 4. Initialization / retry loop -------- */
+  function attemptSetup(tries=0){
+    const okSel = insertSelectOption();
+    const okBtn = insertQuickButton();
+    if (okSel && okBtn){
+      log('500 size UI ready.');
+      return;
+    }
+    if (tries < 40){
+      setTimeout(()=>attemptSetup(tries+1), 200);
+    } else {
+      log('Gave up attaching 500 size UI.');
+    }
+  }
+
+  whenReady(attemptSetup);
+
+  log('Enhancer loaded (will keep default size at 700).');
+})();
+
+/* ===============================================================
+   RA_TOKEN_ID_LABEL_STABLE_V2
+   Comprehensive stability patch for Token ID label:
+     - Prevents duplicate / ghost instances after undo/redo
+     - Ensures label stays selectable & bound to window.idLabel
+     - Adds debounced history snapshots for moves & style changes
+     - Rebinds after JSON restore & history operations
+     - Provides manual repair & debug utilities
+   Remove older RA_TOKEN_ID_HISTORY_FIX_V1 before adding this.
+   =============================================================== */
+(function RA_TOKEN_ID_LABEL_STABLE_V2(){
+  if (window.__RA_TOKEN_ID_LABEL_STABLE_V2__) return;
+  window.__RA_TOKEN_ID_LABEL_STABLE_V2__ = true;
+
+  const DEBOUNCE_MS = 420;
+  let moveTimer = null;
+  let baselineSnapDone = false;
+  let canvasReadyTimer = null;
+
+  function C(){
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+
+  function log(){ /* Uncomment for debugging
+    console.log('[TOKEN_ID_V2]', ...arguments);
+  */ }
+
+  /* ---------- Core Helpers ---------- */
+  function tokenIdObjects(c){
+    c = c || C();
+    if (!c) return [];
+    try { return (c.getObjects()||[]).filter(o=>o && o._raTokenId); } catch(_){ return []; }
+  }
+
+  function pickSurvivor(list){
+    if (!list.length) return null;
+    // Keep the topmost (last in stacking order)
+    return list[list.length - 1];
+  }
+
+  function ensureSelectable(o){
+    if (!o) return;
+    o.selectable = true;
+    o.evented = true;
+    o.hasControls = true;
+    if (typeof o.set === 'function'){
+      try { o.set({ selectable:true, evented:true }); } catch(_){}
+    }
+  }
+
+  function removeDuplicatesAndRebind(c){
+    c = c || C();
+    if (!c) return null;
+    const list = tokenIdObjects(c);
+    if (list.length === 0){
+      if (window.idLabel && !c.contains(window.idLabel)){
+        delete window.idLabel;
+      }
+      return null;
+    }
+    let keep = pickSurvivor(list);
+    list.forEach(o=>{
+      if (o !== keep){
+        try { c.remove(o); } catch(_){}
+      }
+    });
+    // Rebind global pointer
+    window.idLabel = keep;
+    keep._raTokenId = true;
+    ensureSelectable(keep);
+    try { c.requestRenderAll(); } catch(_){}
+    return keep;
+  }
+
+  function repair(){
+    const c = C(); if (!c) return;
+    removeDuplicatesAndRebind(c);
+  }
+
+  /* ---------- History Snapshot Integration ---------- */
+  function historyPushFn(){
+    if (typeof window.forceSnapshot === 'function') return window.forceSnapshot;
+    if (window.raHistory){
+      if (typeof window.raHistory.forceSnapshot === 'function') return window.raHistory.forceSnapshot;
+      if (typeof window.raHistory.push === 'function') return window.raHistory.push;
+    }
+    if (typeof window.push === 'function') return window.push;
+    return null;
+  }
+
+  function snapshot(reason){
+    const fn = historyPushFn();
+    const c = C();
+    if (!fn || !c) return;
+    try {
+      fn(reason);
+    } catch(e){
+      log('Snapshot error', e);
+    }
+  }
+
+  function scheduleMoveSnapshot(){
+    clearTimeout(moveTimer);
+    moveTimer = setTimeout(()=> snapshot('Token ID Move'), DEBOUNCE_MS);
+  }
+
+  function baselineSnapshotOnce(){
+    if (baselineSnapDone) return;
+    baselineSnapDone = true;
+    snapshot('Token ID Baseline');
+  }
+
+  /* ---------- Event Wiring on Canvas ---------- */
+  function wireCanvas(c){
+    if (!c || c.__raTokenIdV2Patched) return;
+    c.__raTokenIdV2Patched = true;
+
+    c.on('object:added', e=>{
+      const o = e.target;
+      if (o && o._raTokenId){
+        removeDuplicatesAndRebind(c);
+        baselineSnapshotOnce();
+      } else {
+        // After batch adds (undo/redo), do a microtask cleanup
+        queueMicrotask(()=> removeDuplicatesAndRebind(c));
+      }
+    });
+
+    c.on('object:removed', ()=>{
+      queueMicrotask(()=> removeDuplicatesAndRebind(c));
+    });
+
+    c.on('object:modified', e=>{
+      const o = e.target;
+      if (o && o._raTokenId){
+        ensureSelectable(o);
+        removeDuplicatesAndRebind(c);
+        scheduleMoveSnapshot();
+      }
+    });
+
+    // If style panels update font/size/color via direct global idLabel →
+    // we run a passive poll after render to ensure pointer validity.
+    c.on('after:render', ()=>{
+      if (window.idLabel && !c.contains(window.idLabel)){
+        removeDuplicatesAndRebind(c);
+      }
+    });
+
+    c.on('selection:created', ()=> {
+      if (window.idLabel && !c.contains(window.idLabel)){
+        removeDuplicatesAndRebind(c);
+      }
+    });
+    c.on('selection:updated', ()=> {
+      if (window.idLabel && !c.contains(window.idLabel)){
+        removeDuplicatesAndRebind(c);
+      }
+    });
+
+    // Periodic lightweight guard (stops after ~90s)
+    let ticks = 0;
+    function periodic(){
+      if (ticks++ > 900) return;
+      try { removeDuplicatesAndRebind(c); } catch(_){}
+      setTimeout(periodic, 100);
+    }
+    setTimeout(periodic, 1000);
+  }
+
+  /* ---------- Undo / Redo Wrappers ---------- */
+  function wrapUndoRedo(name){
+    const fn = window[name];
+    if (typeof fn !== 'function' || fn.__raTokenIdV2Wrapped) return;
+    window[name] = function(){
+      const r = fn.apply(this, arguments);
+      // Let restore finish then cleanup
+      setTimeout(()=> { removeDuplicatesAndRebind(C()); }, 40);
+      setTimeout(()=> { removeDuplicatesAndRebind(C()); }, 160); // second pass for async add bursts
+      return r;
+    };
+    window[name].__raTokenIdV2Wrapped = true;
+  }
+  wrapUndoRedo('undo');
+  wrapUndoRedo('redo');
+
+  /* ---------- JSON Restore Hook (Heuristic) ---------- */
+  // If your code dispatches a custom event after loadFromJSON, catch it
+  window.addEventListener('ra-json-restored', ()=>{
+    setTimeout(()=> removeDuplicatesAndRebind(C()), 50);
+    setTimeout(()=> removeDuplicatesAndRebind(C()), 150);
+  });
+
+  /* ---------- Public Utilities ---------- */
+  window.raTokenIdRepair = repair;
+  window.raTokenIdDebug = function(){
+    const c = C();
+    const objs = tokenIdObjects(c);
+    return {
+      count: objs.length,
+      hasGlobal: !!window.idLabel,
+      globalOnCanvas: !!(window.idLabel && c && c.contains(window.idLabel)),
+      objectIds: objs.map(o=>o.__uid || o.__internalId || o.id || '(no-id)')
+    };
+  };
+  window.raTokenIdForceSnapshot = function(label){
+    snapshot(label || 'Token ID Manual Snapshot');
+  };
+  window.raTokenIdSelect = function(){
+    const c = C(); if (!c) return;
+    const label = tokenIdObjects(c)[0];
+    if (label){
+      c.setActiveObject(label);
+      c.requestRenderAll();
+      return true;
+    }
+    return false;
+  };
+
+  /* ---------- Canvas Wait / Init ---------- */
+  function waitCanvas(tries=0){
+    const c = C();
+    if (c){
+      wireCanvas(c);
+      // Initial cleanup passes
+      setTimeout(()=> removeDuplicatesAndRebind(c), 30);
+      setTimeout(()=> removeDuplicatesAndRebind(c), 120);
+      return;
+    }
+    if (tries < 80){
+      canvasReadyTimer = setTimeout(()=> waitCanvas(tries+1), 200);
+    }
+  }
+  waitCanvas();
+
+  /* ---------- Global Style Input Patching (Passive) ----------
+     If your style inputs mutate idLabel directly, we tap into set calls here
+     by defining a proxy once we have a valid object (light approach). */
+  (function patchIdLabelSetter(){
+    let applied = false;
+    Object.defineProperty(window, '__raIdLabelProxyApplied', {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: false
+    });
+
+    const check = ()=>{
+      const c = C();
+      if (!c) return;
+      if (!window.idLabel || !c.contains(window.idLabel)) return;
+
+      if (applied) return;
+      applied = true;
+
+      // Monkey-patch set() to auto snapshot on style changes
+      if (typeof window.idLabel.set === 'function' && !window.idLabel.__raSetPatched){
+        const origSet = window.idLabel.set;
+        window.idLabel.set = function(k,v){
+          const result = origSet.call(this, k, v);
+            if (typeof k === 'string'){
+              if (/font|fill|stroke|align|text|shadow|color|size/i.test(k)){
+                scheduleMoveSnapshot();
+              }
+            } else if (k && typeof k === 'object'){
+              const keys = Object.keys(k).join(',');
+              if (/(font|fill|stroke|align|text|shadow|color|size)/i.test(keys)){
+                scheduleMoveSnapshot();
+              }
+            }
+          return result;
+        };
+        window.idLabel.__raSetPatched = true;
+      }
+    };
+
+    // Poll a few times early; then rely on events
+    let attempts = 0;
+    function poll(){
+      check();
+      if (attempts++ < 50) setTimeout(poll, 200);
+    }
+    poll();
+
+    // Also after each repair
+    const origRepair = window.raTokenIdRepair;
+    window.raTokenIdRepair = function(){
+      origRepair();
+      applied = false;
+      setTimeout(check, 30);
+    };
+  })();
+
+  log('Token ID Stable V2 patch initialized.');
+})();
+
+/* ===============================================================
+   RA_UNLOCK_TOKEN_ID_FIX_V1
+   Ensures "Unlock All" also unlocks the Token ID label (_raTokenId).
+   =============================================================== */
+(function RA_UNLOCK_TOKEN_ID_FIX_V1(){
+  if (window.__RA_UNLOCK_TOKEN_ID_FIX_V1__) return;
+  window.__RA_UNLOCK_TOKEN_ID_FIX_V1__ = true;
+
+  function C(){
+    return (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+  }
+
+  function unlockTokenId(){
+    const c = C(); if (!c) return;
+    const label = (c.getObjects()||[]).find(o => o && o._raTokenId);
+    if (!label) return;
+
+    // Restore interactivity
+    label.set({
+      selectable: true,
+      evented: true,
+      hasControls: true,
+      lockMovementX: false,
+      lockMovementY: false,
+      lockScalingX: false,
+      lockScalingY: false,
+      lockRotation: false
+    });
+
+    // Some Fabric builds use per‑axis flags; ensure they’re cleared
+    label.lockMovementX = label.lockMovementY =
+      label.lockScalingX = label.lockScalingY =
+      label.lockRotation = false;
+
+    try {
+      // Make sure it gets proper selection handles
+      if (c.getActiveObject() !== label){
+        c.setActiveObject(label);
+      }
+    } catch(_){}
+
+    try { label.setCoords && label.setCoords(); } catch(_){}
+    try { c.requestRenderAll(); } catch(_){}
+  }
+
+  function attach(){
+    const btn = document.getElementById('unlockAll');
+    if (!btn) {
+      // Retry a few times if UI not yet built
+      let tries = 0;
+      const iv = setInterval(()=>{
+        const b = document.getElementById('unlockAll');
+        if (b){
+          clearInterval(iv);
+          attach();
+        } else if (++tries > 40){
+          clearInterval(iv);
+        }
+      }, 200);
+      return;
+    }
+
+    // Add a secondary listener; run AFTER the original handler.
+    btn.addEventListener('click', ()=>{
+      // Let original listener finish its work first.
+      setTimeout(unlockTokenId, 10);
+    });
+
+    // Provide a manual helper
+    window.raUnlockTokenId = unlockTokenId;
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', attach, { once:true });
+  } else {
+    attach();
+  }
+})();
+
+/* ===============================================================
+   RA_PHONE_ROTATE_HINT_V1
+   Portrait-only rotate suggestion overlay for PHONES (not iPad, not desktop).
+   - Appears on phones (touch, non-iPad) in portrait orientation.
+   - Encourages landscape usage for better canvas workspace.
+   - Dismiss / Don't show again today options.
+   - Force test: add ?forcePhone=1 to URL.
+   - Public helpers: phoneRotateHintShow(), phoneRotateHintHide(), phoneRotateHintEval()
+   =============================================================== */
+(function RA_PHONE_ROTATE_HINT_V1(){
+  if (window.__RA_PHONE_ROTATE_HINT_V1__) return;
+  window.__RA_PHONE_ROTATE_HINT_V1__ = true;
+
+  const LS_KEY_BLOCK = 'phoneRotateHintBlockDay';
+  let dismissedSession = false;
+  let overlay, panel;
+  let resizeTimer = null;
+
+  /* ---------------- Detection ---------------- */
+  function isIPad(){
+    const ua = navigator.userAgent;
+    const legacy = /iPad/i.test(ua);
+    const touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+    const tabletBand = Math.min(screen.width, screen.height) >= 650;
+    return (legacy || touchMac) && tabletBand;
+  }
+  function isPhoneDevice(){
+    if (/[?&]forcePhone=1\b/i.test(location.search)) return true;
+    if (isIPad()) return false;
+    const ua = navigator.userAgent;
+    const mobileUA = /(iPhone|Android.*Mobile|Mobile Safari|Mobile;|Pixel)/i.test(ua);
+    const coarse = matchMedia('(pointer:coarse)').matches;
+    // Heuristic: smaller min screen dimension to exclude tablets.
+    const dimBand = Math.min(screen.width, screen.height) < 650;
+    return coarse && mobileUA && dimBand;
+  }
+  function isPortrait(){
+    return window.innerHeight >= window.innerWidth;
+  }
+
+  /* ---------------- Persistence ---------------- */
+  function blockedToday(){
+    try {
+      const stamp = localStorage.getItem(LS_KEY_BLOCK);
+      if (!stamp) return false;
+      return stamp === new Date().toISOString().slice(0,10);
+    } catch(_) { return false; }
+  }
+  function blockToday(){
+    try {
+      localStorage.setItem(LS_KEY_BLOCK, new Date().toISOString().slice(0,10));
+    } catch(_) {}
+  }
+
+  /* ---------------- Build Overlay ---------------- */
+  function build(){
+    if (overlay) return;
+    overlay = document.createElement('div');
+    overlay.id = 'phoneRotateHintOverlay';
+    overlay.setAttribute('role','dialog');
+    overlay.setAttribute('aria-live','polite');
+    overlay.style.cssText = [
+      'position:fixed','inset:0','z-index:999999',
+      'display:flex','align-items:center','justify-content:center',
+      'background:rgba(0,0,0,.42)',
+      'padding:env(safe-area-inset-top,12px) 16px 16px',
+      'opacity:0','pointer-events:none',
+      'transition:opacity 160ms ease'
+    ].join(';');
+
+    panel = document.createElement('div');
+    panel.style.cssText = [
+      'background:#121418','color:#eef2f6','width:100%','max-width:360px',
+      'border:1px solid #2b3138','border-radius:18px','padding:22px 20px',
+      'box-shadow:0 10px 32px -6px rgba(0,0,0,.55),0 2px 6px -1px rgba(0,0,0,.4)',
+      'font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',
+      'transform:translateY(8px)','opacity:0',
+      'transition:opacity 180ms cubic-bezier(.4,.14,.3,1),transform 180ms cubic-bezier(.4,.14,.3,1)'
+    ].join(';');
+
+    panel.innerHTML =
+      '<div style="font-size:17px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+        '<span style="font-size:22px;">🔄</span> Rotate for best workspace' +
+      '</div>' +
+      '<div style="font-size:14px;opacity:.85;margin-bottom:18px;">Landscape gives more room for the canvas and panels.</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;">' +
+        '<button id="phoneHintOk" style="flex:1 1 auto;background:#2563eb;border:0;color:#fff;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer;">Got it</button>' +
+        '<button id="phoneHintDismiss" style="flex:1 1 auto;background:#1f242a;border:1px solid #343b44;color:#d1d5db;padding:10px 14px;border-radius:10px;cursor:pointer;">Dismiss</button>' +
+        '<button id="phoneHintToday" style="flex:1 1 100%;background:#151a1f;border:1px solid #30363d;color:#9ca3af;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer;">Don\'t show again today</button>' +
+      '</div>';
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+      overlay.style.transition='none';
+      panel.style.transition='none';
+    }
+
+    overlay.addEventListener('click', e=>{
+      if (e.target === overlay) hide();
+    });
+
+    document.getElementById('phoneHintOk').onclick = hide;
+    document.getElementById('phoneHintDismiss').onclick = function(){ dismissedSession = true; hide(); };
+    document.getElementById('phoneHintToday').onclick = function(){ blockToday(); hide(); };
+  }
+
+  let showing = false;
+  function show(){
+    if (showing) return;
+    build();
+    showing = true;
+    overlay.style.pointerEvents='auto';
+    requestAnimationFrame(()=>{
+      overlay.style.opacity='1';
+      panel.style.opacity='1';
+      panel.style.transform='translateY(0)';
+    });
+  }
+  function hide(){
+    if (!showing) return;
+    showing = false;
+    overlay.style.opacity='0';
+    overlay.style.pointerEvents='none';
+    panel.style.opacity='0';
+    panel.style.transform='translateY(8px)';
+  }
+
+  /* ---------------- Evaluation Logic ---------------- */
+  function evaluate(){
+    if (!isPhoneDevice()){ hide(); return; }
+    if (!isPortrait()){ hide(); return; }
+    if (blockedToday() || dismissedSession){ hide(); return; }
+    show();
+  }
+
+  function scheduleEvaluate(){
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(evaluate, 90);
+  }
+
+  window.addEventListener('resize', scheduleEvaluate, { passive:true });
+  window.addEventListener('orientationchange', ()=>{
+    // Re-allow hint after user rotates away then back.
+    dismissedSession = false;
+    setTimeout(evaluate, 140); // allow viewport settle
+  }, { passive:true });
+
+  // Public helpers
+  window.phoneRotateHintShow = show;
+  window.phoneRotateHintHide = hide;
+  window.phoneRotateHintEval = evaluate;
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', evaluate, { once:true });
+  } else {
+    evaluate();
+  }
+
+  // Console note
+  try {
+    console.log('[PhoneRotateHint] Ready. Force show: phoneRotateHintShow(); force hide: phoneRotateHintHide();');
+  } catch(_){}
+})();
+
+/* ===============================================================
+   RA_CURVED_RADIUS_250_ONLY_V1
+   Purpose: Force the Curved text feature to use Radius = 250 every time
+            the "Curved" checkbox is turned ON (no other behavior changes).
+   - Does NOT alter / add reversible logic.
+   - Leaves existing curved / linear conversion code untouched.
+   - Works by:
+       1. Capturing the checkbox change event in the CAPTURE phase so
+          we set the radius slider BEFORE the original handler runs.
+       2. Fires input/change events so readUI() returns 250.
+       3. After the curved object is created (which may be async),
+          re‑enforces radius=250 a few times (40/120/240ms) in case
+          legacy code overwrites it.
+   - Public helper: window.raForceCurvedRadius250()
+   - Safe to include multiple times (guarded).
+   =============================================================== */
+(function RA_CURVED_RADIUS_250_ONLY_V1(){
+  if (window.__RA_CURVED_RADIUS_250_ONLY_V1__) return;
+  window.__RA_CURVED_RADIUS_250_ONLY_V1__ = true;
+
+  const TARGET_RADIUS = 250;
+
+  const C = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
+
+  function log(){ /* Uncomment for debug:
+    console.log('[CURVE250]', ...arguments); */ }
+
+  /* ------------ DOM Finders ------------ */
+  function findCustomTextCard(){
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,h4,strong,label'))
+      .find(el => /custom text/i.test(el.textContent||''));
+    return h ? (h.closest('.card') || h.parentElement) : null;
+  }
+
+  function findCurvedCheckbox(card){
+    if (!card) return null;
+    return Array.from(card.querySelectorAll('input[type="checkbox"]'))
+      .find(cb=>{
+        const lab = card.querySelector(`label[for="${cb.id}"]`) || cb.closest('label');
+        return lab && /curved/i.test(lab.textContent||'');
+      }) || null;
+  }
+
+  function findRadiusSlider(card){
+    if (!card) return null;
+    // Look for label containing "Radius"
+    const lbl = Array.from(card.querySelectorAll('label,span,div'))
+      .find(el => /radius/i.test(el.textContent||''));
+    if (lbl){
+      let scope = lbl.parentElement;
+      for (let i=0;i<4 && scope && !scope.querySelector('input[type="range"]');i++){
+        scope = scope.parentElement;
+      }
+      if (scope){
+        // Pick the first range with value >= 100 (likely the radius) else first
+        const ranges = Array.from(scope.querySelectorAll('input[type="range"]'));
+        const likely = ranges.find(r => parseInt(r.value,10) >= 100);
+        return likely || ranges[0] || null;
+      }
+    }
+    // Fallback: any range
+    return card.querySelector('input[type="range"]');
+  }
+
+  function fireValueChange(el){
+    if (!el) return;
+    try { el.dispatchEvent(new Event('input',  { bubbles:true })); } catch(_){}
+    try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch(_){}
+  }
+
+  /* ------------ Radius Enforcement ------------ */
+  function setRadiusOnSlider(card){
+    const slider = findRadiusSlider(card);
+    if (!slider) return false;
+    if (parseInt(slider.value,10) !== TARGET_RADIUS){
+      slider.value = TARGET_RADIUS;
+      fireValueChange(slider);
+      return true;
+    }
+    return false;
+  }
+
+  function isCurved(o){
+    return !!(o && (o._raCurved || o.data?.raType === 'curvedText' || o.raCurve));
+  }
+
+  function enforceOnActive(){
+    const c = C(); if (!c) return;
+    const o = c.getActiveObject && c.getActiveObject();
+    if (o && isCurved(o) && o.raCurve){
+      if (o.raCurve.radius !== TARGET_RADIUS){
+        // Rebuild positions quickly by mimicking existing build logic formula if possible
+        o.raCurve.radius = TARGET_RADIUS;
+        // If your original code has a function to reflow (e.g. reflectUI or updateCurved),
+        // call it here. Otherwise we reposition children directly:
+        const kids = o._objects || [];
+        const { arc, start, spacing, inward } = o.raCurve;
+        const text = o.raCurve.text || extractText(o);
+        const chars = kids.length === text.length ? kids : null;
+        if (chars){
+          const N = chars.length || 1;
+            const step = (N>1 ? arc/(N-1) : 0) + (spacing/Math.max(TARGET_RADIUS,1))*(180/Math.PI);
+            const startDeg = start - arc/2;
+            for (let i=0;i<N;i++){
+              const ang = (startDeg + i*step) * Math.PI/180;
+              const ch = chars[i];
+              ch.left  = TARGET_RADIUS * Math.cos(ang);
+              ch.top   = TARGET_RADIUS * Math.sin(ang);
+              ch.angle = (startDeg + i*step) + (inward ? -90 : 90);
+              ch.setCoords && ch.setCoords();
+            }
+          o.setCoords && o.setCoords();
+          try { c.requestRenderAll(); } catch(_){}
+        }
+      }
+    }
+  }
+
+  function extractText(curved){
+    if (!curved) return '';
+    if (curved.raCurve && curved.raCurve.text) return curved.raCurve.text;
+    if (Array.isArray(curved._objects)){
+      return curved._objects.map(ch => ch.text || '').join('');
+    }
+    return '';
+  }
+
+  function multiEnforce(card){
+    // Set slider BEFORE original handler runs (capture), then re‑enforce after object creation
+    setRadiusOnSlider(card);
+    [40,120,240].forEach(delay=>{
+      setTimeout(()=>{
+        setRadiusOnSlider(card);
+        enforceOnActive();
+      }, delay);
+    });
+  }
+
+  /* ------------ Wiring ------------ */
+  function wire(){
+    const card = findCustomTextCard();
+    if (!card){ retry(); return; }
+    const curvedCB = findCurvedCheckbox(card);
+    if (!curvedCB){ retry(); return; }
+    if (curvedCB.__raRadius250) return;
+    curvedCB.__raRadius250 = true;
+
+    // Capture-phase so we run BEFORE existing change handlers
+    curvedCB.addEventListener('change', (e)=>{
+      if (curvedCB.checked){
+        multiEnforce(card);
+      }
+    }, true);
+
+    log('Curved radius=250 enforcement wired.');
+  }
+
+  function retry(i=0){
+    if (i>60) return;
+    setTimeout(()=>wire(i+1), 250);
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', wire, { once:true });
+  } else {
+    wire();
+  }
+
+  /* ------------ Public Helper ------------ */
+  window.raForceCurvedRadius250 = function(){
+    const card = findCustomTextCard();
+    if (!card) return;
+    multiEnforce(card);
+  };
 })();

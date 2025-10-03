@@ -55,7 +55,7 @@ input[type=range]{width:100%}
 button, .btn { touch-action: manipulation; }
 
 /* Narrow portrait OR short-height landscape */
-@media (max-width: 768px), (max-height: 500px) {
+@media (pointer: coarse) and (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
 
   /* Neutralize any sticky history row on mobile */
   #raHistoryRow {
