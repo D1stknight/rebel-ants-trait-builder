@@ -176,3 +176,39 @@ button, .btn { touch-action: manipulation; }
   .ra-mobile-dock { gap: 6px; padding: 8px 10px; }
   .ra-mobile-dock button { min-height: 42px; font-size: 12px; }
 }
+
+/* =========================================================
+   DESKTOP — make native history buttons blue (no layout change)
+   - Affects: Undo, Redo, Save Draft, Restore Draft, and the small "x"
+   - Desktop only (pointer:fine). Mobile untouched.
+   - Tweak knobs: --raBlueBtnH / --raBlueBtnFS / --raBlueGap
+   ========================================================= */
+@media (pointer: fine) {
+  :root {
+    --raBlueBtnH: 36px;     /* button height */
+    --raBlueBtnFS: 13px;    /* font size     */
+    --raBlueGap: 8px;       /* gap between buttons if we wrap them */
+  }
+
+  /* Add the blue look only to buttons we tag in JS */
+  .panel.right .ra-blue-btn {
+    appearance: none;
+    border: 1px solid rgba(255,255,255,.16);
+    background: linear-gradient(135deg,#1f3b86 0%, #2563eb 50%, #1f7ae5 100%);
+    color: #eaf1ff;
+    box-shadow: 0 6px 18px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.10);
+    border-radius: 10px;
+    min-height: var(--raBlueBtnH);
+    font-size: var(--raBlueBtnFS);
+    line-height: 1.1;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: transform .06s ease, filter .12s ease;
+  }
+  .panel.right .ra-blue-btn:hover   { filter: brightness(1.07); }
+  .panel.right .ra-blue-btn:active  { transform: translateY(1px); }
+  .panel.right .ra-blue-btn:disabled{ opacity:.55; cursor:not-allowed; }
+
+  /* If those buttons sit in a row that can wrap, make wrapped gaps nice */
+  .panel.right .ra-blue-btn + .ra-blue-btn { margin-left: var(--raBlueGap); }
+}
