@@ -260,3 +260,57 @@ aside.panel.right .ra-blue-ghost[disabled] {
     --raFontSize: 12px;
   }
 }
+
+/* =========================================================
+   RA GREEN TOKEN BUTTONS v1
+   Styles for: "Delete Token ID" & "Load Token ID"
+   Scope: left panel only (no bleed elsewhere)
+   ========================================================= */
+
+/* ---- TWEAK HERE (size & colors) ------------------------ */
+:root{
+  /* compact sizing to match your UI */
+  --raGHeight:   34px;
+  --raGPadY:       6px;
+  --raGPadX:      12px;
+  --raGFont:    12.5px;
+  --raGRadius:    10px;
+
+  /* cool green gradient */
+  --raG0: #065f46;   /* deep teal */
+  --raG1: #059669;   /* emerald */
+  --raG2: #10b981;   /* mint/green */
+  --raGText: #eafff7;
+
+  --raGShadow: 0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+/* Primary green style */
+aside.panel.left .ra-green-action,
+aside.panel.left button.ra-green-action{
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--raGHeight);
+  padding: var(--raGPadY) var(--raGPadX);
+  border-radius: var(--raGRadius);
+  font-size: var(--raGFont);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--raGText) !important;
+  background: linear-gradient(135deg, var(--raG0), var(--raG1) 45%, var(--raG2)) !important;
+  border: 1px solid rgba(255,255,255,.18) !important;
+  box-shadow: var(--raGShadow);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+aside.panel.left .ra-green-action:hover{ filter: brightness(1.06); }
+aside.panel.left .ra-green-action:active{ transform: translateY(1px); }
+aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; transform:none; }
+
+/* Slightly tighter on smaller screens */
+@media (max-width: 980px){
+  :root{ --raGHeight:32px; --raGPadY:5px; --raGPadX:10px; --raGFont:12px; }
+}
