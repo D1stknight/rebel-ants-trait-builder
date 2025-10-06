@@ -176,3 +176,141 @@ button, .btn { touch-action: manipulation; }
   .ra-mobile-dock { gap: 6px; padding: 8px 10px; }
   .ra-mobile-dock button { min-height: 42px; font-size: 12px; }
 }
+
+/* =========================================================
+   RA BLUE BUTTONS v3  —  smaller, consistent across devices
+   Scopes to the right panel only (no bleed into other UI).
+   ========================================================= */
+
+/* ---- TWEAK HERE (size & theme knobs) ------------------- */
+:root {
+  /* size (smaller than before) */
+  --raBtnH:        34px;       /* height of action buttons        */
+  --raPadY:         6px;       /* vertical padding                 */
+  --raPadX:        12px;       /* horizontal padding               */
+  --raFontSize:   12.5px;      /* label size                       */
+  --raRadius:      10px;       /* rounded corners                  */
+
+  /* theme */
+  --raBlue0:  #1f3b86;
+  --raBlue1:  #2563eb;
+  --raBlue2:  #1f7ae5;
+  --raBlueText:     #eaf1ff;
+  --raBlueTextDim:  #d6e6ff;
+
+  /* shadow */
+  --raShadow: 0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+/* Scope styling to the right panel (desktop, iPad, mobile) */
+aside.panel.right .ra-blue-action,
+aside.panel.right .ra-blue-ghost {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--raBtnH);
+  padding: var(--raPadY) var(--raPadX);
+  border-radius: var(--raRadius);
+  font-size: var(--raFontSize);
+  line-height: 1;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  box-shadow: var(--raShadow);
+  border: 1px solid rgba(255,255,255,.18);
+}
+
+/* Primary blue (Undo, Redo, Save, Restore) */
+aside.panel.right .ra-blue-action {
+  color: var(--raBlueText);
+  background: linear-gradient(135deg, var(--raBlue0), var(--raBlue1) 45%, var(--raBlue2));
+}
+aside.panel.right .ra-blue-action:hover {
+  filter: brightness(1.1);
+}
+aside.panel.right .ra-blue-action:active {
+  transform: translateY(1px);
+}
+
+/* Subtle ghost (the small “x” close) */
+aside.panel.right .ra-blue-ghost {
+  color: var(--raBlueTextDim);
+  background: rgba(255,255,255,.06);
+}
+aside.panel.right .ra-blue-ghost:hover { background: rgba(255,255,255,.10); }
+aside.panel.right .ra-blue-ghost:active { transform: translateY(1px); }
+
+/* Disabled state (mirrors native feel) */
+aside.panel.right .ra-blue-action[disabled],
+aside.panel.right .ra-blue-ghost[disabled] {
+  opacity: .55;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+}
+
+/* Compact on narrower screens (keeps proportions) */
+@media (max-width: 980px) {
+  :root {
+    --raBtnH: 32px;
+    --raPadY: 5px;
+    --raPadX: 10px;
+    --raFontSize: 12px;
+  }
+}
+
+/* =========================================================
+   RA GREEN TOKEN BUTTONS v1
+   Styles for: "Delete Token ID" & "Load Token ID"
+   Scope: left panel only (no bleed elsewhere)
+   ========================================================= */
+
+/* ---- TWEAK HERE (size & colors) ------------------------ */
+:root{
+  /* compact sizing to match your UI */
+  --raGHeight:   34px;
+  --raGPadY:       6px;
+  --raGPadX:      12px;
+  --raGFont:    12.5px;
+  --raGRadius:    10px;
+
+  /* cool green gradient */
+  --raG0: #065f46;   /* deep teal */
+  --raG1: #059669;   /* emerald */
+  --raG2: #10b981;   /* mint/green */
+  --raGText: #eafff7;
+
+  --raGShadow: 0 2px 8px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+/* Primary green style */
+aside.panel.left .ra-green-action,
+aside.panel.left button.ra-green-action{
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--raGHeight);
+  padding: var(--raGPadY) var(--raGPadX);
+  border-radius: var(--raGRadius);
+  font-size: var(--raGFont);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--raGText) !important;
+  background: linear-gradient(135deg, var(--raG0), var(--raG1) 45%, var(--raG2)) !important;
+  border: 1px solid rgba(255,255,255,.18) !important;
+  box-shadow: var(--raGShadow);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+aside.panel.left .ra-green-action:hover{ filter: brightness(1.06); }
+aside.panel.left .ra-green-action:active{ transform: translateY(1px); }
+aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; transform:none; }
+
+/* Slightly tighter on smaller screens */
+@media (max-width: 980px){
+  :root{ --raGHeight:32px; --raGPadY:5px; --raGPadX:10px; --raGFont:12px; }
+}
