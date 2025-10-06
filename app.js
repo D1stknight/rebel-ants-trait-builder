@@ -9914,37 +9914,86 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   DESKTOP — tag native history buttons for blue styling
-   - Finds Undo, Redo, Save Draft, Restore Draft, and "x"
-   - Adds .ra-blue-btn class so the CSS above can style them
-   - No DOM moves. No proxies. Mobile untouched.
+   RA BLUE ACTION BUTTON TAGGER — global (desktop, iPad, mobile)
+   - Styles your ORIGINAL controls in place (no DOM moves)
+   - Targets: Undo, Redo, Save Draft, Restore Draft, and "X"
+   - If the UI re-renders, a MutationObserver re-applies classes
    ========================================================= */
-(function () {
-  if (!matchMedia('(pointer:fine)').matches) return;   // desktop only
-  const right = document.querySelector('aside.panel.right') || document.querySelector('.panel.right');
-  if (!right) return;
+(function RA_BLUE_BUTTONS_V1(){
+  if (window.__RA_BLUE_BTNS_V1__) return;
+  window.__RA_BLUE_BTNS_V1__ = true;
 
-  // If a previous "Saving Controls" card is around, remove it (cleanup).
-  const oldCard = document.getElementById('raSaveControlsCard');
-  if (oldCard) oldCard.remove();
+  /* Toggle this to make the tiny "x" look like a full blue button too */
+  var STYLE_X_AS_PRIMARY = false;
 
-  // Helper: find a button by starting text (case-insensitive)
-  const byText = (root, starts) => {
-    const want = String(starts).toLowerCase();
-    return Array.from(root.querySelectorAll('button')).find(b => {
-      const t = (b.textContent || '').trim().toLowerCase();
-      return t.startsWith(want); // works for "undo (0)", "redo (3)", etc.
-    }) || null;
-  };
+  function ready(fn){
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once: true });
+    } else { fn(); }
+  }
 
-  // Tag the four main buttons
-  ['undo', 'redo', 'save draft', 'restore draft'].forEach(txt => {
-    const btn = byText(right, txt);
-    if (btn) btn.classList.add('ra-blue-btn');
+  function hasLabel(el, rx){
+    var t = (el.textContent || '').trim();
+    if (rx.test(t)) return true;
+    var a = (el.getAttribute('aria-label') || '').trim();
+    if (rx.test(a)) return true;
+    var ti = (el.getAttribute('title') || '').trim();
+    return rx.test(ti);
+  }
+
+  function isUndo(b){ return b.id === 'undoBtn'        || hasLabel(b, /^undo\b/i); }
+  function isRedo(b){ return b.id === 'redoBtn'        || hasLabel(b, /^redo\b/i); }
+  function isSave(b){ return b.id === 'saveDraft'      || hasLabel(b, /^save\s*draft\b/i); }
+  function isRestore(b){ return b.id === 'restoreDraft'|| hasLabel(b, /^restore\b/i); }
+  function isCloseX(b){ return b.id === 'historyClose' || hasLabel(b, /^[x×]$/i); }
+
+  function tag(scope){
+    scope = scope || document;
+    var btns = scope.querySelectorAll('button, [role="button"], .btn, .a-btn');
+    btns.forEach(function(b){
+      try{
+        if (isUndo(b) || isRedo(b) || isSave(b) || isRestore(b)) {
+          b.classList.add('ra-blue-action');
+        } else if (isCloseX(b)) {
+          b.classList.add(STYLE_X_AS_PRIMARY ? 'ra-blue-action' : 'ra-blue-ghost');
+        }
+      } catch(_){}
+    });
+  }
+
+  function observe(){
+    var mo = new MutationObserver(function(muts){
+      muts.forEach(function(m){
+        if (m.type === 'childList'){
+          m.addedNodes.forEach(function(n){
+            if (n.nodeType !== 1) return;
+            if (n.matches && (n.matches('button, [role="button"], .btn, .a-btn'))) {
+              tag(n.parentNode || document);
+            } else {
+              tag(n);
+            }
+          });
+        } else if (m.type === 'attributes' && m.target.tagName === 'BUTTON') {
+          tag(m.target);
+        }
+      });
+    });
+    mo.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['id','class','aria-label','title','disabled']
+    });
+  }
+
+  ready(function(){
+    // If our experimental “Saving Controls” card exists, remove it so you only see originals
+    var oldCard = document.getElementById('raSaveControlsCard');
+    if (oldCard) oldCard.remove();
+
+    tag(document);
+    observe();
+    // Expose a manual refresher in case you need it from DevTools
+    window.__RA_BLUE_BTNS_REFRESH__ = function(){ tag(document); };
   });
-
-  // Tag the small "x" next to the history line (if present)
-  // It might be a button or an anchor; check both.
-  const xBtn = Array.from(right.querySelectorAll('button, a')).find(el => (el.textContent || '').trim() === 'x');
-  if (xBtn) xBtn.classList.add('ra-blue-btn');
 })();
