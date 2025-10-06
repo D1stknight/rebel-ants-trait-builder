@@ -9914,86 +9914,75 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   RA BLUE ACTION BUTTON TAGGER — global (desktop, iPad, mobile)
-   - Styles your ORIGINAL controls in place (no DOM moves)
-   - Targets: Undo, Redo, Save Draft, Restore Draft, and "X"
-   - If the UI re-renders, a MutationObserver re-applies classes
+   RA BLUE BUTTONS v3 — tag original buttons (incl. “x”)
+   - Works on desktop, iPad, and mobile
+   - No layout changes; only adds classes for styling
    ========================================================= */
-(function RA_BLUE_BUTTONS_V1(){
-  if (window.__RA_BLUE_BTNS_V1__) return;
-  window.__RA_BLUE_BTNS_V1__ = true;
+(function RA_BLUE_BUTTONS_V3(){
+  if (window.__RA_BLUE_BUTTONS_V3__) return;
+  window.__RA_BLUE_BUTTONS_V3__ = true;
 
-  /* Toggle this to make the tiny "x" look like a full blue button too */
-  var STYLE_X_AS_PRIMARY = false;
+  const qs  = (s,r)=> (r||document).querySelector(s);
+  const qsa = (s,r)=> Array.from((r||document).querySelectorAll(s));
 
-  function ready(fn){
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', fn, { once: true });
-    } else { fn(); }
-  }
+  const RIGHT = qs('aside.panel.right') || document;  // safe fallback
 
-  function hasLabel(el, rx){
-    var t = (el.textContent || '').trim();
-    if (rx.test(t)) return true;
-    var a = (el.getAttribute('aria-label') || '').trim();
-    if (rx.test(a)) return true;
-    var ti = (el.getAttribute('title') || '').trim();
-    return rx.test(ti);
-  }
+  // Map label -> class to add
+  const RULES = [
+    { re:/^\s*undo/i,          cls:'ra-blue-action' },
+    { re:/^\s*redo/i,          cls:'ra-blue-action' },
+    { re:/^\s*save\s*draft/i,  cls:'ra-blue-action' },
+    { re:/^\s*restore\s*draft/i, cls:'ra-blue-action' }  // keep strong; change to ghost if you prefer
+  ];
 
-  function isUndo(b){ return b.id === 'undoBtn'        || hasLabel(b, /^undo\b/i); }
-  function isRedo(b){ return b.id === 'redoBtn'        || hasLabel(b, /^redo\b/i); }
-  function isSave(b){ return b.id === 'saveDraft'      || hasLabel(b, /^save\s*draft\b/i); }
-  function isRestore(b){ return b.id === 'restoreDraft'|| hasLabel(b, /^restore\b/i); }
-  function isCloseX(b){ return b.id === 'historyClose' || hasLabel(b, /^[x×]$/i); }
-
-  function tag(scope){
-    scope = scope || document;
-    var btns = scope.querySelectorAll('button, [role="button"], .btn, .a-btn');
-    btns.forEach(function(b){
-      try{
-        if (isUndo(b) || isRedo(b) || isSave(b) || isRestore(b)) {
-          b.classList.add('ra-blue-action');
-        } else if (isCloseX(b)) {
-          b.classList.add(STYLE_X_AS_PRIMARY ? 'ra-blue-action' : 'ra-blue-ghost');
-        }
-      } catch(_){}
+  function tagActionButtons(scope){
+    const btns = qsa('button,[role="button"],.btn', scope);
+    btns.forEach(b=>{
+      const t = (b.textContent||'').trim();
+      for (const r of RULES){
+        if (r.re.test(t)) { b.classList.add(r.cls); break; }
+      }
     });
   }
 
-  function observe(){
-    var mo = new MutationObserver(function(muts){
-      muts.forEach(function(m){
-        if (m.type === 'childList'){
-          m.addedNodes.forEach(function(n){
-            if (n.nodeType !== 1) return;
-            if (n.matches && (n.matches('button, [role="button"], .btn, .a-btn'))) {
-              tag(n.parentNode || document);
-            } else {
-              tag(n);
-            }
-          });
-        } else if (m.type === 'attributes' && m.target.tagName === 'BUTTON') {
-          tag(m.target);
-        }
+  function tagCloseX(scope){
+    // Find a “History n / m …” line, then look nearby for a close control
+    const nodes = qsa('*', scope);
+    const historyLine = nodes.find(n => /history\s+\d+\s*\/\s*\d+/i.test((n.textContent||'')));
+    const host = historyLine ? historyLine.parentElement : scope;
+
+    // Candidates around the history line
+    let cands = qsa('button,[role="button"],.btn,[class*="close"],[aria-label*="close"],[title*="close"]', host);
+    // Prefer an element whose text is literally "x" or "×"
+    let closeEl = cands.find(el => /^(x|×)$/i.test((el.textContent||'').trim()));
+    if (!closeEl) {
+      // Fallback: any element that clearly means “close/clear/dismiss”
+      closeEl = cands.find(el => {
+        const lab = (el.getAttribute('aria-label')||'').toLowerCase();
+        const tit = (el.getAttribute('title')||'').toLowerCase();
+        const txt = (el.textContent||'').trim().toLowerCase();
+        return /close|clear|dismiss/.test(lab) || /close|clear|dismiss/.test(tit) || txt === 'x' || txt === '×';
       });
-    });
-    mo.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ['id','class','aria-label','title','disabled']
-    });
+    }
+    if (closeEl) closeEl.classList.add('ra-blue-ghost'); // or 'ra-blue-action' if you want it full blue
   }
 
-  ready(function(){
-    // If our experimental “Saving Controls” card exists, remove it so you only see originals
-    var oldCard = document.getElementById('raSaveControlsCard');
-    if (oldCard) oldCard.remove();
+  function apply(){
+    tagActionButtons(RIGHT);
+    tagCloseX(RIGHT);
+  }
 
-    tag(document);
-    observe();
-    // Expose a manual refresher in case you need it from DevTools
-    window.__RA_BLUE_BTNS_REFRESH__ = function(){ tag(document); };
-  });
+  // Run now + keep in sync as the panel updates
+  const run = (()=> {
+    let raf = 0;
+    return ()=> { if (raf) return; raf = requestAnimationFrame(()=>{ raf=0; apply(); }); };
+  })();
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run, { once:true });
+  } else {
+    run();
+  }
+
+  new MutationObserver(run).observe(RIGHT, { childList:true, subtree:true });
 })();
