@@ -1,69 +1,45 @@
 // api/contest/entry.js
-export const config = { runtime: 'nodejs' };
-
 import { put } from '@vercel/blob';
-import { getActiveContestId, saveEntry } from '../_lib/redisAdapter.js';
+
+export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 export default async function handler(req) {
+  if (req.method !== 'POST') {
+    return new Response('Method Not Allowed', { status: 405 });
+  }
+
   try {
-    if (req.method !== 'POST') {
-      return new Response('Method not allowed', { status: 405 });
+    const { searchParams } = new URL(req.url);
+    const name = (searchParams.get('name') || 'Anonymous').slice(0, 48);
+    const caption = (searchParams.get('caption') || '').slice(0, 140);
+
+    // Read raw image bytes one time
+    const bytes = Buffer.from(await req.arrayBuffer());
+    if (!bytes.length) {
+      return new Response(JSON.stringify({ ok: false, error: 'no image bytes' }), {
+        status: 400, headers: { 'content-type': 'application/json' }
+      });
     }
 
-    const contestId = await getActiveContestId();
-    if (!contestId) {
-      return new Response(
-        JSON.stringify({ ok: false, error: 'no active contest' }),
-        { status: 400, headers: { 'content-type': 'application/json' } }
-      );
-    }
+    // ✅ TEMP: upload to Blob only (skip Upstash)
+    const id = Math.random().toString(36).slice(2);
+    const filename = `tests/${id}.png`;
 
-    const u = new URL(req.url);
-    const name = (u.searchParams.get('name') || 'Anonymous').slice(0, 48);
-    const caption = (u.searchParams.get('caption') || '').slice(0, 140);
-
-    // read raw bytes (we send a PNG blob from the builder)
-    const bytes = await req.arrayBuffer();
-    if (!bytes || bytes.byteLength < 32) {
-      return new Response(
-        JSON.stringify({ ok: false, error: 'no image bytes' }),
-        { status: 400, headers: { 'content-type': 'application/json' } }
-      );
-    }
-
-    const id = crypto.randomUUID();
-    const path = `contests/${contestId}/${id}.png`;
-
-    // Upload to Vercel Blob (public URL back)
-    const putRes = await put(
-      path,
-      new Blob([bytes], { type: 'image/png' }),
-      {
-        access: 'public',
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-        addRandomSuffix: false,
-        contentType: 'image/png'
-      }
-    );
-
-    // Record in Redis
-    await saveEntry({
-      contestId,
-      id,
-      name,
-      url: putRes.url,
-      caption
+    // If this call hangs, the 504 is the Blob token, not your code.
+    const { url } = await put(filename, bytes, {
+      access: 'public',
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+      contentType: 'image/png'
     });
 
-    return new Response(
-      JSON.stringify({ ok: true, id, url: putRes.url }),
-      { status: 200, headers: { 'content-type': 'application/json' } }
-    );
-  } catch (err) {
-    console.error('entry error', err);
-    return new Response(
-      JSON.stringify({ ok: false, error: String(err?.message || err) }),
-      { status: 500, headers: { 'content-type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ ok: true, id, url, name, caption }), {
+      status: 200, headers: { 'content-type': 'application/json' }
+    });
+
+  } catch (e) {
+    return new Response(JSON.stringify({ ok: false, error: String(e && e.message || e) }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' }
+    });
   }
 }
