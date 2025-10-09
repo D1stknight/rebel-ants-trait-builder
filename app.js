@@ -10023,3 +10023,61 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
   new MutationObserver(run).observe(document.documentElement, { childList:true, subtree:true });
 })();
+
+/* =========================================================
+   Builder → Submit current canvas to the contest
+   - Adds one button under the Export panel
+   - Sends PNG (dataURL) + name/caption to /api/contest/entry
+   ========================================================= */
+(function addContestSubmitButton(){
+  try {
+    // avoid duplicates
+    if (document.getElementById('raSendToContest')) return;
+
+    const right = document.querySelector('aside.panel.right') || document.querySelector('.panel.right');
+    if (!right) return;
+    const exportCard =
+      right.querySelector('.export, [data-card="export"]') ||
+      Array.from(right.querySelectorAll('.card, section')).find(n => /export/i.test(n.textContent || '') ) ||
+      right;
+
+    const btn = document.createElement('button');
+    btn.id = 'raSendToContest';
+    btn.type = 'button';
+    btn.textContent = 'Submit to Contest';
+    // light styling that matches your small pill buttons
+    btn.style.cssText = 'margin-top:10px; width:100%; min-height:36px; border-radius:10px; border:1px solid rgba(255,255,255,.18); background:linear-gradient(135deg,#1f3b86,#2563eb); color:#eaf1ff; cursor:pointer;';
+
+    btn.addEventListener('click', async () => {
+      try {
+        const canvas = document.getElementById('c'); // Fabric lower-canvas
+        if (!canvas || typeof canvas.toDataURL !== 'function') {
+          alert('Canvas not found yet. Try again in a second.'); return;
+        }
+
+        const name = prompt('Display name (shown on leaderboard):', '') || 'Anonymous';
+        const caption = prompt('Caption (optional):', '') || '';
+        const imageDataUrl = canvas.toDataURL('image/png'); // send current PNG
+
+        const r = await fetch('/api/contest/entry', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, caption, imageDataUrl })
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || 'Upload failed');
+
+        alert('Submitted! Open /contest to see your entry.');
+      } catch (e) {
+        console.error('Submit failed:', e);
+        alert('Submit failed: ' + (e && e.message || e));
+      }
+    });
+
+    const holder = document.createElement('div');
+    holder.appendChild(btn);
+    exportCard.parentElement.insertBefore(holder, exportCard.nextSibling); // right under Export
+  } catch (e) {
+    console.warn('Contest submit button not added:', e);
+  }
+})();
