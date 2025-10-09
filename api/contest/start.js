@@ -1,44 +1,45 @@
-// api/contest/start.js
-export const config = { runtime: 'edge' };
+// Starts a new contest. Admin-protected via x-ra-admin header.
+const { kvSet, sadd } = require('../_lib/redisAdapter');
 
-import { kvSet } from '../_lib/redisAdapter.js';
+module.exports = async (req, res) => {
+  try {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return res.status(405).json({ error: 'Method Not Allowed' });
+    }
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'content-type': 'application/json' }
-  });
-}
+    const EXPECT = process.env.RA_ADMIN_KEY;
+    if (!EXPECT) return res.status(500).json({ error: 'RA_ADMIN_KEY missing on server' });
 
-export default async function handler(req) {
-  if (req.method !== 'POST') return json({ error: 'Method Not Allowed' }, 405);
+    // Header name is case-insensitive in Node
+    const admin = req.headers['x-ra-admin'];
+    if (admin !== EXPECT) return res.status(401).json({ error: 'Unauthorized' });
 
-  // Simple admin check: either ?admin=KEY or header x-ra-admin: KEY
-  const url = new URL(req.url);
-  const keyFromQuery = url.searchParams.get('admin');
-  const keyFromHeader = req.headers.get('x-ra-admin');
-  const adminKey = keyFromQuery || keyFromHeader || '';
+    // Parse JSON body regardless of how Vercel passes it
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+    const name = body.name || 'Contest';
+    const prompt = body.prompt || '';
+    const durationDays = Math.max(1, parseInt(body.durationDays, 10) || 7);
 
-  if (!adminKey || adminKey !== (process.env.RA_ADMIN_KEY || '')) {
-    return json({ error: 'Unauthorized' }, 401);
+    const now = Date.now();
+    const id = String(now);
+    const endTs = now + durationDays * 86400000;
+
+    const contest = {
+      id, name, prompt,
+      startTs: now,
+      endTs,
+      status: 'active'
+    };
+
+    // Store a pointer to active + the contest metadata + add to an ID set
+    await kvSet('ra:contest:active', { id });
+    await kvSet(`ra:contest:${id}:meta`, contest);
+    await sadd('ra:contest:ids', id);
+
+    return res.status(200).json({ ok: true, contest });
+  } catch (err) {
+    console.error('[api/contest/start] error:', err);
+    return res.status(500).json({ error: String(err && err.message || err) });
   }
-
-  let body = {};
-  try { body = await req.json(); } catch (_) {}
-
-  const now = Date.now();
-  const durationDays = Number(body.durationDays || 7);
-  const endsAt = Number(body.endsAt || (now + durationDays * 86400_000));
-
-  const contest = {
-    id: `c_${now}`,
-    name: String(body.name || 'Weekly Overlay Contest'),
-    prompt: String(body.prompt || ''),
-    startsAt: now,
-    endsAt,
-    status: 'open'
-  };
-
-  await kvSet('contest:active', contest);
-  return json({ ok: true, contest });
-}
+};
