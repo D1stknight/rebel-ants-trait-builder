@@ -1,33 +1,41 @@
 // api/contest/start.js
-export const config = { runtime: 'edge' };
+export const config = { runtime: 'nodejs' };
 
-import { createContest, setActiveContest } from '../_lib/redisAdapter';
+import { startContest } from '../_lib/redisAdapter.js';
 
 export default async function handler(req) {
-  if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+  try {
+    if (req.method !== 'POST') {
+      return new Response('Method not allowed', { status: 405 });
+    }
+
+    const url = new URL(req.url);
+    const admin = url.searchParams.get('admin') || '';
+    const wanted = process.env.RA_ADMIN_KEY || '';
+
+    if (!wanted || admin !== wanted) {
+      return new Response(
+        JSON.stringify({ ok: false, error: 'unauthorized' }),
+        { status: 401, headers: { 'content-type': 'application/json' } }
+      );
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const name = (body.name || 'Weekly Contest').toString();
+    const prompt = (body.prompt || '').toString();
+    const durationDays = Number(body.durationDays || 7);
+
+    const { id, endsAt } = await startContest({ name, prompt, durationDays });
+
+    return new Response(
+      JSON.stringify({ ok: true, contest: { id, name, prompt, endsAt } }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  } catch (err) {
+    console.error('start contest error', err);
+    return new Response(
+      JSON.stringify({ ok: false, error: String(err?.message || err) }),
+      { status: 500, headers: { 'content-type': 'application/json' } }
+    );
   }
-
-  const url = new URL(req.url);
-  const adminHeader = req.headers.get('x-admin-key');
-  const adminQuery  = url.searchParams.get('admin');
-  const adminKey = adminHeader || adminQuery || '';
-
-  if (adminKey !== (process.env.RA_ADMIN_KEY || '')) {
-    return new Response(JSON.stringify({ ok: false, error: 'unauthorized' }), {
-      status: 401, headers: { 'content-type': 'application/json' }
-    });
-  }
-
-  const { name = 'Rebel Ants Weekly Contest', prompt = '', durationDays = 7 } = await req.json();
-  const now = Date.now();
-  const endsAt = now + Number(durationDays) * 864e5;
-  const id = crypto.randomUUID();
-
-  await createContest({ id, name, prompt, endsAt });
-  await setActiveContest(id);
-
-  return new Response(JSON.stringify({ ok: true, contest: { id, name, prompt, endsAt } }), {
-    status: 200, headers: { 'content-type': 'application/json' }
-  });
 }
