@@ -16,7 +16,7 @@ export default async function handler(req) {
     });
   }
 
-  const { searchParams } = new URL(req.url);
+  const { searchParams } = new URL(req.url, 'http://localhost');
   const name    = (searchParams.get('name') || 'Anonymous').slice(0, 48);
   const caption = (searchParams.get('caption') || '').slice(0, 140);
 
