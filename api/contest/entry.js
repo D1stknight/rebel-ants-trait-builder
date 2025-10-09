@@ -3,43 +3,39 @@ import { put } from '@vercel/blob';
 
 export const config = { runtime: 'nodejs', maxDuration: 60 };
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return new Response('Method Not Allowed', { status: 405 });
+    res.status(405).end('Method Not Allowed');
+    return;
   }
 
   try {
-    const { searchParams } = new URL(req.url);
-    const name = (searchParams.get('name') || 'Anonymous').slice(0, 48);
-    const caption = (searchParams.get('caption') || '').slice(0, 140);
+    // Parse query safely (need a base host in node runtime)
+    const u = new URL(req.url, `http://${req.headers.host}`);
+    const name = (u.searchParams.get('name') || 'Anonymous').slice(0, 48);
+    const caption = (u.searchParams.get('caption') || '').slice(0, 140);
 
-    // Read raw image bytes one time
-    const bytes = Buffer.from(await req.arrayBuffer());
+    // Read raw bytes ONCE (avoid disturbed/locked body errors)
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const bytes = Buffer.concat(chunks);
     if (!bytes.length) {
-      return new Response(JSON.stringify({ ok: false, error: 'no image bytes' }), {
-        status: 400, headers: { 'content-type': 'application/json' }
-      });
+      res.status(400).json({ ok: false, error: 'no image bytes' });
+      return;
     }
 
-    // ✅ TEMP: upload to Blob only (skip Upstash)
+    // TEMP: upload the image to Blob only (skip DB to remove timeouts)
     const id = Math.random().toString(36).slice(2);
     const filename = `tests/${id}.png`;
 
-    // If this call hangs, the 504 is the Blob token, not your code.
     const { url } = await put(filename, bytes, {
       access: 'public',
       token: process.env.BLOB_READ_WRITE_TOKEN,
       contentType: 'image/png'
     });
 
-    return new Response(JSON.stringify({ ok: true, id, url, name, caption }), {
-      status: 200, headers: { 'content-type': 'application/json' }
-    });
-
+    res.status(200).json({ ok: true, id, url, name, caption });
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: String(e && e.message || e) }), {
-      status: 500,
-      headers: { 'content-type': 'application/json' }
-    });
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
 }
