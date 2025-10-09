@@ -83,3 +83,10 @@ input:focus { border-color: #335bcb; box-shadow: 0 0 0 3px rgba(37,99,235,.25); 
 @media (max-width: 720px) {
   .row { grid-template-columns: 1fr; }
 }
+
+/* Submit to Contest – compact */
+#btnSubmitContest {
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 10px;
+}
