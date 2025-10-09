@@ -1,4 +1,6 @@
 // api/contest/start.js
+import { startContest } from '../_lib/redisAdapter';
+
 export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 export default async function handler(req, res) {
@@ -8,7 +10,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // IMPORTANT: in node runtime req.url is relative, so include a base host
+    // need a base when parsing req.url in node runtime
     const u = new URL(req.url, `http://${req.headers.host}`);
     const admin = u.searchParams.get('admin') || '';
 
@@ -17,14 +19,18 @@ export default async function handler(req, res) {
       return;
     }
 
-    const now = Date.now();
-    const endsAt = now + 7 * 24 * 60 * 60 * 1000; // temp: 7 days
+    // read JSON body safely
+    const chunks = [];
+    for await (const ch of req) chunks.push(ch);
+    const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
 
-    // TEMP: no DB here—just prove route returns promptly
-    res.status(200).json({
-      ok: true,
-      contest: { id: 'test-' + Math.random().toString(36).slice(2, 8), endsAt }
+    const meta = await startContest({
+      name: body.name || 'Contest',
+      prompt: body.prompt || '',
+      durationDays: body.durationDays || 7
     });
+
+    res.status(200).json({ ok: true, contest: meta });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
