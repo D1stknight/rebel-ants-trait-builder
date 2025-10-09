@@ -1,45 +1,33 @@
-// Starts a new contest. Admin-protected via x-ra-admin header.
-const { kvSet, sadd } = require('../_lib/redisAdapter');
+// api/contest/start.js
+export const config = { runtime: 'edge' };
 
-module.exports = async (req, res) => {
-  try {
-    if (req.method !== 'POST') {
-      res.setHeader('Allow', 'POST');
-      return res.status(405).json({ error: 'Method Not Allowed' });
-    }
+import { createContest, setActiveContest } from '../_lib/redisAdapter';
 
-    const EXPECT = process.env.RA_ADMIN_KEY;
-    if (!EXPECT) return res.status(500).json({ error: 'RA_ADMIN_KEY missing on server' });
-
-    // Header name is case-insensitive in Node
-    const admin = req.headers['x-ra-admin'];
-    if (admin !== EXPECT) return res.status(401).json({ error: 'Unauthorized' });
-
-    // Parse JSON body regardless of how Vercel passes it
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const name = body.name || 'Contest';
-    const prompt = body.prompt || '';
-    const durationDays = Math.max(1, parseInt(body.durationDays, 10) || 7);
-
-    const now = Date.now();
-    const id = String(now);
-    const endTs = now + durationDays * 86400000;
-
-    const contest = {
-      id, name, prompt,
-      startTs: now,
-      endTs,
-      status: 'active'
-    };
-
-    // Store a pointer to active + the contest metadata + add to an ID set
-    await kvSet('ra:contest:active', { id });
-    await kvSet(`ra:contest:${id}:meta`, contest);
-    await sadd('ra:contest:ids', id);
-
-    return res.status(200).json({ ok: true, contest });
-  } catch (err) {
-    console.error('[api/contest/start] error:', err);
-    return res.status(500).json({ error: String(err && err.message || err) });
+export default async function handler(req) {
+  if (req.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405 });
   }
-};
+
+  const url = new URL(req.url);
+  const adminHeader = req.headers.get('x-admin-key');
+  const adminQuery  = url.searchParams.get('admin');
+  const adminKey = adminHeader || adminQuery || '';
+
+  if (adminKey !== (process.env.RA_ADMIN_KEY || '')) {
+    return new Response(JSON.stringify({ ok: false, error: 'unauthorized' }), {
+      status: 401, headers: { 'content-type': 'application/json' }
+    });
+  }
+
+  const { name = 'Rebel Ants Weekly Contest', prompt = '', durationDays = 7 } = await req.json();
+  const now = Date.now();
+  const endsAt = now + Number(durationDays) * 864e5;
+  const id = crypto.randomUUID();
+
+  await createContest({ id, name, prompt, endsAt });
+  await setActiveContest(id);
+
+  return new Response(JSON.stringify({ ok: true, contest: { id, name, prompt, endsAt } }), {
+    status: 200, headers: { 'content-type': 'application/json' }
+  });
+}
