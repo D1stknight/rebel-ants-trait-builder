@@ -10046,7 +10046,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     btn.type = 'button';
     btn.textContent = 'Submit to Contest';
     // light styling that matches your small pill buttons
-    btn.style.cssText = 'margin-top:10px; width:100%; min-height:36px; border-radius:10px; border:1px solid rgba(255,255,255,.18); background:linear-gradient(135deg,#1f3b86,#2563eb); color:#eaf1ff; cursor:pointer;';
+    btn.style.cssText = 'margin-top:10px;width:100%;min-height:32px;font-size:12px;padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:linear-gradient(135deg,#1f3b86,#2563eb);color:#eaf1ff;cursor:pointer;';
 
     btn.addEventListener('click', async () => {
       try {
