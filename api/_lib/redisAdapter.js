@@ -1,68 +1,63 @@
 // api/_lib/redisAdapter.js
-// Minimal Upstash Redis REST helper that stores JSON values.
-// We use base64 encoding so any string is safe over the REST path.
+import { Redis } from '@upstash/redis';
 
-const KV_URL = process.env.KV_REST_API_URL;
-const KV_TOKEN = process.env.KV_REST_API_TOKEN;
-
-if (!KV_URL || !KV_TOKEN) {
-  throw new Error('Missing KV_REST_API_URL or KV_REST_API_TOKEN env vars');
-}
-
-const ENC = '?_encoding=base64';
-const b64 = (v) => Buffer.from(String(v)).toString('base64');
-
-async function call(cmd, ...parts) {
-  const url = [KV_URL, cmd, ...parts.map(b64)].join('/') + ENC;
-  const method = cmd === 'get' ? 'GET' : 'POST';
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${KV_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`KV ${cmd} failed: ${res.status} ${txt}`);
+let _redis;
+function redis() {
+  if (!_redis) {
+    _redis = new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN
+    });
   }
-  return res.json();
+  return _redis;
 }
 
-const key = (...parts) => ['contest', ...parts].join(':');
-
-// --- Public helpers ---
-
+// gets just the active contest id (or null)
 export async function getActiveContestId() {
-  const { result } = await call('get', key('active'));
-  return result || null;
+  return await redis().get('contest:active');
 }
 
-export async function setActiveContestId(id) {
-  await call('set', key('active'), id);
-  return id;
-}
+// starts a new contest and records meta
+export async function startContest({ name, prompt, durationDays }) {
+  const now = Date.now();
+  const days = Number.isFinite(+durationDays) ? +durationDays : 7;
+  const endsAt = now + days * 86400 * 1000;
+  const id = `c:${now}`;
 
-export async function saveContestMeta(contestId, metaObj) {
-  await call('set', key('meta', contestId), JSON.stringify(metaObj));
-}
+  const r = redis();
 
-export async function saveEntry(contestId, id, name, url, caption) {
-  // Coerce to safe strings; store one JSON payload
-  const entry = {
+  // store active id
+  await r.set('contest:active', id);
+
+  // store contest meta in a hash
+  await r.hset(`contest:${id}`, {
     id,
-    name: String(name ?? 'Anonymous'),
-    caption: String(caption ?? ''),
-    url: String(url ?? ''),
-    votes: 0,
-    createdAt: Date.now(),
-  };
+    name: String(name || 'Contest'),
+    prompt: String(prompt || ''),
+    startedAt: String(now),
+    endsAt: String(endsAt)
+  });
 
-  await call('set', key('entry', contestId, id), JSON.stringify(entry));
-  await call('sadd', key('entries', contestId), id);  // keep list of ids
+  return { id, endsAt };
+}
 
-  // Optional: track a set of all contests we’ve ever opened
-  await call('sadd', key('all'), contestId);
+// saves a single entry (and indexes it)
+export async function saveEntry({ contestId, id, name, url, caption }) {
+  const r = redis();
+  const key = `contest:${contestId}:entry:${id}`;
 
-  return entry;
+  // all values coerced to strings so Upstash never sees null/undefined
+  await r.hset(key, {
+    id,
+    name: String(name || 'Anonymous'),
+    url: String(url || ''),
+    caption: String(caption || ''),
+    votes: '0',
+    createdAt: String(Date.now())
+  });
+
+  // add to a set for listing
+  await r.sadd(`contest:${contestId}:entries`, key);
+
+  return key;
 }
