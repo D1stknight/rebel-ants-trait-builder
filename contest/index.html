@@ -1,1 +1,49 @@
-<link rel="stylesheet" href="/contest/contest.css">
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Overlay Contest</title>
+  <link rel="stylesheet" href="/contest/contest.css">
+</head>
+<body>
+  <main class="wrap">
+    <h1>Overlay Contest</h1>
+
+    <section id="status" class="card">
+      <div id="loading">Loading current contest…</div>
+      <div id="noContest" class="hide">No contest is active.</div>
+      <div id="contestBox" class="hide">
+        <h2 id="cName"></h2>
+        <p id="cPrompt" class="muted"></p>
+        <p class="muted">
+          Starts: <span id="cStart"></span><br>
+          Ends: <span id="cEnd"></span>
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (async function(){
+      const $ = (s) => document.querySelector(s);
+      const res = await fetch('/api/contest/contest');
+      const data = await res.json().catch(()=>({}));
+
+      $('#loading').classList.add('hide');
+
+      if (!data || !data.contest) {
+        $('#noContest').classList.remove('hide');
+        return;
+      }
+      const c = data.contest;
+      $('#contestBox').classList.remove('hide');
+      $('#cName').textContent   = c.name || 'Contest';
+      $('#cPrompt').textContent = c.prompt || '';
+      const fmt = ts => new Date(ts).toLocaleString();
+      $('#cStart').textContent = fmt(c.startsAt);
+      $('#cEnd').textContent   = fmt(c.endsAt);
+    })();
+  </script>
+</body>
+</html>
