@@ -1,14 +1,18 @@
-const { kvGet } = require('../_lib/redisAdapter');
+// api/contest/contest.js
+import { getActiveContestId, listEntries } from '../_lib/redisAdapter';
 
-module.exports = async (_req, res) => {
+export const config = { runtime: 'nodejs' };
+
+export default async function handler(_req, res) {
   try {
-    const active = await kvGet('ra:contest:active');
-    if (!active?.id) return res.status(200).json({ active: null });
-
-    const meta = await kvGet(`ra:contest:${active.id}:meta`);
-    return res.status(200).json({ active: meta || null });
+    const id = await getActiveContestId();
+    if (!id) {
+      res.status(200).json({ ok: true, active: false, entries: [] });
+      return;
+    }
+    const entries = await listEntries(id, 50);
+    res.status(200).json({ ok: true, active: true, id, entries });
   } catch (e) {
-    console.error('[contest meta]', e);
-    return res.status(500).json({ error: 'server' });
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
-};
+}
