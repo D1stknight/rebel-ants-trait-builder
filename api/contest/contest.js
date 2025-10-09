@@ -1,14 +1,14 @@
-// api/contest/contest.js
-export const config = { runtime: 'edge' };
+const { kvGet } = require('../_lib/redisAdapter');
 
-import { kvGet } from '../_lib/redisAdapter.js';
+module.exports = async (_req, res) => {
+  try {
+    const active = await kvGet('ra:contest:active');
+    if (!active?.id) return res.status(200).json({ active: null });
 
-export default async function handler(req) {
-  if (req.method !== 'GET') {
-    return new Response('Method Not Allowed', { status: 405 });
+    const meta = await kvGet(`ra:contest:${active.id}:meta`);
+    return res.status(200).json({ active: meta || null });
+  } catch (e) {
+    console.error('[contest meta]', e);
+    return res.status(500).json({ error: 'server' });
   }
-  const contest = await kvGet('contest:active');
-  return new Response(JSON.stringify({ contest }), {
-    headers: { 'content-type': 'application/json' }
-  });
-}
+};
