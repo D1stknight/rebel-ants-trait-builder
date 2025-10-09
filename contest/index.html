@@ -1,49 +1,132 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Overlay Contest</title>
-  <link rel="stylesheet" href="/contest/contest.css">
-</head>
-<body>
-  <main class="wrap">
-    <h1>Overlay Contest</h1>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Rebel Ants — Contest</title>
+<link rel="stylesheet" href="/contest/contest.css"/>
 
-    <section id="status" class="card">
-      <div id="loading">Loading current contest…</div>
-      <div id="noContest" class="hide">No contest is active.</div>
-      <div id="contestBox" class="hide">
-        <h2 id="cName"></h2>
-        <p id="cPrompt" class="muted"></p>
-        <p class="muted">
-          Starts: <span id="cStart"></span><br>
-          Ends: <span id="cEnd"></span>
-        </p>
+<section class="c-wrap">
+  <header class="c-head">
+    <h1 id="cTitle">Contest</h1>
+    <p id="cPrompt"></p>
+    <p id="cCountdown" class="muted"></p>
+  </header>
+
+  <section class="c-card">
+    <h2>Submit your entry</h2>
+    <div class="row">
+      <label>Name <input id="eName" placeholder="Your display name"/></label>
+      <label>Image URL <input id="eImage" placeholder="Paste a PNG/JPG URL"/></label>
+    </div>
+    <label>Caption (optional)
+      <input id="eCaption" placeholder="Say something about your overlay"/>
+    </label>
+    <button id="eSubmit">Submit Entry</button>
+    <p id="eMsg" class="muted"></p>
+  </section>
+
+  <section class="c-card">
+    <h2>Leaderboard</h2>
+    <div id="board" class="board"></div>
+  </section>
+</section>
+
+<script>
+async function json(url, opts){ const r = await fetch(url, opts||{}); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+
+let ACTIVE = null;
+
+async function loadContest(){
+  const data = await json('/api/contest/contest');
+  ACTIVE = data.active;
+  if (!ACTIVE) {
+    document.getElementById('cTitle').textContent = 'No active contest';
+    document.getElementById('cPrompt').textContent = '';
+    document.getElementById('cCountdown').textContent = '';
+    return;
+  }
+  document.getElementById('cTitle').textContent = ACTIVE.name;
+  document.getElementById('cPrompt').textContent = ACTIVE.prompt || '';
+  tickCountdown();
+  setInterval(tickCountdown, 1000);
+}
+
+function tickCountdown(){
+  if (!ACTIVE) return;
+  const left = Math.max(0, ACTIVE.endTs - Date.now());
+  const s = Math.floor(left/1000)%60;
+  const m = Math.floor(left/60000)%60;
+  const h = Math.floor(left/3600000);
+  document.getElementById('cCountdown').textContent =
+    `${h}h ${m}m ${s}s left`;
+}
+
+async function submitEntry(){
+  const name = document.getElementById('eName').value.trim();
+  const imageUrl = document.getElementById('eImage').value.trim();
+  const caption = document.getElementById('eCaption').value.trim();
+  const msg = document.getElementById('eMsg');
+  msg.textContent = '';
+
+  if (!name || !imageUrl){ msg.textContent = 'Please fill name and image URL.'; return; }
+  try{
+    await json('/api/contest/entry', {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify({ name, imageUrl, caption })
+    });
+    msg.textContent = 'Thanks! Your entry was submitted.';
+    document.getElementById('eName').value='';
+    document.getElementById('eImage').value='';
+    document.getElementById('eCaption').value='';
+    await loadBoard();
+  }catch(e){ msg.textContent = 'Failed: ' + e.message; }
+}
+
+async function loadBoard(){
+  if (!ACTIVE) return;
+  const data = await json('/api/contest/leaderboard');
+  const el = document.getElementById('board');
+  el.innerHTML = '';
+  for (const row of data.items){
+    const card = document.createElement('div');
+    card.className = 'entry';
+    card.innerHTML = `
+      <img src="${row.imageUrl}" alt="">
+      <div class="meta">
+        <div class="name">${escapeHtml(row.name||'')}</div>
+        <div class="score">Score: ${row.score}</div>
+        <div class="votes">
+          ${['👍','❤️','🔥','😂','😮'].map(em=>`
+            <button class="vote" data-id="${row.id}" data-emoji="${em}">${em}</button>
+          `).join('')}
+        </div>
       </div>
-    </section>
-  </main>
+    `;
+    el.appendChild(card);
+  }
+}
 
-  <script>
-    (async function(){
-      const $ = (s) => document.querySelector(s);
-      const res = await fetch('/api/contest/contest');
-      const data = await res.json().catch(()=>({}));
+function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 
-      $('#loading').classList.add('hide');
+document.addEventListener('click', async e=>{
+  const b = e.target.closest('.vote');
+  if (!b) return;
+  const entryId = b.getAttribute('data-id');
+  const emoji = b.getAttribute('data-emoji');
+  try{
+    await json('/api/contest/vote', {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify({ entryId, emoji })
+    });
+    await loadBoard();
+  }catch(err){ alert('Vote failed: ' + err.message); }
+});
 
-      if (!data || !data.contest) {
-        $('#noContest').classList.remove('hide');
-        return;
-      }
-      const c = data.contest;
-      $('#contestBox').classList.remove('hide');
-      $('#cName').textContent   = c.name || 'Contest';
-      $('#cPrompt').textContent = c.prompt || '';
-      const fmt = ts => new Date(ts).toLocaleString();
-      $('#cStart').textContent = fmt(c.startsAt);
-      $('#cEnd').textContent   = fmt(c.endsAt);
-    })();
-  </script>
-</body>
-</html>
+document.getElementById('eSubmit').addEventListener('click', submitEntry);
+
+(async function init(){
+  await loadContest();
+  await loadBoard();
+})();
+</script>
