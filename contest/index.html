@@ -13,14 +13,28 @@
 
   <section class="c-card">
     <h2>Submit your entry</h2>
+
+    <!-- Top row: name + image URL (aligned) -->
     <div class="row">
-      <label>Name <input id="eName" placeholder="Your display name"/></label>
-      <label>Image URL <input id="eImage" placeholder="Paste a PNG/JPG URL"/></label>
+      <label>Name
+        <input id="eName" placeholder="Your display name"/>
+      </label>
+      <label>Image URL
+        <input id="eImage" placeholder="Paste a PNG/JPG URL or use Upload PNG"/>
+      </label>
     </div>
+
+    <!-- Upload row: file picker + upload button (fills eImage for you) -->
+    <div class="fileRow">
+      <input type="file" id="eFile" accept="image/png,image/jpeg"/>
+      <button id="eUpload" class="btn">Upload PNG</button>
+    </div>
+
     <label>Caption (optional)
       <input id="eCaption" placeholder="Say something about your overlay"/>
     </label>
-    <button id="eSubmit">Submit Entry</button>
+
+    <button id="eSubmit" class="btn primary">Submit Entry</button>
     <p id="eMsg" class="muted"></p>
   </section>
 
@@ -31,7 +45,7 @@
 </section>
 
 <script>
-async function json(url, opts){ const r = await fetch(url, opts||{}); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+async function json(url, opts){ const r = await fetch(url, opts||{}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
 let ACTIVE = null;
 
@@ -56,8 +70,20 @@ function tickCountdown(){
   const s = Math.floor(left/1000)%60;
   const m = Math.floor(left/60000)%60;
   const h = Math.floor(left/3600000);
-  document.getElementById('cCountdown').textContent =
-    `${h}h ${m}m ${s}s left`;
+  document.getElementById('cCountdown').textContent = `${h}h ${m}m ${s}s left`;
+}
+
+async function handleUpload(){
+  const f = document.getElementById('eFile').files[0];
+  if (!f) { alert('Choose a PNG/JPG first.'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  const r = await fetch('/api/contest/upload', { method: 'POST', body: fd });
+  if (!r.ok) throw new Error(await r.text());
+  const data = await r.json();
+  const url = data.url || (data.pathname ? `https://blob.vercel-storage.com${data.pathname}` : '');
+  if (!url) throw new Error('No URL returned from upload');
+  document.getElementById('eImage').value = url;
 }
 
 async function submitEntry(){
@@ -67,7 +93,7 @@ async function submitEntry(){
   const msg = document.getElementById('eMsg');
   msg.textContent = '';
 
-  if (!name || !imageUrl){ msg.textContent = 'Please fill name and image URL.'; return; }
+  if (!name || !imageUrl){ msg.textContent = 'Please fill name and image URL (or use Upload PNG).'; return; }
   try{
     await json('/api/contest/entry', {
       method:'POST',
@@ -78,6 +104,7 @@ async function submitEntry(){
     document.getElementById('eName').value='';
     document.getElementById('eImage').value='';
     document.getElementById('eCaption').value='';
+    document.getElementById('eFile').value='';
     await loadBoard();
   }catch(e){ msg.textContent = 'Failed: ' + e.message; }
 }
@@ -108,6 +135,11 @@ async function loadBoard(){
 
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 
+document.getElementById('eUpload').addEventListener('click', async ()=>{
+  try { await handleUpload(); alert('Uploaded ✓'); } catch(e){ alert('Upload failed: ' + e.message); }
+});
+document.getElementById('eSubmit').addEventListener('click', submitEntry);
+
 document.addEventListener('click', async e=>{
   const b = e.target.closest('.vote');
   if (!b) return;
@@ -122,8 +154,6 @@ document.addEventListener('click', async e=>{
     await loadBoard();
   }catch(err){ alert('Vote failed: ' + err.message); }
 });
-
-document.getElementById('eSubmit').addEventListener('click', submitEntry);
 
 (async function init(){
   await loadContest();
