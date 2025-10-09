@@ -1,1 +1,37 @@
-/* stub */
+:root {
+  --bg: #0e1217;
+  --card: #161b22;
+  --text: #e7eefc;
+  --muted: #9fb1d1;
+  --accent: #3b82f6;
+  --ring: rgba(59,130,246,.35);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif;
+}
+
+.wrap {
+  max-width: 920px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+h1 { margin: 0 0 18px; font-size: 22px; letter-spacing: .2px; }
+h2 { margin: 0 0 6px; font-size: 18px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.25);
+}
+
+.muted { color: var(--muted); }
+.hide  { display: none; }
