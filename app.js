@@ -10081,3 +10081,19 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     console.warn('Contest submit button not added:', e);
   }
 })();
+
+(function addContestLink(){
+  const right = document.querySelector('aside.panel.right') || document.querySelector('.panel.right');
+  if (!right || document.getElementById('raContestLink')) return;
+
+  const link = document.createElement('a');
+  link.id = 'raContestLink';
+  link.href = '/contest';
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.textContent = 'Open Contest →';
+  link.style.cssText = 'display:inline-block;margin:10px 0 12px;color:#8ab4ff;text-decoration:none;font-size:13px;';
+  
+  const exportCard = right.querySelector('.export, [data-card="export"]');
+  (exportCard ? exportCard : right).insertAdjacentElement('beforebegin', link);
+})();
