@@ -90,3 +90,16 @@ input:focus { border-color: #335bcb; box-shadow: 0 0 0 3px rgba(37,99,235,.25); 
   padding: 8px 14px;
   border-radius: 10px;
 }
+
+/* Shorter "Submit to Contest" button */
+#btnSubmitContest {
+  display: inline-flex;           /* don't stretch full width */
+  align-items: center;
+  justify-content: center;
+  width: auto !important;         /* override any 100% */
+  min-width: 140px;               /* adjust to taste (130–160) */
+  padding: 8px 12px;              /* already smaller text height */
+  white-space: nowrap;            /* keep the text on one line */
+  border-radius: 10px;
+  align-self: flex-start;         /* if the parent is flex, don’t stretch */
+}
