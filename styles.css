@@ -314,3 +314,24 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
 @media (max-width: 980px){
   :root{ --raGHeight:32px; --raGPadY:5px; --raGPadX:10px; --raGFont:12px; }
 }
+
+/* Open Contest + Submit buttons (compact) */
+#raOpenContestBtn,
+#raSubmitToContest {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  padding: 10px 14px;
+  border-radius: 10px;
+  width: auto;           /* important: no full-width */
+  min-width: 0;          /* let content define width */
+}
+
+/* Make them sit tight to the left edge of the card */
+.export #raOpenContestBtn,
+.export #raSubmitToContest { align-self: flex-start; }
+
+/* If your container forces full width, this prevents it */
+#raOpenContestBtn, #raSubmitToContest { max-width: 240px; }
