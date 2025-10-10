@@ -10,9 +10,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    // need a base when parsing req.url in node runtime
-    const u = new URL(req.url, `http://${req.headers.host}`);
-    const admin = u.searchParams.get('admin') || '';
+   // Example of what your code should be doing:
+const url = new URL(req.url, `http://${req.headers.host}`);
+const adminFromQuery  = url.searchParams.get('admin');
+const adminFromHeader = req.headers['x-admin-key'] || req.headers.get?.('x-admin-key');
+const admin = adminFromHeader || adminFromQuery;
 
     if (admin !== process.env.RA_ADMIN_KEY) {
       res.status(401).json({ ok: false, error: 'unauthorized' });
