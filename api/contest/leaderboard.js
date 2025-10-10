@@ -1,26 +1,28 @@
-const { kvGet, zRevRangeWithScores } = require('../_lib/redisAdapter');
+// api/contest/leaderboard.js
+import { getActiveContestId, listEntries } from '../_lib/redisAdapter';
 
-async function getEntry(storeId, entryId) {
-  const { kvGet } = require('../_lib/redisAdapter');
-  return kvGet(`ra:contest:${storeId}:entry:${entryId}`);
-}
+export const config = { runtime: 'nodejs' };
 
-module.exports = async (req, res) => {
+export default async function handler(_req, res) {
   try {
-    const activeOnly = (req.query?.id || req.query?.contestId) ? null : true;
-    const id = activeOnly ? (await kvGet('ra:contest:active'))?.id : String(req.query.id || req.query.contestId || '');
+    const id = await getActiveContestId();
+    if (!id) return res.status(200).json({ ok: true, items: [] });
 
-    if (!id) return res.status(200).json({ id: null, items: [] });
+    const entries = await listEntries(id, 200);
 
-    const top = await zRevRangeWithScores(`ra:contest:${id}:score`, 0, 49); // top 50
-    const items = [];
-    for (const row of top) {
-      const entry = await getEntry(id, row.member);
-      if (entry) items.push({ score: row.score, ...entry });
-    }
-    return res.status(200).json({ id, items });
+    // Map to the shape the page expects: items[].imageUrl
+    const items = entries.map(e => ({
+      id: e.id,
+      name: e.name || 'Anonymous',
+      caption: e.caption || '',
+      imageUrl: e.url,                  // <- map url -> imageUrl
+      score: typeof e.votes === 'number'
+        ? e.votes
+        : (e.votes ? Object.values(e.votes).reduce((a, b) => a + (+b || 0), 0) : 0)
+    }));
+
+    res.status(200).json({ ok: true, id, items });
   } catch (e) {
-    console.error('[leaderboard]', e);
-    return res.status(500).json({ error: 'server' });
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
-};
+}
