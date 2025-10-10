@@ -3,7 +3,7 @@
   const elGallery = document.getElementById('gallery');
   const elEmpty   = document.getElementById('empty');
 
-  fetch('/api/contest/contest')
+  fetch('/api/contest/leaderboard')
     .then(r => r.json())
     .then(data => {
       if (!data || data.ok === false) {
@@ -14,7 +14,8 @@
         elEmpty.textContent = 'No active contest right now. Check back soon!';
         return;
       }
-      const entries = Array.isArray(data.entries) ? data.entries : [];
+      const entries = Array.isArray(data.items) ? data.items
+                : (Array.isArray(data.entries) ? data.entries : []);
       if (!entries.length) {
         elEmpty.textContent = 'Be the first to submit from the builder!';
         return;
@@ -37,7 +38,7 @@
   function cardHTML(e) {
     const name    = esc(e.name || 'Anonymous');
     const caption = esc(e.caption || '');
-    const url     = esc(e.url || '');
+    const url     = esc(e.imageUrl || e.url || '');
     return `
       <article class="entry">
         <img loading="lazy" src="${url}" alt="${name}">
