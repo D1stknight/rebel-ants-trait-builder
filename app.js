@@ -10097,3 +10097,19 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   const exportCard = right.querySelector('.export, [data-card="export"]');
   (exportCard ? exportCard : right).insertAdjacentElement('beforebegin', link);
 })();
+
+// --- Place a compact "Open Contest" button just above Submit to Contest ---
+(function placeOpenContest() {
+  const exportCard = document.querySelector('.export, [data-card="export"]');
+  const submitBtn  = document.getElementById('raSubmitToContest');
+  if (!exportCard || !submitBtn) return;
+
+  const openBtn = document.createElement('button');
+  openBtn.id = 'raOpenContestBtn';
+  openBtn.type = 'button';
+  openBtn.textContent = 'Open Contest';
+  openBtn.addEventListener('click', () => window.open('/contest/', '_blank'));
+
+  // Put it directly ABOVE the Submit button
+  submitBtn.parentNode.insertBefore(openBtn, submitBtn);
+})();
