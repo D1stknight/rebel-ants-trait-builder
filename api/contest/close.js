@@ -1,33 +1,29 @@
-const { kvGet, kvSet, zRevRangeWithScores } = require('../_lib/redisAdapter');
+// api/contest/close.js
+import { getActiveContestId, kvDel } from '../_lib/redisAdapter';
 
-module.exports = async (req, res) => {
+export const config = { runtime: 'nodejs' };
+
+export default async function handler(req, res) {
   try {
-    if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'method' }); }
+    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    const EXPECT = process.env.RA_ADMIN_KEY;
-    const admin = req.headers['x-ra-admin'];
-    if (!EXPECT || admin !== EXPECT) return res.status(401).json({ error: 'unauthorized' });
+    const provided = String(req.query.admin || req.headers['x-admin'] || '');
+    const secret   = String(process.env.RA_ADMIN_KEY || '');
 
-    const active = await kvGet('ra:contest:active');
-    if (!active?.id) return res.status(400).json({ error: 'no-active' });
+    if (!secret || !provided || provided !== secret) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
 
-    const metaKey = `ra:contest:${active.id}:meta`;
-    const meta = await kvGet(metaKey);
-    if (!meta) return res.status(400).json({ error: 'not-found' });
+    const id = await getActiveContestId();
+    if (!id) {
+      return res.status(200).json({ ok: true, closed: false, reason: 'no active contest' });
+    }
 
-    const winners = await zRevRangeWithScores(`ra:contest:${active.id}:score`, 0, 9); // top 10
-    await kvSet(`ra:contest:${active.id}:winners`, winners);
+    // mark no active contest
+    await kvDel('ra:contest:active');
 
-    meta.status = 'closed';
-    meta.closedTs = Date.now();
-    await kvSet(metaKey, meta);
-
-    // Clear "active" pointer (optional)
-    await kvSet('ra:contest:active', { id: null });
-
-    return res.status(200).json({ ok: true, id: active.id, winners });
+    return res.status(200).json({ ok: true, closed: true, id });
   } catch (e) {
-    console.error('[close]', e);
-    return res.status(500).json({ error: 'server' });
+    return res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
-};
+}
