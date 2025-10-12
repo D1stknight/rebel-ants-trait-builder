@@ -198,3 +198,57 @@
 
   init();
 })();
+
+/* Countdown – single source of truth (guarded) */
+(function () {
+  if (window.__raCountdownMounted) return;         // prevent duplicates if file runs twice
+  window.__raCountdownMounted = true;
+
+  let timer = null;
+
+  function getCountdownEl() {
+    let el = document.getElementById('cCountdown');
+    if (!el) {
+      const head = document.querySelector('.c-head') || document.body;
+      el = document.createElement('p');
+      el.id = 'cCountdown';
+      el.className = 'muted';
+      head.appendChild(el);
+    }
+    return el;
+  }
+
+  async function start() {
+    try {
+      const r = await fetch('/api/contest/contest');
+      const data = await r.json();
+      const endTs = Number(data?.meta?.endTs || 0);   // ms since epoch
+      if (!endTs) return;
+
+      const el = getCountdownEl();
+      clearInterval(timer);
+
+      const tick = () => {
+        const leftMs = endTs - Date.now();
+        if (leftMs <= 0) {
+          el.textContent = 'Ended';
+          clearInterval(timer);
+          return;
+        }
+        // ceil to avoid flicker to zeros between seconds
+        const totalSec = Math.ceil(leftMs / 1000);
+        const s = totalSec % 60;
+        const m = Math.floor(totalSec / 60) % 60;
+        const h = Math.floor(totalSec / 3600);
+        el.textContent = `${h}h ${m}m ${s}s left`;
+      };
+
+      tick();
+      timer = setInterval(tick, 1000);
+    } catch {
+      /* ignore network/parse errors */
+    }
+  }
+
+  start();
+})();
