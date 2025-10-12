@@ -1,39 +1,47 @@
 // api/contest/start.js
-import { startContest } from '../_lib/redisAdapter';
+const { setActiveContest } = require('../_lib/redisAdapter');
 
-export const config = { runtime: 'nodejs', maxDuration: 60 };
+function readJSON(req) {
+  return new Promise((resolve, reject) => {
+    let s = '';
+    req.on('data', c => (s += c));
+    req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch (e) { reject(e); } });
+    req.on('error', reject);
+  });
+}
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.status(405).end('Method Not Allowed');
-    return;
-  }
-
+module.exports = async (req, res) => {
   try {
-   // Example of what your code should be doing:
-const url = new URL(req.url, `http://${req.headers.host}`);
-const adminFromQuery  = url.searchParams.get('admin');
-const adminFromHeader = req.headers['x-admin-key'] || req.headers.get?.('x-admin-key');
-const admin = adminFromHeader || adminFromQuery;
-
-    if (admin !== process.env.RA_ADMIN_KEY) {
-      res.status(401).json({ ok: false, error: 'unauthorized' });
-      return;
+    const admin = (req.query.admin || req.headers['x-admin'] || '').trim();
+    if (!admin || admin !== process.env.RA_ADMIN_KEY) {
+      res.status(401).json({ ok:false, error:'unauthorized' }); return;
     }
 
-    // read JSON body safely
-    const chunks = [];
-    for await (const ch of req) chunks.push(ch);
-    const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+    let name, prompt, durationDays;
+    if (req.method === 'POST') {
+      const body = await readJSON(req).catch(() => ({}));
+      name = body.name; prompt = body.prompt; durationDays = body.durationDays;
+    } else if (req.method === 'GET') {
+      name = req.query.name; prompt = req.query.prompt; durationDays = req.query.days;
+    } else {
+      res.status(405).send('Method Not Allowed'); return;
+    }
 
-    const meta = await startContest({
-      name: body.name || 'Contest',
-      prompt: body.prompt || '',
-      durationDays: body.durationDays || 7
-    });
+    const now = Date.now();
+    const days = Math.max(1, parseInt(durationDays || 7, 10));
+    const id = Math.random().toString(36).slice(2, 10);
+    const meta = {
+      id,
+      name: (name || 'Rebel Ants Weekly Contest').toString(),
+      prompt: (prompt || 'Share your best overlay combo!').toString(),
+      startTs: now,
+      endTs: now + days * 864e5
+    };
 
-    res.status(200).json({ ok: true, contest: meta });
+    await setActiveContest(meta);
+    res.status(200).json({ ok:true, contest: meta });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+    console.error('[start]', e);
+    res.status(500).json({ ok:false, error:String(e && e.message || e) });
   }
-}
+};
