@@ -1,21 +1,35 @@
-// /api/contest/contest.js
-import { getActiveContestId, getContestMeta, listEntries } from '../_lib/redisAdapter.js';
-
+// api/contest/contest.js
 export const config = { runtime: 'nodejs' };
+
+import {
+  getActiveContestId,
+  getContestMeta,
+  listEntries,
+} from '../_lib/redisAdapter';
 
 export default async function handler(_req, res) {
   try {
     const id = await getActiveContestId();
     if (!id) {
-      res.status(200).json({ ok: true, active: false, id: null, meta: null, entries: [] });
-      return;
+      return res.status(200).json({ ok: true, active: false, entries: [] });
     }
 
-    const meta = await getContestMeta(id);          // { id,name,prompt,startTs,endTs }
-    const entries = await listEntries(id, 100);     // includes { url, imageUrl, votes, score }
+    // meta + up to 200 latest entries (newest first)
+    const [meta, entries] = await Promise.all([
+      getContestMeta(id),
+      listEntries(id, 200),
+    ]);
 
-    res.status(200).json({ ok: true, active: true, id, meta, entries });
+    return res.status(200).json({
+      ok: true,
+      active: true,
+      id,
+      meta,       // includes name/prompt/startTs/endTs
+      entries,    // [{ id, name, caption, url, imageUrl, votes, score, ts }, ...]
+    });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res
+      .status(500)
+      .json({ ok: false, error: String(e && e.message || e) });
   }
 }
