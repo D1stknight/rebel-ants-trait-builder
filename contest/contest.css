@@ -201,3 +201,25 @@ input[type="text"], input[type="url"], input:not([type]) {
 /* make sure images actually show and cover the frame */
 .entry .imgWrap { width: 100%; aspect-ratio: 4/5; background: #0b0e14; border-radius: 8px; overflow: hidden; }
 .entry img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Top-10 chips */
+.top10 {
+  display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px;
+}
+.top10 .chip {
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px; opacity: .9;
+}
+.top10 .chip b { margin-right: 6px; }
+.top10 .chip i { font-style: normal; opacity: .75; margin-left: 6px; }
+
+/* Ensure images fill the card */
+.entry .imgWrap { width: 100%; aspect-ratio: 4/5; background:#0b0e14; border-radius:8px; overflow:hidden; }
+.entry img { width:100%; height:100%; object-fit:cover; display:block; }
+
+/* Emoji click micro-animation */
+.votes .vote { transition: transform 120ms ease; }
+.votes .vote.burst { transform: scale(1.16); }
