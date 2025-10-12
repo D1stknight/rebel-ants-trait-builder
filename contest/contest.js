@@ -154,3 +154,47 @@
   }
   function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 })();
+
+// --- Countdown (append) ---
+(function setupCountdown() {
+  let timer = null;
+
+  function mountCountdown() {
+    let el = document.getElementById('cCountdown');
+    const head = document.querySelector('.c-head') || document.body;
+    if (!el) {
+      el = document.createElement('p');
+      el.id = 'cCountdown';
+      el.className = 'muted';
+      head.appendChild(el);
+    }
+    return el;
+  }
+
+  async function init() {
+    try {
+      const r = await fetch('/api/contest/contest');
+      const data = await r.json();
+      if (!data?.active || !data?.meta?.endTs) return;
+
+      const endTs = Number(data.meta.endTs);      // ms since epoch
+      const el = mountCountdown();
+
+      function tick() {
+        const left = Math.max(0, endTs - Date.now());
+        const s = Math.floor(left / 1000) % 60;
+        const m = Math.floor(left / 60000) % 60;
+        const h = Math.floor(left / 3600000);
+        el.textContent = `${h}h ${m}m ${s}s left`;
+      }
+
+      clearInterval(timer);
+      tick();
+      timer = setInterval(tick, 1000);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  init();
+})();
