@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/contest/contest.css">
   <style>
     body { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+    h1 { margin-bottom: 18px; }
     .panel { background:#0f131a; border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
     .row { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; }
     label { font-size:13px; opacity:.95; display:flex; flex-direction:column; gap:6px; min-width:220px; flex:1; }
@@ -81,17 +82,18 @@
 
 <script>
 (function(){
+  // ---- Helpers / wiring ----
   const KEY_STORE = 'ra:adminkey';
-
   const $ = s => document.querySelector(s);
-  const adm = $('#adminkey');
-  const saveKeyMsg = $('#saveKeyMsg');
-  const startMsg = $('#startMsg');
-  const closeMsg = $('#closeMsg');
-  const delMsg = $('#delMsg');
-  const activeInfo = $('#activeInfo');
 
-  // load saved key
+  const adm       = $('#adminkey');
+  const saveKeyMsg= $('#saveKeyMsg');
+  const startMsg  = $('#startMsg');
+  const closeMsg  = $('#closeMsg');
+  const delMsg    = $('#delMsg');
+  const activeInfo= $('#activeInfo');
+
+  // load saved key (so you don't retype)
   const saved = localStorage.getItem(KEY_STORE) || '';
   if (saved) adm.value = saved;
 
@@ -101,6 +103,7 @@
   }
   function clear(el){ el.textContent=''; el.className='muted tight'; }
 
+  // common fetch wrapper that returns {status,json,raw}
   async function j(url, opts) {
     const r = await fetch(url, opts || {});
     const text = await r.text();
@@ -113,12 +116,15 @@
     return k;
   }
 
+  // ---- Actions ----
+
   // Save key
   $('#saveKey').onclick = () => {
     try {
       const k = getKey();
       localStorage.setItem(KEY_STORE, k);
       show(saveKeyMsg, 'Saved ✓', true);
+      setTimeout(() => clear(saveKeyMsg), 1500);
     } catch(e){
       show(saveKeyMsg, e.message, false);
     }
@@ -129,30 +135,39 @@
     clear(startMsg);
     let key; try { key = getKey(); } catch(e){ return show(startMsg, e.message, false); }
     $('#startBtn').disabled = true;
+
+    const name = ($('#cName').value || 'Rebel Ants Weekly Contest').trim();
     const body = JSON.stringify({
-      name: ($('#cName').value || 'Rebel Ants Weekly Contest').trim(),
+      // send both so API that expects either "name" or older "frame" works
+      name,
+      frame: name,
       prompt: ($('#cPrompt').value || '').trim(),
       durationDays: Math.max(1, +$('#cDays').value || 7)
     });
+
     const r = await j('/api/contest/start?admin=' + encodeURIComponent(key), {
       method:'POST', headers:{'content-type':'application/json'}, body
     });
     $('#startBtn').disabled = false;
+
     if (r.status === 200 && r.json && r.json.ok) {
-      show(startMsg, 'Started ✓ id=' + r.json.id, true);
+      const startedId = r.json.id || r.json?.active?.id || r.json?.contestId || '(unknown)';
+      show(startMsg, 'Started ✓  id=' + startedId, true);
       await refresh();
     } else {
       show(startMsg, 'Start failed: ' + (r?.json?.error || r.raw), false);
     }
   };
 
-  // Close
+  // Close active contest
   $('#closeBtn').onclick = async () => {
     clear(closeMsg);
     let key; try { key = getKey(); } catch(e){ return show(closeMsg, e.message, false); }
     $('#closeBtn').disabled = true;
+
     const r = await j('/api/contest/close?admin=' + encodeURIComponent(key), { method:'POST' });
     $('#closeBtn').disabled = false;
+
     if (r.status === 200 && r.json && r.json.ok) {
       show(closeMsg, 'Closed ✓', true);
       await refresh();
@@ -161,18 +176,20 @@
     }
   };
 
-  // Delete entry
+  // Delete a single entry (paste entry id)
   $('#delBtn').onclick = async () => {
     clear(delMsg);
     let key; try { key = getKey(); } catch(e){ return show(delMsg, e.message, false); }
     const eid = ($('#delId').value || '').trim();
     if (!eid) return show(delMsg, 'Enter an entry id', false);
+
     $('#delBtn').disabled = true;
     const r = await j('/api/contest/delete?admin=' + encodeURIComponent(key), {
       method:'POST', headers:{'content-type':'application/json'},
       body: JSON.stringify({ entryId: eid })
     });
     $('#delBtn').disabled = false;
+
     if (r.status === 200 && r.json && r.json.ok) {
       show(delMsg, 'Deleted ✓', true);
       await refresh();
@@ -181,10 +198,10 @@
     }
   };
 
-  // Show active contest info
+  // Show current active contest
   async function refresh(){
     activeInfo.textContent = 'Loading…';
-    const r = await j('/api/contest/contest');
+    const r = await j('/api/contest/contest');   // no admin needed
     if (r.status === 200 && r.json && r.json.active) {
       const meta = r.json.meta || {};
       const end = meta.endTs ? new Date(meta.endTs).toLocaleString() : '(unknown end)';
@@ -196,6 +213,7 @@
     }
   }
 
+  // Initial load
   refresh();
 })();
 </script>
