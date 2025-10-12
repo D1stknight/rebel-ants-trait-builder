@@ -49,6 +49,13 @@ async function json(url, opts){ const r = await fetch(url, opts||{}); if(!r.ok) 
 
 let ACTIVE = null;
 
+  // A stable id per browser so they can only vote once per emoji
+const VOTER_ID = (() => {
+  let v = localStorage.getItem('ra_voter');
+  if (!v) { v = (self.crypto?.randomUUID?.() || String(Math.random()).slice(2)); localStorage.setItem('ra_voter', v); }
+  return v;
+})();
+  
 async function loadContest(){
   const data = await json('/api/contest/contest');
   ACTIVE = data.active;
