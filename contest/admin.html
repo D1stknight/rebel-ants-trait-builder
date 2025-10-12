@@ -6,6 +6,7 @@
   <title>Contest Admin</title>
   <link rel="stylesheet" href="/contest/contest.css">
   <style>
+    /* Base admin styling (kept) */
     body { max-width: 980px; margin: 24px auto; padding: 0 16px; }
     h1 { margin-bottom: 18px; }
     .panel { background:#0f131a; border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
@@ -20,6 +21,25 @@
     .err{ color:#ff7b7b; }
     .muted{ opacity:.75; }
     .tight { margin-top:6px; }
+
+    /* --- NEW: Admin entries list styles --- */
+    #entriesBox { display: grid; gap: 8px; }
+    .entryRow {
+      display: grid; grid-template-columns: 72px 1fr auto;
+      align-items: center; gap: 10px;
+      background:#0f131a; border:1px solid rgba(255,255,255,.12);
+      border-radius:10px; padding:8px;
+    }
+    .entryRow img {
+      width:72px; height:72px; object-fit:cover; border-radius:8px; background:#0b0e12;
+    }
+    .entryRow .meta { font-size:12px; line-height:1.35; }
+    .entryRow .meta .id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      opacity:.8; margin-top:4px; cursor:pointer; user-select: all;
+    }
+    .entryRow .meta .score { margin-top:2px; opacity:.8; }
+    .entryRow .actions button { padding:6px 10px; }
   </style>
 </head>
 <body class="page">
@@ -74,18 +94,18 @@
     <span id="delMsg" class="muted tight"></span>
   </section>
 
-  <!-- Entries list (admin convenience) -->
-<section class="panel">
-  <h3>Entries <span class="muted">(click ID to copy)</span></h3>
-  <div class="row" style="margin:6px 0 10px;">
-    <label>Filter
-      <input id="entriesFilter" placeholder="Filter by name, caption, or ID"/>
-    </label>
-    <button id="entriesRefresh" class="btn" style="align-self:flex-end;height:38px;">Refresh</button>
-  </div>
-  <div id="entriesBox"></div>
-</section>
-  
+  <!-- NEW: Entries list (IDs, thumbnails, filter, one‑click delete) -->
+  <section class="panel">
+    <h3>Entries <span class="muted">(click ID to copy)</span></h3>
+    <div class="row" style="margin:6px 0 10px;">
+      <label>Filter
+        <input id="entriesFilter" placeholder="Filter by name, caption, or ID"/>
+      </label>
+      <button id="entriesRefresh" style="align-self:flex-end;height:38px;">Refresh</button>
+    </div>
+    <div id="entriesBox"></div>
+  </section>
+
   <!-- Active contest status -->
   <section class="panel">
     <h3>Active Contest</h3>
@@ -166,6 +186,7 @@
       const startedId = r.json.id || r.json?.active?.id || r.json?.contestId || '(unknown)';
       show(startMsg, 'Started ✓  id=' + startedId, true);
       await refresh();
+      await refreshEntries();          // keep list in sync
     } else {
       show(startMsg, 'Start failed: ' + (r?.json?.error || r.raw), false);
     }
@@ -183,6 +204,7 @@
     if (r.status === 200 && r.json && r.json.ok) {
       show(closeMsg, 'Closed ✓', true);
       await refresh();
+      await refreshEntries();          // keep list in sync
     } else {
       show(closeMsg, 'Close failed: ' + (r?.json?.error || r.raw), false);
     }
@@ -205,6 +227,7 @@
     if (r.status === 200 && r.json && r.json.ok) {
       show(delMsg, 'Deleted ✓', true);
       await refresh();
+      await refreshEntries();          // keep list in sync
     } else {
       show(delMsg, 'Delete failed: ' + (r?.json?.error || r.raw), false);
     }
@@ -225,7 +248,95 @@
     }
   }
 
-  // Initial load
+  /* ===== NEW: Entries panel logic ===== */
+  const entriesBox     = document.getElementById('entriesBox');
+  const entriesFilter  = document.getElementById('entriesFilter');
+  const entriesRefresh = document.getElementById('entriesRefresh');
+
+  if (entriesBox && entriesRefresh && entriesFilter) {
+    entriesRefresh.addEventListener('click', refreshEntries);
+    entriesFilter.addEventListener('input', refreshEntries);
+    // initial load
+    refreshEntries();
+  }
+
+  function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+  async function refreshEntries(){
+    if (!entriesBox) return;
+    entriesBox.textContent = 'Loading…';
+    const r = await j('/api/contest/contest');
+    if (r.status !== 200 || !r.json) { entriesBox.textContent = 'Failed to load.'; return; }
+    if (!r.json.active) { entriesBox.textContent = 'No active contest.'; return; }
+
+    let items = Array.isArray(r.json.entries) ? r.json.entries : [];
+    const q = (entriesFilter.value || '').toLowerCase().trim();
+    if (q) {
+      items = items.filter(e =>
+        (e.name||'').toLowerCase().includes(q) ||
+        (e.caption||'').toLowerCase().includes(q) ||
+        String(e.id||'').toLowerCase().includes(q)
+      );
+    }
+    if (!items.length) { entriesBox.textContent = 'No entries.'; return; }
+
+    // newest first, then by score desc
+    items.sort((a,b)=> (b.ts|0) - (a.ts|0) || (b.score|0) - (a.score|0));
+
+    entriesBox.innerHTML = items.map(rowHTML).join('');
+
+    // wire delete and copy
+    entriesBox.querySelectorAll('[data-del]').forEach(btn=>{
+      btn.addEventListener('click', async () => {
+        let key; try { key = getKey(); } catch (e) { alert(e.message); return; }
+        const eid = btn.getAttribute('data-del');
+        const resp = await j('/api/contest/delete?admin='+encodeURIComponent(key), {
+          method:'POST',
+          headers:{'content-type':'application/json'},
+          body: JSON.stringify({ entryId: eid })
+        });
+        if (resp.status === 200 && resp.json && resp.json.ok) {
+          await refreshEntries();
+          await refresh(); // update status box
+        } else {
+          alert('Delete failed: ' + (resp?.json?.error || resp.raw || resp.status));
+        }
+      });
+    });
+
+    entriesBox.querySelectorAll('[data-copy]').forEach(el=>{
+      el.addEventListener('click', async () => {
+        try {
+          const val = el.getAttribute('data-copy');
+          await navigator.clipboard.writeText(val);
+          el.textContent = 'Copied ✓';
+          setTimeout(()=>{ el.textContent = val; }, 900);
+        } catch {}
+      });
+    });
+  }
+
+  function rowHTML(e){
+    const id   = esc(e.id);
+    const url  = esc(e.imageUrl || e.url || '');
+    const name = esc(e.name || 'Anonymous');
+    const cap  = esc(e.caption || '');
+    const sc   = e.score|0;
+    return `
+      <div class="entryRow">
+        <img src="${url}" alt="">
+        <div class="meta">
+          <div><b>${name}</b>${cap ? ' • ' + cap : ''}</div>
+          <div class="score">Score: ${sc}</div>
+          <div class="id" title="Click to copy" data-copy="${id}">${id}</div>
+        </div>
+        <div class="actions">
+          <button class="warn" data-del="${id}">Delete</button>
+        </div>
+      </div>`;
+  }
+
+  // Initial admin status
   refresh();
 })();
 </script>
