@@ -1,60 +1,67 @@
-// api/contest/vote.js  (CommonJS)
-exports.config = { runtime: 'nodejs' };
+// /api/contest/vote.js
+export const config = { runtime: 'nodejs' };
 
-const crypto = require('crypto');
-const {
-  getActiveContestId,
-  addVote,
-  kvGet,
-  kvSet,
-} = require('../_lib/redisAdapter');
+import crypto from 'crypto';
+import { getActiveContestId, getEntry, saveEntry } from '../_lib/redisAdapter';
 
-const ALLOWED = ['👍','❤️','🔥','😂','😮'];
-
-// Small JSON body reader for Node.js API routes
-function readJSON(req) {
-  return new Promise((resolve, reject) => {
-    let d = '';
-    req.on('data', c => d += c);
-    req.on('end', () => { try { resolve(JSON.parse(d || '{}')); } catch (e) { reject(e); } });
-    req.on('error', reject);
-  });
+async function readJSON(req) {
+  const chunks = [];
+  for await (const ch of req) chunks.push(ch);
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { return {}; }
 }
 
-function clientFingerprint(req) {
-  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0] || req.socket?.remoteAddress || '';
-  const ua = req.headers['user-agent'] || '';
-  return crypto.createHash('sha256').update(ip + '|' + ua).digest('hex').slice(0, 16);
-}
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    res.status(405).send('Method Not Allowed');
+    return;
+  }
 
-module.exports = async (req, res) => {
   try {
-    if (req.method !== 'POST') {
-      res.status(405).send('Method Not Allowed');
+    const contestId = await getActiveContestId();
+    if (!contestId) {
+      res.status(400).json({ ok: false, error: 'no active contest' });
       return;
     }
 
     const { entryId, emoji } = await readJSON(req);
-    if (!entryId || !emoji) { res.status(400).json({ ok:false, error:'missing entryId/emoji' }); return; }
-    if (!ALLOWED.includes(emoji)) { res.status(400).json({ ok:false, error:'bad emoji' }); return; }
-
-    const contestId = await getActiveContestId();
-    if (!contestId) { res.status(400).json({ ok:false, error:'no active contest' }); return; }
-
-    // Server-side duplicate guard (1 per emoji per entry per client)
-    const fp = clientFingerprint(req);
-    const lockKey = `ra:contest:${contestId}:vote:${entryId}:${emoji}:${fp}`;
-    if (await kvGet(lockKey)) {
-      res.status(200).json({ ok:false, duplicate:true });
+    if (!entryId || !emoji) {
+      res.status(400).json({ ok: false, error: 'entryId and emoji required' });
       return;
     }
-    await kvSet(lockKey, 1); // no TTL needed; contestId changes for new contests
 
-    const votes = await addVote(contestId, entryId, emoji);
-    const score = Object.values(votes||{}).reduce((a,b)=>a+(b|0),0);
-    res.status(200).json({ ok:true, votes, score });
+    const entry = await getEntry(contestId, entryId);
+    if (!entry) {
+      res.status(404).json({ ok: false, error: 'entry not found' });
+      return;
+    }
+
+    // One vote per emoji per visitor (IP + UA hash)
+    const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '')
+      .split(',')[0].trim();
+    const ua = String(req.headers['user-agent'] || '');
+    const voter = crypto.createHash('sha1').update(`${ip}|${ua}`).digest('hex');
+
+    entry.voters = entry.voters || {};       // { voterHash: { '👍': true, '❤️': true, ... } }
+    entry.votes  = entry.votes  || {};       // { emoji: count }
+    if (!entry.voters[voter]) entry.voters[voter] = {};
+
+    if (entry.voters[voter][emoji]) {
+      // Already voted with this emoji
+      entry.score = Object.values(entry.votes).reduce((a, b) => a + (b | 0), 0);
+      res.status(200).json({ ok: true, duplicated: true, votes: entry.votes, score: entry.score });
+      return;
+    }
+
+    entry.voters[voter][emoji] = true;
+    entry.votes[emoji] = (entry.votes[emoji] || 0) + 1;
+    entry.score = Object.values(entry.votes).reduce((a, b) => a + (b | 0), 0);
+
+    await saveEntry(contestId, entry);
+
+    res.status(200).json({ ok: true, votes: entry.votes, score: entry.score });
   } catch (e) {
     console.error('[vote]', e);
-    res.status(500).json({ ok:false, error: String(e && e.message || e) });
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
-};
+}
