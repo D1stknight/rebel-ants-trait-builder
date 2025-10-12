@@ -1,114 +1,156 @@
-// /contest/contest.js
-(function () {
-  const elBoard = document.getElementById('board');
-  const elEmpty = document.getElementById('empty');
-  const elTitle = document.getElementById('cTitle');
-  const elPrompt = document.getElementById('cPrompt');
-  const elCountdown = document.getElementById('cCountdown');
-
+(function(){
   const EMOJIS = ['👍','❤️','🔥','😂','😮'];
+  let ACTIVE = null;
 
-  function esc(s){ return String(s||'').replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  const elPrompt    = document.getElementById('cPrompt');
+  const elCountdown = document.getElementById('cCountdown');
+  const elChips     = document.getElementById('chips');
+  const elBoard     = document.getElementById('board');
 
-  async function json(url, opts){
-    const r = await fetch(url, opts||{});
-    const t = await r.text();
-    try { return { ok:r.ok, status:r.status, data: JSON.parse(t) }; }
-    catch { return { ok:r.ok, status:r.status, data: null, text: t }; }
+  const VOTE_LS = () => 'ra:voted:' + (ACTIVE?.id || 'none');
+
+  init();
+
+  async function init(){
+    const data = await getJSON('/api/contest/contest').catch(()=>null);
+    if (!data || !data.active){ elPrompt.textContent=''; elCountdown.textContent=''; return; }
+    ACTIVE = { id: data.id, meta: data.meta || {} };
+    elPrompt.textContent = ACTIVE.meta.prompt || 'Share your best overlay combo!';
+    startCountdown(ACTIVE.meta.endTs|0);
+
+    render(data.entries||[]);
   }
 
-  function renderCountdown(meta){
-    if (!meta?.endTs) { elCountdown.textContent = ''; return; }
-    const left = Math.max(0, meta.endTs - Date.now());
-    const s = Math.floor(left/1000)%60;
-    const m = Math.floor(left/60000)%60;
-    const h = Math.floor(left/3600000);
-    elCountdown.textContent = `${h}h ${m}m ${s}s left`;
+  function startCountdown(endTs){
+    if (!endTs) { elCountdown.textContent=''; return; }
+    const tick = () => {
+      const left = Math.max(0, endTs - Date.now());
+      const s = Math.floor(left/1000)%60;
+      const m = Math.floor(left/60000)%60;
+      const h = Math.floor(left/3600000);
+      elCountdown.textContent = `${h}h ${m}m ${s}s left`;
+    };
+    tick(); setInterval(tick, 1000);
+  }
+
+  function render(entries){
+    // sort by score desc for initial render
+    entries.sort((a,b)=> (b.score|0) - (a.score|0));
+
+    // render chips (top 10 names + score)
+    const top = entries.slice(0,10);
+    elChips.innerHTML = top.map(e => `<span class="chip">${esc(e.name||'Anonymous')} ${e.score|0}</span>`).join('');
+
+    // render cards
+    elBoard.innerHTML = entries.map(cardHTML).join('');
+    // set initial disabled state for buttons user already used
+    const voted = JSON.parse(localStorage.getItem(VOTE_LS()) || '{}');
+    elBoard.querySelectorAll('.card').forEach(card=>{
+      const eid = card.dataset.id;
+      EMOJIS.forEach(em => {
+        const btn = card.querySelector(`button[data-emoji="${em}"]`);
+        if (voted[`${eid}:${em}`]) btn.disabled = true;
+      });
+    });
+
+    // delegate click handling
+    elBoard.addEventListener('click', onVoteClick, { passive:false });
   }
 
   function cardHTML(e){
-    const name = esc(e.name || 'Anonymous');
-    const caption = esc(e.caption || '');
-    const img = esc(e.imageUrl || e.url || '');
+    const id = esc(e.id);
+    const name = esc(e.name||'Anonymous');
+    const caption = esc(e.caption||'');
+    const url = esc(e.imageUrl || e.url || '');
+    const votes = e.votes || {};
+    const score = e.score|0;
+
+    const buttons = EMOJIS.map(em=>{
+      const c = votes[em]|0;
+      return `<button class="voteBtn" data-id="${id}" data-emoji="${em}">
+                <span>${em}</span><span class="count" data-count>${c}</span>
+              </button>`;
+    }).join('');
 
     return `
-      <article class="entry" data-id="${e.id}">
-        <img loading="lazy" src="${img}" alt="${name}">
+      <article class="card" data-id="${id}" data-score="${score}">
+        <div class="imgWrap">
+          <img src="${url}" alt="${name}">
+        </div>
         <div class="meta">
           <div class="name">${name}</div>
           ${caption ? `<div class="caption">${caption}</div>` : ''}
-          <div class="score">Score: ${e.score|0}</div>
-          <div class="votes">
-            ${EMOJIS.map(em => `
-              <button class="vote" data-emoji="${em}" aria-label="vote ${em}">${em}</button>
-            `).join('')}
+          <div class="voteBar">
+            ${buttons}
+            <div class="score" data-score>Score: ${score}</div>
           </div>
         </div>
-      </article>
-    `;
+      </article>`;
   }
 
-  async function loadBoard(){
-    elEmpty.textContent = '';
-    elBoard.innerHTML = '';
+  async function onVoteClick(ev){
+    const btn = ev.target.closest('button.voteBtn');
+    if (!btn) return;
 
-    const r = await json('/api/contest/contest');
-    if (!r.ok) { elEmpty.textContent = r.text || 'Failed to load contest.'; return; }
+    const eid   = btn.getAttribute('data-id');
+    const emoji = btn.getAttribute('data-emoji');
+    if (!eid || !EMOJIS.includes(emoji)) return;
 
-    const { active, meta, entries } = r.data || {};
-    if (!active) { elEmpty.textContent = 'No active contest right now.'; return; }
+    // one vote per emoji per user → local gate
+    const lsKey = VOTE_LS();
+    const voted = JSON.parse(localStorage.getItem(lsKey) || '{}');
+    if (voted[`${eid}:${emoji}`]) return; // already voted for this emoji
 
-    // header
-    if (meta) {
-      elTitle.textContent = meta.name || 'Rebel Ants Weekly Contest';
-      elPrompt.textContent = meta.prompt || '';
+    // optimistic UI: disable + small pop animation
+    btn.disabled = true;
+    btn.classList.add('pop');
+
+    try{
+      const r = await postJSON('/api/contest/vote', { entryId: eid, emoji });
+      if (!r || !r.ok) throw new Error(r?.error || 'vote failed');
+
+      // update counts on this card only (no full re-render → no flicker)
+      const card  = btn.closest('.card');
+      const count = btn.querySelector('[data-count]');
+      if (count) count.textContent = (r.votes && (r.votes[emoji]|0)) || +count.textContent+1;
+
+      const scoreEl = card.querySelector('[data-score]');
+      if (scoreEl) scoreEl.textContent = 'Score: ' + (r.score|0);
+      card.dataset.score = r.score|0;
+
+      // persist local “already voted” state
+      voted[`${eid}:${emoji}`] = true;
+      localStorage.setItem(lsKey, JSON.stringify(voted));
+
+      // gently update chips
+      refreshChips();
+    }catch(e){
+      // rollback UI if server rejected
+      btn.disabled = false;
+      alert('Vote failed: ' + (e.message||e));
+    }finally{
+      setTimeout(()=>btn.classList.remove('pop'), 260);
     }
-
-    // entries
-    const list = Array.isArray(entries) ? entries.slice() : [];
-    if (!list.length) { elEmpty.textContent = 'No entries yet.'; return; }
-
-    // newest first, then by score desc
-    list.sort((a,b)=> (b.score|0)-(a.score|0) || (b.ts|0)-(a.ts|0));
-    elBoard.innerHTML = list.map(cardHTML).join('');
   }
 
-  // vote click handler
-  document.addEventListener('click', async (ev)=>{
-    const b = ev.target.closest('.vote');
-    if (!b) return;
-    const card = b.closest('.entry');
-    if (!card) return;
-    const entryId = card.getAttribute('data-id');
-    const emoji = b.getAttribute('data-emoji');
+  function refreshChips(){
+    // read current DOM scores to avoid refetch → no flicker
+    const rows = [...elBoard.querySelectorAll('.card')].map(card=>{
+      return {
+        name: card.querySelector('.name')?.textContent || 'Anonymous',
+        score: +(card.dataset.score||'0')
+      };
+    }).sort((a,b)=>b.score-a.score).slice(0,10);
 
-    // optimistic UI: disable this emoji button
-    b.disabled = true;
+    elChips.innerHTML = rows.map(r => `<span class="chip">${esc(r.name)} ${r.score}</span>`).join('');
+  }
 
-    const r = await json('/api/contest/vote', {
-      method:'POST',
-      headers:{ 'content-type':'application/json' },
-      body: JSON.stringify({ entryId, emoji })
-    });
-
-    if (!r.ok) {
-      // re-enable if server rejected
-      b.disabled = false;
-      alert('Vote failed: ' + (r.text || (r.data && r.data.error) || 'error'));
-      return;
-    }
-
-    // refresh board to update scores and keep order
-    await loadBoard();
-  });
-
-  // initial + ticker
-  (async function init(){
-    await loadBoard();
-    setInterval(loadBoard, 15000);
-    setInterval(async ()=>{
-      const r = await json('/api/contest/contest');
-      if (r.ok && r.data?.meta) renderCountdown(r.data.meta);
-    }, 1000);
-  })();
+  // utilities
+  async function getJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+  async function postJSON(url, body){
+    const r = await fetch(url, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) });
+    const text = await r.text();
+    try { const json = JSON.parse(text); return json; } catch { throw new Error(text||('HTTP '+r.status)); }
+  }
+  function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 })();
