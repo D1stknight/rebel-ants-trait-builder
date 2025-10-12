@@ -1,84 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Rebel Ants — Contest</title>
-
-  <!-- Your existing contest styles -->
+  <title>Rebel Ants Weekly Contest</title>
   <link rel="stylesheet" href="/contest/contest.css"/>
-
-  <!-- Small inline fixes specific to this page -->
-  <style>
-    /* More breathing room under caption field */
-    #eCaption { margin-bottom: 10px; }
-    /* Make the Submit button not hug the field above */
-    #eSubmit  { margin-top: 10px; }
-
-    /* Card grid + image box to ensure the PNG shows */
-    .entry-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 16px;
-    }
-    .entry-card {
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,.08);
-      background: rgba(0,0,0,.35);
-      overflow: hidden;
-    }
-    .entry-card .imgbox {
-      height: 240px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #0d1117;       /* dark backdrop */
-    }
-    .entry-card .imgbox img {
-      max-width: 100%;
-      max-height: 100%;
-      object-fit: contain;
-      display: block;
-    }
-    .entry-card .meta {
-      padding: 10px 12px 4px;
-    }
-    .entry-card .meta .name {
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
-    .entry-card .meta .caption {
-      opacity: .85;
-      font-size: 13px;
-    }
-    .entry-card .votes {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      padding: 10px 12px 12px;
-    }
-    .entry-card .votes .vote {
-      border: 1px solid rgba(255,255,255,.15);
-      background: rgba(255,255,255,.06);
-      border-radius: 10px;
-      padding: 6px 10px;
-      cursor: pointer;
-    }
-    .entry-card .votes .vote[disabled] {
-      opacity: .5; cursor: default;
-    }
-    .entry-card .votes .score {
-      margin-left: auto;
-      opacity: .85;
-      font-size: 12px;
-    }
-  </style>
 </head>
-
 <body class="page">
   <section class="c-wrap">
     <header class="c-head">
-      <h1 id="cTitle">Contest</h1>
+      <h1 id="cTitle">Rebel Ants Weekly Contest</h1>
       <p id="cPrompt" class="muted"></p>
       <p id="cCountdown" class="muted"></p>
     </header>
@@ -86,7 +17,6 @@
     <section class="c-card">
       <h2>Submit your entry</h2>
 
-      <!-- Top row: name + image URL -->
       <div class="row">
         <label>Name
           <input id="eName" placeholder="Your display name"/>
@@ -96,7 +26,6 @@
         </label>
       </div>
 
-      <!-- Upload row: file picker + upload button (fills eImage) -->
       <div class="fileRow">
         <input type="file" id="eFile" accept="image/png,image/jpeg"/>
         <button id="eUpload" class="btn">Upload PNG</button>
@@ -106,148 +35,18 @@
         <input id="eCaption" placeholder="Say something about your overlay"/>
       </label>
 
-      <button id="eSubmit" class="btn primary">Submit Entry</button>
-      <p id="eMsg" class="muted"></p>
+      <div class="actions">
+        <button id="eSubmit" class="btn primary">Submit Entry</button>
+        <span id="eMsg" class="muted" style="margin-left:10px"></span>
+      </div>
     </section>
 
     <section class="c-card">
       <h2>Leaderboard</h2>
-      <div id="board" class="entry-grid"></div>
+      <div id="board" class="board"></div>
     </section>
   </section>
 
-  <script>
-    // ----- helpers -----
-    async function api(url, opts){ const r = await fetch(url, opts||{}); if(!r.ok) throw new Error(await r.text().catch(()=>r.statusText)); return r.json(); }
-    function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-    function scoreOf(v){ if(!v) return 0; return Object.values(v).reduce((a,b)=>a+(b|0),0); }
-
-    // Keep it consistent with the server
-    const VOTE_EMOJIS = ['👍','❤️','🔥','😂','😮'];
-
-    // localStorage guard: allow each emoji once per entry per browser
-    const votedStore = {
-      key:'ra_voted_v1',
-      get(){ try{return JSON.parse(localStorage.getItem(this.key)||'{}')}catch{ return {} } },
-      set(v){ localStorage.setItem(this.key, JSON.stringify(v)) },
-      has(id, em){ const m=this.get(); return !!(m[id] && m[id][em]); },
-      mark(id, em){ const m=this.get(); (m[id]||(m[id]={}))[em]=1; this.set(m); }
-    };
-
-    let ACTIVE = null;
-
-    async function loadContest(){
-      const data = await api('/api/contest/contest');
-      if(!data.active){
-        document.getElementById('cTitle').textContent='No active contest';
-        document.getElementById('cPrompt').textContent='';
-        document.getElementById('cCountdown').textContent='';
-        document.getElementById('board').innerHTML='';
-        return;
-      }
-      ACTIVE = data;
-      const meta = data.meta || {};
-      document.getElementById('cTitle').textContent = meta.name || 'Contest';
-      document.getElementById('cPrompt').textContent = meta.prompt || '';
-      beginCountdown(meta.endTs);
-      renderBoard(data.entries || []);
-    }
-
-    function beginCountdown(endTs){
-      const el = document.getElementById('cCountdown');
-      if(!endTs){ el.textContent=''; return; }
-      function tick(){
-        const left = Math.max(0, endTs - Date.now());
-        const s = Math.floor(left/1000)%60, m=Math.floor(left/60000)%60, h=Math.floor(left/3600000);
-        el.textContent = `${h}h ${m}m ${s}s left`;
-      }
-      tick(); setInterval(tick, 1000);
-    }
-
-    function renderBoard(entries){
-      const board = document.getElementById('board');
-      board.innerHTML = '';
-      for(const e of entries){
-        const name    = escapeHtml(e.name || 'Anonymous');
-        const caption = e.caption ? `<div class="caption">${escapeHtml(e.caption)}</div>` : '';
-        const imgUrl  = e.imageUrl || e.url || ''; // accept either
-        const sc      = typeof e.score==='number' ? e.score : scoreOf(e.votes);
-
-        const card = document.createElement('article');
-        card.className = 'entry-card';
-        card.innerHTML = `
-          <div class="imgbox">
-            <img loading="lazy" decoding="async" src="${imgUrl}" alt="${name}">
-          </div>
-          <div class="meta">
-            <div class="name">${name}</div>
-            ${caption}
-          </div>
-          <div class="votes">
-            ${VOTE_EMOJIS.map(em=>`<button class="vote" data-id="${e.id}" data-emoji="${em}" ${votedStore.has(e.id,em)?'disabled':''}>${em}</button>`).join('')}
-            <div class="score">Score: ${sc}</div>
-          </div>
-        `;
-        board.appendChild(card);
-      }
-    }
-
-    // voting (one click per emoji per entry per browser + server lock)
-    document.addEventListener('click', async (ev)=>{
-      const b = ev.target.closest('.vote'); if(!b) return;
-      const id = b.getAttribute('data-id');
-      const em = b.getAttribute('data-emoji');
-      if (votedStore.has(id, em)) return;
-      b.disabled = true;
-      try{
-        await api('/api/contest/vote', {
-          method:'POST',
-          headers:{'content-type':'application/json'},
-          body: JSON.stringify({ entryId:id, emoji:em })
-        });
-        votedStore.mark(id, em);
-        await loadContest();
-      }catch(err){
-        b.disabled = false;
-        alert('Vote failed: ' + err.message);
-      }
-    });
-
-    // Upload PNG -> fills the Image URL field using your /api/contest/upload
-    document.getElementById('eUpload').addEventListener('click', async ()=>{
-      const f = document.getElementById('eFile').files[0];
-      if(!f){ alert('Choose a PNG/JPG first.'); return; }
-      const fd = new FormData(); fd.append('file', f);
-      const up = await api('/api/contest/upload', { method:'POST', body: fd });
-      const url = up.url || (up.pathname ? `https://blob.vercel-storage.com${up.pathname}` : '');
-      if(!url){ alert('Upload failed: no URL returned'); return; }
-      document.getElementById('eImage').value = url;
-      alert('Uploaded ✓');
-    });
-
-    // Submit manual entry (builder has its own button; this is for outside users)
-    document.getElementById('eSubmit').addEventListener('click', async ()=>{
-      const name = document.getElementById('eName').value.trim() || 'Anonymous';
-      const caption = document.getElementById('eCaption').value.trim();
-      const imageUrl = document.getElementById('eImage').value.trim();
-      if(!imageUrl){ document.getElementById('eMsg').textContent = 'Please provide an image URL or use Upload PNG.'; return; }
-      document.getElementById('eMsg').textContent = '';
-      try{
-        await api('/api/contest/entry', {
-          method:'POST',
-          headers:{'content-type':'application/json'},
-          body: JSON.stringify({ name, caption, imageUrl })
-        });
-        // reset
-        document.getElementById('eName').value=''; document.getElementById('eCaption').value='';
-        document.getElementById('eImage').value=''; document.getElementById('eFile').value='';
-        await loadContest();
-        alert('Submitted ✓');
-      }catch(err){ alert('Submit failed: ' + err.message); }
-    });
-
-    // initial load
-    loadContest();
-  </script>
+  <script src="/contest/contest.js"></script>
 </body>
 </html>
