@@ -91,6 +91,17 @@ async function getEntry(contestId, eid) {
   return await kvGet(entryKey(contestId, eid));
 }
 
+// --- add this helper ---
+async function kvSetNX(key, value) {
+  const payload = typeof value === 'string' ? value : JSON.stringify(value);
+  // Upstash KV: set only if key does not exist
+  const { result } = await kvRequest(`/set/${encodeURIComponent(key)}?nx=true`, {
+    method: 'POST',
+    body: payload
+  });
+  return result === 'OK';
+}
+
 async function listEntries(contestId, limit = 50) {
   let ids = (await kvGet(idsKey(contestId))) || [];
   if (!Array.isArray(ids)) ids = [];
@@ -117,7 +128,7 @@ async function addVote(contestId, eid, emoji) {
 
 module.exports = {
   // low-level (kept for compatibility)
-  kvGet, kvSet, kvDel,
+  kvGet, kvSet, kvDel, kvSetNX,
   // contest
   getActiveContestId, getContestMeta, setActiveContest,
   saveEntry, getEntry, listEntries, addVote
