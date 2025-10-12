@@ -64,3 +64,12 @@ h1{ margin:0 0 6px 0; font-weight:700; font-size:22px; }
 /* Small pop animation on vote */
 @keyframes pop { 0%{transform:scale(1)} 50%{transform:scale(1.25)} 100%{transform:scale(1)} }
 .voteBtn.pop{ animation:pop .25s ease; }
+
+/* --- Fancy gradient background (append) --- */
+body.page{
+  background:
+    radial-gradient(1100px 600px at 72% -10%, #1b2c4a 0%, rgba(0,0,0,0) 60%),
+    radial-gradient(900px 500px at -10% 20%, #0f325a 0%, rgba(0,0,0,0) 60%),
+    radial-gradient(1200px 700px at 110% 120%, #18243d 0%, rgba(0,0,0,0) 60%),
+    #0b0f16;
+}
