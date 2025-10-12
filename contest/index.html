@@ -118,7 +118,9 @@ async function loadBoard(){
     const card = document.createElement('div');
     card.className = 'entry';
     card.innerHTML = `
-      <img src="${row.imageUrl}" alt="">
+      <img loading="lazy" referrerpolicy="no-referrer"
+     src="${(row.imageUrl || row.url || '')}"
+     alt="">
       <div class="meta">
         <div class="name">${escapeHtml(row.name||'')}</div>
         <div class="score">Score: ${row.score}</div>
