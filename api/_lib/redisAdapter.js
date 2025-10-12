@@ -61,15 +61,30 @@ async function setActiveContest(meta) {
 }
 
 async function saveEntry(contestId, entry) {
-  // entry: { id, name, caption, url, ts, votes:{emoji->count} }
-  await kvSet(entryKey(contestId, entry.id), entry);
+  // Normalize to ensure both url and imageUrl exist, and defaults are present.
+  // entry coming in may have only `url`; we mirror it to `imageUrl`.
+  const normalized = {
+    id: entry.id,
+    name: entry.name || 'Anonymous',
+    caption: entry.caption || '',
+    url: entry.url || entry.imageUrl || '',     // prefer url if provided
+    imageUrl: entry.imageUrl || entry.url || '',// ensure imageUrl is set
+    ts: entry.ts || Date.now(),
+    votes: entry.votes || {},                   // emoji -> count
+    score: typeof entry.score === 'number'
+      ? entry.score
+      : Object.values(entry.votes || {}).reduce((a, b) => a + (b | 0), 0)
+  };
+
+  await kvSet(entryKey(contestId, normalized.id), normalized);
+
   let ids = (await kvGet(idsKey(contestId))) || [];
   if (!Array.isArray(ids)) ids = [];
-  if (!ids.includes(entry.id)) {
-    ids.push(entry.id);
+  if (!ids.includes(normalized.id)) {
+    ids.push(normalized.id);
     await kvSet(idsKey(contestId), ids);
   }
-  return entry;
+  return normalized;
 }
 
 async function getEntry(contestId, eid) {
