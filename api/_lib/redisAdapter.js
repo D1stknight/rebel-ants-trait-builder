@@ -1,65 +1,109 @@
-// api/_lib/redisAdapter.js
-// Uses Upstash KV REST API via KV_REST_API_URL + KV_REST_API_TOKEN
+// api/_lib/redisAdapter.js  (CommonJS, Upstash KV only)
+const KV_URL   = process.env.KV_REST_API_URL || process.env.KV_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.KV_REST_TOKEN;
 
-const BASE = process.env.KV_REST_API_URL;
-const TOKEN = process.env.KV_REST_API_TOKEN;
+if (!KV_URL || !KV_TOKEN) {
+  console.warn('[redisAdapter] Missing KV_REST_API_URL / KV_REST_API_TOKEN env vars');
+}
 
-async function kv(cmd, ...args) {
-  const r = await fetch(BASE, {
-    method: 'POST',
+async function kvRequest(path, { method = 'GET', body } = {}) {
+  const r = await fetch(`${KV_URL}${path}`, {
+    method,
     headers: {
-      'Authorization': `Bearer ${TOKEN}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${KV_TOKEN}`,
+      ...(body ? { 'Content-Type': 'text/plain' } : {})
     },
-    body: JSON.stringify([cmd, ...args])
+    body
   });
-  const data = await r.json();
-  if (data && data.error) throw new Error(data.error);
-  return data ? data.result : null;
-}
-
-const j = (v) => JSON.stringify(v);
-const p = (v) => { try { return JSON.parse(v); } catch { return null; } };
-
-export async function startContest({ name, prompt, durationDays }) {
-  const id = 'c' + Date.now().toString(36);
-  const now = Date.now();
-  const endsAt = now + (Number(durationDays) || 7) * 86400_000; // days→ms
-
-  const meta = { id, name, prompt, startedAt: now, endsAt };
-
-  // Save meta and set the "active" pointer with TTL so it auto-clears
-  await kv('SET', `contest:${id}:meta`, j(meta));
-  await kv('SET', 'contest:active', j({ id, endsAt }));
-  await kv('EXPIRE', 'contest:active', Math.max(1, Math.floor((endsAt - now) / 1000)));
-
-  return meta;
-}
-
-export async function getActiveContestId() {
-  const raw = await kv('GET', 'contest:active');
-  if (!raw) return null;
-  const { id, endsAt } = p(raw) || {};
-  if (!id || !endsAt || Date.now() > endsAt) {
-    await kv('DEL', 'contest:active');
-    return null;
+  if (!r.ok) {
+    const t = await r.text().catch(() => String(r.status));
+    throw new Error(`KV ${method} ${path} -> ${r.status} ${t}`);
   }
-  return id;
+  return r.json();
 }
 
-export async function saveEntry(contestId, { name, caption, url }) {
-  const entry = {
-    id: 'e' + Math.random().toString(36).slice(2),
-    ts: Date.now(),
-    name, caption, url, votes: 0
-  };
-  // keep a map for quick lookup, and a list for ordering
-  await kv('SET', `contest:${contestId}:entry:${entry.id}`, j(entry));
-  await kv('LPUSH', `contest:${contestId}:entries`, j(entry));
+async function kvGet(key) {
+  const { result } = await kvRequest(`/get/${encodeURIComponent(key)}`);
+  if (result == null) return null;
+  try { return JSON.parse(result); } catch { return result; }
+}
+
+async function kvSet(key, value) {
+  const payload = typeof value === 'string' ? value : JSON.stringify(value);
+  await kvRequest(`/set/${encodeURIComponent(key)}`, { method: 'POST', body: payload });
+  return true;
+}
+
+async function kvDel(key) {
+  await kvRequest(`/del/${encodeURIComponent(key)}`, { method: 'POST' });
+  return true;
+}
+
+// ----- Contest helpers (KV only) -----
+const ACTIVE_KEY = 'ra:contest:active';
+const idsKey     = (id) => `ra:contest:${id}:ids`;
+const metaKey    = (id) => `ra:contest:${id}:meta`;
+const entryKey   = (id, eid) => `ra:contest:${id}:entry:${eid}`;
+
+async function getActiveContestId() {
+  const active = await kvGet(ACTIVE_KEY);
+  return active && active.id ? String(active.id) : null;
+}
+async function getContestMeta(id) {
+  return await kvGet(metaKey(id));
+}
+async function setActiveContest(meta) {
+  // meta: { id, name, prompt, startTs, endTs }
+  await kvSet(ACTIVE_KEY, { id: meta.id });
+  await kvSet(metaKey(meta.id), meta);
+  if (!(await kvGet(idsKey(meta.id)))) await kvSet(idsKey(meta.id), []);
+  return meta.id;
+}
+
+async function saveEntry(contestId, entry) {
+  // entry: { id, name, caption, url, ts, votes:{emoji->count} }
+  await kvSet(entryKey(contestId, entry.id), entry);
+  let ids = (await kvGet(idsKey(contestId))) || [];
+  if (!Array.isArray(ids)) ids = [];
+  if (!ids.includes(entry.id)) {
+    ids.push(entry.id);
+    await kvSet(idsKey(contestId), ids);
+  }
   return entry;
 }
 
-export async function listEntries(contestId, limit = 50) {
-  const raws = await kv('LRANGE', `contest:${contestId}:entries`, 0, limit - 1) || [];
-  return raws.map(p).filter(Boolean);
+async function getEntry(contestId, eid) {
+  return await kvGet(entryKey(contestId, eid));
 }
+
+async function listEntries(contestId, limit = 50) {
+  let ids = (await kvGet(idsKey(contestId))) || [];
+  if (!Array.isArray(ids)) ids = [];
+  ids = ids.slice(-limit).reverse(); // newest first
+  const out = [];
+  for (const id of ids) {
+    const e = await getEntry(contestId, id);
+    if (!e) continue;
+    e.votes = e.votes || {};
+    e.score = Object.values(e.votes).reduce((a, b) => a + (b | 0), 0);
+    out.push(e);
+  }
+  return out;
+}
+
+async function addVote(contestId, eid, emoji) {
+  const e = await getEntry(contestId, eid);
+  if (!e) throw new Error('entry not found');
+  e.votes = e.votes || {};
+  e.votes[emoji] = (e.votes[emoji] || 0) + 1;
+  await kvSet(entryKey(contestId, eid), e);
+  return e.votes;
+}
+
+module.exports = {
+  // low-level (kept for compatibility)
+  kvGet, kvSet, kvDel,
+  // contest
+  getActiveContestId, getContestMeta, setActiveContest,
+  saveEntry, getEntry, listEntries, addVote
+};
