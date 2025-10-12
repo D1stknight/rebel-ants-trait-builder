@@ -74,6 +74,18 @@
     <span id="delMsg" class="muted tight"></span>
   </section>
 
+  <!-- Entries list (admin convenience) -->
+<section class="panel">
+  <h3>Entries <span class="muted">(click ID to copy)</span></h3>
+  <div class="row" style="margin:6px 0 10px;">
+    <label>Filter
+      <input id="entriesFilter" placeholder="Filter by name, caption, or ID"/>
+    </label>
+    <button id="entriesRefresh" class="btn" style="align-self:flex-end;height:38px;">Refresh</button>
+  </div>
+  <div id="entriesBox"></div>
+</section>
+  
   <!-- Active contest status -->
   <section class="panel">
     <h3>Active Contest</h3>
