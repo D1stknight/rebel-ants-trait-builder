@@ -91,15 +91,18 @@ async function getEntry(contestId, eid) {
   return await kvGet(entryKey(contestId, eid));
 }
 
-// --- add this helper ---
+// --- ADD OR REPLACE THIS helper ---
 async function kvSetNX(key, value) {
   const payload = typeof value === 'string' ? value : JSON.stringify(value);
-  // Upstash KV: set only if key does not exist
-  const { result } = await kvRequest(`/set/${encodeURIComponent(key)}?nx=true`, {
+  // Upstash expects nx=1 (not true) on the REST /set endpoint
+  const r = await fetch(`${KV_URL}/set/${encodeURIComponent(key)}?nx=1`, {
     method: 'POST',
+    headers: { Authorization: `Bearer ${KV_TOKEN}`, 'Content-Type': 'text/plain' },
     body: payload
   });
-  return result === 'OK';
+  // When NX fails (key existed) Upstash returns 200 with result not OK, or 200 null; normalize to boolean
+  const j = await r.json().catch(() => ({}));
+  return j && j.result === 'OK';
 }
 
 async function listEntries(contestId, limit = 50) {
