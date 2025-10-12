@@ -9,6 +9,22 @@ function readJSON(req) {
   });
 }
 
+await fetch('/api/contest/vote', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ entryId, emoji, voter: VOTER_ID })
+}).then(r => r.json()).then(data => {
+  if (data.ok) {
+    b.disabled = true;          // lock this emoji for this browser
+    b.classList.add('voted');   // (optional) style it differently
+    loadBoard();                // refresh scores
+  } else if (data.already) {
+    b.disabled = true;          // already voted this emoji — lock it
+  } else {
+    alert('Vote failed');
+  }
+});
+
 module.exports = async (req, res) => {
   try {
     if (req.method !== 'POST') { res.status(405).send('Method Not Allowed'); return; }
