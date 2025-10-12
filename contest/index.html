@@ -7,17 +7,15 @@
   <link rel="stylesheet" href="/contest/contest.css">
 </head>
 <body class="page">
-  <h1 id="cTitle">Rebel Ants Weekly Contest</h1>
-  <p id="cPrompt" class="muted"></p>
-  <p id="cCountdown" class="muted"></p>
+  <header class="c-head">
+    <h1>Rebel Ants Weekly Contest</h1>
+    <p id="cPrompt" class="muted"></p>
+    <p id="cCountdown" class="muted"></p>
+    <div id="chips" class="chips"></div>
+  </header>
 
-  <section class="c-card">
-    <h2>Leaderboard</h2>
-    <div id="board" class="board"></div>
-    <div id="empty" class="muted"></div>
-  </section>
+  <section id="board" class="board" aria-live="polite"></section>
 
-  <!-- bump the v= whenever you want to hard-refresh browsers -->
-  <script src="/contest/contest.js?v=27"></script>
+  <script src="/contest/contest.js" defer></script>
 </body>
 </html>
