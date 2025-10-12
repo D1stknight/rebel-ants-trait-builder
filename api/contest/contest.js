@@ -1,13 +1,9 @@
-// api/contest/contest.js  (CommonJS)
-exports.config = { runtime: 'nodejs' };
+// /api/contest/contest.js
+import { getActiveContestId, getContestMeta, listEntries } from '../_lib/redisAdapter.js';
 
-const {
-  getActiveContestId,
-  getContestMeta,
-  listEntries,
-} = require('../_lib/redisAdapter');
+export const config = { runtime: 'nodejs' };
 
-module.exports = async (_req, res) => {
+export default async function handler(_req, res) {
   try {
     const id = await getActiveContestId();
     if (!id) {
@@ -15,26 +11,11 @@ module.exports = async (_req, res) => {
       return;
     }
 
-    const meta = await getContestMeta(id);
-    let entries = await listEntries(id, 200);
-
-    // Normalize fields so the UI can always use .imageUrl (and still keep .url)
-    entries = (entries || []).map(e => ({
-      id: String(e.id),
-      name: e.name || 'Anonymous',
-      caption: e.caption || '',
-      url: e.url || e.imageUrl || '',
-      imageUrl: e.imageUrl || e.url || '',
-      ts: e.ts || 0,
-      votes: e.votes || {},
-      score: typeof e.score === 'number'
-        ? e.score
-        : Object.values(e.votes || {}).reduce((a, b) => a + (b|0), 0)
-    }));
+    const meta = await getContestMeta(id);          // { id,name,prompt,startTs,endTs }
+    const entries = await listEntries(id, 100);     // includes { url, imageUrl, votes, score }
 
     res.status(200).json({ ok: true, active: true, id, meta, entries });
   } catch (e) {
-    console.error('[contest]', e);
-    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
-};
+}
