@@ -1,11 +1,12 @@
-// /api/contest/entry.js
-import { put } from '@vercel/blob';
-import { getActiveContestId, saveEntry } from '../_lib/redisAdapter.js';
-
+// api/contest/entry.js
 export const config = { runtime: 'nodejs' };
 
-// helper: read raw body (works in Node runtime on Vercel)
-function readRaw(req) {
+import crypto from 'crypto';
+import { put } from '@vercel/blob';
+import { getActiveContestId, saveEntry } from '../_lib/redisAdapter';
+
+// read whole request body as Buffer (Node stream)
+function readBuffer(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     req.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
@@ -14,9 +15,15 @@ function readRaw(req) {
   });
 }
 
+// read JSON body (Node stream -> string -> JSON)
 async function readJSON(req) {
-  const buf = await readRaw(req);
-  try { return JSON.parse(buf.toString() || '{}'); } catch { return {}; }
+  const buf = await readBuffer(req);
+  if (!buf?.length) return {};
+  try {
+    return JSON.parse(buf.toString('utf8') || '{}');
+  } catch {
+    return {};
+  }
 }
 
 export default async function handler(req, res) {
@@ -32,73 +39,73 @@ export default async function handler(req, res) {
       return;
     }
 
-    // name + caption come via querystring (from the builder)
-    const urlObj = new URL(req.url, 'https://x');
-    const name = (urlObj.searchParams.get('name') || 'Anonymous').slice(0, 48);
-    const caption = (urlObj.searchParams.get('caption') || '').slice(0, 140);
+    const ct = String(req.headers['content-type'] || '').toLowerCase();
+    const urlObj = new URL(req.url, 'http://localhost');
+    let name = (urlObj.searchParams.get('name') || '').trim() || 'Anonymous';
+    let caption = (urlObj.searchParams.get('caption') || '').trim();
 
-    const ct = String(req.headers['content-type'] || '');
-    let imageUrl = '';
+    let imageUrl = null;
 
-    if (ct.startsWith('image/')) {
-      // Builder path: raw PNG/JPG upload -> Blob
-      const bytes = await readRaw(req);
-      if (!bytes || bytes.length < 64) {
-        res.status(400).json({ ok: false, error: 'empty image' });
+    if (ct.includes('application/json')) {
+      // JSON path
+      const body = await readJSON(req);
+      name = (body.name || name || 'Anonymous').toString().slice(0, 48);
+      caption = (body.caption || caption || '').toString().slice(0, 140);
+
+      if (body.imageUrl) {
+        imageUrl = String(body.imageUrl);
+      } else if (body.imageDataUrl) {
+        // data URL -> buffer -> upload to Vercel Blob
+        const m = /^data:(image\/(?:png|jpeg));base64,(.+)$/i.exec(body.imageDataUrl);
+        if (!m) {
+          res.status(400).json({ ok: false, error: 'bad imageDataUrl' });
+          return;
+        }
+        const buf = Buffer.from(m[2], 'base64');
+        const filename = `contests/${contestId}/${crypto.randomUUID()}.png`;
+        const putRes = await put(filename, buf, {
+          access: 'public',
+          contentType: m[1],
+          token: process.env.BLOB_READ_WRITE_TOKEN,
+        });
+        imageUrl = putRes.url;
+      }
+    }
+
+    if (!imageUrl) {
+      // raw bytes path (PNG/JPG blob from builder)
+      const buf = await readBuffer(req);
+      if (!buf?.length || buf.length < 32) {
+        res.status(400).json({ ok: false, error: 'no image bytes and no imageUrl' });
         return;
       }
-
-      const id = crypto.randomUUID();
-      const filename = `contests/${contestId}/${id}.png`;
-
-      const stored = await put(filename, bytes, {
+      const contentType =
+        ct.includes('jpeg') || ct.includes('jpg') ? 'image/jpeg' : 'image/png';
+      const filename = `contests/${contestId}/${crypto.randomUUID()}.png`;
+      const putRes = await put(filename, buf, {
         access: 'public',
-        contentType: 'image/png',
-        addRandomSuffix: false,
+        contentType,
         token: process.env.BLOB_READ_WRITE_TOKEN,
       });
-
-      imageUrl = stored.url || (stored.pathname ? `https://blob.vercel-storage.com${stored.pathname}` : '');
-
-      const payload = {
-        id,
-        name,
-        caption,
-        url: imageUrl,        // <-- keep
-        imageUrl,             // <-- also store here
-        ts: Date.now(),
-        votes: {},
-        score: 0,
-      };
-
-      await saveEntry(contestId, payload);
-      res.status(200).json({ ok: true, id, url: imageUrl });
-      return;
+      imageUrl = putRes.url;
     }
 
-    // Fallback path: JSON body with imageUrl
-    const body = await readJSON(req);
-    imageUrl = String(body.imageUrl || body.url || '').trim();
-    if (!/^https?:\/\//i.test(imageUrl)) {
-      res.status(400).json({ ok: false, error: 'imageUrl required' });
-      return;
-    }
-
+    // save entry
     const id = crypto.randomUUID();
-    const payload = {
+    const entry = {
       id,
       name,
       caption,
-      url: imageUrl,
-      imageUrl,
+      url: imageUrl,      // keep for compatibility
+      imageUrl,           // explicit
       ts: Date.now(),
       votes: {},
-      score: 0,
     };
+    await saveEntry(contestId, entry);
 
-    await saveEntry(contestId, payload);
     res.status(200).json({ ok: true, id, url: imageUrl });
   } catch (e) {
+    console.error('[entry]', e);
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 }
