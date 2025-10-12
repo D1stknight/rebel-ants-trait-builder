@@ -223,3 +223,28 @@ input[type="text"], input[type="url"], input:not([type]) {
 /* Emoji click micro-animation */
 .votes .vote { transition: transform 120ms ease; }
 .votes .vote.burst { transform: scale(1.16); }
+
+/* /contest/contest.css additions (safe to append at the end) */
+.card .imgWrap { background:#0e0f12; border-radius:10px; overflow:hidden; }
+.card .imgWrap img { width:100%; display:block; }
+
+.votes { display:flex; gap:8px; margin-top:6px; }
+.vote {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:6px 8px; border-radius:999px; border:1px solid #394150;
+  background:#151a22; color:#cbd5e1; cursor:pointer;
+  transition: transform .06s ease;
+}
+.vote:enabled:hover { transform: translateY(-1px); }
+.vote:disabled { opacity:.55; cursor:default; }
+.vote .cnt { font-size:12px; opacity:.8; }
+
+/* burst effect */
+.burst { position:absolute; font-size:18px; animation:fly .6s ease-out forwards; }
+@keyframes fly {
+  from { transform: translate(0,0) scale(.85); opacity:1; }
+  to   { transform: translate(var(--tx), var(--ty)) scale(1.45) rotate(var(--rot)); opacity:0; }
+}
+
+/* a little space under caption field if you still have the submit form visible */
+#eCaption { margin-bottom: 10px; }
