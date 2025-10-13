@@ -201,56 +201,68 @@
   start();
 })();
 
-/* ===== Share to X (single link, new tab; mobile = image+link) ===== */
-(function wireXShare(){
-  // treat only real mobile UAs as “Web Share with files” capable
-  const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
+/* ===== Share to X (desktop: single link/new tab; mobile: image + link) ===== */
+(function () {
+  const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent || '');
 
-  document.addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('[data-x]');     // your X button has data-x
+  const SEL = '.shareBtn'; // <- matches your current buttons
+
+  const contestURL = (id) =>
+    `${location.origin}/contest#e-${encodeURIComponent(id || '')}`;
+
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest(SEL);
     if (!btn) return;
 
-    const card = btn.closest('.card');
-    const id      = card?.getAttribute('data-id') || '';
-    const name    = card?.querySelector('.name')?.textContent?.trim() || '';
-    const caption = card?.querySelector('.caption')?.textContent?.trim() || '';
-    const imgUrl  = card?.querySelector('img')?.src || '';
-    const contestURL = `${location.origin}/contest#e-${encodeURIComponent(id)}`;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
 
+    const card    = btn.closest('.card');
+    const id      = btn.dataset.id   || card?.dataset.id || '';
+    const name    = btn.dataset.name || card?.querySelector('.name')?.textContent?.trim() || '';
+    const caption = card?.querySelector('.caption')?.textContent?.trim() || '';
+    const imgUrl  = btn.dataset.url  || card?.querySelector('img')?.src || '';
+
+    const link = contestURL(id);
     const head = [name, caption].filter(Boolean).join(' — ') || 'Check this entry';
 
-    // --- Mobile: Web Share (image + link) ---
+    // ---- Mobile (Web Share): attach image + include link ----
     if (isMobile && navigator.share) {
-      try {
-        // attach the image if we can fetch it
-        let files = [];
+      (async () => {
         try {
-          if (navigator.canShare) {
-            const resp = await fetch(imgUrl, { mode: 'cors', cache: 'no-store' });
-            const blob = await resp.blob();
-            const file = new File([blob], 'rebel-ants.png', { type: blob.type || 'image/png' });
-            const data = { text: head, url: contestURL, files: [file] };
-            if (!navigator.canShare || navigator.canShare(data)) {
-              await navigator.share(data);
-              return;
-            }
+          const data = { text: head, url: link };   // link included here
+          // Try to attach the image (if CORS allows)
+          if (imgUrl && navigator.canShare) {
+            try {
+              const resp = await fetch(imgUrl, { mode: 'cors', cache: 'no-store' });
+              const blob = await resp.blob();
+              const file = new File([blob], 'rebel-ants.png', { type: blob.type || 'image/png' });
+              if (navigator.canShare({ files: [file], text: head, url: link })) {
+                data.files = [file];
+              }
+            } catch { /* ignore and share without file */ }
           }
-        } catch { /* fall through to desktop intent */ }
-
-        // fallback mobile share without file
-        await navigator.share({ text: `${head}\n\nVote here: ${contestURL}` });
-        return;
-      } catch { /* ignore and fall through to desktop intent */ }
+          await navigator.share(data);
+          return;
+        } catch {
+          // fall through to desktop flow if user cancels or share fails
+          openX(head, link, imgUrl);
+        }
+      })();
+      return;
     }
 
-    // --- Desktop (and fallback): open X compose in a NEW TAB ---
-    // ONE contest link only (inline in text). Image goes as plain URL text.
-    const text = `${head}\n\nVote here: ${contestURL}\n\nImage: ${imgUrl}`;
+    // ---- Desktop (and fallback): open X compose in a NEW TAB, single link ----
+    openX(head, link, imgUrl);
+  }, { passive: false });
+
+  function openX(head, link, imgUrl) {
+    // Put ONE contest link in text; do NOT add &url= (prevents duplicate preview)
+    const text = `${head}\n\nVote here: ${link}${imgUrl ? `\n\nImage: ${imgUrl}` : ''}`;
     const u = new URL('https://twitter.com/intent/tweet');
     u.searchParams.set('text', text);
-    // do NOT set &url= to avoid a duplicate contest link
-
-    // synchronous open => no Safari popup blocker; opens as a new tab
+    // Synchronous open → new tab, no popup‑blocker alert
     window.open(u.toString(), '_blank');
-  });
+  }
 })();
