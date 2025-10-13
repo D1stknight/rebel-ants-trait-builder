@@ -10162,4 +10162,3 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     console.warn('Failed to mount contest actions:', e);
   }
 })();
-</script>
