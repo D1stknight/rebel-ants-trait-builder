@@ -73,3 +73,20 @@ body.page{
     radial-gradient(1200px 700px at 110% 120%, #18243d 0%, rgba(0,0,0,0) 60%),
     #0b0f16;
 }
+
+/* ——— Share button + card highlight ——— */
+.shareBtn{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 8px; border-radius:999px;
+  border:1px solid rgba(255,255,255,.12);
+  background:#0e1523; color:#e8eefc; cursor:pointer;
+  font-size:12px; line-height:1; user-select:none;
+  transition:transform .06s ease, filter .15s ease;
+}
+.shareBtn:hover{ transform:translateY(-1px); filter:brightness(1.07); }
+.shareBtn .x { font-weight:700; letter-spacing:.2px; } /* “𝕏” glyph */
+
+.card.hi{
+  box-shadow: 0 0 0 2px #5b8cff, 0 12px 28px rgba(91,140,255,.25);
+  transition: box-shadow .25s ease;
+}
