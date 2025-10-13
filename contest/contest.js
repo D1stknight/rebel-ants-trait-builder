@@ -254,7 +254,7 @@
     }
 
     // ---- Desktop (and fallback): open X compose in a NEW TAB, single link ----
-    openX(head, link, imgUrl);
+    openX(head, link, imgUrl, id);
   }, { passive: false });
 
   function openX(head, link, imgUrl, id) {
