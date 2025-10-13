@@ -1,0 +1,92 @@
+/* Page chrome */
+:root{ --card:#131822; --line:rgba(255,255,255,.10); --muted:rgba(255,255,255,.7); }
+*{ box-sizing:border-box }
+html,body{ margin:0; padding:0; }
+body.page{
+  color:#e8eefc;
+  background: radial-gradient(1200px 700px at 30% -10%, #0f1b33 0%, #0a1220 45%, #08101c 100%),
+             radial-gradient(1200px 700px at 80% 110%, #10213f 0%, #0a1220 40%, #08101c 100%);
+  min-height:100vh;
+  padding:28px 16px 80px;
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+}
+h1{ margin:0 0 6px 0; font-weight:700; font-size:22px; }
+.muted{ color:var(--muted); }
+.c-head{ max-width:1100px; margin:0 auto 14px; }
+
+/* Leader chips (top–10 by score) */
+.chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.chip{
+  font-size:12px; padding:6px 10px; border:1px solid var(--line);
+  background:#0e1523; border-radius:999px; color:#cfd8ee; opacity:.95;
+}
+
+/* Grid of cards */
+.board{
+  max-width:1100px; margin:16px auto 0;
+  display:grid; gap:16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  align-items:start;
+}
+
+/* Card */
+.card{
+  background:var(--card); border:1px solid var(--line); border-radius:14px;
+  padding:10px; box-shadow: 0 4px 18px rgba(0,0,0,.25);
+}
+.card .imgWrap{
+  width:100%; aspect-ratio:1/1; background:#0b111c; border-radius:10px;
+  display:flex; align-items:center; justify-content:center; overflow:hidden;
+}
+.card img{
+  width:100%; height:100%; object-fit:contain; /* keep whole image visible */
+  display:block;
+}
+.meta{ margin-top:8px; }
+.name{ font-weight:600; }
+.caption{ color:var(--muted); margin-top:2px; font-size:12px; }
+
+/* Vote bar */
+.voteBar{
+  margin-top:8px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+}
+.voteBtn{
+  display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line);
+  background:#0e1523; color:#e8eefc; border-radius:999px; padding:4px 8px;
+  cursor:pointer; user-select:none; transition:transform .06s ease;
+}
+.voteBtn:active{ transform:scale(.97); }
+.voteBtn[disabled]{ opacity:.38; cursor:not-allowed; }
+
+.count{ font-size:12px; opacity:.9; }
+.score{ margin-left:auto; font-weight:600; font-size:13px; opacity:.9; }
+
+/* Small pop animation on vote */
+@keyframes pop { 0%{transform:scale(1)} 50%{transform:scale(1.25)} 100%{transform:scale(1)} }
+.voteBtn.pop{ animation:pop .25s ease; }
+
+/* --- Fancy gradient background (append) --- */
+body.page{
+  background:
+    radial-gradient(1100px 600px at 72% -10%, #1b2c4a 0%, rgba(0,0,0,0) 60%),
+    radial-gradient(900px 500px at -10% 20%, #0f325a 0%, rgba(0,0,0,0) 60%),
+    radial-gradient(1200px 700px at 110% 120%, #18243d 0%, rgba(0,0,0,0) 60%),
+    #0b0f16;
+}
+
+/* ——— Share button + card highlight ——— */
+.shareBtn{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 8px; border-radius:999px;
+  border:1px solid rgba(255,255,255,.12);
+  background:#0e1523; color:#e8eefc; cursor:pointer;
+  font-size:12px; line-height:1; user-select:none;
+  transition:transform .06s ease, filter .15s ease;
+}
+.shareBtn:hover{ transform:translateY(-1px); filter:brightness(1.07); }
+.shareBtn .x { font-weight:700; letter-spacing:.2px; } /* “𝕏” glyph */
+
+.card.hi{
+  box-shadow: 0 0 0 2px #5b8cff, 0 12px 28px rgba(91,140,255,.25);
+  transition: box-shadow .25s ease;
+}

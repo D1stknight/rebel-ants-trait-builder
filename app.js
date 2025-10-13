@@ -10023,3 +10023,142 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
   new MutationObserver(run).observe(document.documentElement, { childList:true, subtree:true });
 })();
+
+/* ===== Mobile Dock Add‑on: Submit to Contest (non‑destructive) ===== */
+(function () {
+  const DOCK_SEL = '#raMobileDock';      // your mobile dock element
+  const BTN_ID   = 'raDockSubmitBtn';    // id for our add-on button
+
+  function findSubmitBtn() {
+    // Try common ids/selectors first, then fall back to text match
+    const guesses = [
+      '#btnSubmitContest',
+      '#submitContest',
+      'button[data-action="submit-contest"]',
+      'button#contestSubmit',
+      'button[name="submit-contest"]'
+    ];
+    for (const sel of guesses) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    return [...document.querySelectorAll('button, a[role="button"]')]
+      .find(b => /submit/i.test(b.textContent || '') && /contest/i.test(b.textContent || ''));
+  }
+
+  function triggerSubmit() {
+    const btn = findSubmitBtn();
+    if (!btn) return false;
+    btn.click();                 // use your existing handler/modal
+    return true;
+  }
+
+  function openContest() {       // fallback if submit button not found
+    try { window.location.href = '/contest/'; } catch {}
+  }
+
+  function ensureBtn(dock) {
+    let btn = document.getElementById(BTN_ID);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = BTN_ID;
+      btn.type = 'button';
+      btn.className = 'dock-btn';
+      btn.textContent = 'Submit';
+      btn.title = 'Submit to Contest';
+      dock.appendChild(btn);
+      dock.classList.add('ra-has-contest');
+    } else if (btn.parentElement !== dock) {
+      dock.appendChild(btn);
+    }
+    btn.onclick = (e) => { e.preventDefault(); if (!triggerSubmit()) openContest(); };
+
+    // ensure it’s visible on the right
+    requestAnimationFrame(() => { try { dock.scrollLeft = dock.scrollWidth; } catch {} });
+  }
+
+  function init() {
+    const dock = document.querySelector(DOCK_SEL);
+    if (dock) ensureBtn(dock);
+  }
+
+  // Run now and re-run if the dock is re-rendered
+  const obs = new MutationObserver(() => {
+    if (!document.getElementById(BTN_ID) && document.querySelector(DOCK_SEL)) init();
+  });
+  obs.observe(document.documentElement, { childList: true, subtree: true });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+   /* =========================================================
+   Export panel → compact "Submit to Contest" + "Open Contest"
+   - Buttons sit together at the bottom-right of the Export card
+   ========================================================= */
+(function mountContestActions(){
+  try {
+    // Clean up any older versions
+    ['raContestLink','raOpenContestBtn','raSendToContest','raSubmitToContest']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+    const oldRow = document.querySelector('.ra-contest-actions'); if (oldRow) oldRow.remove();
+
+    // Find the right-side Export card
+    const right = document.querySelector('aside.panel.right') || document.querySelector('.panel.right');
+    if (!right) return;
+    const exportCard =
+      right.querySelector('.export, [data-card="export"]') ||
+      Array.from(right.querySelectorAll('.card, section')).find(n => /export/i.test(n.textContent||'')) ||
+      right;
+
+    // Row that holds both buttons, aligned to the right
+    const row = document.createElement('div');
+    row.className = 'ra-contest-actions';
+
+    // Submit button (compact)
+    const submitBtn = document.createElement('button');
+    submitBtn.id   = 'raSubmitToContest';
+    submitBtn.type = 'button';
+    submitBtn.className = 'ra-btn ra-primary';
+    submitBtn.textContent = 'Submit to Contest';
+
+    submitBtn.addEventListener('click', async () => {
+      try {
+        const canvas = document.getElementById('c'); // Fabric lower-canvas
+        if (!canvas || typeof canvas.toDataURL !== 'function') {
+          alert('Canvas not ready. Try again in a second.'); return;
+        }
+
+        const name    = prompt('Display name (shown on leaderboard):', '') || 'Anonymous';
+        const caption = prompt('Caption (optional):', '') || '';
+        const imageDataUrl = canvas.toDataURL('image/png');
+
+        const r = await fetch('/api/contest/entry', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, caption, imageDataUrl })
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || 'Upload failed');
+
+        alert('Submitted! Open the contest page to see your entry.');
+      } catch (e) {
+        alert('Submit failed: ' + (e && e.message || e));
+      }
+    });
+
+    // Open contest button (compact)
+    const openBtn = document.createElement('button');
+    openBtn.id   = 'raOpenContestBtn';
+    openBtn.type = 'button';
+    openBtn.className = 'ra-btn ra-ghost';
+    openBtn.textContent = 'Open Contest';
+    openBtn.addEventListener('click', () => window.open('/contest', '_blank', 'noopener'));
+
+    // Mount under the Export card (bottom)
+    row.appendChild(openBtn);
+    row.appendChild(submitBtn);
+    exportCard.appendChild(row);
+  } catch (e) {
+    console.warn('Failed to mount contest actions:', e);
+  }
+})();
