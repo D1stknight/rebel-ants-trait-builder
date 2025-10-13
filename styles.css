@@ -315,27 +315,6 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
   :root{ --raGHeight:32px; --raGPadY:5px; --raGPadX:10px; --raGFont:12px; }
 }
 
-/* Open Contest + Submit buttons (compact) */
-#raOpenContestBtn,
-#raSubmitToContest {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  line-height: 1;
-  padding: 10px 14px;
-  border-radius: 10px;
-  width: auto;           /* important: no full-width */
-  min-width: 0;          /* let content define width */
-}
-
-/* Make them sit tight to the left edge of the card */
-.export #raOpenContestBtn,
-.export #raSubmitToContest { align-self: flex-start; }
-
-/* If your container forces full width, this prevents it */
-#raOpenContestBtn, #raSubmitToContest { max-width: 240px; }
-
 /* ===== Mobile dock: keep last button visible & allow scroll ===== */
 @media (max-width: 820px) {
   .ra-mobile-dock {
@@ -351,4 +330,46 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
     grid-auto-flow: column;
     grid-auto-columns: minmax(64px, auto);
   }
+}
+
+/* Compact contest action row at the bottom of Export card */
+.ra-contest-actions{
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;  /* bottom-right alignment */
+}
+
+/* Shared button look (compact, no full width) */
+.ra-btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.18);
+  cursor: pointer;
+  white-space: nowrap;
+  width: auto;          /* ensure not full width */
+  min-width: 0;
+  max-width: 240px;
+}
+
+/* Visual variants */
+.ra-btn.ra-primary{
+  background: linear-gradient(135deg,#1f3b86,#2563eb);
+  color: #eaf1ff;
+}
+
+.ra-btn.ra-ghost{
+  background: #1b2230;
+  color: #cfe0ff;
+}
+
+/* Mobile: allow wrapping neatly while staying right-aligned */
+@media (max-width: 720px){
+  .ra-contest-actions{ justify-content: flex-end; }
 }
