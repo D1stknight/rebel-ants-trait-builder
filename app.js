@@ -10114,45 +10114,69 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   submitBtn.parentNode.insertBefore(openBtn, submitBtn);
 })();
 
-/* === Mobile Dock Add‑on: Contest button (non-destructive) === */
-;(() => {
-  if (window.__RA_MOBILE_DOCK_CONTEST__) return;
-  window.__RA_MOBILE_DOCK_CONTEST__ = true;
+/* ===== Mobile Dock Add‑on: Submit to Contest (non‑destructive) ===== */
+(function () {
+  const DOCK_SEL = '#raMobileDock';      // your mobile dock element
+  const BTN_ID   = 'raDockSubmitBtn';    // id for our add-on button
 
-  const isSmall = () => matchMedia('(max-width: 768px), (max-height: 500px)').matches;
-
-  function addContestBtn(){
-    if (!isSmall()) return;                           // mobile/short-height only
-    const dock = document.getElementById('raMobileDock');
-    if (!dock) { setTimeout(addContestBtn, 250); return; }     // wait until your dock is built
-    if (dock.querySelector('#raDockContestBtn')) return;        // already present
-
-    const btn = document.createElement('button');
-    btn.id = 'raDockContestBtn';
-    btn.type = 'button';
-    btn.textContent = 'Contest';
-    btn.addEventListener('click', (e)=>{
-      e.preventDefault(); e.stopPropagation();
-      // 1) Prefer your builder’s existing button if present
-      const submitBtn = document.getElementById('btnSubmitContest');
-      if (submitBtn) { submitBtn.click(); return; }
-      // 2) Or a helper if you have one
-      if (typeof window.raSubmitContest === 'function') { try { window.raSubmitContest(); return; } catch(_){} }
-      // 3) Fallback: open the contest page
-      try { window.open('/contest/', '_blank'); } catch(_){}
-    });
-
-    dock.appendChild(btn);
-    dock.classList.add('ra-has-contest');             // lets CSS expand the grid cleanly
+  function findSubmitBtn() {
+    // Try common ids/selectors first, then fall back to text match
+    const guesses = [
+      '#btnSubmitContest',
+      '#submitContest',
+      'button[data-action="submit-contest"]',
+      'button#contestSubmit',
+      'button[name="submit-contest"]'
+    ];
+    for (const sel of guesses) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    return [...document.querySelectorAll('button, a[role="button"]')]
+      .find(b => /submit/i.test(b.textContent || '') && /contest/i.test(b.textContent || ''));
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', addContestBtn, { once: true });
-  } else {
-    addContestBtn();
+  function triggerSubmit() {
+    const btn = findSubmitBtn();
+    if (!btn) return false;
+    btn.click();                 // use your existing handler/modal
+    return true;
   }
 
-  // Re-try if layout changes later
-  window.addEventListener('resize', addContestBtn);
-  window.addEventListener('orientationchange', () => setTimeout(addContestBtn, 200));
+  function openContest() {       // fallback if submit button not found
+    try { window.location.href = '/contest/'; } catch {}
+  }
+
+  function ensureBtn(dock) {
+    let btn = document.getElementById(BTN_ID);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = BTN_ID;
+      btn.type = 'button';
+      btn.className = 'dock-btn';
+      btn.textContent = 'Submit';
+      btn.title = 'Submit to Contest';
+      dock.appendChild(btn);
+      dock.classList.add('ra-has-contest');
+    } else if (btn.parentElement !== dock) {
+      dock.appendChild(btn);
+    }
+    btn.onclick = (e) => { e.preventDefault(); if (!triggerSubmit()) openContest(); };
+
+    // ensure it’s visible on the right
+    requestAnimationFrame(() => { try { dock.scrollLeft = dock.scrollWidth; } catch {} });
+  }
+
+  function init() {
+    const dock = document.querySelector(DOCK_SEL);
+    if (dock) ensureBtn(dock);
+  }
+
+  // Run now and re-run if the dock is re-rendered
+  const obs = new MutationObserver(() => {
+    if (!document.getElementById(BTN_ID) && document.querySelector(DOCK_SEL)) init();
+  });
+  obs.observe(document.documentElement, { childList: true, subtree: true });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 })();
