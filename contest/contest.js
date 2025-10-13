@@ -201,64 +201,41 @@
   start();
 })();
 
-// ===== Share handling (append) =====
-(function(){
-  // attach once alongside your vote handler
-  if (!elBoard.__shareWired) {
-    elBoard.addEventListener('click', onShareClick, { passive:false });
-    elBoard.__shareWired = true;
-  }
-
-  // Create an X intent URL (you can customize hashtags / via)
-  function buildXIntent({ id, name, caption, imageUrl }){
-    const contestURL = new URL('/contest', location.origin);
-    contestURL.hash = 'e-' + id;
-
-    // If you prefer the image to unfurl in the tweet card, set true.
-    const PREF_IMAGE_UNFURL = false;
-
-    const text = `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\nVote here:`;
-    const u = new URL('https://x.com/intent/tweet');
-    u.searchParams.set('text', text);
-
-    // Choose which URL should unfurl
-    u.searchParams.set('url', (PREF_IMAGE_UNFURL && imageUrl) ? imageUrl : contestURL.toString());
-
-    // Optional extras
-    u.searchParams.set('hashtags', 'RebelAnts,Contest');
-    // u.searchParams.set('via', 'RebelAnts'); // set if you have a handle
-
-    // Add the second URL as plain text (won't unfurl)
-    if (!PREF_IMAGE_UNFURL && imageUrl) u.searchParams.append('url', imageUrl);
-
-    return u.toString();
-  }
-
-  async function onShareClick(ev){
+/* ===== Share handling (append v2 – no dependencies) ===== */
+(function () {
+  function onShareClick(ev) {
     const b = ev.target.closest('.shareBtn');
     if (!b) return;
 
-    const id   = b.getAttribute('data-id');
-    const name = b.getAttribute('data-name') || '';
-    const url  = b.getAttribute('data-url') || '';
-    const cap  = b.closest('.card')?.querySelector('.caption')?.textContent || '';
+    const id       = b.dataset.id;
+    const name     = b.dataset.name || '';
+    const imageUrl = b.dataset.url  || '';
+    const cap      = b.closest('.card')?.querySelector('.caption')?.textContent || '';
 
     const contestURL = new URL('/contest', location.origin);
     contestURL.hash = 'e-' + id;
+    const text = `${name ? name + ' — ' : ''}${cap || 'My contest entry'}\nVote here:`;
 
-    const shareData = {
-      title: 'Rebel Ants Contest',
-      text: `${name ? name + ' — ' : ''}${cap || 'My contest entry'}\nVote here:`,
-      url: contestURL.toString()
-    };
-
-    // Native share on phones (shows OS sheet with X if installed)
+    // Native share first (mobile)
     if (navigator.share) {
-      try { await navigator.share(shareData); return; } catch(_) { /* fall through */ }
+      navigator.share({ title: 'Rebel Ants Contest', text, url: contestURL.toString() })
+        .catch(() => openXIntent());     // user canceled → fall back to X
+    } else {
+      openXIntent();
     }
 
-    // Desktop (or fallback): open X intent
-    const intent = buildXIntent({ id, name, caption: cap, imageUrl: url });
-    window.open(intent, '_blank', 'noopener');
+    function openXIntent() {
+      const u = new URL('https://x.com/intent/tweet');
+      u.searchParams.set('text', text);
+      // Let the contest page unfurl; include the image URL as a secondary link
+      u.searchParams.set('url', contestURL.toString());
+      if (imageUrl) u.searchParams.append('url', imageUrl);
+      // Try to open in a user-gesture context; if blocked, fall back in-place.
+      const w = window.open(u.toString(), '_blank', 'noopener');
+      if (!w) location.href = u.toString();
+    }
   }
+
+  // Attach globally so we don't depend on any local variables
+  document.addEventListener('click', onShareClick, { passive: false });
 })();
