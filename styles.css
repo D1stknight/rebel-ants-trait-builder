@@ -373,3 +373,36 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
 @media (max-width: 720px){
   .ra-contest-actions{ justify-content: flex-end; }
 }
+
+/* --- Mobile dock overlap fix (add scroll room below content) --- */
+@media (max-width: 900px), (max-height: 640px) {
+  :root { --ra-dock-h: 72px; } /* adjust if your dock is taller/shorter */
+
+  /* 1) Global spacer so bottom content isn't hidden behind the dock */
+  body::after {
+    content: "";
+    display: block;
+    height: calc(var(--ra-dock-h) + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* 2) Ensure the right panel itself has enough room at the bottom */
+  aside.panel.right {
+    margin-bottom: calc(var(--ra-dock-h) + 12px) !important;
+    padding-bottom: 8px;
+  }
+
+  /* 3) Keep the new contest buttons compact on mobile */
+  #raOpenContestBtn,
+  #raSubmitToContest {
+    max-width: 220px;
+    width: auto;
+    font-size: 12px;
+    padding: 8px 12px;
+  }
+
+  /* If your buttons sit inside a wrapper we created */
+  .contest-actions {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+}
