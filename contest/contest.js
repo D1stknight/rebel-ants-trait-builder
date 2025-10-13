@@ -257,12 +257,15 @@
     openX(head, link, imgUrl);
   }, { passive: false });
 
-  function openX(head, link, imgUrl) {
-    // Put ONE contest link in text; do NOT add &url= (prevents duplicate preview)
-    const text = `${head}\n\nVote here: ${link}${imgUrl ? `\n\nImage: ${imgUrl}` : ''}`;
-    const u = new URL('https://twitter.com/intent/tweet');
-    u.searchParams.set('text', text);
-    // Synchronous open → new tab, no popup‑blocker alert
-    window.open(u.toString(), '_blank');
-  }
+  function openX(head, link, imgUrl, id) {
+  // Use the viewer page so the image opens at a friendly size
+  const imgPage = `${location.origin}/contest/img.html?id=${encodeURIComponent(id || '')}`;
+
+  const text = `${head}\n\nVote here: ${link}`
+             + (imgUrl ? `\n\nImage: ${imgPage}` : '');
+
+  const u = new URL('https://twitter.com/intent/tweet');
+  u.searchParams.set('text', text);
+  window.open(u.toString(), '_blank');
+}
 })();
