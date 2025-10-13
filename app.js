@@ -10091,8 +10091,6 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   else init();
 })();
 
-<script>
-
    /* =========================================================
    Export panel → compact "Submit to Contest" + "Open Contest"
    - Buttons sit together at the bottom-right of the Export card
