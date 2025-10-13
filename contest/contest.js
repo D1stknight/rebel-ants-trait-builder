@@ -212,18 +212,32 @@
     return u.toString();
   }
 
-  function openXPopup(id, name, caption, imageUrl) {
-    const contestURL = buildContestURL(id);
-    const text = `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\nVote here:`;
-    const intent = new URL('https://x.com/intent/tweet');
-    intent.searchParams.set('text', text);
-    intent.searchParams.set('url', contestURL);
-    // desktop X cannot attach media from intent; include image URL as an extra link
-    if (imageUrl) intent.searchParams.append('url', imageUrl);
+function openXPopup(id, name, caption, imageUrl) {
+  const contestURL = buildContestURL(id);
 
-    const w = window.open(intent.toString(), '_blank', 'noopener,noreferrer');
-    if (!w) alert('Please allow pop‑ups to share on X.');
-  }
+  // Compose readable text with clean newlines (no commas)
+  const lb = '\n';
+  const text =
+    `${name ? `${name} — ` : ''}${caption || 'My contest entry'}`
+    + lb + lb +
+    `Vote here: ${contestURL}` +
+    (imageUrl ? `${lb}Image: ${imageUrl}` : '');
+
+  const intent = new URL('https://x.com/intent/tweet');
+  intent.searchParams.set('text', text);
+  // Keep ONE url param so X renders a single card for the contest page
+  intent.searchParams.set('url', contestURL);
+
+  // Open in a single popup window; show the “allow pop‑ups” message only if truly blocked
+  let w = null;
+  try { w = window.open(intent.toString(), '_blank', 'noopener,noreferrer,popup=1,width=680,height=760'); } catch {}
+  setTimeout(() => {
+    try {
+      // Safari sometimes returns a WindowProxy late; only alert if really blocked
+      if (!w || w.closed) alert('Please allow pop‑ups to share on X.');
+    } catch (_) { /* ignore */ }
+  }, 350);
+}
 
   document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('.shareBtn');
