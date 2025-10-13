@@ -201,89 +201,56 @@
   start();
 })();
 
-/* ===== Share handling (v4.1) — mobile: image + link; desktop: X; single popup ===== */
-(function () {
-  const UA = navigator.userAgent || '';
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(UA);
-
-  function buildContestURL(id) {
-    const u = new URL('/contest', location.origin);
-    u.hash = 'e-' + id;
-    return u.toString();
-  }
-
-function openXPopup(id, name, caption, imageUrl) {
-  const contestURL = buildContestURL(id);
-
-  // Compose readable text with clean newlines (no commas)
-  const lb = '\n';
-  const text =
-    `${name ? `${name} — ` : ''}${caption || 'My contest entry'}`
-    + lb + lb +
-    `Vote here: ${contestURL}` +
-    (imageUrl ? `${lb}Image: ${imageUrl}` : '');
-
-  const intent = new URL('https://x.com/intent/tweet');
-  intent.searchParams.set('text', text);
-  // Keep ONE url param so X renders a single card for the contest page
-  intent.searchParams.set('url', contestURL);
-
-  // Open in a single popup window; show the “allow pop‑ups” message only if truly blocked
-  let w = null;
-  try { w = window.open(intent.toString(), '_blank', 'noopener,noreferrer,popup=1,width=680,height=760'); } catch {}
-  setTimeout(() => {
-    try {
-      // Safari sometimes returns a WindowProxy late; only alert if really blocked
-      if (!w || w.closed) alert('Please allow pop‑ups to share on X.');
-    } catch (_) { /* ignore */ }
-  }, 350);
-}
+/* ===== Share to X (single link, new tab; mobile = image+link) ===== */
+(function wireXShare(){
+  // treat only real mobile UAs as “Web Share with files” capable
+  const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
 
   document.addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('.shareBtn');
+    const btn = ev.target.closest('[data-x]');     // your X button has data-x
     if (!btn) return;
 
-    // prevent any other handlers / default nav (avoids opening X in the same tab)
-    ev.preventDefault();
-    ev.stopPropagation();
-    ev.stopImmediatePropagation();
+    const card = btn.closest('.card');
+    const id      = card?.getAttribute('data-id') || '';
+    const name    = card?.querySelector('.name')?.textContent?.trim() || '';
+    const caption = card?.querySelector('.caption')?.textContent?.trim() || '';
+    const imgUrl  = card?.querySelector('img')?.src || '';
+    const contestURL = `${location.origin}/contest#e-${encodeURIComponent(id)}`;
 
-    const id       = btn.dataset.id   || '';
-    const name     = btn.dataset.name || '';
-    const imageUrl = btn.dataset.url  || '';
-    const caption  = btn.closest('.card')?.querySelector('.caption')?.textContent || '';
-    const contestURL = buildContestURL(id);
+    const head = [name, caption].filter(Boolean).join(' — ') || 'Check this entry';
 
+    // --- Mobile: Web Share (image + link) ---
     if (isMobile && navigator.share) {
-      // Start with text that ALWAYS includes the link
-      let shareData = {
-        title: 'Rebel Ants Contest',
-        text: `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\nVote here: ${contestURL}`,
-        url: contestURL
-      };
-
       try {
-        // Try to attach the image too
-        if (imageUrl && navigator.canShare && typeof navigator.canShare === 'function') {
-          const resp = await fetch(imageUrl, { mode: 'cors' });
-          if (resp.ok) {
+        // attach the image if we can fetch it
+        let files = [];
+        try {
+          if (navigator.canShare) {
+            const resp = await fetch(imgUrl, { mode: 'cors', cache: 'no-store' });
             const blob = await resp.blob();
-            const file = new File([blob], 'entry.png', { type: blob.type || 'image/png' });
-            if (navigator.canShare({ files: [file] })) {
-              // IMPORTANT: keep the text with the link AND add the file
-              shareData.files = [file];
+            const file = new File([blob], 'rebel-ants.png', { type: blob.type || 'image/png' });
+            const data = { text: head, url: contestURL, files: [file] };
+            if (!navigator.canShare || navigator.canShare(data)) {
+              await navigator.share(data);
+              return;
             }
           }
-        }
+        } catch { /* fall through to desktop intent */ }
 
-        await navigator.share(shareData);
-        return; // native share completed (no extra tab)
-      } catch (e) {
-        // user cancelled OR share not supported -> fall back to X intent
-      }
+        // fallback mobile share without file
+        await navigator.share({ text: `${head}\n\nVote here: ${contestURL}` });
+        return;
+      } catch { /* ignore and fall through to desktop intent */ }
     }
 
-    // Desktop or fallback path
-    openXPopup(id, name, caption, imageUrl);
-  }, { passive: false });
+    // --- Desktop (and fallback): open X compose in a NEW TAB ---
+    // ONE contest link only (inline in text). Image goes as plain URL text.
+    const text = `${head}\n\nVote here: ${contestURL}\n\nImage: ${imgUrl}`;
+    const u = new URL('https://twitter.com/intent/tweet');
+    u.searchParams.set('text', text);
+    // do NOT set &url= to avoid a duplicate contest link
+
+    // synchronous open => no Safari popup blocker; opens as a new tab
+    window.open(u.toString(), '_blank');
+  });
 })();
