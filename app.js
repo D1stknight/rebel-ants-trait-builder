@@ -10113,3 +10113,46 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // Put it directly ABOVE the Submit button
   submitBtn.parentNode.insertBefore(openBtn, submitBtn);
 })();
+
+/* === Mobile Dock Add‑on: Contest button (non-destructive) === */
+;(() => {
+  if (window.__RA_MOBILE_DOCK_CONTEST__) return;
+  window.__RA_MOBILE_DOCK_CONTEST__ = true;
+
+  const isSmall = () => matchMedia('(max-width: 768px), (max-height: 500px)').matches;
+
+  function addContestBtn(){
+    if (!isSmall()) return;                           // mobile/short-height only
+    const dock = document.getElementById('raMobileDock');
+    if (!dock) { setTimeout(addContestBtn, 250); return; }     // wait until your dock is built
+    if (dock.querySelector('#raDockContestBtn')) return;        // already present
+
+    const btn = document.createElement('button');
+    btn.id = 'raDockContestBtn';
+    btn.type = 'button';
+    btn.textContent = 'Contest';
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      // 1) Prefer your builder’s existing button if present
+      const submitBtn = document.getElementById('btnSubmitContest');
+      if (submitBtn) { submitBtn.click(); return; }
+      // 2) Or a helper if you have one
+      if (typeof window.raSubmitContest === 'function') { try { window.raSubmitContest(); return; } catch(_){} }
+      // 3) Fallback: open the contest page
+      try { window.open('/contest/', '_blank'); } catch(_){}
+    });
+
+    dock.appendChild(btn);
+    dock.classList.add('ra-has-contest');             // lets CSS expand the grid cleanly
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', addContestBtn, { once: true });
+  } else {
+    addContestBtn();
+  }
+
+  // Re-try if layout changes later
+  window.addEventListener('resize', addContestBtn);
+  window.addEventListener('orientationchange', () => setTimeout(addContestBtn, 200));
+})();
