@@ -44,36 +44,41 @@
     elBoard.addEventListener('click', onVoteClick, { passive:false });
   }
 
-  function cardHTML(e){
-    const id = esc(e.id);
-    const name = esc(e.name||'Anonymous');
-    const caption = esc(e.caption||'');
-    const url = esc(e.imageUrl || e.url || '');
-    const votes = e.votes || {};
-    const score = e.score|0;
+ function cardHTML(e){
+  const id      = esc(e.id);
+  const name    = esc(e.name || 'Anonymous');
+  const caption = esc(e.caption || '');
+  const url     = esc(e.imageUrl || e.url || '');
+  const votes   = e.votes || {};
+  const score   = e.score|0;
 
-    const buttons = EMOJIS.map(em=>{
-      const c = votes[em]|0;
-      return `<button class="voteBtn" data-id="${id}" data-emoji="${em}">
-                <span>${em}</span><span class="count" data-count>${c}</span>
-              </button>`;
-    }).join('');
+  const buttons = EMOJIS.map(em => {
+    const c = votes[em] | 0;
+    return `<button class="voteBtn" data-id="${id}" data-emoji="${em}">
+              <span>${em}</span><span class="count" data-count>${c}</span>
+            </button>`;
+  }).join('');
 
-    return `
-      <article class="card" data-id="${id}" data-score="${score}">
-        <div class="imgWrap">
-          <img src="${url}" alt="${name}">
+  // note: we include data-name and data-url for the share handler
+  return `
+    <article class="card" data-id="${id}" data-score="${score}" id="e-${id}">
+      <div class="imgWrap">
+        <img src="${url}" alt="${name}">
+      </div>
+      <div class="meta">
+        <div class="name">${name}</div>
+        ${caption ? `<div class="caption">${caption}</div>` : ''}
+        <div class="voteBar">
+          ${buttons}
+          <button class="shareBtn" title="Share on X"
+                  data-id="${id}" data-name="${name}" data-url="${url}">
+            <span class="x">𝕏</span> Share
+          </button>
+          <div class="score" data-score>Score: ${score}</div>
         </div>
-        <div class="meta">
-          <div class="name">${name}</div>
-          ${caption ? `<div class="caption">${caption}</div>` : ''}
-          <div class="voteBar">
-            ${buttons}
-            <div class="score" data-score>Score: ${score}</div>
-          </div>
-        </div>
-      </article>`;
-  }
+      </div>
+    </article>`;
+}
 
   async function onVoteClick(ev){
     const btn = ev.target.closest('button.voteBtn');
