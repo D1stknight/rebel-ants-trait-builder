@@ -335,3 +335,17 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
 
 /* If your container forces full width, this prevents it */
 #raOpenContestBtn, #raSubmitToContest { max-width: 240px; }
+
+/* Mobile dock add-on: make room for the new "Contest" button */
+@media (max-width: 768px), (max-height: 500px) {
+  .ra-mobile-dock.ra-has-contest {
+    grid-template-columns: repeat(8, 1fr);
+  }
+}
+
+/* Ultra-small phones: wrap into two rows automatically */
+@media (max-width: 420px) {
+  .ra-mobile-dock.ra-has-contest {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
