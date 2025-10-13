@@ -201,60 +201,72 @@
   start();
 })();
 
-/* ===== Share handling (append v3 – X on desktop, native on mobile) ===== */
+/* ===== Share handling (v4) — X on desktop, native share on mobile; single popup ===== */
 (function () {
+  const UA = navigator.userAgent || '';
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(UA);
+
+  function buildContestURL(id) {
+    const u = new URL('/contest', location.origin);
+    u.hash = 'e-' + id;
+    return u.toString();
+  }
+
+  function openXPopup(id, name, caption, imageUrl) {
+    const text = `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\nVote here:`;
+    const intent = new URL('https://x.com/intent/tweet');
+    intent.searchParams.set('text', text);
+    intent.searchParams.set('url', buildContestURL(id));
+    if (imageUrl) intent.searchParams.append('url', imageUrl); // X won’t attach as media, but include link
+
+    // Open ONLY a new tab/window (no in-tab navigation)
+    const w = window.open(intent.toString(), '_blank', 'noopener,noreferrer');
+    if (!w) alert('Please allow pop‑ups to share on X.');
+  }
+
   document.addEventListener('click', async (ev) => {
-    const b = ev.target.closest('.shareBtn');
-    if (!b) return;
+    const btn = ev.target.closest('.shareBtn');
+    if (!btn) return;
 
-    const id       = b.dataset.id;
-    const name     = b.dataset.name || '';
-    const imageUrl = b.dataset.url  || '';
-    const caption  = b.closest('.card')?.querySelector('.caption')?.textContent || '';
+    // kill any default/bubbling that could cause a second navigation
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
 
-    // Permalink to this entry (used for X + share)
-    const contestURL = new URL('/contest', location.origin);
-    contestURL.hash = 'e-' + id;
-
-    const shareText = `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\nVote here:`;
-
-    // Simple device sniff: only use native share on iOS/Android
-    const ua = navigator.userAgent || '';
-    const isIOS = /iPhone|iPad|iPod/.test(ua);
-    const isAndroid = /Android/.test(ua);
-    const isMobile = isIOS || isAndroid;
+    const id       = btn.dataset.id || '';
+    const name     = btn.dataset.name || '';
+    const imageUrl = btn.dataset.url  || '';
+    const caption  = btn.closest('.card')?.querySelector('.caption')?.textContent || '';
 
     if (isMobile && navigator.share) {
-      // Try to share the image file (Web Share Target Level 2)
-      let opts = { title: 'Rebel Ants Contest', text: shareText, url: contestURL.toString() };
+      // try native share first on mobile (optionally attach image)
+      const contestURL = buildContestURL(id);
+      let shareData = {
+        title: 'Rebel Ants Contest',
+        text: `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\n${contestURL}`,
+        url: contestURL
+      };
       try {
         if (imageUrl && navigator.canShare && typeof navigator.canShare === 'function') {
           const resp = await fetch(imageUrl, { mode: 'cors' });
           const blob = await resp.blob();
-          const file = new File([blob], 'rebel-ants.png', { type: blob.type || 'image/png' });
+          const file = new File([blob], 'entry.png', { type: blob.type || 'image/png' });
           if (navigator.canShare({ files: [file] })) {
-            // On mobile, prefer sending the image file with text (most native share targets show the image)
-            opts = { title: 'Rebel Ants Contest', text: shareText + '\n' + contestURL.toString(), files: [file] };
+            // Send image + text (most mobile share targets will show the image)
+            shareData = {
+              title: 'Rebel Ants Contest',
+              text: `${name ? name + ' — ' : ''}${caption || 'My contest entry'}`,
+              files: [file]
+            };
           }
         }
-      } catch (_) { /* ignore; we’ll share text+url */ }
-
-      try {
-        await navigator.share(opts);
-        return; // user completed the native share
+        await navigator.share(shareData);
+        return; // native share completed
       } catch {
-        // user cancelled or not allowed — fall through to X intent
+        // user cancelled or not supported → fall back to X popup
       }
     }
 
-    // Desktop or fallback → open X intent directly (no macOS share sheet)
-    const x = new URL('https://x.com/intent/tweet');
-    x.searchParams.set('text', shareText);
-    x.searchParams.set('url', contestURL.toString());
-    // You can add the image URL as a second link; X won’t attach it as media, but it gives users a direct link.
-    if (imageUrl) x.searchParams.append('url', imageUrl);
-
-    const w = window.open(x.toString(), '_blank', 'noopener');
-    if (!w) location.href = x.toString(); // popup blocked → navigate
+    openXPopup(id, name, caption, imageUrl);
   }, { passive: false });
 })();
