@@ -201,7 +201,7 @@
   start();
 })();
 
-/* ===== Share handling (v4) — X on desktop, native share on mobile; single popup ===== */
+/* ===== Share handling (v4.1) — mobile: image + link; desktop: X; single popup ===== */
 (function () {
   const UA = navigator.userAgent || '';
   const isMobile = /iPhone|iPad|iPod|Android/i.test(UA);
@@ -213,13 +213,14 @@
   }
 
   function openXPopup(id, name, caption, imageUrl) {
+    const contestURL = buildContestURL(id);
     const text = `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\nVote here:`;
     const intent = new URL('https://x.com/intent/tweet');
     intent.searchParams.set('text', text);
-    intent.searchParams.set('url', buildContestURL(id));
-    if (imageUrl) intent.searchParams.append('url', imageUrl); // X won’t attach as media, but include link
+    intent.searchParams.set('url', contestURL);
+    // desktop X cannot attach media from intent; include image URL as an extra link
+    if (imageUrl) intent.searchParams.append('url', imageUrl);
 
-    // Open ONLY a new tab/window (no in-tab navigation)
     const w = window.open(intent.toString(), '_blank', 'noopener,noreferrer');
     if (!w) alert('Please allow pop‑ups to share on X.');
   }
@@ -228,45 +229,47 @@
     const btn = ev.target.closest('.shareBtn');
     if (!btn) return;
 
-    // kill any default/bubbling that could cause a second navigation
+    // prevent any other handlers / default nav (avoids opening X in the same tab)
     ev.preventDefault();
     ev.stopPropagation();
     ev.stopImmediatePropagation();
 
-    const id       = btn.dataset.id || '';
+    const id       = btn.dataset.id   || '';
     const name     = btn.dataset.name || '';
     const imageUrl = btn.dataset.url  || '';
     const caption  = btn.closest('.card')?.querySelector('.caption')?.textContent || '';
+    const contestURL = buildContestURL(id);
 
     if (isMobile && navigator.share) {
-      // try native share first on mobile (optionally attach image)
-      const contestURL = buildContestURL(id);
+      // Start with text that ALWAYS includes the link
       let shareData = {
         title: 'Rebel Ants Contest',
-        text: `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\n${contestURL}`,
+        text: `${name ? name + ' — ' : ''}${caption || 'My contest entry'}\nVote here: ${contestURL}`,
         url: contestURL
       };
+
       try {
+        // Try to attach the image too
         if (imageUrl && navigator.canShare && typeof navigator.canShare === 'function') {
           const resp = await fetch(imageUrl, { mode: 'cors' });
-          const blob = await resp.blob();
-          const file = new File([blob], 'entry.png', { type: blob.type || 'image/png' });
-          if (navigator.canShare({ files: [file] })) {
-            // Send image + text (most mobile share targets will show the image)
-            shareData = {
-              title: 'Rebel Ants Contest',
-              text: `${name ? name + ' — ' : ''}${caption || 'My contest entry'}`,
-              files: [file]
-            };
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const file = new File([blob], 'entry.png', { type: blob.type || 'image/png' });
+            if (navigator.canShare({ files: [file] })) {
+              // IMPORTANT: keep the text with the link AND add the file
+              shareData.files = [file];
+            }
           }
         }
+
         await navigator.share(shareData);
-        return; // native share completed
-      } catch {
-        // user cancelled or not supported → fall back to X popup
+        return; // native share completed (no extra tab)
+      } catch (e) {
+        // user cancelled OR share not supported -> fall back to X intent
       }
     }
 
+    // Desktop or fallback path
     openXPopup(id, name, caption, imageUrl);
   }, { passive: false });
 })();
