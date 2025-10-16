@@ -407,30 +407,37 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
   }
 }
 
-/* ===== Builder: Published Overlays panel — make it scroll and show all ===== */
+/* ===== Builder: force Published Overlays section to be scrollable ===== */
 
-/* Try several likely containers so we don't depend on one class name */
+/* Make the whole right panel scroll independently if needed */
+aside.panel.right {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+/* Try several likely containers to catch your DOM */
 aside.panel.right .published-overlays,
 aside.panel.right [data-published-list],
 aside.panel.right .published,
 aside.panel.right #publishedOverlays {
-  /* take a good chunk of the viewport height and scroll */
-  max-height: calc(100vh - 420px);
+  /* critical for flex layouts: let this child shrink so it can scroll */
+  min-height: 0;
+  max-height: 60vh;         /* adjust if you want more/less */
   overflow-y: auto;
-  padding-right: 6px; /* room for scrollbar */
+  padding-right: 6px;       /* room for scrollbar */
 }
 
-/* If the list uses a grid wrapper, make sure it lays out nicely */
+/* If a grid wrapper exists, make it flow */
 aside.panel.right .published-overlays .grid,
 aside.panel.right [data-published-list] .grid,
 aside.panel.right .published .grid,
 aside.panel.right #publishedOverlays .grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  grid-template-columns: repeat(2, minmax(110px, 1fr));
   gap: 8px;
 }
 
-/* Thumb basics (safe, non-invasive) */
+/* Thumbnails look tidy */
 aside.panel.right .published-overlays img,
 aside.panel.right [data-published-list] img,
 aside.panel.right .published img,
