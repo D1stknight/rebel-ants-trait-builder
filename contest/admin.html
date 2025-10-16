@@ -253,18 +253,36 @@
     const ovStatus = document.getElementById('ovStatus');
 
     async function readSelectedJSON(fileInput){
-      if (!fileInput || !fileInput.files || !fileInput.files[0]) throw new Error('Choose a JSON file first.');
-      const text = await fileInput.files[0].text();
-      let parsed;
-      try { parsed = JSON.parse(text); }
-      catch { throw new Error('Invalid JSON file.'); }
-      // Accept either an array or {overlays:[...]}
-      const overlays = Array.isArray(parsed) ? parsed
-                    : (Array.isArray(parsed.overlays) ? parsed.overlays : null);
-      if (!overlays) throw new Error('JSON must be an array or { "overlays": [...] }.');
-      return overlays;
-    }
+  if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+    throw new Error('Choose a JSON file first.');
+  }
+  const text = await fileInput.files[0].text();
 
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch { throw new Error('Invalid JSON file.'); }
+
+  // Accept any of these shapes:
+  // 1) [ ... ]
+  // 2) { overlays:[ ... ] }
+  // 3) { items:[ ... ] }          <-- builder export
+  let overlays = null;
+  if (Array.isArray(parsed)) overlays = parsed;
+  else if (Array.isArray(parsed.overlays)) overlays = parsed.overlays;
+  else if (Array.isArray(parsed.items)) overlays = parsed.items;
+
+  if (!overlays) {
+    throw new Error('JSON must be an array or { "overlays": [...] } or { "items": [...] }.');
+  }
+
+  // Optional sanity check (must have name + dataURL)
+  overlays = overlays.filter(o => o && o.name && o.dataURL);
+
+  if (!overlays.length) {
+    throw new Error('No valid overlays found (need "name" and "dataURL").');
+  }
+  return overlays;
+}
     if (ovBtn){
       ovBtn.addEventListener('click', async () => {
         clear(ovMsg);
