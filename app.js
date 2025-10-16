@@ -10162,3 +10162,29 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     console.warn('Failed to mount contest actions:', e);
   }
 })();
+
+/* ===== Ensure Published Overlays panel is scrollable (robust) ===== */
+(function ensurePublishedPanelScroll() {
+  function findPublishedSection() {
+    // look for a heading that says “Published Overlays” in the right panel
+    const heads = Array.from(document.querySelectorAll('.panel.right h2, .panel.right h3, .panel.right h4, .panel.right .section-title'));
+    const h = heads.find(el => /Published Overlays/i.test(el.textContent || ''));
+    return h ? h.parentElement : null;
+  }
+  function apply(box) {
+    if (!box || box.__pubScrollApplied) return;
+    box.__pubScrollApplied = true;
+
+    // prefer list container right after the heading; fallback to box itself
+    const list = box.querySelector('.grid, [data-list], ul, .list, .thumbs') || box;
+
+    list.style.maxHeight = 'calc(100vh - 420px)';
+    list.style.overflowY = 'auto';
+    list.style.paddingRight = '6px';
+  }
+
+  apply(findPublishedSection());
+  // Re-apply if the admin changes the list (publish/unpublish, etc.)
+  const mo = new MutationObserver(() => apply(findPublishedSection()));
+  mo.observe(document.body, { childList: true, subtree: true });
+})();
