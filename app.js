@@ -10209,18 +10209,3 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   mo.observe(document.body, { childList:true, subtree:true });
   mount();
 })();
-
-// Helper to load overlays with fallback to static
-async function loadOverlaysPack() {
-  try {
-    const r = await fetch('/api/overlays', { cache:'no-store' });
-    if (r.ok && (r.headers.get('content-type')||'').includes('application/json')) return r.json();
-  } catch {}
-  const r2 = await fetch('/overlays.json', { cache:'no-store' });
-  return r2.json();
-}
-
-// Example usage where you previously had:
-//   const pack = await (await fetch('/overlays.json')).json();
-// change to:
-const pack = await loadOverlaysPack();
