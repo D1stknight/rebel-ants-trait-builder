@@ -227,27 +227,33 @@
     const link = contestURL(id);
     const head = [name, caption].filter(Boolean).join(' — ') || 'Check this entry';
 
-    // ---- Mobile (Web Share): attach image + include link ----
+  // ---- Mobile (Web Share): ALWAYS include the contest link in text ----
     if (isMobile && navigator.share) {
       (async () => {
         try {
-          const data = { text: head, url: link };   // link included here
-          // Try to attach the image (if CORS allows)
-          if (imgUrl && navigator.canShare) {
+          // iOS can drop `url` when files are attached, so keep the link in TEXT too
+          const shareText = `${head}\n\nVote here: ${link}`;
+          const data = { text: shareText, url: link };
+
+          // Try to attach the image (if CORS allows and the platform supports files)
+          if (imgUrl && navigator.canShare && typeof navigator.canShare === 'function') {
             try {
               const resp = await fetch(imgUrl, { mode: 'cors', cache: 'no-store' });
-              const blob = await resp.blob();
-              const file = new File([blob], 'rebel-ants.png', { type: blob.type || 'image/png' });
-              if (navigator.canShare({ files: [file], text: head, url: link })) {
-                data.files = [file];
+              if (resp.ok) {
+                const blob = await resp.blob();
+                const file = new File([blob], 'rebel-ants.png', { type: blob.type || 'image/png' });
+                if (navigator.canShare({ files: [file], text: shareText, url: link })) {
+                  data.files = [file];
+                }
               }
             } catch { /* ignore and share without file */ }
           }
+
           await navigator.share(data);
           return;
         } catch {
           // fall through to desktop flow if user cancels or share fails
-          openX(head, link, imgUrl);
+          openX(head, link, imgUrl, id);
         }
       })();
       return;
