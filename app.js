@@ -10163,28 +10163,43 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   }
 })();
 
-/* ===== Ensure Published Overlays panel is scrollable (robust) ===== */
+/* ===== Ensure Published Overlays panel is scrollable and not clipped ===== */
 (function ensurePublishedPanelScroll() {
   function findPublishedSection() {
-    // look for a heading that says “Published Overlays” in the right panel
-    const heads = Array.from(document.querySelectorAll('.panel.right h2, .panel.right h3, .panel.right h4, .panel.right .section-title'));
+    // Find a heading that says “Published Overlays” in the right panel
+    const heads = Array.from(
+      document.querySelectorAll('.panel.right h1, .panel.right h2, .panel.right h3, .panel.right .section-title')
+    );
     const h = heads.find(el => /Published Overlays/i.test(el.textContent || ''));
-    return h ? h.parentElement : null;
+    return h ? (h.closest('section, .card, .group, .panel-section') || h.parentElement) : null;
   }
-  function apply(box) {
+
+  function apply() {
+    const box = findPublishedSection();
     if (!box || box.__pubScrollApplied) return;
     box.__pubScrollApplied = true;
 
-    // prefer list container right after the heading; fallback to box itself
-    const list = box.querySelector('.grid, [data-list], ul, .list, .thumbs') || box;
+    // Important: in flex layouts, ancestors must allow children to shrink
+    let p = box;
+    while (p && !p.classList?.contains('right') && p !== document.body) {
+      p.style.minHeight = '0';
+      p = p.parentElement;
+    }
+    const right = document.querySelector('aside.panel.right');
+    if (right) {
+      right.style.maxHeight = 'calc(100vh - 16px)';
+      right.style.overflowY = 'auto';
+    }
 
-    list.style.maxHeight = 'calc(100vh - 420px)';
+    const list = box.querySelector('[data-list], .grid, .thumbs, ul, .list') || box;
+    list.style.minHeight = '0';
+    list.style.maxHeight = '60vh';
     list.style.overflowY = 'auto';
     list.style.paddingRight = '6px';
   }
 
-  apply(findPublishedSection());
-  // Re-apply if the admin changes the list (publish/unpublish, etc.)
-  const mo = new MutationObserver(() => apply(findPublishedSection()));
+  // Apply now and re-apply if the DOM changes (publish/unpublish)
+  apply();
+  const mo = new MutationObserver(apply);
   mo.observe(document.body, { childList: true, subtree: true });
 })();
