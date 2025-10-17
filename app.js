@@ -10211,10 +10211,10 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   LIVE PUBLISHED OVERLAYS  — shows /api/overlays in builder
-   - Force-creates a "Published Overlays (live)" shelf in the
-     right panel if we can’t find your existing grid.
-   - Clicking a tile tries to add it to the canvas.
+   LIVE PUBLISHED OVERLAYS (updated)
+   - 3-column compact grid with internal scroll
+   - Hides legacy "Published Overlays" section/text
+   - Adds overlay centered & scaled smaller on canvas
 ========================================================= */
 (function(){
   // Pull overlays from the live API
@@ -10228,23 +10228,28 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     } catch { return []; }
   }
 
-  // Find the right panel (works with your markup)
+  // Right panel helper (several possible classnames in your UI)
   function findRightPanel(){
     return document.querySelector('aside.panel.right')
         || document.querySelector('.panel.right')
         || document.querySelector('aside.right')
-        || null;
+        || document.querySelector('aside')
+        || document.body;
   }
 
-  // Ensure a section exists; return the grid element
-  function ensureLiveSection(){
-    let right = findRightPanel();
-    if (!right) {
-      // fall back to body if your layout is different
-      right = document.body;
-    }
+  // Hide the old static "Published Overlays" section to avoid confusion
+  function hideLegacyPublished(){
+    const headers = [...document.querySelectorAll('h1,h2,h3,.section-title')]
+      .filter(h => /Published Overlays/i.test(h.textContent || '') && !/\(live\)/i.test(h.textContent || ''));
+    headers.forEach(h => {
+      const block = h.closest('section,.card,.group,.panel-section') || h.parentElement;
+      if (block) block.style.display = 'none'; else h.style.display = 'none';
+    });
+  }
 
-    // Already mounted?
+  // Create (or get) the live section and its grid
+  function ensureLiveSection(){
+    const right = findRightPanel();
     let section = document.getElementById('ra-live-overlays-sec');
     if (!section) {
       section = document.createElement('section');
@@ -10255,10 +10260,10 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       section.style.padding = '10px';
       section.style.margin = '12px 0';
 
-      // Try to insert right under your “Overlays” area if present
+      // insert under the main “Overlays” heading if we can find it
       const overlaysHeader = [...document.querySelectorAll('h1,h2,h3,.section-title')]
-        .find(h => /(^|\b)Overlays\b/i.test(h.textContent || ''));
-      if (overlaysHeader && overlaysHeader.parentElement) {
+        .find(h => /^\s*Overlays\b/i.test(h.textContent || ''));
+      if (overlaysHeader?.parentElement) {
         overlaysHeader.parentElement.insertAdjacentElement('afterend', section);
       } else {
         right.appendChild(section);
@@ -10267,75 +10272,104 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       const head = document.createElement('h3');
       head.textContent = 'Published Overlays (live)';
       head.style.margin = '0 0 6px';
-      head.style.fontSize = '14px';
+      head.style.fontSize = '13px';
       section.appendChild(head);
 
       const grid = document.createElement('div');
       grid.id = 'ra-live-grid';
+      // —— compact 3‑column grid + internal scroll (like the regular shelf)
       grid.style.display = 'grid';
-      grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(88px, 1fr))';
+      grid.style.gridTemplateColumns = 'repeat(3, 1fr)'; // 3 columns
       grid.style.gap = '8px';
-      grid.style.maxHeight = '60vh';
+      grid.style.maxHeight = '320px';
       grid.style.overflow = 'auto';
-      grid.style.background = '#0e1218';
+      grid.style.padding = '6px';
       grid.style.border = '1px solid rgba(255,255,255,.08)';
+      grid.style.background = '#0e1218';
       grid.style.borderRadius = '8px';
-      grid.style.padding = '8px';
       section.appendChild(grid);
     }
     return document.getElementById('ra-live-grid');
   }
 
-  // Try to add to canvas (works with your existing hooks if present)
+  // Add clicked overlay to the canvas (centered & scaled smaller)
   function addToCanvas(src, name){
-    if (window.addOverlayFromURL) {         // your builder helper
+    // If your builder exposes a helper, use it
+    if (window.addOverlayFromURL) {
       window.addOverlayFromURL(src, { name });
       return;
     }
-    const canv = window.canvas || window.c;  // fabric.Canvas instance
-    if (window.fabric && canv && canv.add) {
+    // Fabric fallback
+    const canv = window.canvas || window.c || window.fabricCanvas;
+    if (window.fabric && canv && typeof canv.add === 'function') {
       fabric.Image.fromURL(src, (img) => {
-        img.set({ left: canv.getWidth()*0.1, top: canv.getHeight()*0.1, selectable:true });
+        const cw = (canv.getWidth ? canv.getWidth() : canv.width)  || 700;
+        const ch = (canv.getHeight ? canv.getHeight() : canv.height) || 700;
+
+        // target smaller footprint: fit inside 55% of canvas dims
+        const maxW = cw * 0.55;
+        const maxH = ch * 0.55;
+        const iw = img.width  || maxW;
+        const ih = img.height || maxH;
+        const scale = Math.min(maxW/iw, maxH/ih, 1);
+
+        img.set({
+          originX: 'center',
+          originY: 'center',
+          left: cw / 2,
+          top:  ch / 2,
+          selectable: true,
+        });
+        if (scale && scale !== 1) img.scale(scale);
+
         canv.add(img);
-        canv.setActiveObject(img);
-        canv.requestRenderAll();
+        canv.setActiveObject?.(img);
+        canv.requestRenderAll?.();
       }, { crossOrigin: 'anonymous' });
     }
   }
 
-  // Render tiles
+  function escHtml(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function escAttr(s){ return escHtml(s).replace(/"/g,'&quot;'); }
+
+  // Render tiles into the grid
   function render(list){
     const grid = ensureLiveSection();
+    hideLegacyPublished();
+
     if (!list.length) {
       grid.innerHTML = '<div class="muted">No live overlays published yet.</div>';
       return;
     }
+
     grid.innerHTML = list.map(o => {
-      const src = o.url || o.dataURL;
+      const src  = o.url || o.dataURL;
       const name = o.name || 'overlay';
       return `
-        <div class="ov" style="display:flex;flex-direction:column;gap:6px">
-          <img src="${src}" alt="${name}"
-               style="width:100%;aspect-ratio:1/1;object-fit:contain;background:#0a0f14;border-radius:8px;cursor:pointer">
-          <div class="t" style="font-size:12px;opacity:.85">${name}</div>
-        </div>`;
+        <button class="ra-ov" title="${escAttr(name)}"
+                style="appearance:none;border:0;background:none;padding:0;margin:0;cursor:pointer;">
+          <img src="${escAttr(src)}" alt="${escAttr(name)}"
+               style="width:100%;aspect-ratio:1/1;object-fit:contain;background:#0a0f14;border-radius:8px;display:block">
+          <div style="font-size:11px;margin-top:4px;opacity:.8;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${escHtml(name)}
+          </div>
+        </button>`;
     }).join('');
 
-    grid.querySelectorAll('img').forEach(img => {
+    // click -> add to canvas (centered & scaled)
+    grid.querySelectorAll('.ra-ov img').forEach(img => {
       img.addEventListener('click', () => addToCanvas(img.src, img.alt));
     });
   }
 
-  // Public API: you can call this from console after publishing
+  // Public hook so you can refresh after publishing from Admin
   window.raReloadLiveOverlays = async function(){
     const pack = await fetchLivePack();
     render(pack);
   };
 
-  // Initial run (give the page a moment to paint)
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => setTimeout(window.raReloadLiveOverlays, 300));
-  } else {
-    setTimeout(window.raReloadLiveOverlays, 300);
-  }
+  // Initial run
+  const run = () => setTimeout(window.raReloadLiveOverlays, 150);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+  else run();
 })();
