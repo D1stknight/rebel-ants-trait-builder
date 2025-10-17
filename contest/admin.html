@@ -56,18 +56,21 @@
   </section>
 
   <!-- Overlays Publisher (single panel) -->
-  <section class="panel">
-    <h3>Overlays Publisher</h3>
-    <div class="row">
-      <label>Upload PNG/JPG or JSON
-        <input id="ovFiles" type="file" multiple
-               accept="application/json,.json,image/png,image/jpeg"/>
-      </label>
-    </div>
+ <section class="panel" id="ovPanel">
+  <h3>Overlays Publisher</h3>
+  <div class="row">
+    <label>Upload PNG/JPG or JSON
+      <input id="ovFiles" type="file" multiple
+             accept="image/png,image/jpeg,application/json,.json"/>
+    </label>
+  </div>
+  <div class="row">
     <button id="ovPublish">Publish live</button>
-    <span id="ovMsg" class="muted tight"></span>
-    <div id="ovStatus" class="muted tight"></div>
-  </section>
+    <button id="ovClear" class="warn">Clear live overlays</button>
+  </div>
+  <span id="ovMsg" class="muted tight"></span>
+  <div id="ovStatus" class="muted tight"></div>
+</section>
 
   <!-- Start contest -->
   <section class="panel">
@@ -337,106 +340,160 @@
       </div>`;
   }
 
-  /* ---------- Overlays Publisher (PNG/JPG/JSON; small chunks) ---------- */
-  {
-    const ovInput  = document.getElementById('ovFiles');
-    const ovBtn    = document.getElementById('ovPublish');
-    const ovMsg    = document.getElementById('ovMsg');
-    const ovStatus = document.getElementById('ovStatus');
+ /* === Overlays Publisher: accept PNG/JPG or JSON, publish in small chunks === */
+{
+  const ovInput  = document.getElementById('ovFiles');   // multiple files
+  const ovBtn    = document.getElementById('ovPublish');
+  const ovClear  = document.getElementById('ovClear');
+  const ovMsg    = document.getElementById('ovMsg');
+  const ovStatus = document.getElementById('ovStatus');
 
-    function msg(el, text, ok) {
-      if (!el) return;
-      el.textContent = text;
-      el.className = (ok ? 'ok' : 'err') + ' tight';
-    }
-    function clearMsg(el){ if (el) { el.textContent=''; el.className='muted tight'; } }
+  // small status helpers (avoid colliding with your show/clear helpers)
+  function msg(el, text, ok) { if (el){ el.textContent = text; el.className = (ok?'ok':'err') + ' tight'; } }
+  function clearMsg(el)      { if (el){ el.textContent = '';   el.className = 'muted tight'; } }
 
-    async function fileToOverlay(file) {
-      const name = file.name.replace(/\.[a-z0-9]+$/i,'');
-      const buf  = await file.arrayBuffer();
-      const b64  = btoa(String.fromCharCode(...new Uint8Array(buf)));
-      const mime = file.type || 'image/png';
-      return { name, dataURL: `data:${mime};base64,${b64}` };
-    }
-    async function jsonFileToOverlays(file) {
-      const text = await file.text();
-      let data; try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON file.'); }
-      const norm = (x) => {
-        if (!x) return null;
-        const name = String(x.name || 'overlay').trim();
-        const url  = String(x.url  || x.href || x.src || '').trim();
-        const du   = String(x.dataURL || x.dataUrl || '').trim();
-        if (!url && !du) return null;
-        return du ? { name, dataURL: du } : { name, url };
-      };
-      let arr = null;
-      if (Array.isArray(data)) arr = data;
-      else if (Array.isArray(data.items)) arr = data.items;
-      else if (Array.isArray(data.overlays)) arr = data.overlays;
-      else throw new Error('JSON must be an array or { "items": [...] } or { "overlays": [...] }.');
-      const out = arr.map(norm).filter(Boolean);
-      if (!out.length) throw new Error('No overlays found in JSON.');
-      return out;
-    }
-    async function readSelectedOverlays(input) {
-      const files = (input && input.files) ? Array.from(input.files) : [];
-      if (!files.length) throw new Error('Choose one or more PNG/JPG or a JSON file.');
-      const imgFiles  = files.filter(f => /^image\/(png|jpe?g)$/i.test(f.type));
-      const jsonFiles = files.filter(f => /json/i.test(f.type) || /\.json$/i.test(f.name));
-      const overlays = [];
-      for (const jf of jsonFiles) overlays.push(...await jsonFileToOverlays(jf));
-      for (const img of imgFiles) overlays.push(await fileToOverlay(img));
-      if (!overlays.length) throw new Error('No usable overlays in selection.');
-      return overlays;
-    }
-
-    if (ovBtn) {
-      ovBtn.addEventListener('click', async () => {
-        clearMsg(ovMsg);
-        try {
-          const key = (document.getElementById('adminkey')?.value || '').trim();
-          if (!key) throw new Error('Admin key is empty.');
-
-          const overlays = await readSelectedOverlays(ovInput);
-
-          // 1) Clear current list
-          {
-            const r = await j('/api/overlays?admin=' + encodeURIComponent(key), {
-              method: 'PUT',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ overlays: [] })
-            });
-            if (r.status !== 200 || !r.json?.ok) {
-              throw new Error('Failed to start publish: ' + (r?.json?.error || r.raw || r.status));
-            }
-          }
-
-          // 2) Append in tiny chunks
-          const BATCH_SIZE = 1;
-          let sent = 0;
-          for (let i = 0; i < overlays.length; i += BATCH_SIZE) {
-            const batch = overlays.slice(i, i + BATCH_SIZE);
-            const r = await j('/api/overlays?admin=' + encodeURIComponent(key) + '&mode=append', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ overlays: batch })
-            });
-            if (r.status !== 200 || !r.json?.ok) {
-              throw new Error('Append failed near item ' + (i+1) + ': ' + (r?.json?.error || r.raw || r.status));
-            }
-            sent += (r.json.count || batch.length);
-            msg(ovMsg, `Publishing… ${sent}/${overlays.length}`, true);
-          }
-
-          msg(ovMsg, `Published ✓ ${sent} overlays`, true);
-          if (ovStatus) ovStatus.textContent = 'Updated at ' + new Date().toLocaleString();
-
-        } catch (e) {
-          msg(ovMsg, e.message || String(e), false);
-        }
-      });
-    }
+  // File -> dataURL (safe for large images; avoids call-stack overflow)
+  function fileToDataURL(file){
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload  = () => resolve(String(r.result||''));
+      r.onerror = () => reject(r.error || new Error('read failed'));
+      r.readAsDataURL(file);
+    });
   }
+
+  // Convert a File (image) -> overlay { name, dataURL }
+  async function fileToOverlay(file) {
+    const name = file.name.replace(/\.[a-z0-9]+$/i,'');
+    const dataURL = await fileToDataURL(file);
+    if (!dataURL.startsWith('data:')) throw new Error('Bad image');
+    return { name, dataURL };
+  }
+
+  // Parse JSON file -> overlays array (supports: [..], {items:[..]}, {overlays:[..]})
+  async function jsonFileToOverlays(file) {
+    const text = await file.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON file.'); }
+
+    const norm = (x) => {
+      if (!x) return null;
+      const name = String(x.name || 'overlay').trim();
+      const url  = String(x.url  || x.href || x.src || '').trim();
+      const du   = String(x.dataURL || x.dataUrl || '').trim();
+      if (!url && !du) return null;
+      return du ? { name, dataURL: du } : { name, url };
+    };
+
+    let arr = null;
+    if (Array.isArray(data)) arr = data;
+    else if (Array.isArray(data.items)) arr = data.items;
+    else if (Array.isArray(data.overlays)) arr = data.overlays;
+    else throw new Error('JSON must be an array or { "items": [...] } or { "overlays": [...] }.');
+
+    const out = arr.map(norm).filter(Boolean);
+    if (!out.length) throw new Error('No overlays found in JSON.');
+    return out;
+  }
+
+  // Read all selected files -> overlays[]
+  async function readSelectedOverlays(input) {
+    const files = (input && input.files) ? Array.from(input.files) : [];
+    if (!files.length) throw new Error('Choose one or more PNG/JPG or a JSON file.');
+
+    const imgFiles  = files.filter(f => /^image\/(png|jpe?g)$/i.test(f.type));
+    const jsonFiles = files.filter(f => /json/i.test(f.type) || /\.json$/i.test(f.name));
+
+    const overlays = [];
+
+    // Prefer JSON if present; you can also select PNG/JPG alongside JSON
+    for (const jf of jsonFiles) {
+      const arr = await jsonFileToOverlays(jf);
+      overlays.push(...arr);
+    }
+
+    // Add all images as overlays
+    for (const img of imgFiles) {
+      overlays.push(await fileToOverlay(img));
+    }
+
+    if (!overlays.length) throw new Error('No usable overlays in selection.');
+    return overlays;
+  }
+
+  // Publish
+  if (ovBtn) {
+    ovBtn.addEventListener('click', async () => {
+      clearMsg(ovMsg);
+      try {
+        const key = (document.getElementById('adminkey')?.value || '').trim();
+        if (!key) throw new Error('Admin key is empty.');
+
+        const overlays = await readSelectedOverlays(ovInput);
+
+        // 1) Clear existing on server
+        {
+          const r = await j('/api/overlays?admin=' + encodeURIComponent(key), {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ overlays: [] })
+          });
+          if (r.status !== 200 || !r.json?.ok) {
+            throw new Error('Failed to start publish: ' + (r?.json?.error || r.raw || r.status));
+          }
+        }
+
+        // 2) Append in tiny chunks to avoid payload limits
+        const BATCH_SIZE = 1;  // keep at 1 for large images
+        let sent = 0;
+        for (let i = 0; i < overlays.length; i += BATCH_SIZE) {
+          const batch = overlays.slice(i, i + BATCH_SIZE);
+          const r = await j('/api/overlays?admin=' + encodeURIComponent(key) + '&mode=append', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ overlays: batch })
+          });
+          if (r.status !== 200 || !r.json?.ok) {
+            throw new Error('Append failed near item ' + (i+1) + ': ' + (r?.json?.error || r.raw || r.status));
+          }
+          sent += (r.json.count || batch.length);
+          msg(ovMsg, `Publishing… ${sent}/${overlays.length}`, true);
+        }
+
+        msg(ovMsg, `Published ✓ ${sent} overlays`, true);
+        if (ovStatus) ovStatus.textContent = 'Updated at ' + new Date().toLocaleString();
+
+      } catch (e) {
+        msg(ovMsg, e.message || String(e), false);
+      }
+    });
+  }
+
+  // Clear all live overlays (season reset)
+  if (ovClear) {
+    ovClear.addEventListener('click', async () => {
+      clearMsg(ovMsg);
+      try {
+        const key = (document.getElementById('adminkey')?.value || '').trim();
+        if (!key) throw new Error('Admin key is empty.');
+
+        const r = await j('/api/overlays?admin=' + encodeURIComponent(key), {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ overlays: [] })
+        });
+        if (r.status === 200 && r.json?.ok) {
+          msg(ovMsg, 'Cleared ✓', true);
+          if (ovStatus) ovStatus.textContent = 'Updated at ' + new Date().toLocaleString();
+        } else {
+          throw new Error(r?.json?.error || r.raw || r.status);
+        }
+      } catch (e) {
+        msg(ovMsg, e.message || String(e), false);
+      }
+    });
+  }
+}
 
   // Initial status load
   refresh();
