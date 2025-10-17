@@ -113,18 +113,19 @@
   </section>
 
   <!-- Overlays Publisher -->
-  <section class="panel">
-    <h3>Overlays Publisher</h3>
-    <div class="row">
-      <label>Exported JSON file
-        <input id="ovFile" type="file" accept="application/json,.json"/>
-      </label>
-    </div>
-    <button id="ovPublish">Publish live</button>
-    <span id="ovMsg" class="muted tight"></span>
-    <div id="ovStatus" class="muted tight"></div>
-  </section>
-
+<section class="panel">
+  <h3>Overlays Publisher</h3>
+  <div class="row">
+    <label>Upload PNG/JPG or JSON
+      <input id="ovFiles" type="file" multiple
+             accept="application/json,.json,image/png,image/jpeg"/>
+    </label>
+  </div>
+  <button id="ovPublish">Publish live</button>
+  <span id="ovMsg" class="muted tight"></span>
+  <div id="ovStatus" class="muted tight"></div>
+</section>
+  
   <script>
   (function(){
     // ---- Helpers / wiring ----
