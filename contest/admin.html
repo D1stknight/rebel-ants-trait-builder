@@ -6,7 +6,7 @@
   <title>Contest Admin</title>
   <link rel="stylesheet" href="/contest/contest.css">
   <style>
-    /* Base admin styling (kept) */
+    /* Base admin styling */
     body { max-width: 980px; margin: 24px auto; padding: 0 16px; }
     h1 { margin-bottom: 18px; }
     .panel { background:#0f131a; border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
@@ -22,7 +22,7 @@
     .muted{ opacity:.75; }
     .tight { margin-top:6px; }
 
-    /* --- Admin entries list styles --- */
+    /* Entries list styles */
     #entriesBox { display: grid; gap: 8px; }
     .entryRow {
       display: grid; grid-template-columns: 72px 1fr auto;
@@ -30,9 +30,7 @@
       background:#0f131a; border:1px solid rgba(255,255,255,.12);
       border-radius:10px; padding:8px;
     }
-    .entryRow img {
-      width:72px; height:72px; object-fit:cover; border-radius:8px; background:#0b0e12;
-    }
+    .entryRow img { width:72px; height:72px; object-fit:cover; border-radius:8px; background:#0b0e12; }
     .entryRow .meta { font-size:12px; line-height:1.35; }
     .entryRow .meta .id {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -47,18 +45,30 @@
 
   <!-- Admin key -->
   <section class="panel">
-  <h3>Overlays Publisher</h3>
-  <div class="row">
-    <label>Upload PNG/JPG or JSON
-      <input id="ovFiles" type="file" multiple
-             accept="application/json,.json,image/png,image/jpeg"/>
-    </label>
-  </div>
-  <button id="ovPublish">Publish live</button>
-  <span id="ovMsg" class="muted tight"></span>
-  <div id="ovStatus" class="muted tight"></div>
-</section>
-  
+    <h3>Admin Key</h3>
+    <div class="row">
+      <label>RA_ADMIN_KEY
+        <input id="adminkey" type="password" placeholder="Paste your exact RA_ADMIN_KEY"/>
+      </label>
+    </div>
+    <button id="saveKey">Save</button>
+    <span id="saveKeyMsg" class="muted tight"></span>
+  </section>
+
+  <!-- Overlays Publisher (single panel) -->
+  <section class="panel">
+    <h3>Overlays Publisher</h3>
+    <div class="row">
+      <label>Upload PNG/JPG or JSON
+        <input id="ovFiles" type="file" multiple
+               accept="application/json,.json,image/png,image/jpeg"/>
+      </label>
+    </div>
+    <button id="ovPublish">Publish live</button>
+    <span id="ovMsg" class="muted tight"></span>
+    <div id="ovStatus" class="muted tight"></div>
+  </section>
+
   <!-- Start contest -->
   <section class="panel">
     <h3>Start Contest</h3>
@@ -96,7 +106,7 @@
     <span id="delMsg" class="muted tight"></span>
   </section>
 
-  <!-- Entries list (IDs, thumbnails, filter, one‑click delete) -->
+  <!-- Entries list (IDs, filter, one‑click delete) -->
   <section class="panel">
     <h3>Entries <span class="muted">(click ID to copy)</span></h3>
     <div class="row" style="margin:6px 0 10px;">
@@ -114,369 +124,323 @@
     <div id="activeInfo" class="muted">Loading…</div>
   </section>
 
-  <!-- Overlays Publisher -->
-<section class="panel">
-  <h3>Overlays Publisher</h3>
-  <div class="row">
-    <label>Upload PNG/JPG or JSON
-      <input id="ovFiles" type="file" multiple
-             accept="application/json,.json,image/png,image/jpeg"/>
-    </label>
-  </div>
-  <button id="ovPublish">Publish live</button>
-  <span id="ovMsg" class="muted tight"></span>
-  <div id="ovStatus" class="muted tight"></div>
-</section>
-  
-  <script>
-  (function(){
-    // ---- Helpers / wiring ----
-    const KEY_STORE = 'ra:adminkey';
-    const $ = s => document.querySelector(s);
+<script>
+(function(){
+  /* ---------- Helpers / wiring ---------- */
+  const KEY_STORE = 'ra:adminkey';
+  const $ = s => document.querySelector(s);
 
-    const adm       = $('#adminkey');
-    const saveKeyMsg= $('#saveKeyMsg');
-    const startMsg  = $('#startMsg');
-    const closeMsg  = $('#closeMsg');
-    const delMsg    = $('#delMsg');
-    const activeInfo= $('#activeInfo');
+  const adm       = $('#adminkey');
+  const saveKeyMsg= $('#saveKeyMsg');
+  const startMsg  = $('#startMsg');
+  const closeMsg  = $('#closeMsg');
+  const delMsg    = $('#delMsg');
+  const activeInfo= $('#activeInfo');
 
-    // load saved key (so you don't retype)
-    const saved = localStorage.getItem(KEY_STORE) || '';
-    if (saved) adm.value = saved;
+  // load saved key
+  const saved = localStorage.getItem(KEY_STORE) || '';
+  if (saved) adm.value = saved;
 
-    function show(el, text, ok) {
-      el.textContent = text;
-      el.className = (ok ? 'ok' : 'err') + ' tight';
-    }
-    function clear(el){ el.textContent=''; el.className='muted tight'; }
-
-    // common fetch wrapper that returns {status,json,raw}
-    async function j(url, opts) {
-      const r = await fetch(url, opts || {});
-      const text = await r.text();
-      try { return { status:r.status, json: JSON.parse(text), raw:text }; }
-      catch { return { status:r.status, json: null, raw:text }; }
-    }
-    function getKey(){
-      const k = (adm.value || '').trim();
-      if (!k) throw new Error('Admin key is empty');
-      return k;
-    }
-
-    // ---- Actions ----
-
-    // Save key
-    $('#saveKey').onclick = () => {
-      try {
-        const k = getKey();
-        localStorage.setItem(KEY_STORE, k);
-        show(saveKeyMsg, 'Saved ✓', true);
-        setTimeout(() => clear(saveKeyMsg), 1500);
-      } catch(e){
-        show(saveKeyMsg, e.message, false);
-      }
-    };
-
-    // Start contest
-    $('#startBtn').onclick = async () => {
-      clear(startMsg);
-      let key; try { key = getKey(); } catch(e){ return show(startMsg, e.message, false); }
-      $('#startBtn').disabled = true;
-
-      const name = ($('#cName').value || 'Rebel Ants Weekly Contest').trim();
-      const body = JSON.stringify({
-        // send both so API that expects either "name" or older "frame" works
-        name,
-        frame: name,
-        prompt: ($('#cPrompt').value || '').trim(),
-        durationDays: Math.max(1, +$('#cDays').value || 7)
-      });
-
-      const r = await j('/api/contest/start?admin=' + encodeURIComponent(key), {
-        method:'POST', headers:{'content-type':'application/json'}, body
-      });
-      $('#startBtn').disabled = false;
-
-      if (r.status === 200 && r.json && r.json.ok) {
-        const startedId = r.json.id || r.json?.active?.id || r.json?.contestId || '(unknown)';
-        show(startMsg, 'Started ✓  id=' + startedId, true);
-        await refresh();
-        await refreshEntries();          // keep list in sync
-      } else {
-        show(startMsg, 'Start failed: ' + (r?.json?.error || r.raw), false);
-      }
-    };
-
-    // Close active contest
-    $('#closeBtn').onclick = async () => {
-      clear(closeMsg);
-      let key; try { key = getKey(); } catch(e){ return show(closeMsg, e.message, false); }
-      $('#closeBtn').disabled = true;
-
-      const r = await j('/api/contest/close?admin=' + encodeURIComponent(key), { method:'POST' });
-      $('#closeBtn').disabled = false;
-
-      if (r.status === 200 && r.json && r.json.ok) {
-        show(closeMsg, 'Closed ✓', true);
-        await refresh();
-        await refreshEntries();          // keep list in sync
-      } else {
-        show(closeMsg, 'Close failed: ' + (r?.json?.error || r.raw), false);
-      }
-    };
-
-    // Delete a single entry (paste entry id)
-    $('#delBtn').onclick = async () => {
-      clear(delMsg);
-      let key; try { key = getKey(); } catch(e){ return show(delMsg, e.message, false); }
-      const eid = ($('#delId').value || '').trim();
-      if (!eid) return show(delMsg, 'Enter an entry id', false);
-
-      $('#delBtn').disabled = true;
-      const r = await j('/api/contest/delete?admin=' + encodeURIComponent(key), {
-        method:'POST', headers:{'content-type':'application/json'},
-        body: JSON.stringify({ entryId: eid })
-      });
-      $('#delBtn').disabled = false;
-
-      if (r.status === 200 && r.json && r.json.ok) {
-        show(delMsg, 'Deleted ✓', true);
-        await refresh();
-        await refreshEntries();          // keep list in sync
-      } else {
-        show(delMsg, 'Delete failed: ' + (r?.json?.error || r.raw), false);
-      }
-    };
-
-  /* === Overlays Publisher: accept PNG/JPG or JSON, publish in small chunks === */
-{
-  const ovInput  = document.getElementById('ovFiles');   // <-- matches new HTML id
-  const ovBtn    = document.getElementById('ovPublish');
-  const ovMsg    = document.getElementById('ovMsg');
-  const ovStatus = document.getElementById('ovStatus');
-
-  // Helper: status text
-  function msg(el, text, ok) {
-    if (!el) return;
+  function show(el, text, ok) {
     el.textContent = text;
     el.className = (ok ? 'ok' : 'err') + ' tight';
   }
-  function clearMsg(el){ if (el) { el.textContent=''; el.className='muted tight'; } }
+  function clear(el){ el.textContent=''; el.className='muted tight'; }
 
-  // Convert a File (image) -> overlay { name, dataURL }
-  async function fileToOverlay(file) {
-    const name = file.name.replace(/\.[a-z0-9]+$/i,'');
-    const buf  = await file.arrayBuffer();
-    const b64  = btoa(String.fromCharCode(...new Uint8Array(buf)));
-    const mime = file.type || 'image/png';
-    return { name, dataURL: `data:${mime};base64,${b64}` };
+  // common fetch wrapper: returns {status,json,raw}
+  async function j(url, opts) {
+    const r = await fetch(url, opts || {});
+    const text = await r.text();
+    try { return { status:r.status, json: JSON.parse(text), raw:text }; }
+    catch { return { status:r.status, json: null, raw:text }; }
+  }
+  function getKey(){
+    const k = (adm.value || '').trim();
+    if (!k) throw new Error('Admin key is empty');
+    return k;
   }
 
-  // Parse JSON file -> overlays array (supports: [..], {items:[..]}, {overlays:[..]})
-  async function jsonFileToOverlays(file) {
-    const text = await file.text();
-    let data;
-    try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON file.'); }
-    const norm = (x) => {
-      if (!x) return null;
-      const name = String(x.name || 'overlay').trim();
-      const url  = String(x.url  || x.href || x.src || '').trim();
-      const du   = String(x.dataURL || x.dataUrl || '').trim();
-      if (!url && !du) return null;
-      return du ? { name, dataURL: du } : { name, url };
-    };
-    let arr = null;
-    if (Array.isArray(data)) arr = data;
-    else if (Array.isArray(data.items)) arr = data.items;
-    else if (Array.isArray(data.overlays)) arr = data.overlays;
-    else throw new Error('JSON must be an array or { "items": [...] } or { "overlays": [...] }.');
-
-    const out = arr.map(norm).filter(Boolean);
-    if (!out.length) throw new Error('No overlays found in JSON.');
-    return out;
-  }
-
-  // Read all selected files -> overlays[]
-  async function readSelectedOverlays(input) {
-    const files = (input && input.files) ? Array.from(input.files) : [];
-    if (!files.length) throw new Error('Choose one or more PNG/JPG or a JSON file.');
-
-    const imgFiles  = files.filter(f => /^image\/(png|jpe?g)$/i.test(f.type));
-    const jsonFiles = files.filter(f => /json/i.test(f.type) || /\.json$/i.test(f.name));
-
-    const overlays = [];
-
-    // Prefer JSON if present; you can also select PNG/JPG alongside JSON
-    for (const jf of jsonFiles) {
-      const arr = await jsonFileToOverlays(jf);
-      overlays.push(...arr);
+  /* ---------- Admin key ---------- */
+  $('#saveKey').onclick = () => {
+    try {
+      const k = getKey();
+      localStorage.setItem(KEY_STORE, k);
+      show(saveKeyMsg, 'Saved ✓', true);
+      setTimeout(() => clear(saveKeyMsg), 1500);
+    } catch(e){
+      show(saveKeyMsg, e.message, false);
     }
+  };
 
-    // Add all images as overlays
-    for (const img of imgFiles) {
-      overlays.push(await fileToOverlay(img));
+  /* ---------- Contest controls ---------- */
+  $('#startBtn').onclick = async () => {
+    clear(startMsg);
+    let key; try { key = getKey(); } catch(e){ return show(startMsg, e.message, false); }
+    $('#startBtn').disabled = true;
+
+    const name = ($('#cName').value || 'Rebel Ants Weekly Contest').trim();
+    const body = JSON.stringify({
+      name, frame: name,
+      prompt: ($('#cPrompt').value || '').trim(),
+      durationDays: Math.max(1, +$('#cDays').value || 7)
+    });
+
+    const r = await j('/api/contest/start?admin=' + encodeURIComponent(key), {
+      method:'POST', headers:{'content-type':'application/json'}, body
+    });
+    $('#startBtn').disabled = false;
+
+    if (r.status === 200 && r.json && r.json.ok) {
+      const startedId = r.json.id || r.json?.active?.id || r.json?.contestId || '(unknown)';
+      show(startMsg, 'Started ✓  id=' + startedId, true);
+      await refresh();
+      await refreshEntries();
+    } else {
+      show(startMsg, 'Start failed: ' + (r?.json?.error || r.raw), false);
     }
+  };
 
-    if (!overlays.length) throw new Error('No usable overlays in selection.');
-    return overlays;
+  $('#closeBtn').onclick = async () => {
+    clear(closeMsg);
+    let key; try { key = getKey(); } catch(e){ return show(closeMsg, e.message, false); }
+    $('#closeBtn').disabled = true;
+
+    const r = await j('/api/contest/close?admin=' + encodeURIComponent(key), { method:'POST' });
+    $('#closeBtn').disabled = false;
+
+    if (r.status === 200 && r.json && r.json.ok) {
+      show(closeMsg, 'Closed ✓', true);
+      await refresh();
+      await refreshEntries();
+    } else {
+      show(closeMsg, 'Close failed: ' + (r?.json?.error || r.raw), false);
+    }
+  };
+
+  $('#delBtn').onclick = async () => {
+    clear(delMsg);
+    let key; try { key = getKey(); } catch(e){ return show(delMsg, e.message, false); }
+    const eid = ($('#delId').value || '').trim();
+    if (!eid) return show(delMsg, 'Enter an entry id', false);
+
+    $('#delBtn').disabled = true;
+    const r = await j('/api/contest/delete?admin=' + encodeURIComponent(key), {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ entryId: eid })
+    });
+    $('#delBtn').disabled = false;
+
+    if (r.status === 200 && r.json && r.json.ok) {
+      show(delMsg, 'Deleted ✓', true);
+      await refresh();
+      await refreshEntries();
+    } else {
+      show(delMsg, 'Delete failed: ' + (r?.json?.error || r.raw), false);
+    }
+  };
+
+  async function refresh(){
+    activeInfo.textContent = 'Loading…';
+    const r = await j('/api/contest/contest');
+    if (r.status === 200 && r.json && r.json.active) {
+      const meta = r.json.meta || {};
+      const end = meta.endTs ? new Date(meta.endTs).toLocaleString() : '(unknown end)';
+      activeInfo.textContent = `Active ✓  id=${r.json.id} • “${meta.name||''}” • ends ${end}`;
+    } else if (r.status === 200 && r.json && !r.json.active) {
+      activeInfo.textContent = 'No active contest';
+    } else {
+      activeInfo.textContent = 'Failed to read status: ' + (r.raw || r.status);
+    }
   }
 
-  if (ovBtn) {
-    ovBtn.addEventListener('click', async () => {
-      clearMsg(ovMsg);
-      let key = '';
-      try {
-        key = (document.getElementById('adminkey')?.value || '').trim();
-        if (!key) throw new Error('Admin key is empty.');
+  /* ---------- Entries panel ---------- */
+  const entriesBox     = document.getElementById('entriesBox');
+  const entriesFilter  = document.getElementById('entriesFilter');
+  const entriesRefresh = document.getElementById('entriesRefresh');
 
-        const overlays = await readSelectedOverlays(ovInput);
+  if (entriesBox && entriesRefresh && entriesFilter) {
+    entriesRefresh.addEventListener('click', refreshEntries);
+    entriesFilter.addEventListener('input', refreshEntries);
+    refreshEntries();
+  }
 
-        // 1) Clear existing on server
-        {
-          const r = await j('/api/overlays?admin=' + encodeURIComponent(key), {
-            method: 'PUT',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ overlays: [] })
-          });
-          if (r.status !== 200 || !r.json?.ok) {
-            throw new Error('Failed to start publish: ' + (r?.json?.error || r.raw || r.status));
-          }
+  function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+  async function refreshEntries(){
+    if (!entriesBox) return;
+    entriesBox.textContent = 'Loading…';
+    const r = await j('/api/contest/contest');
+    if (r.status !== 200 || !r.json) { entriesBox.textContent = 'Failed to load.'; return; }
+    if (!r.json.active) { entriesBox.textContent = 'No active contest.'; return; }
+
+    let items = Array.isArray(r.json.entries) ? r.json.entries : [];
+    const q = (entriesFilter.value || '').toLowerCase().trim();
+    if (q) {
+      items = items.filter(e =>
+        (e.name||'').toLowerCase().includes(q) ||
+        (e.caption||'').toLowerCase().includes(q) ||
+        String(e.id||'').toLowerCase().includes(q)
+      );
+    }
+    if (!items.length) { entriesBox.textContent = 'No entries.'; return; }
+
+    items.sort((a,b)=> (b.ts|0) - (a.ts|0) || (b.score|0) - (a.score|0));
+    entriesBox.innerHTML = items.map(rowHTML).join('');
+
+    entriesBox.querySelectorAll('[data-del]').forEach(btn=>{
+      btn.addEventListener('click', async () => {
+        let key; try { key = getKey(); } catch (e) { alert(e.message); return; }
+        const eid = btn.getAttribute('data-del');
+        const resp = await j('/api/contest/delete?admin='+encodeURIComponent(key), {
+          method:'POST',
+          headers:{'content-type':'application/json'},
+          body: JSON.stringify({ entryId: eid })
+        });
+        if (resp.status === 200 && resp.json && resp.json.ok) {
+          await refreshEntries();
+          await refresh();
+        } else {
+          alert('Delete failed: ' + (resp?.json?.error || resp.raw || resp.status));
         }
+      });
+    });
 
-        // 2) Append in tiny chunks to avoid payload limits
-        const BATCH_SIZE = 1;  // keep at 1 for large images
-        let sent = 0;
-        for (let i = 0; i < overlays.length; i += BATCH_SIZE) {
-          const batch = overlays.slice(i, i + BATCH_SIZE);
-          const r = await j('/api/overlays?admin=' + encodeURIComponent(key) + '&mode=append', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ overlays: batch })
-          });
-          if (r.status !== 200 || !r.json?.ok) {
-            throw new Error('Append failed near item ' + (i+1) + ': ' + (r?.json?.error || r.raw || r.status));
-          }
-          sent += (r.json.count || batch.length);
-          msg(ovMsg, `Publishing… ${sent}/${overlays.length}`, true);
-        }
-
-        msg(ovMsg, `Published ✓ ${sent} overlays`, true);
-        if (ovStatus) ovStatus.textContent = 'Updated at ' + new Date().toLocaleString();
-
-      } catch (e) {
-        msg(ovMsg, e.message || String(e), false);
-      }
+    entriesBox.querySelectorAll('[data-copy]').forEach(el=>{
+      el.addEventListener('click', async () => {
+        try {
+          const val = el.getAttribute('data-copy');
+          await navigator.clipboard.writeText(val);
+          el.textContent = 'Copied ✓';
+          setTimeout(()=>{ el.textContent = val; }, 900);
+        } catch {}
+      });
     });
   }
-}
-    
-    // Show current active contest
-    async function refresh(){
-      activeInfo.textContent = 'Loading…';
-      const r = await j('/api/contest/contest');   // no admin needed
-      if (r.status === 200 && r.json && r.json.active) {
-        const meta = r.json.meta || {};
-        const end = meta.endTs ? new Date(meta.endTs).toLocaleString() : '(unknown end)';
-        activeInfo.textContent = `Active ✓  id=${r.json.id} • “${meta.name||''}” • ends ${end}`;
-      } else if (r.status === 200 && r.json && !r.json.active) {
-        activeInfo.textContent = 'No active contest';
-      } else {
-        activeInfo.textContent = 'Failed to read status: ' + (r.raw || r.status);
-      }
+
+  function rowHTML(e){
+    const id   = esc(e.id);
+    const url  = esc(e.imageUrl || e.url || '');
+    const name = esc(e.name || 'Anonymous');
+    const cap  = esc(e.caption || '');
+    const sc   = e.score|0;
+    return `
+      <div class="entryRow">
+        <img src="${url}" alt="">
+        <div class="meta">
+          <div><b>${name}</b>${cap ? ' • ' + cap : ''}</div>
+          <div class="score">Score: ${sc}</div>
+          <div class="id" title="Click to copy" data-copy="${id}">${id}</div>
+        </div>
+        <div class="actions">
+          <button class="warn" data-del="${id}">Delete</button>
+        </div>
+      </div>`;
+  }
+
+  /* ---------- Overlays Publisher (PNG/JPG/JSON; small chunks) ---------- */
+  {
+    const ovInput  = document.getElementById('ovFiles');
+    const ovBtn    = document.getElementById('ovPublish');
+    const ovMsg    = document.getElementById('ovMsg');
+    const ovStatus = document.getElementById('ovStatus');
+
+    function msg(el, text, ok) {
+      if (!el) return;
+      el.textContent = text;
+      el.className = (ok ? 'ok' : 'err') + ' tight';
+    }
+    function clearMsg(el){ if (el) { el.textContent=''; el.className='muted tight'; } }
+
+    async function fileToOverlay(file) {
+      const name = file.name.replace(/\.[a-z0-9]+$/i,'');
+      const buf  = await file.arrayBuffer();
+      const b64  = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      const mime = file.type || 'image/png';
+      return { name, dataURL: `data:${mime};base64,${b64}` };
+    }
+    async function jsonFileToOverlays(file) {
+      const text = await file.text();
+      let data; try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON file.'); }
+      const norm = (x) => {
+        if (!x) return null;
+        const name = String(x.name || 'overlay').trim();
+        const url  = String(x.url  || x.href || x.src || '').trim();
+        const du   = String(x.dataURL || x.dataUrl || '').trim();
+        if (!url && !du) return null;
+        return du ? { name, dataURL: du } : { name, url };
+      };
+      let arr = null;
+      if (Array.isArray(data)) arr = data;
+      else if (Array.isArray(data.items)) arr = data.items;
+      else if (Array.isArray(data.overlays)) arr = data.overlays;
+      else throw new Error('JSON must be an array or { "items": [...] } or { "overlays": [...] }.');
+      const out = arr.map(norm).filter(Boolean);
+      if (!out.length) throw new Error('No overlays found in JSON.');
+      return out;
+    }
+    async function readSelectedOverlays(input) {
+      const files = (input && input.files) ? Array.from(input.files) : [];
+      if (!files.length) throw new Error('Choose one or more PNG/JPG or a JSON file.');
+      const imgFiles  = files.filter(f => /^image\/(png|jpe?g)$/i.test(f.type));
+      const jsonFiles = files.filter(f => /json/i.test(f.type) || /\.json$/i.test(f.name));
+      const overlays = [];
+      for (const jf of jsonFiles) overlays.push(...await jsonFileToOverlays(jf));
+      for (const img of imgFiles) overlays.push(await fileToOverlay(img));
+      if (!overlays.length) throw new Error('No usable overlays in selection.');
+      return overlays;
     }
 
-    /* ===== Entries panel logic ===== */
-    const entriesBox     = document.getElementById('entriesBox');
-    const entriesFilter  = document.getElementById('entriesFilter');
-    const entriesRefresh = document.getElementById('entriesRefresh');
+    if (ovBtn) {
+      ovBtn.addEventListener('click', async () => {
+        clearMsg(ovMsg);
+        try {
+          const key = (document.getElementById('adminkey')?.value || '').trim();
+          if (!key) throw new Error('Admin key is empty.');
 
-    if (entriesBox && entriesRefresh && entriesFilter) {
-      entriesRefresh.addEventListener('click', refreshEntries);
-      entriesFilter.addEventListener('input', refreshEntries);
-      // initial load
-      refreshEntries();
-    }
+          const overlays = await readSelectedOverlays(ovInput);
 
-    function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
-
-    async function refreshEntries(){
-      if (!entriesBox) return;
-      entriesBox.textContent = 'Loading…';
-      const r = await j('/api/contest/contest');
-      if (r.status !== 200 || !r.json) { entriesBox.textContent = 'Failed to load.'; return; }
-      if (!r.json.active) { entriesBox.textContent = 'No active contest.'; return; }
-
-      let items = Array.isArray(r.json.entries) ? r.json.entries : [];
-      const q = (entriesFilter.value || '').toLowerCase().trim();
-      if (q) {
-        items = items.filter(e =>
-          (e.name||'').toLowerCase().includes(q) ||
-          (e.caption||'').toLowerCase().includes(q) ||
-          String(e.id||'').toLowerCase().includes(q)
-        );
-      }
-      if (!items.length) { entriesBox.textContent = 'No entries.'; return; }
-
-      // newest first, then by score desc
-      items.sort((a,b)=> (b.ts|0) - (a.ts|0) || (b.score|0) - (a.score|0));
-
-      entriesBox.innerHTML = items.map(rowHTML).join('');
-
-      // wire delete and copy
-      entriesBox.querySelectorAll('[data-del]').forEach(btn=>{
-        btn.addEventListener('click', async () => {
-          let key; try { key = getKey(); } catch (e) { alert(e.message); return; }
-          const eid = btn.getAttribute('data-del');
-          const resp = await j('/api/contest/delete?admin='+encodeURIComponent(key), {
-            method:'POST',
-            headers:{'content-type':'application/json'},
-            body: JSON.stringify({ entryId: eid })
-          });
-          if (resp.status === 200 && resp.json && resp.json.ok) {
-            await refreshEntries();
-            await refresh(); // update status box
-          } else {
-            alert('Delete failed: ' + (resp?.json?.error || resp.raw || resp.status));
+          // 1) Clear current list
+          {
+            const r = await j('/api/overlays?admin=' + encodeURIComponent(key), {
+              method: 'PUT',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ overlays: [] })
+            });
+            if (r.status !== 200 || !r.json?.ok) {
+              throw new Error('Failed to start publish: ' + (r?.json?.error || r.raw || r.status));
+            }
           }
-        });
-      });
 
-      entriesBox.querySelectorAll('[data-copy]').forEach(el=>{
-        el.addEventListener('click', async () => {
-          try {
-            const val = el.getAttribute('data-copy');
-            await navigator.clipboard.writeText(val);
-            el.textContent = 'Copied ✓';
-            setTimeout(()=>{ el.textContent = val; }, 900);
-          } catch {}
-        });
+          // 2) Append in tiny chunks
+          const BATCH_SIZE = 1;
+          let sent = 0;
+          for (let i = 0; i < overlays.length; i += BATCH_SIZE) {
+            const batch = overlays.slice(i, i + BATCH_SIZE);
+            const r = await j('/api/overlays?admin=' + encodeURIComponent(key) + '&mode=append', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ overlays: batch })
+            });
+            if (r.status !== 200 || !r.json?.ok) {
+              throw new Error('Append failed near item ' + (i+1) + ': ' + (r?.json?.error || r.raw || r.status));
+            }
+            sent += (r.json.count || batch.length);
+            msg(ovMsg, `Publishing… ${sent}/${overlays.length}`, true);
+          }
+
+          msg(ovMsg, `Published ✓ ${sent} overlays`, true);
+          if (ovStatus) ovStatus.textContent = 'Updated at ' + new Date().toLocaleString();
+
+        } catch (e) {
+          msg(ovMsg, e.message || String(e), false);
+        }
       });
     }
+  }
 
-    function rowHTML(e){
-      const id   = esc(e.id);
-      const url  = esc(e.imageUrl || e.url || '');
-      const name = esc(e.name || 'Anonymous');
-      const cap  = esc(e.caption || '');
-      const sc   = e.score|0;
-      return `
-        <div class="entryRow">
-          <img src="${url}" alt="">
-          <div class="meta">
-            <div><b>${name}</b>${cap ? ' • ' + cap : ''}</div>
-            <div class="score">Score: ${sc}</div>
-            <div class="id" title="Click to copy" data-copy="${id}">${id}</div>
-          </div>
-          <div class="actions">
-            <button class="warn" data-del="${id}">Delete</button>
-          </div>
-        </div>`;
-    }
-
-    // Initial admin status
-    refresh();
-  })();
-  </script>
+  // Initial status load
+  refresh();
+})();
+</script>
 </body>
 </html>
