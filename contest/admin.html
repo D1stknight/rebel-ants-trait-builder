@@ -283,35 +283,58 @@
   }
   return overlays;
 }
-    if (ovBtn){
-      ovBtn.addEventListener('click', async () => {
-        clear(ovMsg);
-        try {
-          const key = (document.getElementById('adminkey')?.value || '').trim();
-          if (!key) throw new Error('Admin key is empty.');
+   if (ovBtn){
+    ovBtn.addEventListener('click', async () => {
+      clear(ovMsg);
+      try {
+        const key = (document.getElementById('adminkey')?.value || '').trim();
+        if (!key) throw new Error('Admin key is empty.');
 
-          const overlays = await readSelectedJSON(ovFile);
+        const overlays = await readSelectedJSON(ovFile);
+        if (!overlays.length) throw new Error('No overlays in the file.');
 
-          ovBtn.disabled = true;
+        // 1) clear existing list (tiny request)
+        {
           const r = await j('/api/overlays?admin=' + encodeURIComponent(key), {
-            method: 'PUT',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ overlays })
+            method:'PUT',
+            headers:{'content-type':'application/json'},
+            body: JSON.stringify({ overlays: [] })   // replace with empty first
           });
-          ovBtn.disabled = false;
-
-          if (r.status === 200 && r.json && r.json.ok) {
-            show(ovMsg, `Published ✓ ${r.json.count || overlays.length} overlays`, true);
-            if (ovStatus) ovStatus.textContent = 'Updated at ' + new Date().toLocaleString();
-          } else {
-            show(ovMsg, 'Publish failed: ' + (r?.json?.error || r.raw || r.status), false);
+          if (r.status !== 200 || !r.json?.ok) {
+            throw new Error('Failed to start publish: ' + (r?.json?.error || r.raw || r.status));
           }
-        } catch(e){
-          ovBtn.disabled = false;
-          show(ovMsg, e.message || String(e), false);
         }
-      });
-    }
+
+        // 2) append in small chunks to avoid payload-too-large
+        const BATCH_SIZE = 1; // keep 1 to be safest; raise to 2–3 if your images are tiny
+        let sent = 0;
+
+        for (let i = 0; i < overlays.length; i += BATCH_SIZE) {
+          const batch = overlays.slice(i, i + BATCH_SIZE);
+
+          const r = await j('/api/overlays?admin=' + encodeURIComponent(key) + '&mode=append', {
+            method:'POST',
+            headers:{'content-type':'application/json'},
+            body: JSON.stringify({ overlays: batch })
+          });
+
+          if (r.status !== 200 || !r.json?.ok) {
+            throw new Error('Append failed near item ' + (i+1) + ': ' + (r?.json?.error || r.raw || r.status));
+          }
+
+          sent += (r.json.count || batch.length);
+          show(ovMsg, `Publishing… ${sent}/${overlays.length}`, true);
+        }
+
+        show(ovMsg, `Published ✓ ${sent} overlays`, true);
+        if (ovStatus) ovStatus.textContent = 'Updated at ' + new Date().toLocaleString();
+      } catch(e){
+        ovBtn.disabled = false;
+        show(ovMsg, e.message || String(e), false);
+      }
+    });
+  }
+    
     /* === END Overlays Publisher handler === */
 
     // Show current active contest
