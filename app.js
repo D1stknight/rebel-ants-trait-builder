@@ -10211,10 +10211,11 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   LIVE PUBLISHED OVERLAYS (updated)
-   - 3-column compact grid with internal scroll
-   - Hides legacy "Published Overlays" section/text
+   LIVE PUBLISHED OVERLAYS (final polish)
+   - 3‑column compact grid with internal scroll
+   - Hides legacy "Published Overlays" label (not our (live) one)
    - Adds overlay centered & scaled smaller on canvas
+   - Ensures tile labels use a readable light color
 ========================================================= */
 (function(){
   // Pull overlays from the live API
@@ -10228,7 +10229,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     } catch { return []; }
   }
 
-  // Right panel helper (several possible classnames in your UI)
+  // Right panel helper (covers your markup variants)
   function findRightPanel(){
     return document.querySelector('aside.panel.right')
         || document.querySelector('.panel.right')
@@ -10237,13 +10238,18 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
         || document.body;
   }
 
-  // Hide the old static "Published Overlays" section to avoid confusion
-  function hideLegacyPublished(){
-    const headers = [...document.querySelectorAll('h1,h2,h3,.section-title')]
-      .filter(h => /Published Overlays/i.test(h.textContent || '') && !/\(live\)/i.test(h.textContent || ''));
-    headers.forEach(h => {
-      const block = h.closest('section,.card,.group,.panel-section') || h.parentElement;
-      if (block) block.style.display = 'none'; else h.style.display = 'none';
+  // Robustly hide the old static "Published Overlays" label (not the new "(live)" one)
+  function hideLegacyPublishedLabel(){
+    const right = findRightPanel();
+    if (!right) return;
+    const candidates = right.querySelectorAll('h1,h2,h3,h4,p,div,span,strong,em,.section-title');
+    candidates.forEach(node => {
+      const txt = (node.textContent || '').trim().toLowerCase();
+      if (!txt) return;
+      // match exact "published overlays" and ensure it's NOT inside our live section
+      if (txt === 'published overlays' && !node.closest('#ra-live-overlays-sec')) {
+        node.style.display = 'none';
+      }
     });
   }
 
@@ -10260,7 +10266,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       section.style.padding = '10px';
       section.style.margin = '12px 0';
 
-      // insert under the main “Overlays” heading if we can find it
+      // insert under the main “Overlays” header if we can find it
       const overlaysHeader = [...document.querySelectorAll('h1,h2,h3,.section-title')]
         .find(h => /^\s*Overlays\b/i.test(h.textContent || ''));
       if (overlaysHeader?.parentElement) {
@@ -10287,6 +10293,8 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
       grid.style.border = '1px solid rgba(255,255,255,.08)';
       grid.style.background = '#0e1218';
       grid.style.borderRadius = '8px';
+      // make sure text inside tiles is readable even if a parent enforces dark text
+      grid.style.color = '#cfd8ee';
       section.appendChild(grid);
     }
     return document.getElementById('ra-live-grid');
@@ -10335,7 +10343,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   // Render tiles into the grid
   function render(list){
     const grid = ensureLiveSection();
-    hideLegacyPublished();
+    hideLegacyPublishedLabel();  // <— hide the old label whenever we render
 
     if (!list.length) {
       grid.innerHTML = '<div class="muted">No live overlays published yet.</div>';
@@ -10350,7 +10358,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
                 style="appearance:none;border:0;background:none;padding:0;margin:0;cursor:pointer;">
           <img src="${escAttr(src)}" alt="${escAttr(name)}"
                style="width:100%;aspect-ratio:1/1;object-fit:contain;background:#0a0f14;border-radius:8px;display:block">
-          <div style="font-size:11px;margin-top:4px;opacity:.8;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          <div style="font-size:11px;margin-top:4px;opacity:.9;color:#cfd8ee;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
             ${escHtml(name)}
           </div>
         </button>`;
