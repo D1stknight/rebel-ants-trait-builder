@@ -10211,79 +10211,131 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 })();
 
 /* =========================================================
-   Live Overlays: fetch from /api/overlays and render shelf
-   Append this at the very end of app.js (no <script> tags)
-   ========================================================= */
+   LIVE PUBLISHED OVERLAYS  — shows /api/overlays in builder
+   - Force-creates a "Published Overlays (live)" shelf in the
+     right panel if we can’t find your existing grid.
+   - Clicking a tile tries to add it to the canvas.
+========================================================= */
 (function(){
-  // Candidate selectors for the Published Overlays shelf/grid
-  const SHELF_SELS = [
-    '[aria-label="Published Overlays"] .grid',
-    '[aria-label="Published Overlays"]',
-    '[data-shelf="published-overlays"] .grid',
-    '.published-overlays .grid',
-    '.published-overlays'
-  ];
+  // Pull overlays from the live API
+  async function fetchLivePack(){
+    try {
+      const r = await fetch('/api/overlays', { cache: 'no-store' });
+      if (!r.ok) return [];
+      const j = await r.json().catch(()=>null);
+      const arr = (j && Array.isArray(j.overlays)) ? j.overlays : [];
+      return arr.filter(o => (o && (o.url || o.dataURL)));
+    } catch { return []; }
+  }
 
-  // Wait until the shelf node appears (UI can be built lazily)
-  function waitForShelf(timeoutMs = 8000){
-    return new Promise(resolve => {
-      const found = SHELF_SELS.map(s => document.querySelector(s)).find(Boolean);
-      if (found) return resolve(found);
+  // Find the right panel (works with your markup)
+  function findRightPanel(){
+    return document.querySelector('aside.panel.right')
+        || document.querySelector('.panel.right')
+        || document.querySelector('aside.right')
+        || null;
+  }
 
-      const mo = new MutationObserver(() => {
-        const node = SHELF_SELS.map(s => document.querySelector(s)).find(Boolean);
-        if (node) { mo.disconnect(); resolve(node); }
-      });
-      mo.observe(document.documentElement, { childList: true, subtree: true });
-      setTimeout(() => { mo.disconnect(); resolve(null); }, timeoutMs);
+  // Ensure a section exists; return the grid element
+  function ensureLiveSection(){
+    let right = findRightPanel();
+    if (!right) {
+      // fall back to body if your layout is different
+      right = document.body;
+    }
+
+    // Already mounted?
+    let section = document.getElementById('ra-live-overlays-sec');
+    if (!section) {
+      section = document.createElement('section');
+      section.id = 'ra-live-overlays-sec';
+      section.className = 'panel';
+      section.style.border = '1px solid rgba(255,255,255,.12)';
+      section.style.borderRadius = '10px';
+      section.style.padding = '10px';
+      section.style.margin = '12px 0';
+
+      // Try to insert right under your “Overlays” area if present
+      const overlaysHeader = [...document.querySelectorAll('h1,h2,h3,.section-title')]
+        .find(h => /(^|\b)Overlays\b/i.test(h.textContent || ''));
+      if (overlaysHeader && overlaysHeader.parentElement) {
+        overlaysHeader.parentElement.insertAdjacentElement('afterend', section);
+      } else {
+        right.appendChild(section);
+      }
+
+      const head = document.createElement('h3');
+      head.textContent = 'Published Overlays (live)';
+      head.style.margin = '0 0 6px';
+      head.style.fontSize = '14px';
+      section.appendChild(head);
+
+      const grid = document.createElement('div');
+      grid.id = 'ra-live-grid';
+      grid.style.display = 'grid';
+      grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(88px, 1fr))';
+      grid.style.gap = '8px';
+      grid.style.maxHeight = '60vh';
+      grid.style.overflow = 'auto';
+      grid.style.background = '#0e1218';
+      grid.style.border = '1px solid rgba(255,255,255,.08)';
+      grid.style.borderRadius = '8px';
+      grid.style.padding = '8px';
+      section.appendChild(grid);
+    }
+    return document.getElementById('ra-live-grid');
+  }
+
+  // Try to add to canvas (works with your existing hooks if present)
+  function addToCanvas(src, name){
+    if (window.addOverlayFromURL) {         // your builder helper
+      window.addOverlayFromURL(src, { name });
+      return;
+    }
+    const canv = window.canvas || window.c;  // fabric.Canvas instance
+    if (window.fabric && canv && canv.add) {
+      fabric.Image.fromURL(src, (img) => {
+        img.set({ left: canv.getWidth()*0.1, top: canv.getHeight()*0.1, selectable:true });
+        canv.add(img);
+        canv.setActiveObject(img);
+        canv.requestRenderAll();
+      }, { crossOrigin: 'anonymous' });
+    }
+  }
+
+  // Render tiles
+  function render(list){
+    const grid = ensureLiveSection();
+    if (!list.length) {
+      grid.innerHTML = '<div class="muted">No live overlays published yet.</div>';
+      return;
+    }
+    grid.innerHTML = list.map(o => {
+      const src = o.url || o.dataURL;
+      const name = o.name || 'overlay';
+      return `
+        <div class="ov" style="display:flex;flex-direction:column;gap:6px">
+          <img src="${src}" alt="${name}"
+               style="width:100%;aspect-ratio:1/1;object-fit:contain;background:#0a0f14;border-radius:8px;cursor:pointer">
+          <div class="t" style="font-size:12px;opacity:.85">${name}</div>
+        </div>`;
+    }).join('');
+
+    grid.querySelectorAll('img').forEach(img => {
+      img.addEventListener('click', () => addToCanvas(img.src, img.alt));
     });
   }
 
-  async function fetchOverlays(){
-    try {
-      const r = await fetch('/api/overlays', { cache: 'no-store' });
-      if (!r.ok) throw new Error(await r.text());
-      const j = await r.json();
-      // Expect { overlays:[ { name, url? , dataURL? } ] }
-      const list = Array.isArray(j?.overlays) ? j.overlays : [];
-      // Normalize each item to {name, src}
-      return list.map(o => ({
-        name: o?.name || 'overlay',
-        src : o?.url || o?.dataURL || ''
-      })).filter(x => x.src);
-    } catch (e) {
-      console.warn('Live overlays load failed:', e);
-      return [];
-    }
-  }
+  // Public API: you can call this from console after publishing
+  window.raReloadLiveOverlays = async function(){
+    const pack = await fetchLivePack();
+    render(pack);
+  };
 
-  function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
-  function renderIntoShelf(shelf, items){
-    // If your builder exposes a renderer, use it (most expect {name, dataURL})
-    if (typeof window.renderPublishedOverlays === 'function') {
-      window.renderPublishedOverlays(items.map(x => ({ name: x.name, dataURL: x.src })));
-      return;
-    }
-    // Fallback: inject simple thumbnails so existing drag/click hooks can attach
-    shelf.innerHTML = items.map(x => `
-      <div class="ov" draggable="true" data-name="${esc(x.name)}">
-        <img src="${esc(x.src)}" alt="${esc(x.name)}">
-        <div class="t">${esc(x.name)}</div>
-      </div>
-    `).join('');
-  }
-
-  async function initLiveOverlays(){
-    const [items, shelf] = await Promise.all([fetchOverlays(), waitForShelf()]);
-    if (!shelf) { console.warn('Published Overlays shelf not found. Loaded', items.length, 'items.'); return; }
-    renderIntoShelf(shelf, items);
-    console.log('Live overlays injected:', items.length);
-  }
-
+  // Initial run (give the page a moment to paint)
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initLiveOverlays);
+    document.addEventListener('DOMContentLoaded', () => setTimeout(window.raReloadLiveOverlays, 300));
   } else {
-    initLiveOverlays();
+    setTimeout(window.raReloadLiveOverlays, 300);
   }
 })();
