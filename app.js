@@ -10209,3 +10209,81 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   mo.observe(document.body, { childList:true, subtree:true });
   mount();
 })();
+
+/* =========================================================
+   Live Overlays: fetch from /api/overlays and render shelf
+   Append this at the very end of app.js (no <script> tags)
+   ========================================================= */
+(function(){
+  // Candidate selectors for the Published Overlays shelf/grid
+  const SHELF_SELS = [
+    '[aria-label="Published Overlays"] .grid',
+    '[aria-label="Published Overlays"]',
+    '[data-shelf="published-overlays"] .grid',
+    '.published-overlays .grid',
+    '.published-overlays'
+  ];
+
+  // Wait until the shelf node appears (UI can be built lazily)
+  function waitForShelf(timeoutMs = 8000){
+    return new Promise(resolve => {
+      const found = SHELF_SELS.map(s => document.querySelector(s)).find(Boolean);
+      if (found) return resolve(found);
+
+      const mo = new MutationObserver(() => {
+        const node = SHELF_SELS.map(s => document.querySelector(s)).find(Boolean);
+        if (node) { mo.disconnect(); resolve(node); }
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+      setTimeout(() => { mo.disconnect(); resolve(null); }, timeoutMs);
+    });
+  }
+
+  async function fetchOverlays(){
+    try {
+      const r = await fetch('/api/overlays', { cache: 'no-store' });
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json();
+      // Expect { overlays:[ { name, url? , dataURL? } ] }
+      const list = Array.isArray(j?.overlays) ? j.overlays : [];
+      // Normalize each item to {name, src}
+      return list.map(o => ({
+        name: o?.name || 'overlay',
+        src : o?.url || o?.dataURL || ''
+      })).filter(x => x.src);
+    } catch (e) {
+      console.warn('Live overlays load failed:', e);
+      return [];
+    }
+  }
+
+  function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function renderIntoShelf(shelf, items){
+    // If your builder exposes a renderer, use it (most expect {name, dataURL})
+    if (typeof window.renderPublishedOverlays === 'function') {
+      window.renderPublishedOverlays(items.map(x => ({ name: x.name, dataURL: x.src })));
+      return;
+    }
+    // Fallback: inject simple thumbnails so existing drag/click hooks can attach
+    shelf.innerHTML = items.map(x => `
+      <div class="ov" draggable="true" data-name="${esc(x.name)}">
+        <img src="${esc(x.src)}" alt="${esc(x.name)}">
+        <div class="t">${esc(x.name)}</div>
+      </div>
+    `).join('');
+  }
+
+  async function initLiveOverlays(){
+    const [items, shelf] = await Promise.all([fetchOverlays(), waitForShelf()]);
+    if (!shelf) { console.warn('Published Overlays shelf not found. Loaded', items.length, 'items.'); return; }
+    renderIntoShelf(shelf, items);
+    console.log('Live overlays injected:', items.length);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initLiveOverlays);
+  } else {
+    initLiveOverlays();
+  }
+})();
