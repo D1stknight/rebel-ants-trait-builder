@@ -47,16 +47,18 @@
 
   <!-- Admin key -->
   <section class="panel">
-    <h3>Admin Key</h3>
-    <div class="row">
-      <label>RA_ADMIN_KEY
-        <input id="adminkey" type="password" placeholder="Paste your exact RA_ADMIN_KEY"/>
-      </label>
-    </div>
-    <button id="saveKey">Save</button>
-    <span id="saveKeyMsg" class="muted tight"></span>
-  </section>
-
+  <h3>Overlays Publisher</h3>
+  <div class="row">
+    <label>Upload PNG/JPG or JSON
+      <input id="ovFiles" type="file" multiple
+             accept="application/json,.json,image/png,image/jpeg"/>
+    </label>
+  </div>
+  <button id="ovPublish">Publish live</button>
+  <span id="ovMsg" class="muted tight"></span>
+  <div id="ovStatus" class="muted tight"></div>
+</section>
+  
   <!-- Start contest -->
   <section class="panel">
     <h3>Start Contest</h3>
