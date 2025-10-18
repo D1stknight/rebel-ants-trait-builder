@@ -10162,3 +10162,222 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     console.warn('Failed to mount contest actions:', e);
   }
 })();
+
+/* ===== Admin (/?admin=1): Expand/Collapse the "Published Overlays" section ===== */
+(function addPublishedExpandToggle(){
+  if (!/[?&]admin=1\b/.test(location.search)) return;
+
+  function findRight(){ return document.querySelector('aside.panel.right') || document.querySelector('.panel.right'); }
+  function findTitle() {
+    const right = findRight(); if (!right) return null;
+    return [...right.querySelectorAll('h1,h2,h3,.section-title')]
+      .find(el => /Published Overlays/i.test(el.textContent || '')) || null;
+  }
+
+  function mount() {
+    const title = findTitle();
+    if (!title || title.__raExpandMounted) return;
+    title.__raExpandMounted = true;
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Show all';
+    btn.style.cssText = 'margin-left:8px;font-size:12px;padding:2px 8px;border:1px solid rgba(255,255,255,.18);border-radius:8px;background:#1b2538;color:#e8eefc;cursor:pointer;';
+    title.appendChild(btn);
+
+    const section = title.closest('section,.card,.group,.panel-section') || title.parentElement;
+    let expanded = false;
+    const right = findRight();
+
+    function apply() {
+      if (expanded) {
+        if (right) right.style.overflowY = 'visible';
+        section.style.maxHeight = 'none';
+        section.style.overflow = 'visible';
+        btn.textContent = 'Collapse';
+      } else {
+        if (right) right.style.overflowY = 'auto';
+        section.style.maxHeight = '60vh';
+        section.style.overflow = 'auto';
+        btn.textContent = 'Show all';
+      }
+    }
+    btn.onclick = () => { expanded = !expanded; apply(); };
+    apply();
+  }
+
+  const mo = new MutationObserver(mount);
+  mo.observe(document.body, { childList:true, subtree:true });
+  mount();
+})();
+
+/* =========================================================
+   LIVE PUBLISHED OVERLAYS (final polish)
+   - 3‑column compact grid with internal scroll
+   - Hides legacy "Published Overlays" label (not our (live) one)
+   - Adds overlay centered & scaled smaller on canvas
+   - Ensures tile labels use a readable light color
+========================================================= */
+(function(){
+  // Pull overlays from the live API
+  async function fetchLivePack(){
+    try {
+      const r = await fetch('/api/overlays', { cache: 'no-store' });
+      if (!r.ok) return [];
+      const j = await r.json().catch(()=>null);
+      const arr = (j && Array.isArray(j.overlays)) ? j.overlays : [];
+      return arr.filter(o => (o && (o.url || o.dataURL)));
+    } catch { return []; }
+  }
+
+  // Right panel helper (covers your markup variants)
+  function findRightPanel(){
+    return document.querySelector('aside.panel.right')
+        || document.querySelector('.panel.right')
+        || document.querySelector('aside.right')
+        || document.querySelector('aside')
+        || document.body;
+  }
+
+  // Robustly hide the old static "Published Overlays" label (not the new "(live)" one)
+  function hideLegacyPublishedLabel(){
+    const right = findRightPanel();
+    if (!right) return;
+    const candidates = right.querySelectorAll('h1,h2,h3,h4,p,div,span,strong,em,.section-title');
+    candidates.forEach(node => {
+      const txt = (node.textContent || '').trim().toLowerCase();
+      if (!txt) return;
+      // match exact "published overlays" and ensure it's NOT inside our live section
+      if (txt === 'published overlays' && !node.closest('#ra-live-overlays-sec')) {
+        node.style.display = 'none';
+      }
+    });
+  }
+
+  // Create (or get) the live section and its grid
+  function ensureLiveSection(){
+    const right = findRightPanel();
+    let section = document.getElementById('ra-live-overlays-sec');
+    if (!section) {
+      section = document.createElement('section');
+      section.id = 'ra-live-overlays-sec';
+      section.className = 'panel';
+      section.style.border = '1px solid rgba(255,255,255,.12)';
+      section.style.borderRadius = '10px';
+      section.style.padding = '10px';
+      section.style.margin = '12px 0';
+
+      // insert under the main “Overlays” header if we can find it
+      const overlaysHeader = [...document.querySelectorAll('h1,h2,h3,.section-title')]
+        .find(h => /^\s*Overlays\b/i.test(h.textContent || ''));
+      if (overlaysHeader?.parentElement) {
+        overlaysHeader.parentElement.insertAdjacentElement('afterend', section);
+      } else {
+        right.appendChild(section);
+      }
+
+      const head = document.createElement('h3');
+      head.textContent = 'Published Overlays (live)';
+      head.style.margin = '0 0 6px';
+      head.style.fontSize = '13px';
+      section.appendChild(head);
+
+      const grid = document.createElement('div');
+      grid.id = 'ra-live-grid';
+      // —— compact 3‑column grid + internal scroll (like the regular shelf)
+      grid.style.display = 'grid';
+      grid.style.gridTemplateColumns = 'repeat(3, 1fr)'; // 3 columns
+      grid.style.gap = '8px';
+      grid.style.maxHeight = '320px';
+      grid.style.overflow = 'auto';
+      grid.style.padding = '6px';
+      grid.style.border = '1px solid rgba(255,255,255,.08)';
+      grid.style.background = '#0e1218';
+      grid.style.borderRadius = '8px';
+      // make sure text inside tiles is readable even if a parent enforces dark text
+      grid.style.color = '#cfd8ee';
+      section.appendChild(grid);
+    }
+    return document.getElementById('ra-live-grid');
+  }
+
+  // Add clicked overlay to the canvas (centered & scaled smaller)
+  function addToCanvas(src, name){
+    // If your builder exposes a helper, use it
+    if (window.addOverlayFromURL) {
+      window.addOverlayFromURL(src, { name });
+      return;
+    }
+    // Fabric fallback
+    const canv = window.canvas || window.c || window.fabricCanvas;
+    if (window.fabric && canv && typeof canv.add === 'function') {
+      fabric.Image.fromURL(src, (img) => {
+        const cw = (canv.getWidth ? canv.getWidth() : canv.width)  || 700;
+        const ch = (canv.getHeight ? canv.getHeight() : canv.height) || 700;
+
+        // target smaller footprint: fit inside 55% of canvas dims
+        const maxW = cw * 0.55;
+        const maxH = ch * 0.55;
+        const iw = img.width  || maxW;
+        const ih = img.height || maxH;
+        const scale = Math.min(maxW/iw, maxH/ih, 1);
+
+        img.set({
+          originX: 'center',
+          originY: 'center',
+          left: cw / 2,
+          top:  ch / 2,
+          selectable: true,
+        });
+        if (scale && scale !== 1) img.scale(scale);
+
+        canv.add(img);
+        canv.setActiveObject?.(img);
+        canv.requestRenderAll?.();
+      }, { crossOrigin: 'anonymous' });
+    }
+  }
+
+  function escHtml(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function escAttr(s){ return escHtml(s).replace(/"/g,'&quot;'); }
+
+  // Render tiles into the grid
+  function render(list){
+    const grid = ensureLiveSection();
+    hideLegacyPublishedLabel();  // <— hide the old label whenever we render
+
+    if (!list.length) {
+      grid.innerHTML = '<div class="muted">No live overlays published yet.</div>';
+      return;
+    }
+
+    grid.innerHTML = list.map(o => {
+      const src  = o.url || o.dataURL;
+      const name = o.name || 'overlay';
+      return `
+        <button class="ra-ov" title="${escAttr(name)}"
+                style="appearance:none;border:0;background:none;padding:0;margin:0;cursor:pointer;">
+          <img src="${escAttr(src)}" alt="${escAttr(name)}"
+               style="width:100%;aspect-ratio:1/1;object-fit:contain;background:#0a0f14;border-radius:8px;display:block">
+          <div style="font-size:11px;margin-top:4px;opacity:.9;color:#cfd8ee;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${escHtml(name)}
+          </div>
+        </button>`;
+    }).join('');
+
+    // click -> add to canvas (centered & scaled)
+    grid.querySelectorAll('.ra-ov img').forEach(img => {
+      img.addEventListener('click', () => addToCanvas(img.src, img.alt));
+    });
+  }
+
+  // Public hook so you can refresh after publishing from Admin
+  window.raReloadLiveOverlays = async function(){
+    const pack = await fetchLivePack();
+    render(pack);
+  };
+
+  // Initial run
+  const run = () => setTimeout(window.raReloadLiveOverlays, 150);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+  else run();
+})();

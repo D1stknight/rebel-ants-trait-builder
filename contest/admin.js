@@ -67,3 +67,41 @@
   loadStatus();
 })();
 </script>
+
+/* ===== Overlays Publisher (upload JSON → live) ===== */
+(function(){
+  const $ = s => document.querySelector(s);
+  const ovFile = $('#ovFile');
+  const ovMsg  = $('#ovMsg');
+  const ovStat = $('#ovStatus');
+  const ovBtn  = $('#ovPublish');
+
+  if (!ovBtn) return;
+
+  ovBtn.onclick = async () => {
+    ovMsg.textContent = '';
+    try {
+      const key = getKey();
+      const f = ovFile.files && ovFile.files[0];
+      if (!f) { show(ovMsg, 'Choose the exported overlays .json file.', false); return; }
+
+      const text = await f.text(); // raw JSON
+      ovBtn.disabled = true;
+      const r = await j('/api/overlays/publish?admin='+encodeURIComponent(key), {
+        method:'POST',
+        headers:{ 'content-type':'application/json' },
+        body: text
+      });
+      ovBtn.disabled = false;
+
+      if (r.status === 200 && r.json && r.json.ok) {
+        show(ovMsg, `Published ✓ (${r.json.count||0} items)`, true);
+        ovStat.textContent = 'Live URL: ' + r.json.url;
+      } else {
+        show(ovMsg, 'Publish failed: ' + (r?.json?.error || r.raw || r.status), false);
+      }
+    } catch (e) {
+      show(ovMsg, 'Publish failed: ' + (e && e.message || e), false);
+    }
+  };
+})();

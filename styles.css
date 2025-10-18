@@ -406,3 +406,24 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
     flex-wrap: wrap;
   }
 }
+
+/* Published Overlays shelf: make it scroll if tall */
+[aria-label="Published Overlays"],
+.published-overlays {
+  max-height: 360px;        /* adjust to taste */
+  overflow-y: auto;
+}
+
+/* Tiny thumbnail styling if we use the fallback renderer */
+.published-overlays .ov,
+[aria-label="Published Overlays"] .ov {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.published-overlays .ov img,
+[aria-label="Published Overlays"] .ov img {
+  width: 100%; height: auto; display: block;
+}
+.published-overlays .ov .t,
+[aria-label="Published Overlays"] .ov .t {
+  font-size: 12px; opacity: .8;
+}
