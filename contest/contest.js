@@ -24,7 +24,7 @@ async function init(){
   ACTIVE = { id: data.id, meta: data.meta || {} };
 
   // Set page heading and browser tab title from contest meta
-  const titleText = ACTIVE.meta.name || ACTIVE.meta.frame || 'Rebel Ants Contests';
+  const titleText = ACTIVE.meta.name || ACTIVE.meta.frame || 'Rebel Ants Contest Page';
   if (elTitle) elTitle.textContent = titleText;
   document.title = `${titleText} — Contest`;
 
