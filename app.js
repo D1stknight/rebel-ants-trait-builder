@@ -10424,3 +10424,40 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     }
   }catch(_){}
 })();
+
+/* ===== Z-order safety net for live overlays (Bring Front / Send Back) ===== */
+(() => {
+  const canv = (window.canvas || window.c);               // your fabric.Canvas
+  if (!canv || !canv.getActiveObject) return;
+
+  function ao() { return (window.canvas || window.c)?.getActiveObject?.() || null; }
+
+  function findButton(labelText, sel = 'aside.panel.right button, .panel.right button, button') {
+    labelText = String(labelText).trim().toLowerCase();
+    return [...document.querySelectorAll(sel)]
+      .find(b => (b.textContent || '').trim().toLowerCase() === labelText) || null;
+  }
+
+  const bringBtn = findButton('Bring to Front');
+  const backBtn  = findButton('Send to Back');
+
+  if (bringBtn && !bringBtn.__raBound) {
+    bringBtn.__raBound = true;
+    bringBtn.addEventListener('click', () => {
+      const o = ao(); if (!o) return;
+      canv.bringToFront(o);
+      canv.setActiveObject(o);              // keep selection
+      canv.requestRenderAll();
+    });
+  }
+
+  if (backBtn && !backBtn.__raBound) {
+    backBtn.__raBound = true;
+    backBtn.addEventListener('click', () => {
+      const o = ao(); if (!o) return;
+      canv.sendToBack(o);
+      canv.setActiveObject(o);
+      canv.requestRenderAll();
+    });
+  }
+})();
