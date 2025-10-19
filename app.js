@@ -10483,61 +10483,124 @@ function loadTrimmedCanvas(url) {
 })();
 
 /* =========================================================
-   Overlay z‑order (builder UI buttons) — document delegate (v3)
-   - Works like the console snippet that succeeded for you
-   - Captures ALL clicks anywhere; if a click is on a
-     "Bring to Front" or "Send to Back" button, we re-order
-     the active object among overlays only.
-   - We enforce our order multiple times AFTER the app handler
-     (to win against any delayed re-renders)
+   Overlay z‑order (persisted) — same behavior as your console test
+   - Reorders ONLY among overlays (fabric.Image objects that are selectable)
+   - Wires to your right‑panel “Bring to Front” / “Send to Back” buttons
+   - Survives UI re-renders
    ========================================================= */
 (function(){
+  if (window.__raZorderInstalled) return;
+  window.__raZorderInstalled = true;
+
   const canv = window.canvas || window.c;
   if (!window.fabric || !canv) return;
 
+  // === CONFIG: how buttons behave ===
+  // 'step' = move one step among overlays (your console behavior)
+  // 'edge' = jump to top/bottom among overlays
+  const MODE = 'step';
+
+  // What counts as an overlay in your app
   const isOverlay = o => o && o.type === 'image' && o.selectable !== false;
 
-  function enforce(which){
-    const run = () => {
-      const o = canv.getActiveObject?.();
-      if (!o || !isOverlay(o)) return;
+  // Helpers for console debugging (optional)
+  function listOverlays(){
+    const objs = canv.getObjects();
+    console.table(objs.map((o,i)=>({ i, overlay:isOverlay(o), type:o.type, name:o.name||o.raName||'' })));
+  }
+  window.raListOverlays = listOverlays;
 
-      const objs  = canv.getObjects();
-      const ovIdx = [];
-      for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) ovIdx.push(i);
-      if (!ovIdx.length) return;
-
-      const target = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
-      canv.moveTo(o, target);
-      canv.setActiveObject(o);
-      canv.requestRenderAll();
-    };
-
-    // Run several times to beat any deferred app logic
-    setTimeout(run, 0);
-    setTimeout(run, 60);
-    setTimeout(run, 140);
-    setTimeout(run, 280);
+  function indicesOfOverlays(){
+    const out = [];
+    const objs = canv.getObjects();
+    for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) out.push(i);
+    return out;
   }
 
-  // Single delegated listener catches *all* buttons, including re-rendered ones
-  function isBtnText(el, words){
-    const t = (el.textContent || '').toLowerCase();
-    return words.every(w => t.includes(w));
+  // One-step movement among overlays only
+  function moveWithinOverlaysStep(dir /* +1 or -1 */){
+    const objs = canv.getObjects();
+    const o = canv.getActiveObject?.();
+    if (!o || !isOverlay(o)) return;
+
+    const ovIdx = indicesOfOverlays();
+    const cur   = objs.indexOf(o);
+    const pos   = ovIdx.indexOf(cur);
+    if (pos === -1) return;
+
+    if (dir === +1 && pos < ovIdx.length - 1) {
+      canv.moveTo(o, ovIdx[pos + 1]);
+    } else if (dir === -1 && pos > 0) {
+      canv.moveTo(o, ovIdx[pos - 1]);
+    } else {
+      return; // at edge
+    }
+    canv.setActiveObject(o);
+    canv.requestRenderAll();
   }
 
-  function onClickCapture(ev){
-    const btn = ev.target && ev.target.closest('button, .btn, [role="button"], .control, .action');
-    if (!btn) return;
+  // Jump to top/bottom among overlays only
+  function moveToOverlayEdge(which /* 'top' | 'bottom' */){
+    const o = canv.getActiveObject?.();
+    if (!o || !isOverlay(o)) return;
 
-    if (isBtnText(btn, ['bring','front']))   enforce('top');
-    if (isBtnText(btn, ['send','back']))     enforce('bottom');
+    const ovIdx = indicesOfOverlays();
+    if (!ovIdx.length) return;
+
+    const target = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
+    canv.moveTo(o, target);
+    canv.setActiveObject(o);
+    canv.requestRenderAll();
   }
 
-  // Capture phase so we always see the click; we do our work AFTER via timeouts
-  document.addEventListener('click', onClickCapture, { capture:true });
-  document.addEventListener('pointerdown', onClickCapture, { capture:true });
+  // Expose in case you want to call from console
+  window.raStepFwd = () => moveWithinOverlaysStep(+1);
+  window.raStepBack= () => moveWithinOverlaysStep(-1);
+  window.raToFront = () => moveToOverlayEdge('top');
+  window.raToBack  = () => moveToOverlayEdge('bottom');
 
-  // Optional: small console breadcrumb so you know it’s mounted
-  if (!window.__raZMounted){ window.__raZMounted = true; console.log('[ra] z‑order delegate mounted'); }
+  // --- Button wiring (same approach as your working console test) ---
+  const right = document.querySelector('aside.panel.right') || document;
+  const buttonNodes = () => [...right.querySelectorAll('button, .btn, [role="button"], .control, .action')];
+  const textLC = el => (el.textContent || '').toLowerCase();
+
+  // Accept multiple label variants
+  const FRONT_PATTERNS = [
+    ['bring','front'], ['to','front'], ['front']
+  ];
+  const BACK_PATTERNS  = [
+    ['send','back'],   ['to','back'],  ['back']
+  ];
+  const matchesWords = (el, patterns) =>
+    patterns.some(words => words.every(w => textLC(el).includes(w)));
+
+  function wire(el, fn){
+    if (!el || el.__raWired) return;
+    // run AFTER the app’s own handlers
+    const handler = () => setTimeout(fn, 40);
+    el.addEventListener('click', handler, { capture:true });
+    el.addEventListener('pointerdown', handler, { capture:true });
+    el.__raWired = true;
+  }
+
+  function tryWire(){
+    const btns = buttonNodes();
+    const frontBtn = btns.find(el => matchesWords(el, FRONT_PATTERNS));
+    const backBtn  = btns.find(el => matchesWords(el, BACK_PATTERNS));
+
+    if (MODE === 'edge') {
+      wire(frontBtn, window.raToFront);
+      wire(backBtn,  window.raToBack);
+    } else { // 'step'
+      wire(frontBtn, window.raStepFwd);
+      wire(backBtn,  window.raStepBack);
+    }
+  }
+
+  // initial pass + stay wired through re-renders
+  tryWire();
+  const mo = new MutationObserver(tryWire);
+  mo.observe(document.body, { childList:true, subtree:true });
+
+  console.log('[ra] overlay z‑order wiring ready (mode:', MODE, ')');
 })();
