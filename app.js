@@ -10300,12 +10300,20 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return document.getElementById('ra-live-grid');
   }
 
+/* === Overlay sizing/selection knobs (tweak these) === */
+const RA_OV_CFG = {
+  FIT: 0.50,        // 50% of canvas. Lower = smaller (e.g., 0.45).
+  MAX_PX: 520,      // Optional hard pixel cap (null = ignore).
+  TRIM_ALPHA: 10,   // 0..255: higher trims more faint transparency.
+  TRIM_PAD: 1,      // pixels of margin to keep after trimming.
+  CORNER_SIZE: 9    // selection dot size (handles).
+};
+
 /* ===== Centered + trimmed addToCanvas (tight selection box) ===== */
 function addToCanvas(src, name = 'overlay') {
   const canv = window.canvas || window.c;
   if (!window.fabric || !canv) return;
 
-  // Try to trim transparent margins first
   loadTrimmedCanvas(src).then(trimmedCanvas => {
     const img = new fabric.Image(trimmedCanvas, {
       originX: 'center', originY: 'center',
@@ -10313,14 +10321,19 @@ function addToCanvas(src, name = 'overlay') {
       top:  canv.getHeight() / 2,
       selectable: true,
       evented: true,
-      perPixelTargetFind: true,   // clicks feel close to visible pixels
-      objectCaching: false
+      perPixelTargetFind: true,
+      objectCaching: false,
+      cornerStyle: 'circle',
+      transparentCorners: false,
+      cornerSize: RA_OV_CFG.CORNER_SIZE
     });
 
-    // Fit to ~60% of canvas
-    const FIT = 0.60;
-    const maxW = canv.getWidth()  * FIT;
-    const maxH = canv.getHeight() * FIT;
+    // Fit inside % of canvas, with optional hard pixel cap
+    const fitW = canv.getWidth()  * RA_OV_CFG.FIT;
+    const fitH = canv.getHeight() * RA_OV_CFG.FIT;
+    const maxW = (RA_OV_CFG.MAX_PX ? Math.min(fitW, RA_OV_CFG.MAX_PX) : fitW);
+    const maxH = (RA_OV_CFG.MAX_PX ? Math.min(fitH, RA_OV_CFG.MAX_PX) : fitH);
+
     const s = Math.min(maxW / img.width, maxH / img.height, 1);
     img.scale(s);
 
@@ -10328,16 +10341,24 @@ function addToCanvas(src, name = 'overlay') {
     canv.setActiveObject(img);
     canv.requestRenderAll();
   }).catch(() => {
-    // If trimming’s not possible (e.g., CORS), still center & scale smaller
+    // Fallback if trimming isn’t possible (e.g., CORS)
     fabric.Image.fromURL(src, (img) => {
       img.set({
         originX: 'center', originY: 'center',
         left: canv.getWidth()/2, top: canv.getHeight()/2,
-        selectable: true, evented: true, perPixelTargetFind: true, objectCaching: false
+        selectable: true, evented: true, perPixelTargetFind: true,
+        objectCaching: false, cornerStyle: 'circle',
+        transparentCorners: false, cornerSize: RA_OV_CFG.CORNER_SIZE
       });
-      const FIT = 0.60;
-      const s = Math.min((canv.getWidth()*FIT)/img.width, (canv.getHeight()*FIT)/img.height, 1);
+
+      const fitW = canv.getWidth()  * RA_OV_CFG.FIT;
+      const fitH = canv.getHeight() * RA_OV_CFG.FIT;
+      const maxW = (RA_OV_CFG.MAX_PX ? Math.min(fitW, RA_OV_CFG.MAX_PX) : fitW);
+      const maxH = (RA_OV_CFG.MAX_PX ? Math.min(fitH, RA_OV_CFG.MAX_PX) : fitH);
+
+      const s = Math.min(maxW / img.width, maxH / img.height, 1);
       img.scale(s);
+
       canv.add(img);
       canv.setActiveObject(img);
       canv.requestRenderAll();
@@ -10345,7 +10366,7 @@ function addToCanvas(src, name = 'overlay') {
   });
 }
 
-/* Trim an image’s transparent margins and return a canvas with tight bounds */
+/* --- Helper: load image and return a trimmed canvas (respects alpha) --- */
 function loadTrimmedCanvas(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -10361,11 +10382,13 @@ function loadTrimmedCanvas(url) {
         ctx.drawImage(img, 0, 0);
 
         const { data } = ctx.getImageData(0, 0, w, h);
+        const TH = RA_OV_CFG.TRIM_ALPHA|0;
 
         let minX = w, minY = h, maxX = -1, maxY = -1;
         for (let y = 0; y < h; y++) {
           for (let x = 0; x < w; x++) {
-            if (data[(y*w + x) * 4 + 3] /* alpha */) {
+            const a = data[(y*w + x) * 4 + 3];
+            if (a > TH) { // treat faint pixels below threshold as transparent
               if (x < minX) minX = x;
               if (y < minY) minY = y;
               if (x > maxX) maxX = x;
@@ -10374,8 +10397,15 @@ function loadTrimmedCanvas(url) {
           }
         }
 
-        // If fully transparent (unlikely), just use the original image
+        // If fully transparent (or failed), just use original image element
         if (maxX < minX || maxY < minY) return resolve(img);
+
+        // Apply padding and clamp
+        const pad = Math.max(0, RA_OV_CFG.TRIM_PAD|0);
+        minX = Math.max(0, minX - pad);
+        minY = Math.max(0, minY - pad);
+        maxX = Math.min(w - 1, maxX + pad);
+        maxY = Math.min(h - 1, maxY + pad);
 
         const cw = maxX - minX + 1;
         const ch = maxY - minY + 1;
@@ -10384,9 +10414,8 @@ function loadTrimmedCanvas(url) {
         out.width = cw; out.height = ch;
         out.getContext('2d').drawImage(tmp, minX, minY, cw, ch, 0, 0, cw, ch);
         resolve(out);
-      } catch (e) {
-        // If getImageData throws (CORS), fall back
-        resolve(img);
+      } catch {
+        resolve(img); // graceful fallback
       }
     };
     img.onerror = reject;
