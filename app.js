@@ -10483,9 +10483,9 @@ function loadTrimmedCanvas(url) {
 })();
 
 /* =========================================================
-   Overlay z‑order (persisted) — same behavior as your console test
-   - Reorders ONLY among overlays (fabric.Image objects that are selectable)
-   - Wires to your right‑panel “Bring to Front” / “Send to Back” buttons
+   Overlay z‑order (persisted) — overlay-only reordering
+   - Works with buttons labeled “Bring to Front” and “Bring to Back”
+   - Also accepts “Send to Back”, “To Front/Back”, etc.
    - Survives UI re-renders
    ========================================================= */
 (function(){
@@ -10495,35 +10495,26 @@ function loadTrimmedCanvas(url) {
   const canv = window.canvas || window.c;
   if (!window.fabric || !canv) return;
 
-  // === CONFIG: how buttons behave ===
-  // 'step' = move one step among overlays (your console behavior)
-  // 'edge' = jump to top/bottom among overlays
+  // 'step'  = move one step among overlays (your console behavior)
+  // 'edge'  = jump to overlay top/bottom
   const MODE = 'step';
 
-  // What counts as an overlay in your app
+  // Overlay = selectable fabric.Image (excludes locked base/watermark/text)
   const isOverlay = o => o && o.type === 'image' && o.selectable !== false;
 
-  // Helpers for console debugging (optional)
-  function listOverlays(){
+  function overlayIndices(){
+    const idx = [];
     const objs = canv.getObjects();
-    console.table(objs.map((o,i)=>({ i, overlay:isOverlay(o), type:o.type, name:o.name||o.raName||'' })));
-  }
-  window.raListOverlays = listOverlays;
-
-  function indicesOfOverlays(){
-    const out = [];
-    const objs = canv.getObjects();
-    for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) out.push(i);
-    return out;
+    for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) idx.push(i);
+    return idx;
   }
 
-  // One-step movement among overlays only
-  function moveWithinOverlaysStep(dir /* +1 or -1 */){
+  function moveStep(dir){
     const objs = canv.getObjects();
     const o = canv.getActiveObject?.();
     if (!o || !isOverlay(o)) return;
 
-    const ovIdx = indicesOfOverlays();
+    const ovIdx = overlayIndices();
     const cur   = objs.indexOf(o);
     const pos   = ovIdx.indexOf(cur);
     if (pos === -1) return;
@@ -10533,74 +10524,75 @@ function loadTrimmedCanvas(url) {
     } else if (dir === -1 && pos > 0) {
       canv.moveTo(o, ovIdx[pos - 1]);
     } else {
-      return; // at edge
+      return;
     }
     canv.setActiveObject(o);
     canv.requestRenderAll();
   }
 
-  // Jump to top/bottom among overlays only
-  function moveToOverlayEdge(which /* 'top' | 'bottom' */){
+  function moveEdge(which){ // 'top' | 'bottom'
     const o = canv.getActiveObject?.();
     if (!o || !isOverlay(o)) return;
-
-    const ovIdx = indicesOfOverlays();
+    const ovIdx = overlayIndices();
     if (!ovIdx.length) return;
-
     const target = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
     canv.moveTo(o, target);
     canv.setActiveObject(o);
     canv.requestRenderAll();
   }
 
-  // Expose in case you want to call from console
-  window.raStepFwd = () => moveWithinOverlaysStep(+1);
-  window.raStepBack= () => moveWithinOverlaysStep(-1);
-  window.raToFront = () => moveToOverlayEdge('top');
-  window.raToBack  = () => moveToOverlayEdge('bottom');
+  // Expose for console (optional)
+  window.raStepFwd = () => moveStep(+1);
+  window.raStepBack= () => moveStep(-1);
+  window.raToFront = () => moveEdge('top');
+  window.raToBack  = () => moveEdge('bottom');
 
-  // --- Button wiring (same approach as your working console test) ---
+  // ---------- Button wiring ----------
   const right = document.querySelector('aside.panel.right') || document;
-  const buttonNodes = () => [...right.querySelectorAll('button, .btn, [role="button"], .control, .action')];
-  const textLC = el => (el.textContent || '').toLowerCase();
 
-  // Accept multiple label variants
-  const FRONT_PATTERNS = [
-    ['bring','front'], ['to','front'], ['front']
-  ];
-  const BACK_PATTERNS  = [
-    ['send','back'],   ['to','back'],  ['back']
-  ];
-  const matchesWords = (el, patterns) =>
-    patterns.some(words => words.every(w => textLC(el).includes(w)));
+  const norm = s => (s || '').toLowerCase().replace(/\s+/g,' ').trim();
+  const BUTTON_SEL = 'button, .btn, [role="button"], .control, .action';
+
+  // Accept both “Send to Back” and “Bring to Back” (and variants)
+  const FRONT_KEYS = ['bring to front','bring front','to front','front'];
+  const BACK_KEYS  = ['bring to back','send to back','send back','bring back','to back','back'];
+
+  function findLabeled(which){
+    const want = which === 'front' ? FRONT_KEYS : BACK_KEYS;
+    const all  = [...right.querySelectorAll(BUTTON_SEL)].map(el => [el, norm(el.textContent)]);
+    const hit  = all.find(([el, t]) => want.some(k => t.includes(k)));
+    return hit ? hit[0] : null;
+  }
 
   function wire(el, fn){
     if (!el || el.__raWired) return;
-    // run AFTER the app’s own handlers
-    const handler = () => setTimeout(fn, 40);
+    const handler = () => setTimeout(fn, 40); // run after app’s default handler
     el.addEventListener('click', handler, { capture:true });
     el.addEventListener('pointerdown', handler, { capture:true });
     el.__raWired = true;
   }
 
-  function tryWire(){
-    const btns = buttonNodes();
-    const frontBtn = btns.find(el => matchesWords(el, FRONT_PATTERNS));
-    const backBtn  = btns.find(el => matchesWords(el, BACK_PATTERNS));
+  function rewire(){
+    const f = findLabeled('front');
+    const b = findLabeled('back');
 
     if (MODE === 'edge') {
-      wire(frontBtn, window.raToFront);
-      wire(backBtn,  window.raToBack);
-    } else { // 'step'
-      wire(frontBtn, window.raStepFwd);
-      wire(backBtn,  window.raStepBack);
+      wire(f, window.raToFront);
+      wire(b, window.raToBack);
+    } else {
+      wire(f, window.raStepFwd);
+      wire(b, window.raStepBack);
     }
+
+    // Debug so you can confirm it latched to the real buttons
+    // (You should see “wired: true true – Bring to Front | Bring to Back” once)
+    console.log('[ra:zorder] wired:',
+      !!f, !!b, '–',
+      f && f.textContent.trim(), '|', b && b.textContent.trim()
+    );
   }
 
-  // initial pass + stay wired through re-renders
-  tryWire();
-  const mo = new MutationObserver(tryWire);
+  rewire();
+  const mo = new MutationObserver(rewire);
   mo.observe(document.body, { childList:true, subtree:true });
-
-  console.log('[ra] overlay z‑order wiring ready (mode:', MODE, ')');
 })();
