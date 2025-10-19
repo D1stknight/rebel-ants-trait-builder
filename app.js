@@ -10300,42 +10300,96 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return document.getElementById('ra-live-grid');
   }
 
-  // Add clicked overlay to the canvas (centered & scaled smaller)
-  function addToCanvas(src, name){
-    // If your builder exposes a helper, use it
-    if (window.addOverlayFromURL) {
-      window.addOverlayFromURL(src, { name });
-      return;
-    }
-    // Fabric fallback
-    const canv = window.canvas || window.c || window.fabricCanvas;
-    if (window.fabric && canv && typeof canv.add === 'function') {
-      fabric.Image.fromURL(src, (img) => {
-        const cw = (canv.getWidth ? canv.getWidth() : canv.width)  || 700;
-        const ch = (canv.getHeight ? canv.getHeight() : canv.height) || 700;
+ /* ===== Replace your addToCanvas with a trimmed/centered version ===== */
+function addToCanvas(src, name = 'overlay') {
+  const canv = window.canvas || window.c;
+  if (!window.fabric || !canv) return;
 
-        // target smaller footprint: fit inside 55% of canvas dims
-        const maxW = cw * 0.55;
-        const maxH = ch * 0.55;
-        const iw = img.width  || maxW;
-        const ih = img.height || maxH;
-        const scale = Math.min(maxW/iw, maxH/ih, 1);
+  // 1) Load image and trim transparent margins
+  loadTrimmedCanvas(src).then(trimmedCanvas => {
+    // 2) Create fabric image from the trimmed canvas
+    const img = new fabric.Image(trimmedCanvas, {
+      originX: 'center',
+      originY: 'center',
+      left: canv.getWidth() / 2,
+      top:  canv.getHeight() / 2,
+      selectable: true,
+      evented: true,
+      perPixelTargetFind: true,
+      objectCaching: false
+    });
 
-        img.set({
-          originX: 'center',
-          originY: 'center',
-          left: cw / 2,
-          top:  ch / 2,
-          selectable: true,
-        });
-        if (scale && scale !== 1) img.scale(scale);
+    // 3) Scale to fit ~60% of the canvas
+    const FIT = 0.60; // tweak 0.50–0.70 to taste
+    const maxW = canv.getWidth()  * FIT;
+    const maxH = canv.getHeight() * FIT;
+    const s = Math.min(maxW / img.width, maxH / img.height, 1);
+    img.scale(s);
 
-        canv.add(img);
-        canv.setActiveObject?.(img);
-        canv.requestRenderAll?.();
-      }, { crossOrigin: 'anonymous' });
-    }
-  }
+    canv.add(img);
+    canv.setActiveObject(img);
+    canv.requestRenderAll();
+  }).catch(() => {
+    // Fallback: if trimming fails (e.g., CORS), still center & scale smaller
+    fabric.Image.fromURL(src, (img) => {
+      img.set({
+        originX: 'center', originY: 'center',
+        left: canv.getWidth()/2, top: canv.getHeight()/2,
+        selectable: true, evented: true, perPixelTargetFind: true, objectCaching: false
+      });
+      const FIT = 0.60;
+      const s = Math.min((canv.getWidth()*FIT)/img.width, (canv.getHeight()*FIT)/img.height, 1);
+      img.scale(s);
+      canv.add(img);
+      canv.setActiveObject(img);
+      canv.requestRenderAll();
+    }, { crossOrigin: 'anonymous' });
+  });
+}
+
+/* --- Helper: load an image and return a canvas trimmed to non‑transparent bounds --- */
+function loadTrimmedCanvas(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth  || img.width;
+        const h = img.naturalHeight || img.height;
+        const tmp = document.createElement('canvas');
+        tmp.width = w; tmp.height = h;
+        const ctx = tmp.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        const { data } = ctx.getImageData(0, 0, w, h);
+        let minX = w, minY = h, maxX = -1, maxY = -1;
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const a = data[(y*w + x) * 4 + 3];
+            if (a) {
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (maxX < minX || maxY < minY) return resolve(img); // fully transparent safeguard
+
+        const cw = maxX - minX + 1;
+        const ch = maxY - minY + 1;
+        const out = document.createElement('canvas');
+        out.width = cw; out.height = ch;
+        out.getContext('2d').drawImage(tmp, minX, minY, cw, ch, 0, 0, cw, ch);
+        resolve(out);
+      } catch (e) {
+        resolve(img); // graceful fallback
+      }
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
 
   function escHtml(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
   function escAttr(s){ return escHtml(s).replace(/"/g,'&quot;'); }
