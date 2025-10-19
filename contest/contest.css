@@ -130,3 +130,22 @@ body.page{
     bottom: calc(var(--dock-offset, 0px) + env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* ---------- Explainer (How it works) ---------- */
+.explain { max-width: 1100px; margin: 8px auto 12px; padding: 0 16px; }
+.explain details.c-card { padding: 0; }
+.explain summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  font-weight: 600;
+  list-style: none;
+  outline: none;
+}
+.explain summary::-webkit-details-marker { display: none; }
+.explain details[open] summary { border-bottom: 1px solid var(--line, rgba(255,255,255,.10)); }
+.explain .body { padding: 12px 14px; }
+.explain .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.explain h3 { margin: 0 0 6px; font-size: 14px; }
+.explain ul { margin: 0; padding-left: 18px; }
+.explain li { margin: 4px 0; }
+.explain a { color: #8ab4ff; }
