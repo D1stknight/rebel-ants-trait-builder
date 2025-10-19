@@ -10483,57 +10483,56 @@ function loadTrimmedCanvas(url) {
 })();
 
 /* =========================================================
-   Overlay z‑order (persisted) — overlay-only reordering
-   - Works with buttons labeled “Bring to Front” and “Bring to Back”
-   - Also accepts “Send to Back”, “To Front/Back”, etc.
-   - Survives UI re-renders
+   Overlay z‑order (late‑binding) — overlay-only reordering
+   - Works with “Bring to Front” + “Bring to Back” or “Send to Back”
+   - Binds after Fabric is ready; survives UI re-renders
    ========================================================= */
 (function(){
-  if (window.__raZorderInstalled) return;
-  window.__raZorderInstalled = true;
+  if (window.__raZorderInstalled2) return;
+  window.__raZorderInstalled2 = true;
 
-  const canv = window.canvas || window.c;
-  if (!window.fabric || !canv) return;
-
-  // 'step'  = move one step among overlays (your console behavior)
-  // 'edge'  = jump to overlay top/bottom
+  // How the buttons behave:
+  //   'step' -> move one step among overlays (matches your console test)
+  //   'edge' -> jump to top/bottom among overlays
   const MODE = 'step';
 
-  // Overlay = selectable fabric.Image (excludes locked base/watermark/text)
+  // What counts as an overlay in your app
   const isOverlay = o => o && o.type === 'image' && o.selectable !== false;
 
-  function overlayIndices(){
-    const idx = [];
-    const objs = canv.getObjects();
-    for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) idx.push(i);
-    return idx;
+  // Always fetch the live Fabric canvas (don’t capture it early)
+  function getCanv(){
+    const cands = [window.canvas, window.fabricCanvas, window.FABRIC_CANVAS, window.builderCanvas];
+    for (const c of cands) {
+      if (c && typeof c.getObjects === 'function') return c;
+    }
+    return null;
   }
 
+  // Move one step among overlays only
   function moveStep(dir){
+    const canv = getCanv(); if (!canv) return;
     const objs = canv.getObjects();
-    const o = canv.getActiveObject?.();
-    if (!o || !isOverlay(o)) return;
+    const o = canv.getActiveObject?.(); if (!o || !isOverlay(o)) return;
 
-    const ovIdx = overlayIndices();
+    const ovIdx = objs.map((x,i)=> isOverlay(x) ? i : -1).filter(i => i >= 0);
     const cur   = objs.indexOf(o);
     const pos   = ovIdx.indexOf(cur);
     if (pos === -1) return;
 
-    if (dir === +1 && pos < ovIdx.length - 1) {
-      canv.moveTo(o, ovIdx[pos + 1]);
-    } else if (dir === -1 && pos > 0) {
-      canv.moveTo(o, ovIdx[pos - 1]);
-    } else {
-      return;
-    }
+    if (dir === +1 && pos < ovIdx.length-1)      canv.moveTo(o, ovIdx[pos+1]);
+    else if (dir === -1 && pos > 0)              canv.moveTo(o, ovIdx[pos-1]);
+    else return;
+
     canv.setActiveObject(o);
     canv.requestRenderAll();
   }
 
-  function moveEdge(which){ // 'top' | 'bottom'
-    const o = canv.getActiveObject?.();
-    if (!o || !isOverlay(o)) return;
-    const ovIdx = overlayIndices();
+  // Jump to overlay top/bottom (not above watermark / below base)
+  function moveEdge(which){
+    const canv = getCanv(); if (!canv) return;
+    const o = canv.getActiveObject?.(); if (!o || !isOverlay(o)) return;
+    const objs = canv.getObjects();
+    const ovIdx = objs.map((x,i)=> isOverlay(x) ? i : -1).filter(i => i >= 0);
     if (!ovIdx.length) return;
     const target = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
     canv.moveTo(o, target);
@@ -10541,58 +10540,54 @@ function loadTrimmedCanvas(url) {
     canv.requestRenderAll();
   }
 
-  // Expose for console (optional)
+  // Expose for quick console testing if you want
   window.raStepFwd = () => moveStep(+1);
   window.raStepBack= () => moveStep(-1);
   window.raToFront = () => moveEdge('top');
   window.raToBack  = () => moveEdge('bottom');
 
-  // ---------- Button wiring ----------
+  // -------- Button wiring --------
   const right = document.querySelector('aside.panel.right') || document;
+  const SEL   = 'button, .btn, [role="button"], .control, .action';
+  const norm  = s => (s||'').toLowerCase().replace(/\s+/g,' ').trim();
 
-  const norm = s => (s || '').toLowerCase().replace(/\s+/g,' ').trim();
-  const BUTTON_SEL = 'button, .btn, [role="button"], .control, .action';
-
-  // Accept both “Send to Back” and “Bring to Back” (and variants)
+  // Accept common variants
   const FRONT_KEYS = ['bring to front','bring front','to front','front'];
-  const BACK_KEYS  = ['bring to back','send to back','send back','bring back','to back','back'];
+  const BACK_KEYS  = ['bring to back','send to back','send back','to back','back','bring back'];
 
-  function findLabeled(which){
-    const want = which === 'front' ? FRONT_KEYS : BACK_KEYS;
-    const all  = [...right.querySelectorAll(BUTTON_SEL)].map(el => [el, norm(el.textContent)]);
-    const hit  = all.find(([el, t]) => want.some(k => t.includes(k)));
-    return hit ? hit[0] : null;
+  function findBtn(keys){
+    const els = [...right.querySelectorAll(SEL)];
+    return els.find(el => keys.some(k => norm(el.textContent).includes(k))) || null;
   }
 
-  function wire(el, fn){
-    if (!el || el.__raWired) return;
-    const handler = () => setTimeout(fn, 40); // run after app’s default handler
-    el.addEventListener('click', handler, { capture:true });
-    el.addEventListener('pointerdown', handler, { capture:true });
-    el.__raWired = true;
+  function wire(btn, fn){
+    if (!btn || btn.__raWired) return;
+    const handler = () => setTimeout(fn, 40); // run after the app’s own handler
+    btn.addEventListener('click', handler, { capture:true });
+    btn.addEventListener('pointerdown', handler, { capture:true });
+    btn.__raWired = true;
   }
 
   function rewire(){
-    const f = findLabeled('front');
-    const b = findLabeled('back');
+    const frontBtn = findBtn(FRONT_KEYS);
+    const backBtn  = findBtn(BACK_KEYS);
+    const doFront  = (MODE === 'edge') ? () => moveEdge('top')    : () => moveStep(+1);
+    const doBack   = (MODE === 'edge') ? () => moveEdge('bottom') : () => moveStep(-1);
+    wire(frontBtn, doFront);
+    wire(backBtn,  doBack);
 
-    if (MODE === 'edge') {
-      wire(f, window.raToFront);
-      wire(b, window.raToBack);
-    } else {
-      wire(f, window.raStepFwd);
-      wire(b, window.raStepBack);
-    }
-
-    // Debug so you can confirm it latched to the real buttons
-    // (You should see “wired: true true – Bring to Front | Bring to Back” once)
+    // Debug: you should see this once it latches to real buttons
     console.log('[ra:zorder] wired:',
-      !!f, !!b, '–',
-      f && f.textContent.trim(), '|', b && b.textContent.trim()
+      !!frontBtn, !!backBtn, '–',
+      frontBtn?.textContent?.trim(), '|', backBtn?.textContent?.trim()
     );
   }
 
-  rewire();
-  const mo = new MutationObserver(rewire);
-  mo.observe(document.body, { childList:true, subtree:true });
+  // Wait until Fabric + canvas exist, then wire and keep wiring
+  (function wait(){
+    if (!window.fabric || !getCanv()) { setTimeout(wait, 120); return; }
+    rewire();
+    const mo = new MutationObserver(rewire);
+    mo.observe(document.body, { childList:true, subtree:true });
+  })();
 })();
