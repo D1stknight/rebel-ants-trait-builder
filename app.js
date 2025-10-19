@@ -10483,18 +10483,18 @@ function loadTrimmedCanvas(url) {
 })();
 
 /* =========================================================
-   Overlay z‑order (builder UI buttons)
-   - Maps “Bring to Front” / “Send to Back” to TOP/BOTTOM
-     within overlays only (never above watermark / below base)
+   Overlay z‑order (builder UI buttons) — v2
+   - Moves only among overlays (fabric.Image & selectable)
+   - Binds to ALL "Bring to Front" / "Send to Back" buttons
+   - Enforces our move after the app's own handlers run
    ========================================================= */
 (function(){
   const canv = window.canvas || window.c;
   if (!window.fabric || !canv) return;
 
-  // Treat overlay as any selectable fabric.Image
   const isOverlay = o => o && o.type === 'image' && o.selectable !== false;
 
-  function moveToOverlayEdge(which){ // which = 'top' | 'bottom'
+  function moveToOverlayEdge(which){ // 'top' | 'bottom'
     const o = canv.getActiveObject?.();
     if (!o || !isOverlay(o)) return;
 
@@ -10509,34 +10509,50 @@ function loadTrimmedCanvas(url) {
     canv.requestRenderAll();
   }
 
-  // Expose helpers for quick testing
+  // Expose for quick manual checks
   window.raOverlayFront = () => moveToOverlayEdge('top');
   window.raOverlayBack  = () => moveToOverlayEdge('bottom');
 
-  // Find the right‑panel buttons by visible text
-  const right = document.querySelector('aside.panel.right') || document;
-  const findBtn = words => {
-    const els = [...right.querySelectorAll('button, .btn, [role="button"], .control, .action')];
-    const txt = el => (el.textContent || '').toLowerCase();
-    return els.find(el => words.every(w => txt(el).includes(w))) || null;
-  };
-
-  function bind(btn, fn){
-    if (!btn || btn.__raWired) return;
-    // Run after the app’s own click handler so our order “wins”
-    const handler = () => setTimeout(fn, 40);
-    btn.addEventListener('click', handler, { capture:true });
-    btn.addEventListener('pointerdown', handler, { capture:true });
-    btn.__raWired = true;
+  // Find ALL candidate buttons anywhere in the document
+  function findBtns(words){
+    const all = [...document.querySelectorAll('button, .btn, [role="button"], .control, .action')];
+    const want = w => (el) => {
+      const t = (el.textContent || '').toLowerCase();
+      return w.every(x => t.includes(x));
+    };
+    return all.filter(want(words));
   }
 
-  function wireOnce(){
-    bind(findBtn(['bring','front']),  window.raOverlayFront);
-    bind(findBtn(['send','back']),    window.raOverlayBack);
+  function bindMany(btns, which){
+    if (!btns || !btns.length) return 0;
+    const fn = which === 'top' ? window.raOverlayFront : window.raOverlayBack;
+
+    btns.forEach(btn => {
+      if (btn.__raWiredZ) return;
+      const handler = (ev) => {
+        // Let the app's handler run, then enforce ours (twice to beat deferred reorders)
+        setTimeout(fn, 0);
+        setTimeout(fn, 70);
+      };
+      // Capture so we always see the click; we don’t block the app
+      btn.addEventListener('click', handler, { capture:true });
+      btn.addEventListener('pointerdown', handler, { capture:true });
+      btn.__raWiredZ = true;
+    });
+    return btns.length;
   }
 
-  // Initial wire + keep wiring through UI re-renders
-  wireOnce();
-  const mo = new MutationObserver(wireOnce);
+  function wireAll(){
+    const n1 = bindMany(findBtns(['bring','front']), 'top');
+    const n2 = bindMany(findBtns(['send','back']),   'bottom');
+    if (!wireAll.didLog) {
+      console.log('[ra] z‑order wiring → front:', n1, ' back:', n2);
+      wireAll.didLog = true;
+    }
+  }
+
+  // Initial wire + keep it alive through re-renders
+  wireAll();
+  const mo = new MutationObserver(wireAll);
   mo.observe(document.body, { childList:true, subtree:true });
 })();
