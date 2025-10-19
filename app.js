@@ -10302,7 +10302,7 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
 /* === Overlay sizing/selection knobs (tweak these) === */
 const RA_OV_CFG = {
-  FIT: 0.50,        // 50% of canvas. Lower = smaller (e.g., 0.45).
+  FIT: 0.40,        // 50% of canvas. Lower = smaller (e.g., 0.45).
   MAX_PX: 520,      // Optional hard pixel cap (null = ignore).
   TRIM_ALPHA: 10,   // 0..255: higher trims more faint transparency.
   TRIM_PAD: 1,      // pixels of margin to keep after trimming.
