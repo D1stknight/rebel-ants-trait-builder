@@ -2,6 +2,7 @@
   const EMOJIS = ['👍','❤️','🔥','😂','😮'];
   let ACTIVE = null;
 
+  const elTitle     = document.getElementById('cTitle');
   const elPrompt    = document.getElementById('cPrompt');
   const elCountdown = document.getElementById('cCountdown');
   const elChips     = document.getElementById('chips');
@@ -9,16 +10,32 @@
 
   const VOTE_LS = () => 'ra:voted:' + (ACTIVE?.id || 'none');
 
-  init();
+ init();
 
-  async function init(){
-    const data = await getJSON('/api/contest/contest').catch(()=>null);
-    if (!data || !data.active){ elPrompt.textContent=''; elCountdown.textContent=''; return; }
-    ACTIVE = { id: data.id, meta: data.meta || {} };
-    elPrompt.textContent = ACTIVE.meta.prompt || 'Share your best overlay combo!';
-    
-    render(data.entries||[]);
+async function init(){
+  const data = await getJSON('/api/contest/contest').catch(()=>null);
+
+  if (!data || !data.active){
+    if (elPrompt)     elPrompt.textContent = '';
+    if (elCountdown)  elCountdown.textContent = '';
+    return;
   }
+
+  ACTIVE = { id: data.id, meta: data.meta || {} };
+
+  // Set page heading and browser tab title from contest meta
+  const titleText = ACTIVE.meta.name || ACTIVE.meta.frame || 'Rebel Ants Contest Page';
+  if (elTitle) elTitle.textContent = titleText;
+  document.title = `${titleText} — Contest`;
+
+  // Existing prompt line
+  if (elPrompt) elPrompt.textContent = ACTIVE.meta.prompt || 'Share your best overlay combo!';
+
+  // (If you already call startCountdown elsewhere, keep it; otherwise you can call it here)
+  // startCountdown(ACTIVE.meta.endTs|0);
+
+  render(data.entries || []);
+}
 
   function render(entries){
     // sort by score desc for initial render

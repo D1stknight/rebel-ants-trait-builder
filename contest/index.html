@@ -3,19 +3,85 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Rebel Ants Weekly Contest</title>
+  <title>Rebel Ants Contest Page</title>
   <link rel="stylesheet" href="/contest/contest.css">
 </head>
 <body class="page">
   <header class="c-head">
-    <h1>Rebel Ants Weekly Contest</h1>
-    <p id="cPrompt" class="muted"></p>
-    <p id="cCountdown" class="muted"></p>
-    <div id="chips" class="chips"></div>
-  </header>
+  <h1 id="cTitle">Rebel Ants Contest Page</h1>
+  <p id="cPrompt" class="muted">Share your best overlay combo!</p>
+  <p id="cCountdown" class="muted"></p>
+  <div id="chips" class="chips"></div>
+</header>
 
+  <!-- How it works / explainer -->
+<section class="explain" aria-labelledby="how-title">
+  <details id="howitworks" class="c-card" open>
+    <summary id="how-title">How the contest works</summary>
+    <div class="body">
+      <div class="grid">
+        <div>
+          <h3>1) Create & submit</h3>
+          <ul>
+            <li>Make your combo in the <a href="/">Overlay Builder</a>.</li>
+            <li>Click <b>Submit to Contest</b> inside the builder (we snapshot your canvas).</li>
+            <li>Choose a display name and optional caption. No wallet needed.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>2) Vote</h3>
+          <ul>
+            <li>Use the reaction bar under each entry: 👍 ❤️ 🔥 😂 😮</li>
+            <li>Each emoji click = <b>1 point</b>. One click per emoji per device/browser.</li>
+            <li>You can give up to <b>5 points</b> to a single entry (one per emoji).</li>
+            <li><b>Score</b> is the sum of all emoji points from everyone.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>3) Timing</h3>
+          <ul>
+            <li>The countdown shows how long is left. When it hits 0, voting stops.</li>
+            <li>Length varies by round (hours or days).</li>
+          </ul>
+        </div>
+        <div>
+          <h3>4) Winners</h3>
+          <ul>
+            <li>Highest score wins; ties may be broken at our discretion (or co‑winners).</li>
+            <li>Prizes vary (crypto, NFTs, merch) or sometimes bragging rights.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>5) Share</h3>
+          <ul>
+            <li>Use the <b>X Share</b> button on a card to post with a voting link.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>6) Fair play</h3>
+          <ul>
+            <li>We limit duplicate reactions and monitor for abuse.</li>
+            <li>See our <a href="/contest/rules.html">Rules</a> & <a href="/contest/moderation.html">Moderation</a>.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </details>
+</section>
+  
   <section id="board" class="board" aria-live="polite"></section>
 
   <script src="/contest/contest.js" defer></script>
+
+<footer id="ra-footer" class="ra-footer">
+  <nav>
+    <a href="/contest/rules.html">Contest Rules</a>
+    <a href="/contest/privacy.html">Privacy</a>
+    <a href="/contest/terms.html">Terms</a>
+    <a href="/contest/moderation.html">Moderation</a>
+  </nav>
+  <small>© Rebel Ants LLC</small>
+</footer>
+  
 </body>
 </html>

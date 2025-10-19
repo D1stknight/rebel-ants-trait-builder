@@ -10300,42 +10300,128 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return document.getElementById('ra-live-grid');
   }
 
-  // Add clicked overlay to the canvas (centered & scaled smaller)
-  function addToCanvas(src, name){
-    // If your builder exposes a helper, use it
-    if (window.addOverlayFromURL) {
-      window.addOverlayFromURL(src, { name });
-      return;
-    }
-    // Fabric fallback
-    const canv = window.canvas || window.c || window.fabricCanvas;
-    if (window.fabric && canv && typeof canv.add === 'function') {
-      fabric.Image.fromURL(src, (img) => {
-        const cw = (canv.getWidth ? canv.getWidth() : canv.width)  || 700;
-        const ch = (canv.getHeight ? canv.getHeight() : canv.height) || 700;
+/* === Overlay sizing/selection knobs (tweak these) === */
+const RA_OV_CFG = {
+  FIT: 0.40,        // 50% of canvas. Lower = smaller (e.g., 0.45).
+  MAX_PX: 520,      // Optional hard pixel cap (null = ignore).
+  TRIM_ALPHA: 10,   // 0..255: higher trims more faint transparency.
+  TRIM_PAD: 1,      // pixels of margin to keep after trimming.
+  CORNER_SIZE: 9    // selection dot size (handles).
+};
 
-        // target smaller footprint: fit inside 55% of canvas dims
-        const maxW = cw * 0.55;
-        const maxH = ch * 0.55;
-        const iw = img.width  || maxW;
-        const ih = img.height || maxH;
-        const scale = Math.min(maxW/iw, maxH/ih, 1);
+/* ===== Centered + trimmed addToCanvas (tight selection box) ===== */
+function addToCanvas(src, name = 'overlay') {
+  const canv = window.canvas || window.c;
+  if (!window.fabric || !canv) return;
 
-        img.set({
-          originX: 'center',
-          originY: 'center',
-          left: cw / 2,
-          top:  ch / 2,
-          selectable: true,
-        });
-        if (scale && scale !== 1) img.scale(scale);
+  loadTrimmedCanvas(src).then(trimmedCanvas => {
+    const img = new fabric.Image(trimmedCanvas, {
+      originX: 'center', originY: 'center',
+      left: canv.getWidth() / 2,
+      top:  canv.getHeight() / 2,
+      selectable: true,
+      evented: true,
+      perPixelTargetFind: true,
+      objectCaching: false,
+      cornerStyle: 'circle',
+      transparentCorners: false,
+      cornerSize: RA_OV_CFG.CORNER_SIZE
+    });
 
-        canv.add(img);
-        canv.setActiveObject?.(img);
-        canv.requestRenderAll?.();
-      }, { crossOrigin: 'anonymous' });
-    }
-  }
+    // Fit inside % of canvas, with optional hard pixel cap
+    const fitW = canv.getWidth()  * RA_OV_CFG.FIT;
+    const fitH = canv.getHeight() * RA_OV_CFG.FIT;
+    const maxW = (RA_OV_CFG.MAX_PX ? Math.min(fitW, RA_OV_CFG.MAX_PX) : fitW);
+    const maxH = (RA_OV_CFG.MAX_PX ? Math.min(fitH, RA_OV_CFG.MAX_PX) : fitH);
+
+    const s = Math.min(maxW / img.width, maxH / img.height, 1);
+    img.scale(s);
+
+    canv.add(img);
+    canv.setActiveObject(img);
+    canv.requestRenderAll();
+  }).catch(() => {
+    // Fallback if trimming isn’t possible (e.g., CORS)
+    fabric.Image.fromURL(src, (img) => {
+      img.set({
+        originX: 'center', originY: 'center',
+        left: canv.getWidth()/2, top: canv.getHeight()/2,
+        selectable: true, evented: true, perPixelTargetFind: true,
+        objectCaching: false, cornerStyle: 'circle',
+        transparentCorners: false, cornerSize: RA_OV_CFG.CORNER_SIZE
+      });
+
+      const fitW = canv.getWidth()  * RA_OV_CFG.FIT;
+      const fitH = canv.getHeight() * RA_OV_CFG.FIT;
+      const maxW = (RA_OV_CFG.MAX_PX ? Math.min(fitW, RA_OV_CFG.MAX_PX) : fitW);
+      const maxH = (RA_OV_CFG.MAX_PX ? Math.min(fitH, RA_OV_CFG.MAX_PX) : fitH);
+
+      const s = Math.min(maxW / img.width, maxH / img.height, 1);
+      img.scale(s);
+
+      canv.add(img);
+      canv.setActiveObject(img);
+      canv.requestRenderAll();
+    }, { crossOrigin: 'anonymous' });
+  });
+}
+
+/* --- Helper: load image and return a trimmed canvas (respects alpha) --- */
+function loadTrimmedCanvas(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth  || img.width;
+        const h = img.naturalHeight || img.height;
+
+        const tmp = document.createElement('canvas');
+        tmp.width = w; tmp.height = h;
+        const ctx = tmp.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        const { data } = ctx.getImageData(0, 0, w, h);
+        const TH = RA_OV_CFG.TRIM_ALPHA|0;
+
+        let minX = w, minY = h, maxX = -1, maxY = -1;
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const a = data[(y*w + x) * 4 + 3];
+            if (a > TH) { // treat faint pixels below threshold as transparent
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+
+        // If fully transparent (or failed), just use original image element
+        if (maxX < minX || maxY < minY) return resolve(img);
+
+        // Apply padding and clamp
+        const pad = Math.max(0, RA_OV_CFG.TRIM_PAD|0);
+        minX = Math.max(0, minX - pad);
+        minY = Math.max(0, minY - pad);
+        maxX = Math.min(w - 1, maxX + pad);
+        maxY = Math.min(h - 1, maxY + pad);
+
+        const cw = maxX - minX + 1;
+        const ch = maxY - minY + 1;
+
+        const out = document.createElement('canvas');
+        out.width = cw; out.height = ch;
+        out.getContext('2d').drawImage(tmp, minX, minY, cw, ch, 0, 0, cw, ch);
+        resolve(out);
+      } catch {
+        resolve(img); // graceful fallback
+      }
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
 
   function escHtml(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
   function escAttr(s){ return escHtml(s).replace(/"/g,'&quot;'); }
@@ -10380,4 +10466,157 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   const run = () => setTimeout(window.raReloadLiveOverlays, 150);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
+})();
+
+// ===== Rebel Ants: add footer on Builder if missing =====
+(() => {
+  // If a footer already exists (e.g., on contest), do nothing
+  if (document.getElementById('ra-footer')) return;
+
+  const footer = document.createElement('footer');
+  footer.className = 'ra-site-footer';
+  footer.id = 'ra-footer';
+
+  // Your legal files are at project root per your screenshot
+  footer.innerHTML = `
+    <nav class="links">
+      <a href="/contest/rules.html">Contest Rules</a>
+      <a href="/contest/privacy.html">Privacy</a>
+      <a href="/contest/terms.html">Terms</a>
+      <a href="/contest/moderation.html">Moderation</a>
+    </nav>
+    <small>© Rebel Ants LLC</small>
+  `;
+
+  // Append after paint so it sits above any mobile dock
+  requestAnimationFrame(() => document.body.appendChild(footer));
+})();
+
+// Lift the footer above the mobile dock on phones/tablets
+(function(){
+  try{
+    const dock = document.querySelector('.ra-mobile-dock');
+    const root = document.documentElement;
+
+    function setOffset(){
+      const h = dock ? (dock.offsetHeight || 0) : 0;
+      root.style.setProperty('--dock-offset', (h ? h + 8 : 0) + 'px'); // +8px breathing room
+    }
+
+    if (dock){
+      setOffset();
+      window.addEventListener('resize', setOffset);
+      new ResizeObserver(setOffset).observe(dock);
+    }
+  }catch(_){}
+})();
+
+/* =========================================================
+   Overlay z‑order (late‑binding) — overlay-only reordering
+   - Works with “Bring to Front” + “Bring to Back” or “Send to Back”
+   - Binds after Fabric is ready; survives UI re-renders
+   ========================================================= */
+(function(){
+  if (window.__raZorderInstalled2) return;
+  window.__raZorderInstalled2 = true;
+
+  // How the buttons behave:
+  //   'step' -> move one step among overlays (matches your console test)
+  //   'edge' -> jump to top/bottom among overlays
+  const MODE = 'step';
+
+  // What counts as an overlay in your app
+  const isOverlay = o => o && o.type === 'image' && o.selectable !== false;
+
+  // Always fetch the live Fabric canvas (don’t capture it early)
+  function getCanv(){
+    const cands = [window.canvas, window.fabricCanvas, window.FABRIC_CANVAS, window.builderCanvas];
+    for (const c of cands) {
+      if (c && typeof c.getObjects === 'function') return c;
+    }
+    return null;
+  }
+
+  // Move one step among overlays only
+  function moveStep(dir){
+    const canv = getCanv(); if (!canv) return;
+    const objs = canv.getObjects();
+    const o = canv.getActiveObject?.(); if (!o || !isOverlay(o)) return;
+
+    const ovIdx = objs.map((x,i)=> isOverlay(x) ? i : -1).filter(i => i >= 0);
+    const cur   = objs.indexOf(o);
+    const pos   = ovIdx.indexOf(cur);
+    if (pos === -1) return;
+
+    if (dir === +1 && pos < ovIdx.length-1)      canv.moveTo(o, ovIdx[pos+1]);
+    else if (dir === -1 && pos > 0)              canv.moveTo(o, ovIdx[pos-1]);
+    else return;
+
+    canv.setActiveObject(o);
+    canv.requestRenderAll();
+  }
+
+  // Jump to overlay top/bottom (not above watermark / below base)
+  function moveEdge(which){
+    const canv = getCanv(); if (!canv) return;
+    const o = canv.getActiveObject?.(); if (!o || !isOverlay(o)) return;
+    const objs = canv.getObjects();
+    const ovIdx = objs.map((x,i)=> isOverlay(x) ? i : -1).filter(i => i >= 0);
+    if (!ovIdx.length) return;
+    const target = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
+    canv.moveTo(o, target);
+    canv.setActiveObject(o);
+    canv.requestRenderAll();
+  }
+
+  // Expose for quick console testing if you want
+  window.raStepFwd = () => moveStep(+1);
+  window.raStepBack= () => moveStep(-1);
+  window.raToFront = () => moveEdge('top');
+  window.raToBack  = () => moveEdge('bottom');
+
+  // -------- Button wiring --------
+  const right = document.querySelector('aside.panel.right') || document;
+  const SEL   = 'button, .btn, [role="button"], .control, .action';
+  const norm  = s => (s||'').toLowerCase().replace(/\s+/g,' ').trim();
+
+  // Accept common variants
+  const FRONT_KEYS = ['bring to front','bring front','to front','front'];
+  const BACK_KEYS  = ['bring to back','send to back','send back','to back','back','bring back'];
+
+  function findBtn(keys){
+    const els = [...right.querySelectorAll(SEL)];
+    return els.find(el => keys.some(k => norm(el.textContent).includes(k))) || null;
+  }
+
+  function wire(btn, fn){
+    if (!btn || btn.__raWired) return;
+    const handler = () => setTimeout(fn, 40); // run after the app’s own handler
+    btn.addEventListener('click', handler, { capture:true });
+    btn.addEventListener('pointerdown', handler, { capture:true });
+    btn.__raWired = true;
+  }
+
+  function rewire(){
+    const frontBtn = findBtn(FRONT_KEYS);
+    const backBtn  = findBtn(BACK_KEYS);
+    const doFront  = (MODE === 'edge') ? () => moveEdge('top')    : () => moveStep(+1);
+    const doBack   = (MODE === 'edge') ? () => moveEdge('bottom') : () => moveStep(-1);
+    wire(frontBtn, doFront);
+    wire(backBtn,  doBack);
+
+    // Debug: you should see this once it latches to real buttons
+    console.log('[ra:zorder] wired:',
+      !!frontBtn, !!backBtn, '–',
+      frontBtn?.textContent?.trim(), '|', backBtn?.textContent?.trim()
+    );
+  }
+
+  // Wait until Fabric + canvas exist, then wire and keep wiring
+  (function wait(){
+    if (!window.fabric || !getCanv()) { setTimeout(wait, 120); return; }
+    rewire();
+    const mo = new MutationObserver(rewire);
+    mo.observe(document.body, { childList:true, subtree:true });
+  })();
 })();

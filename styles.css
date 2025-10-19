@@ -427,3 +427,43 @@ aside.panel.left .ra-green-action[disabled]{ opacity:.55; cursor:not-allowed; tr
 [aria-label="Published Overlays"] .ov .t {
   font-size: 12px; opacity: .8;
 }
+
+/* ===== Rebel Ants footer strip ===== */
+:root{ --footer-z: 30; }  /* safe below modals & above page content */
+
+.ra-site-footer{
+  position: fixed;
+  left: 0; right: 0;
+  bottom: env(safe-area-inset-bottom, 0px);
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+
+  font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  color: rgba(255,255,255,.75);
+
+  background: linear-gradient(180deg, rgba(8,12,18,0) 0%, rgba(8,12,18,.75) 50%, rgba(8,12,18,.9) 100%);
+  border-top: 1px solid rgba(255,255,255,.10);
+  backdrop-filter: blur(6px);
+
+  z-index: var(--footer-z);
+}
+
+/* links */
+.ra-site-footer a{
+  color: #c7d2fe;
+  text-decoration: none;
+}
+.ra-site-footer a:hover{ text-decoration: underline; }
+.ra-site-footer .sep{ opacity:.45; margin: 0 4px; }
+
+/* Builder-specific: lift the footer above the mobile dock on small screens. 
+   We'll set --dock-offset from JS on the builder. */
+@media (max-width: 900px){
+  .ra-site-footer{
+    bottom: calc(var(--dock-offset, 0px) + env(safe-area-inset-bottom, 0px));
+  }
+}
