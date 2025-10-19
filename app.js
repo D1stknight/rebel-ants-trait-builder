@@ -10393,11 +10393,13 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
 
   // Your legal files are at project root per your screenshot
   footer.innerHTML = `
-    <span>© 2025 Rebel Ants LLC</span>
-    <span class="sep">•</span><a href="/rules.html" target="_blank" rel="noopener">Rules</a>
-    <span class="sep">•</span><a href="/terms.html" target="_blank" rel="noopener">Terms</a>
-    <span class="sep">•</span><a href="/privacy.html" target="_blank" rel="noopener">Privacy</a>
-    <span class="sep">•</span><a href="/moderation.html" target="_blank" rel="noopener">Moderation</a>
+    <nav class="links">
+      <a href="/contest/rules.html">Contest Rules</a>
+      <a href="/contest/privacy.html">Privacy</a>
+      <a href="/contest/terms.html">Terms</a>
+      <a href="/contest/moderation.html">Moderation</a>
+    </nav>
+    <small>© Rebel Ants LLC</small>
   `;
 
   // Append after paint so it sits above any mobile dock
