@@ -10382,6 +10382,28 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
   else run();
 })();
 
+// ===== Rebel Ants: add footer on Builder if missing =====
+(() => {
+  // If a footer already exists (e.g., on contest), do nothing
+  if (document.getElementById('ra-footer')) return;
+
+  const footer = document.createElement('footer');
+  footer.className = 'ra-site-footer';
+  footer.id = 'ra-footer';
+
+  // Your legal files are at project root per your screenshot
+  footer.innerHTML = `
+    <span>© 2025 Rebel Ants LLC</span>
+    <span class="sep">•</span><a href="/rules.html" target="_blank" rel="noopener">Rules</a>
+    <span class="sep">•</span><a href="/terms.html" target="_blank" rel="noopener">Terms</a>
+    <span class="sep">•</span><a href="/privacy.html" target="_blank" rel="noopener">Privacy</a>
+    <span class="sep">•</span><a href="/moderation.html" target="_blank" rel="noopener">Moderation</a>
+  `;
+
+  // Append after paint so it sits above any mobile dock
+  requestAnimationFrame(() => document.body.appendChild(footer));
+})();
+
 // Lift the footer above the mobile dock on phones/tablets
 (function(){
   try{
