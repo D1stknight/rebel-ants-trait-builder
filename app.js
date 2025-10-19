@@ -10300,27 +10300,25 @@ console.log("✅ app.js marker loaded: APP_MARKER_0928");
     return document.getElementById('ra-live-grid');
   }
 
- /* ===== Replace your addToCanvas with a trimmed/centered version ===== */
+/* ===== Centered + trimmed addToCanvas (tight selection box) ===== */
 function addToCanvas(src, name = 'overlay') {
   const canv = window.canvas || window.c;
   if (!window.fabric || !canv) return;
 
-  // 1) Load image and trim transparent margins
+  // Try to trim transparent margins first
   loadTrimmedCanvas(src).then(trimmedCanvas => {
-    // 2) Create fabric image from the trimmed canvas
     const img = new fabric.Image(trimmedCanvas, {
-      originX: 'center',
-      originY: 'center',
+      originX: 'center', originY: 'center',
       left: canv.getWidth() / 2,
       top:  canv.getHeight() / 2,
       selectable: true,
       evented: true,
-      perPixelTargetFind: true,
+      perPixelTargetFind: true,   // clicks feel close to visible pixels
       objectCaching: false
     });
 
-    // 3) Scale to fit ~60% of the canvas
-    const FIT = 0.60; // tweak 0.50–0.70 to taste
+    // Fit to ~60% of canvas
+    const FIT = 0.60;
     const maxW = canv.getWidth()  * FIT;
     const maxH = canv.getHeight() * FIT;
     const s = Math.min(maxW / img.width, maxH / img.height, 1);
@@ -10330,7 +10328,7 @@ function addToCanvas(src, name = 'overlay') {
     canv.setActiveObject(img);
     canv.requestRenderAll();
   }).catch(() => {
-    // Fallback: if trimming fails (e.g., CORS), still center & scale smaller
+    // If trimming’s not possible (e.g., CORS), still center & scale smaller
     fabric.Image.fromURL(src, (img) => {
       img.set({
         originX: 'center', originY: 'center',
@@ -10347,7 +10345,7 @@ function addToCanvas(src, name = 'overlay') {
   });
 }
 
-/* --- Helper: load an image and return a canvas trimmed to non‑transparent bounds --- */
+/* Trim an image’s transparent margins and return a canvas with tight bounds */
 function loadTrimmedCanvas(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -10356,17 +10354,18 @@ function loadTrimmedCanvas(url) {
       try {
         const w = img.naturalWidth  || img.width;
         const h = img.naturalHeight || img.height;
+
         const tmp = document.createElement('canvas');
         tmp.width = w; tmp.height = h;
         const ctx = tmp.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
         const { data } = ctx.getImageData(0, 0, w, h);
+
         let minX = w, minY = h, maxX = -1, maxY = -1;
         for (let y = 0; y < h; y++) {
           for (let x = 0; x < w; x++) {
-            const a = data[(y*w + x) * 4 + 3];
-            if (a) {
+            if (data[(y*w + x) * 4 + 3] /* alpha */) {
               if (x < minX) minX = x;
               if (y < minY) minY = y;
               if (x > maxX) maxX = x;
@@ -10374,16 +10373,20 @@ function loadTrimmedCanvas(url) {
             }
           }
         }
-        if (maxX < minX || maxY < minY) return resolve(img); // fully transparent safeguard
+
+        // If fully transparent (unlikely), just use the original image
+        if (maxX < minX || maxY < minY) return resolve(img);
 
         const cw = maxX - minX + 1;
         const ch = maxY - minY + 1;
+
         const out = document.createElement('canvas');
         out.width = cw; out.height = ch;
         out.getContext('2d').drawImage(tmp, minX, minY, cw, ch, 0, 0, cw, ch);
         resolve(out);
       } catch (e) {
-        resolve(img); // graceful fallback
+        // If getImageData throws (CORS), fall back
+        resolve(img);
       }
     };
     img.onerror = reject;
@@ -10479,39 +10482,46 @@ function loadTrimmedCanvas(url) {
   }catch(_){}
 })();
 
-/* ===== Z-order safety net for live overlays (Bring Front / Send Back) ===== */
-(() => {
-  const canv = (window.canvas || window.c);               // your fabric.Canvas
-  if (!canv || !canv.getActiveObject) return;
+/* =========================================================
+   Z‑order safety net — make "Bring to Front" / "Send to Back"
+   always work on the selected Fabric object (any overlay).
+   Append at the very end of app.js.
+========================================================= */
+(function wireZOrderButtons(){
+  const canv = window.canvas || window.c;
+  if (!window.fabric || !canv) return;
 
-  function ao() { return (window.canvas || window.c)?.getActiveObject?.() || null; }
-
-  function findButton(labelText, sel = 'aside.panel.right button, .panel.right button, button') {
-    labelText = String(labelText).trim().toLowerCase();
-    return [...document.querySelectorAll(sel)]
-      .find(b => (b.textContent || '').trim().toLowerCase() === labelText) || null;
+  function active() {
+    return (typeof canv.getActiveObject === 'function')
+      ? canv.getActiveObject()
+      : (canv._activeObject || null);
+  }
+  function toFront() {
+    const o = active(); if (!o) return;
+    canv.bringToFront(o);
+    // re-assert selection so UI updates immediately
+    canv.setActiveObject(o);
+    canv.requestRenderAll();
+  }
+  function toBack() {
+    const o = active(); if (!o) return;
+    canv.sendToBack(o);
+    canv.setActiveObject(o);
+    canv.requestRenderAll();
   }
 
-  const bringBtn = findButton('Bring to Front');
-  const backBtn  = findButton('Send to Back');
+  // Capture clicks on the existing UI buttons by label text.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
 
-  if (bringBtn && !bringBtn.__raBound) {
-    bringBtn.__raBound = true;
-    bringBtn.addEventListener('click', () => {
-      const o = ao(); if (!o) return;
-      canv.bringToFront(o);
-      canv.setActiveObject(o);              // keep selection
-      canv.requestRenderAll();
-    });
-  }
-
-  if (backBtn && !backBtn.__raBound) {
-    backBtn.__raBound = true;
-    backBtn.addEventListener('click', () => {
-      const o = ao(); if (!o) return;
-      canv.sendToBack(o);
-      canv.setActiveObject(o);
-      canv.requestRenderAll();
-    });
-  }
+    const txt = (btn.textContent || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    // match a few variants just in case
+    if (['bring to front','bring front','front'].includes(txt)) {
+      // let the app’s own handler fire too; ours guarantees it works
+      setTimeout(toFront, 0);
+    } else if (['send to back','send back','back'].includes(txt)) {
+      setTimeout(toBack, 0);
+    }
+  }, true);
 })();
