@@ -10483,45 +10483,60 @@ function loadTrimmedCanvas(url) {
 })();
 
 /* =========================================================
-   Z‑order safety net — make "Bring to Front" / "Send to Back"
-   always work on the selected Fabric object (any overlay).
-   Append at the very end of app.js.
-========================================================= */
-(function wireZOrderButtons(){
+   Overlay z‑order (builder UI buttons)
+   - Maps “Bring to Front” / “Send to Back” to TOP/BOTTOM
+     within overlays only (never above watermark / below base)
+   ========================================================= */
+(function(){
   const canv = window.canvas || window.c;
   if (!window.fabric || !canv) return;
 
-  function active() {
-    return (typeof canv.getActiveObject === 'function')
-      ? canv.getActiveObject()
-      : (canv._activeObject || null);
-  }
-  function toFront() {
-    const o = active(); if (!o) return;
-    canv.bringToFront(o);
-    // re-assert selection so UI updates immediately
-    canv.setActiveObject(o);
-    canv.requestRenderAll();
-  }
-  function toBack() {
-    const o = active(); if (!o) return;
-    canv.sendToBack(o);
+  // Treat overlay as any selectable fabric.Image
+  const isOverlay = o => o && o.type === 'image' && o.selectable !== false;
+
+  function moveToOverlayEdge(which){ // which = 'top' | 'bottom'
+    const o = canv.getActiveObject?.();
+    if (!o || !isOverlay(o)) return;
+
+    const objs  = canv.getObjects();
+    const ovIdx = [];
+    for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) ovIdx.push(i);
+    if (!ovIdx.length) return;
+
+    const targetIndex = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
+    canv.moveTo(o, targetIndex);
     canv.setActiveObject(o);
     canv.requestRenderAll();
   }
 
-  // Capture clicks on the existing UI buttons by label text.
-  document.addEventListener('click', (ev) => {
-    const btn = ev.target.closest('button');
-    if (!btn) return;
+  // Expose helpers for quick testing
+  window.raOverlayFront = () => moveToOverlayEdge('top');
+  window.raOverlayBack  = () => moveToOverlayEdge('bottom');
 
-    const txt = (btn.textContent || '').toLowerCase().replace(/\s+/g, ' ').trim();
-    // match a few variants just in case
-    if (['bring to front','bring front','front'].includes(txt)) {
-      // let the app’s own handler fire too; ours guarantees it works
-      setTimeout(toFront, 0);
-    } else if (['send to back','send back','back'].includes(txt)) {
-      setTimeout(toBack, 0);
-    }
-  }, true);
+  // Find the right‑panel buttons by visible text
+  const right = document.querySelector('aside.panel.right') || document;
+  const findBtn = words => {
+    const els = [...right.querySelectorAll('button, .btn, [role="button"], .control, .action')];
+    const txt = el => (el.textContent || '').toLowerCase();
+    return els.find(el => words.every(w => txt(el).includes(w))) || null;
+  };
+
+  function bind(btn, fn){
+    if (!btn || btn.__raWired) return;
+    // Run after the app’s own click handler so our order “wins”
+    const handler = () => setTimeout(fn, 40);
+    btn.addEventListener('click', handler, { capture:true });
+    btn.addEventListener('pointerdown', handler, { capture:true });
+    btn.__raWired = true;
+  }
+
+  function wireOnce(){
+    bind(findBtn(['bring','front']),  window.raOverlayFront);
+    bind(findBtn(['send','back']),    window.raOverlayBack);
+  }
+
+  // Initial wire + keep wiring through UI re-renders
+  wireOnce();
+  const mo = new MutationObserver(wireOnce);
+  mo.observe(document.body, { childList:true, subtree:true });
 })();
