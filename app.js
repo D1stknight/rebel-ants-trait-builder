@@ -10483,10 +10483,13 @@ function loadTrimmedCanvas(url) {
 })();
 
 /* =========================================================
-   Overlay z‑order (builder UI buttons) — v2
-   - Moves only among overlays (fabric.Image & selectable)
-   - Binds to ALL "Bring to Front" / "Send to Back" buttons
-   - Enforces our move after the app's own handlers run
+   Overlay z‑order (builder UI buttons) — document delegate (v3)
+   - Works like the console snippet that succeeded for you
+   - Captures ALL clicks anywhere; if a click is on a
+     "Bring to Front" or "Send to Back" button, we re-order
+     the active object among overlays only.
+   - We enforce our order multiple times AFTER the app handler
+     (to win against any delayed re-renders)
    ========================================================= */
 (function(){
   const canv = window.canvas || window.c;
@@ -10494,65 +10497,47 @@ function loadTrimmedCanvas(url) {
 
   const isOverlay = o => o && o.type === 'image' && o.selectable !== false;
 
-  function moveToOverlayEdge(which){ // 'top' | 'bottom'
-    const o = canv.getActiveObject?.();
-    if (!o || !isOverlay(o)) return;
+  function enforce(which){
+    const run = () => {
+      const o = canv.getActiveObject?.();
+      if (!o || !isOverlay(o)) return;
 
-    const objs  = canv.getObjects();
-    const ovIdx = [];
-    for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) ovIdx.push(i);
-    if (!ovIdx.length) return;
+      const objs  = canv.getObjects();
+      const ovIdx = [];
+      for (let i = 0; i < objs.length; i++) if (isOverlay(objs[i])) ovIdx.push(i);
+      if (!ovIdx.length) return;
 
-    const targetIndex = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
-    canv.moveTo(o, targetIndex);
-    canv.setActiveObject(o);
-    canv.requestRenderAll();
-  }
-
-  // Expose for quick manual checks
-  window.raOverlayFront = () => moveToOverlayEdge('top');
-  window.raOverlayBack  = () => moveToOverlayEdge('bottom');
-
-  // Find ALL candidate buttons anywhere in the document
-  function findBtns(words){
-    const all = [...document.querySelectorAll('button, .btn, [role="button"], .control, .action')];
-    const want = w => (el) => {
-      const t = (el.textContent || '').toLowerCase();
-      return w.every(x => t.includes(x));
+      const target = (which === 'top') ? ovIdx[ovIdx.length - 1] : ovIdx[0];
+      canv.moveTo(o, target);
+      canv.setActiveObject(o);
+      canv.requestRenderAll();
     };
-    return all.filter(want(words));
+
+    // Run several times to beat any deferred app logic
+    setTimeout(run, 0);
+    setTimeout(run, 60);
+    setTimeout(run, 140);
+    setTimeout(run, 280);
   }
 
-  function bindMany(btns, which){
-    if (!btns || !btns.length) return 0;
-    const fn = which === 'top' ? window.raOverlayFront : window.raOverlayBack;
-
-    btns.forEach(btn => {
-      if (btn.__raWiredZ) return;
-      const handler = (ev) => {
-        // Let the app's handler run, then enforce ours (twice to beat deferred reorders)
-        setTimeout(fn, 0);
-        setTimeout(fn, 70);
-      };
-      // Capture so we always see the click; we don’t block the app
-      btn.addEventListener('click', handler, { capture:true });
-      btn.addEventListener('pointerdown', handler, { capture:true });
-      btn.__raWiredZ = true;
-    });
-    return btns.length;
+  // Single delegated listener catches *all* buttons, including re-rendered ones
+  function isBtnText(el, words){
+    const t = (el.textContent || '').toLowerCase();
+    return words.every(w => t.includes(w));
   }
 
-  function wireAll(){
-    const n1 = bindMany(findBtns(['bring','front']), 'top');
-    const n2 = bindMany(findBtns(['send','back']),   'bottom');
-    if (!wireAll.didLog) {
-      console.log('[ra] z‑order wiring → front:', n1, ' back:', n2);
-      wireAll.didLog = true;
-    }
+  function onClickCapture(ev){
+    const btn = ev.target && ev.target.closest('button, .btn, [role="button"], .control, .action');
+    if (!btn) return;
+
+    if (isBtnText(btn, ['bring','front']))   enforce('top');
+    if (isBtnText(btn, ['send','back']))     enforce('bottom');
   }
 
-  // Initial wire + keep it alive through re-renders
-  wireAll();
-  const mo = new MutationObserver(wireAll);
-  mo.observe(document.body, { childList:true, subtree:true });
+  // Capture phase so we always see the click; we do our work AFTER via timeouts
+  document.addEventListener('click', onClickCapture, { capture:true });
+  document.addEventListener('pointerdown', onClickCapture, { capture:true });
+
+  // Optional: small console breadcrumb so you know it’s mounted
+  if (!window.__raZMounted){ window.__raZMounted = true; console.log('[ra] z‑order delegate mounted'); }
 })();
