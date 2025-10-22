@@ -54,13 +54,14 @@
 
 /* ======================================================================
    Reservoir hot‑swap (no keys): emulate /tokens/v7 via on‑chain tokenURI()
-   - Intercepts window.fetch to replace calls to api.reservoir.tools/tokens/v7
-   - Resolves image URL from metadata (ipfs/data/http) for ETH & ApeChain
+   - Replaces calls to https://api.reservoir.tools/tokens/v7
+   - Resolves image URL from metadata for ETH & ApeChain
+   - Tries multiple IPFS gateways + handles inline SVG (image_data)
    ====================================================================== */
 (() => {
   // --- Config / defaults ---
-  const ETH_RPC  = 'https://cloudflare-eth.com';
-  const APE_RPC  = (window.__APECHAIN_RPC && String(window.__APECHAIN_RPC)) || 'https://rpc.apecoinchain.org';
+  const ETH_RPC = 'https://cloudflare-eth.com';
+  const APE_RPC = (window.__APECHAIN_RPC && String(window.__APECHAIN_RPC)) || 'https://rpc.apecoinchain.org';
 
   // Keep a tiny cache so repeated looks are instant
   const _cache = {
@@ -75,15 +76,19 @@
     return n.toString(16).padStart(64, '0');
   };
 
-  const ipfsToHttp = (u) => {
-    if (!u) return u;
-    if (u.startsWith('ipfs://')) {
-      let p = u.slice(7);
-      if (p.startsWith('ipfs/')) p = p.slice(5);
-      return `https://nftstorage.link/ipfs/${p}`;
-    }
-    return u;
-  };
+  // IPFS + Arweave helpers
+  function arweaveToHttp(u) {
+    // ar://<id>  →  https://arweave.net/<id>
+    return u.startsWith('ar://') ? `https://arweave.net/${u.slice(5)}` : u;
+  }
+  function ipfsToHttp(u, gateway = 'nftstorage') {
+    if (!u || !u.startsWith('ipfs://')) return u;
+    let p = u.slice(7);
+    if (p.startsWith('ipfs/')) p = p.slice(5);
+    if (gateway === 'cloudflare') return `https://cloudflare-ipfs.com/ipfs/${p}`;
+    if (gateway === 'ipfsio')     return `https://ipfs.io/ipfs/${p}`;
+    return `https://nftstorage.link/ipfs/${p}`; // default
+  }
 
   // Decode a JSON data URI (base64 or utf-8)
   function parseDataURI(u) {
@@ -120,15 +125,11 @@
   async function detectChainForContract(addr) {
     addr = addr.toLowerCase();
     if (_cache.chainByContract.has(addr)) return _cache.chainByContract.get(addr);
-
-    // Try ETH first (most likely), then ApeChain
     const onEth = await contractExists(ETH_RPC, addr);
     if (onEth) { _cache.chainByContract.set(addr, 'eth'); return 'eth'; }
     const onApe = await contractExists(APE_RPC, addr);
     if (onApe) { _cache.chainByContract.set(addr, 'ape'); return 'ape'; }
-
-    // Default to ETH if undetermined (won't succeed, but avoids loops)
-    _cache.chainByContract.set(addr, 'eth');
+    _cache.chainByContract.set(addr, 'eth');  // default
     return 'eth';
   }
 
@@ -162,43 +163,107 @@
   async function loadMetadata(metaURL) {
     if (!metaURL) return null;
 
-    // data:… JSON
+    // inline data: JSON
     const inlined = parseDataURI(metaURL);
     if (inlined) return inlined;
 
-    // ipfs://…  → gateway
-    const httpURL = ipfsToHttp(metaURL);
+    // normalize ar:// and ipfs://
+    metaURL = arweaveToHttp(metaURL);
+    let httpURL = ipfsToHttp(metaURL, 'nftstorage');
+
     if (_cache.meta.has(httpURL)) return _cache.meta.get(httpURL);
 
-    const r = await fetch(httpURL, { cache:'no-store' });
+    // fetch with no-store to avoid stale CORS rulings
+    let r = await fetch(httpURL, { cache:'no-store' });
+    if (!r.ok) {
+      // try a second gateway
+      httpURL = ipfsToHttp(metaURL, 'cloudflare');
+      r = await fetch(httpURL, { cache:'no-store' });
+      if (!r.ok) {
+        httpURL = ipfsToHttp(metaURL, 'ipfsio');
+        r = await fetch(httpURL, { cache:'no-store' });
+      }
+    }
     const j = await r.json().catch(()=>null);
     if (j) _cache.meta.set(httpURL, j);
     return j;
   }
 
+  // Try three gateways; return the first that actually loads as an <img>
+  function canLoad(u) {
+    return new Promise(res => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload  = () => res(true);
+      img.onerror = () => res(false);
+      img.src = u + (u.includes('?') ? '&' : '?') + 't=' + Date.now();
+    });
+  }
+  async function pickImageGateway(rawUrl) {
+    // allow data: and plain http(s) first
+    if (!/^ipfs:\/\//i.test(rawUrl)) return rawUrl;
+    const variants = [
+      ipfsToHttp(rawUrl, 'nftstorage'),
+      ipfsToHttp(rawUrl, 'cloudflare'),
+      ipfsToHttp(rawUrl, 'ipfsio')
+    ];
+    for (const u of variants) {
+      if (await canLoad(u)) return u;
+    }
+    return variants[0];
+  }
+
+  function svgDataURI(svgString) {
+    const safe = encodeURIComponent(String(svgString).replace(/\s+/g,' ').trim());
+    return `data:image/svg+xml;utf8,${safe}`;
+  }
+
+  function pickMetaImage(meta) {
+    // Most common fields first
+    let img =
+      meta?.image ??
+      meta?.image_url ??
+      meta?.image_original_url ??
+      null;
+
+    // If missing, accept image‑type animation_url
+    if (!img && meta?.animation_url && /\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(meta.animation_url)) {
+      img = meta.animation_url;
+    }
+
+    // Inline SVG (image_data)
+    if (!img && meta?.image_data) {
+      // Some collections store raw SVG markup here
+      const v = String(meta.image_data);
+      if (/^<svg[\s>]/i.test(v)) return svgDataURI(v);
+      if (/^data:image\//i.test(v)) return v; // already a data URL
+    }
+
+    return img || '';
+  }
+
   async function resolveImageURL(contract, tokenId) {
-    const chain = await detectChainForContract(contract);
+    const chain    = await detectChainForContract(contract);
     const tokenURI = await readTokenURI(chain, contract, tokenId);
 
-    // If tokenURI is itself an image (rare but possible)
-    if (/^data:image\//i.test(tokenURI) || /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(tokenURI) || tokenURI.startsWith('ipfs://')) {
-      return ipfsToHttp(tokenURI);
+    // If tokenURI looks like an image already
+    if (/^data:image\//i.test(tokenURI) ||
+        /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(tokenURI) ||
+        tokenURI.startsWith('ipfs://') ||
+        tokenURI.startsWith('ar://')) {
+      const raw = tokenURI.startsWith('ar://') ? arweaveToHttp(tokenURI) : tokenURI;
+      return await pickImageGateway(raw);
     }
 
     // Otherwise treat as metadata JSON
     const meta = await loadMetadata(tokenURI);
     if (!meta) throw new Error('metadata not found');
 
-    // Common fields in the wild
-    const img =
-      meta.image ||
-      meta.image_url ||
-      meta.image_original_url ||
-      meta.image_data ||  // may be inline SVG/data
-      null;
+    const imgField = pickMetaImage(meta);
+    if (!imgField) throw new Error('image field missing');
 
-    if (!img) throw new Error('image field missing');
-    return ipfsToHttp(String(img));
+    const raw = imgField.startsWith('ar://') ? arweaveToHttp(imgField) : imgField;
+    return await pickImageGateway(raw);
   }
 
   // Parse the "tokens" query param used by Reservoir: "0xabc...:123,0xdef...:7"
@@ -215,8 +280,7 @@
 
   // ---------- Intercept fetch ----------
   const ORIG_FETCH = window.fetch.bind(window);
-  const isReservoirTokens = (u) =>
-    /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
+  const isReservoirTokens = (u) => /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
 
   window.fetch = async function(input, init) {
     try {
@@ -227,10 +291,9 @@
 
       // Emulate the response of /tokens/v7?media=true&tokens=addr:id[,addr:id...]
       const u = new URL(url, location.origin);
-      const tokensParam = u.searchParams.get('tokens'); // decoded -> "0x..:123,0x..:7"
+      const tokensParam = u.searchParams.get('tokens');  // "0x..:123,0x..:7"
       const wanted = parseTokensParam(tokensParam);
 
-      // Resolve every requested token
       const results = [];
       for (const { contract, tokenId } of wanted) {
         try {
@@ -246,7 +309,6 @@
             }
           });
         } catch (e) {
-          // Keep a placeholder so callers don’t crash
           results.push({
             token: {
               contract: contract,
