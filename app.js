@@ -52,6 +52,227 @@
   });
 })(); // end CONFIGG
 
+<!-- 🔧 Paste this WHOLE <script> block into app.js (no <script> tags if app.js is a JS file).
+     Place it anywhere after your CONFIG block where RA_ENV is defined. -->
+
+/* ======================================================================
+   Reservoir hot‑swap (no keys): emulate /tokens/v7 via on‑chain tokenURI()
+   - Intercepts window.fetch to replace calls to api.reservoir.tools/tokens/v7
+   - Resolves image URL from metadata (ipfs/data/http) for ETH & ApeChain
+   ====================================================================== */
+(() => {
+  // --- Config / defaults ---
+  const ETH_RPC  = 'https://cloudflare-eth.com';
+  const APE_RPC  = (window.__APECHAIN_RPC && String(window.__APECHAIN_RPC)) || 'https://rpc.apecoinchain.org';
+
+  // Keep a tiny cache so repeated looks are instant
+  const _cache = {
+    chainByContract: new Map(),     // addr -> 'eth' | 'ape'
+    tokenURI:        new Map(),     // key: chain|addr|id -> urlOrDataURI
+    meta:            new Map(),     // metadata URL -> parsed JSON
+  };
+
+  // ---------- Utilities ----------
+  const toHex32 = (nStr) => {
+    const n = BigInt(String(nStr));
+    return n.toString(16).padStart(64, '0');
+  };
+
+  const ipfsToHttp = (u) => {
+    if (!u) return u;
+    if (u.startsWith('ipfs://')) {
+      let p = u.slice(7);
+      if (p.startsWith('ipfs/')) p = p.slice(5);
+      return `https://nftstorage.link/ipfs/${p}`;
+    }
+    return u;
+  };
+
+  // Decode a JSON data URI (base64 or utf-8)
+  function parseDataURI(u) {
+    try {
+      const m = String(u).match(/^data:application\/json(?:;charset=[^;,]*)?(;base64)?,(.*)$/i);
+      if (!m) return null;
+      const isB64 = !!m[1];
+      const payload = m[2];
+      const jsonText = isB64 ? atob(payload) : decodeURIComponent(payload);
+      return JSON.parse(jsonText);
+    } catch { return null; }
+  }
+
+  // JSON-RPC call
+  async function rpcCall(rpc, method, params) {
+    const body = JSON.stringify({ jsonrpc:'2.0', id: 1, method, params });
+    const r = await fetch(rpc, { method:'POST', headers:{ 'content-type':'application/json' }, body });
+    const j = await r.json();
+    if (j && j.result != null) return j.result;
+    throw new Error((j && (j.error?.message || j.error)) || 'RPC error');
+  }
+
+  // Does a contract exist on a chain?
+  async function contractExists(rpc, addr) {
+    try {
+      const code = await rpcCall(rpc, 'eth_getCode', [addr, 'latest']);
+      return (code && code !== '0x');
+    } catch {
+      return false;
+    }
+  }
+
+  // Pick the right chain for a contract (cache result)
+  async function detectChainForContract(addr) {
+    addr = addr.toLowerCase();
+    if (_cache.chainByContract.has(addr)) return _cache.chainByContract.get(addr);
+
+    // Try ETH first (most likely), then ApeChain
+    const onEth = await contractExists(ETH_RPC, addr);
+    if (onEth) { _cache.chainByContract.set(addr, 'eth'); return 'eth'; }
+    const onApe = await contractExists(APE_RPC, addr);
+    if (onApe) { _cache.chainByContract.set(addr, 'ape'); return 'ape'; }
+
+    // Default to ETH if undetermined (won't succeed, but avoids loops)
+    _cache.chainByContract.set(addr, 'eth');
+    return 'eth';
+  }
+
+  // tokenURI(addr, id) via RPC (ERC721 / ERC1155 style selector)
+  async function readTokenURI(chain, addr, tokenId) {
+    const key = `${chain}|${addr.toLowerCase()}|${tokenId}`;
+    if (_cache.tokenURI.has(key)) return _cache.tokenURI.get(key);
+
+    const rpc  = (chain === 'ape') ? APE_RPC : ETH_RPC;
+    const sig  = '0xc87b56dd'; // keccak256("tokenURI(uint256)") first 4 bytes
+    const data = sig + toHex32(tokenId);
+
+    const result = await rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']);
+    if (!result || result === '0x') throw new Error('empty tokenURI result');
+
+    // ABI decode dynamic string: [offset][...][len][bytes...]
+    const hex = result.slice(2);
+    const ofs = parseInt(hex.slice(0, 64), 16) * 2;  // nibbles
+    const len = parseInt(hex.slice(ofs, ofs + 64), 16) * 2;
+    const strHex = hex.slice(ofs + 64, ofs + 64 + len);
+
+    // hex -> utf8
+    const bytes = new Uint8Array(strHex.match(/.{1,2}/g).map(h => parseInt(h, 16)));
+    const url   = new TextDecoder('utf-8').decode(bytes);
+
+    _cache.tokenURI.set(key, url);
+    return url;
+  }
+
+  // Read metadata JSON, from http(s) or data:application/json...
+  async function loadMetadata(metaURL) {
+    if (!metaURL) return null;
+
+    // data:… JSON
+    const inlined = parseDataURI(metaURL);
+    if (inlined) return inlined;
+
+    // ipfs://…  → gateway
+    const httpURL = ipfsToHttp(metaURL);
+    if (_cache.meta.has(httpURL)) return _cache.meta.get(httpURL);
+
+    const r = await fetch(httpURL, { cache:'no-store' });
+    const j = await r.json().catch(()=>null);
+    if (j) _cache.meta.set(httpURL, j);
+    return j;
+  }
+
+  async function resolveImageURL(contract, tokenId) {
+    const chain = await detectChainForContract(contract);
+    const tokenURI = await readTokenURI(chain, contract, tokenId);
+
+    // If tokenURI is itself an image (rare but possible)
+    if (/^data:image\//i.test(tokenURI) || /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(tokenURI) || tokenURI.startsWith('ipfs://')) {
+      return ipfsToHttp(tokenURI);
+    }
+
+    // Otherwise treat as metadata JSON
+    const meta = await loadMetadata(tokenURI);
+    if (!meta) throw new Error('metadata not found');
+
+    // Common fields in the wild
+    const img =
+      meta.image ||
+      meta.image_url ||
+      meta.image_original_url ||
+      meta.image_data ||  // may be inline SVG/data
+      null;
+
+    if (!img) throw new Error('image field missing');
+    return ipfsToHttp(String(img));
+  }
+
+  // Parse the "tokens" query param used by Reservoir: "0xabc...:123,0xdef...:7"
+  function parseTokensParam(val) {
+    const out = [];
+    if (!val) return out;
+    const parts = String(val).split(',');
+    for (const p of parts) {
+      const [addr, id] = p.split(':');
+      if (addr && id != null) out.push({ contract: addr.trim(), tokenId: String(id).trim() });
+    }
+    return out;
+  }
+
+  // ---------- Intercept fetch ----------
+  const ORIG_FETCH = window.fetch.bind(window);
+  const isReservoirTokens = (u) =>
+    /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
+
+  window.fetch = async function(input, init) {
+    try {
+      const url = (typeof input === 'string') ? input : (input?.url || '');
+      if (!url || !isReservoirTokens(url)) {
+        return ORIG_FETCH(input, init);
+      }
+
+      // Emulate the response of /tokens/v7?media=true&tokens=addr:id[,addr:id...]
+      const u = new URL(url, location.origin);
+      const tokensParam = u.searchParams.get('tokens'); // decoded -> "0x..:123,0x..:7"
+      const wanted = parseTokensParam(tokensParam);
+
+      // Resolve every requested token
+      const results = [];
+      for (const { contract, tokenId } of wanted) {
+        try {
+          const image = await resolveImageURL(contract, tokenId);
+          results.push({
+            token: {
+              contract: contract,
+              tokenId:  String(tokenId),
+              name:     `#${tokenId}`,
+              imageSmall: image,
+              image:      image,
+              imageLarge: image
+            }
+          });
+        } catch (e) {
+          // Keep a placeholder so callers don’t crash
+          results.push({
+            token: {
+              contract: contract,
+              tokenId:  String(tokenId),
+              name:     `#${tokenId}`,
+              imageSmall: '',
+              image:      '',
+              imageLarge: ''
+            },
+            error: String(e?.message || e)
+          });
+        }
+      }
+
+      const body = JSON.stringify({ tokens: results });
+      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    } catch (e) {
+      // If anything in our shim fails, fall back to the original fetch (will 503)
+      return ORIG_FETCH(input, init);
+    }
+  };
+})();
+
   // ===============================
   //  FABRIC DEFAULTS
   // ===============================
