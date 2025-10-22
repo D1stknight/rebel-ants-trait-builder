@@ -52,9 +52,6 @@
   });
 })(); // end CONFIGG
 
-<!-- 🔧 Paste this WHOLE <script> block into app.js (no <script> tags if app.js is a JS file).
-     Place it anywhere after your CONFIG block where RA_ENV is defined. -->
-
 /* ======================================================================
    Reservoir hot‑swap (no keys): emulate /tokens/v7 via on‑chain tokenURI()
    - Intercepts window.fetch to replace calls to api.reservoir.tools/tokens/v7
