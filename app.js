@@ -7567,11 +7567,12 @@ let urls = await reservoirCandidates(contract, tokenId, chain);
 // If still nothing, try the server once more forcing a chain hint
 if (!urls || !urls.length) {
   try {
+    const chainHint = (String(chain || '').toLowerCase().includes('ape') ? 'ape' : 'eth');
     const forced = await fetch(
-      `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}&chain=${(String(chain).toLowerCase().includes('ape') ? 'ape' : 'eth')}`,
+      `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}&chain=${chainHint}`,
       { cache: 'no-store' }
     ).then(r => r.json());
-    if (forced?.image) urls = [forced.image];
+    if (forced && forced.image) urls = [ forced.image ];
   } catch {}
 }
 
