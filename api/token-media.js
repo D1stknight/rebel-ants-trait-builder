@@ -94,7 +94,13 @@ async function contractExists(rpcs, addr) {
 
 async function detectChain(addr, hint) {
   const a = addr.toLowerCase();
-  if (hint === 'eth' || hint === 'ape') return hint;
+  const h = (hint || '').toLowerCase();
+
+  // Accept common synonyms as an explicit hint
+  if (['eth','ethereum','1','0x1'].includes(h)) return 'eth';
+  if (['ape','apechain','apecoin','apecoinchain','8173','0x8173'].includes(h)) return 'ape';
+
+  // Auto-detect if no usable hint
   if (await contractExists(ETH_RPCS, a)) return 'eth';
   if (await contractExists(APE_RPCS, a)) return 'ape';
   return '';
