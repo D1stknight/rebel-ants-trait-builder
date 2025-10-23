@@ -53,250 +53,32 @@
 })(); // end CONFIGG
 
 /* ======================================================================
-   Reservoir hot‑swap (no keys): emulate /tokens/v7 via on‑chain tokenURI()
-   - Replaces calls to https://api.reservoir.tools/tokens/v7
-   - Resolves image URL from metadata for ETH & ApeChain
-   - Tries multiple IPFS gateways + handles inline SVG (image_data)
+   Reservoir shim (browser) — use your server API instead of direct RPC
+   Intercepts calls to https://api.reservoir.tools/tokens/v7?... and returns
+   the same-shaped JSON by calling /api/token-media per token.
    ====================================================================== */
 (() => {
-  // --- Config / defaults ---
-  const ETH_RPC = 'https://cloudflare-eth.com';
-  const APE_RPC = (window.__APECHAIN_RPC && String(window.__APECHAIN_RPC)) || 'https://rpc.apecoinchain.org';
+  const ORIG_FETCH = window.fetch.bind(window);
+  const isReservoirTokens = (u) => /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
 
-  // Keep a tiny cache so repeated looks are instant
-  const _cache = {
-    chainByContract: new Map(),     // addr -> 'eth' | 'ape'
-    tokenURI:        new Map(),     // key: chain|addr|id -> urlOrDataURI
-    meta:            new Map(),     // metadata URL -> parsed JSON
-  };
-
-  // ---------- Utilities ----------
-  const toHex32 = (nStr) => {
-    const n = BigInt(String(nStr));
-    return n.toString(16).padStart(64, '0');
-  };
-
-  // IPFS + Arweave helpers
-  function arweaveToHttp(u) {
-    // ar://<id>  →  https://arweave.net/<id>
-    return u.startsWith('ar://') ? `https://arweave.net/${u.slice(5)}` : u;
-  }
-  function ipfsToHttp(u, gateway = 'nftstorage') {
-    if (!u || !u.startsWith('ipfs://')) return u;
-    let p = u.slice(7);
-    if (p.startsWith('ipfs/')) p = p.slice(5);
-    if (gateway === 'cloudflare') return `https://cloudflare-ipfs.com/ipfs/${p}`;
-    if (gateway === 'ipfsio')     return `https://ipfs.io/ipfs/${p}`;
-    return `https://nftstorage.link/ipfs/${p}`; // default
-  }
-
-  // Decode a JSON data URI (base64 or utf-8)
-  function parseDataURI(u) {
-    try {
-      const m = String(u).match(/^data:application\/json(?:;charset=[^;,]*)?(;base64)?,(.*)$/i);
-      if (!m) return null;
-      const isB64 = !!m[1];
-      const payload = m[2];
-      const jsonText = isB64 ? atob(payload) : decodeURIComponent(payload);
-      return JSON.parse(jsonText);
-    } catch { return null; }
-  }
-
-  // JSON-RPC call
-  async function rpcCall(rpc, method, params) {
-    const body = JSON.stringify({ jsonrpc:'2.0', id: 1, method, params });
-    const r = await fetch(rpc, { method:'POST', headers:{ 'content-type':'application/json' }, body });
-    const j = await r.json();
-    if (j && j.result != null) return j.result;
-    throw new Error((j && (j.error?.message || j.error)) || 'RPC error');
-  }
-
-  // Does a contract exist on a chain?
-  async function contractExists(rpc, addr) {
-    try {
-      const code = await rpcCall(rpc, 'eth_getCode', [addr, 'latest']);
-      return (code && code !== '0x');
-    } catch {
-      return false;
-    }
-  }
-
-  // Pick the right chain for a contract (cache result)
-  async function detectChainForContract(addr) {
-    addr = addr.toLowerCase();
-    if (_cache.chainByContract.has(addr)) return _cache.chainByContract.get(addr);
-    const onEth = await contractExists(ETH_RPC, addr);
-    if (onEth) { _cache.chainByContract.set(addr, 'eth'); return 'eth'; }
-    const onApe = await contractExists(APE_RPC, addr);
-    if (onApe) { _cache.chainByContract.set(addr, 'ape'); return 'ape'; }
-    _cache.chainByContract.set(addr, 'eth');  // default
-    return 'eth';
-  }
-
- // tokenURI(addr, id) via RPC — tries ERC‑721 tokenURI, then ERC‑1155 uri with {id}
-async function readTokenURI(chain, addr, tokenId) {
-  const key = `${chain}|${addr.toLowerCase()}|${tokenId}`;
-  if (_cache.tokenURI.has(key)) return _cache.tokenURI.get(key);
-
-  const rpc = (chain === 'ape') ? APE_RPC : ETH_RPC;
-
-  // Helper to call a view that returns a string and ABI‑decode it
-  async function callString(selector /* 0x… 4‑byte */) {
-    const data = selector + toHex32(tokenId);
-    const out = await rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']);
-    if (!out || out === '0x') return '';
-    const hex = out.slice(2);
-    const ofs = parseInt(hex.slice(0, 64), 16) * 2;           // nibbles
-    const len = parseInt(hex.slice(ofs, ofs + 64), 16) * 2;
-    const strHex = hex.slice(ofs + 64, ofs + 64 + len);
-    const bytes = new Uint8Array(strHex.match(/.{1,2}/g).map(h => parseInt(h, 16)));
-    return new TextDecoder('utf-8').decode(bytes);
-  }
-
-  // 1) ERC‑721: tokenURI(uint256)
-  let url = '';
-  try { url = await callString('0xc87b56dd'); } catch {}
-
-  // 2) ERC‑1155: uri(uint256) with {id} placeholder
-  if (!url) {
-    try {
-      url = await callString('0x0e89341c'); // keccak("uri(uint256)")
-      if (url) {
-        const id64 = toHex32(tokenId);     // 64‑char hex, lowercase, no 0x
-        url = url.replace(/\{id\}/gi, id64)
-                 .replace(/\{tokenId\}/gi, id64);
-      }
-    } catch {}
-  }
-
-  if (!url) throw new Error('empty tokenURI/uri result');
-
-  _cache.tokenURI.set(key, url);
-  return url;
-}
-
-  // Read metadata JSON, from http(s) or data:application/json...
-  async function loadMetadata(metaURL) {
-    if (!metaURL) return null;
-
-    // inline data: JSON
-    const inlined = parseDataURI(metaURL);
-    if (inlined) return inlined;
-
-    // normalize ar:// and ipfs://
-    metaURL = arweaveToHttp(metaURL);
-    let httpURL = ipfsToHttp(metaURL, 'nftstorage');
-
-    if (_cache.meta.has(httpURL)) return _cache.meta.get(httpURL);
-
-    // fetch with no-store to avoid stale CORS rulings
-    let r = await fetch(httpURL, { cache:'no-store' });
-    if (!r.ok) {
-      // try a second gateway
-      httpURL = ipfsToHttp(metaURL, 'cloudflare');
-      r = await fetch(httpURL, { cache:'no-store' });
-      if (!r.ok) {
-        httpURL = ipfsToHttp(metaURL, 'ipfsio');
-        r = await fetch(httpURL, { cache:'no-store' });
-      }
-    }
-    const j = await r.json().catch(()=>null);
-    if (j) _cache.meta.set(httpURL, j);
-    return j;
-  }
-
-  // Try three gateways; return the first that actually loads as an <img>
-  function canLoad(u) {
-    return new Promise(res => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload  = () => res(true);
-      img.onerror = () => res(false);
-      img.src = u + (u.includes('?') ? '&' : '?') + 't=' + Date.now();
-    });
-  }
-  async function pickImageGateway(rawUrl) {
-    // allow data: and plain http(s) first
-    if (!/^ipfs:\/\//i.test(rawUrl)) return rawUrl;
-    const variants = [
-      ipfsToHttp(rawUrl, 'nftstorage'),
-      ipfsToHttp(rawUrl, 'cloudflare'),
-      ipfsToHttp(rawUrl, 'ipfsio')
-    ];
-    for (const u of variants) {
-      if (await canLoad(u)) return u;
-    }
-    return variants[0];
-  }
-
-  function svgDataURI(svgString) {
-    const safe = encodeURIComponent(String(svgString).replace(/\s+/g,' ').trim());
-    return `data:image/svg+xml;utf8,${safe}`;
-  }
-
-  function pickMetaImage(meta) {
-    // Most common fields first
-    let img =
-      meta?.image ??
-      meta?.image_url ??
-      meta?.image_original_url ??
-      null;
-
-    // If missing, accept image‑type animation_url
-    if (!img && meta?.animation_url && /\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(meta.animation_url)) {
-      img = meta.animation_url;
-    }
-
-    // Inline SVG (image_data)
-    if (!img && meta?.image_data) {
-      // Some collections store raw SVG markup here
-      const v = String(meta.image_data);
-      if (/^<svg[\s>]/i.test(v)) return svgDataURI(v);
-      if (/^data:image\//i.test(v)) return v; // already a data URL
-    }
-
-    return img || '';
-  }
-
-  async function resolveImageURL(contract, tokenId) {
-    const chain    = await detectChainForContract(contract);
-    const tokenURI = await readTokenURI(chain, contract, tokenId);
-
-    // If tokenURI looks like an image already
-    if (/^data:image\//i.test(tokenURI) ||
-        /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(tokenURI) ||
-        tokenURI.startsWith('ipfs://') ||
-        tokenURI.startsWith('ar://')) {
-      const raw = tokenURI.startsWith('ar://') ? arweaveToHttp(tokenURI) : tokenURI;
-      return await pickImageGateway(raw);
-    }
-
-    // Otherwise treat as metadata JSON
-    const meta = await loadMetadata(tokenURI);
-    if (!meta) throw new Error('metadata not found');
-
-    const imgField = pickMetaImage(meta);
-    if (!imgField) throw new Error('image field missing');
-
-    const raw = imgField.startsWith('ar://') ? arweaveToHttp(imgField) : imgField;
-    return await pickImageGateway(raw);
-  }
-
-  // Parse the "tokens" query param used by Reservoir: "0xabc...:123,0xdef...:7"
   function parseTokensParam(val) {
     const out = [];
     if (!val) return out;
-    const parts = String(val).split(',');
-    for (const p of parts) {
+    for (const p of String(val).split(',')) {
       const [addr, id] = p.split(':');
       if (addr && id != null) out.push({ contract: addr.trim(), tokenId: String(id).trim() });
     }
     return out;
   }
 
-  // ---------- Intercept fetch ----------
-  const ORIG_FETCH = window.fetch.bind(window);
-  const isReservoirTokens = (u) => /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
+  // call our API for one token
+  async function getImageViaAPI(contract, tokenId) {
+    const u = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
+    const r = await fetch(u, { cache:'no-store' });
+    const j = await r.json().catch(()=>null);
+    if (j && j.ok && j.image) return j.image;
+    return ''; // keep shape even on failure
+  }
 
   window.fetch = async function(input, init) {
     try {
@@ -305,44 +87,27 @@ async function readTokenURI(chain, addr, tokenId) {
         return ORIG_FETCH(input, init);
       }
 
-      // Emulate the response of /tokens/v7?media=true&tokens=addr:id[,addr:id...]
-      const u = new URL(url, location.origin);
-      const tokensParam = u.searchParams.get('tokens');  // "0x..:123,0x..:7"
-      const wanted = parseTokensParam(tokensParam);
+      const u      = new URL(url, location.origin);
+      const wanted = parseTokensParam(u.searchParams.get('tokens')); // "0x..:123,0x..:7"
 
-      const results = [];
-      for (const { contract, tokenId } of wanted) {
-        try {
-          const image = await resolveImageURL(contract, tokenId);
-          results.push({
-            token: {
-              contract: contract,
-              tokenId:  String(tokenId),
-              name:     `#${tokenId}`,
-              imageSmall: image,
-              image:      image,
-              imageLarge: image
-            }
-          });
-        } catch (e) {
-          results.push({
-            token: {
-              contract: contract,
-              tokenId:  String(tokenId),
-              name:     `#${tokenId}`,
-              imageSmall: '',
-              image:      '',
-              imageLarge: ''
-            },
-            error: String(e?.message || e)
-          });
-        }
-      }
+      const tokens = await Promise.all(wanted.map(async ({ contract, tokenId }) => {
+        const image = await getImageViaAPI(contract, tokenId);
+        return {
+          token: {
+            contract,
+            tokenId: String(tokenId),
+            name:    `#${tokenId}`,
+            imageSmall: image,
+            image:      image,
+            imageLarge: image
+          }
+        };
+      }));
 
-      const body = JSON.stringify({ tokens: results });
+      const body = JSON.stringify({ tokens });
       return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
     } catch (e) {
-      // If anything in our shim fails, fall back to the original fetch (will 503)
+      // last resort: original (will 503 if Reservoir is down)
       return ORIG_FETCH(input, init);
     }
   };
