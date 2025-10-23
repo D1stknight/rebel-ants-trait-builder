@@ -7403,9 +7403,17 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
- async function reservoirCandidates(contract, tokenId, chainSlug /* unused */) {
-  // Single authoritative source now: our server route
-  const url = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
+ async function reservoirCandidates(contract, tokenId, chainSlug /* unused by server if absent */) {
+  const hint = (chainSlug || '').toLowerCase();
+  const chain =
+    hint.includes('ape')  ? 'ape'  :
+    hint.includes('base') ? 'base' :
+    (hint.includes('eth') || hint.includes('ether')) ? 'eth' : '';
+
+  const url =
+    `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}` +
+    (chain ? `&chain=${chain}` : '');
+
   try {
     const r = await fetch(url, { cache: 'no-store' });
     const j = await r.json();
@@ -7422,15 +7430,11 @@ async function loadTokenFromCollection(tokenId, col){
     };
 
     if (j && j.image) out.push(j.image);
-
-    // Optional: also try tokenURI if it looks like a direct image
     if (
       j && j.tokenURI &&
-      (
-        j.tokenURI.startsWith('ipfs://') ||
+      ( j.tokenURI.startsWith('ipfs://') ||
         /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(j.tokenURI) ||
-        j.tokenURI.startsWith('data:image/')
-      )
+        j.tokenURI.startsWith('data:image/') )
     ) {
       out.push(ipfsToHttp(j.tokenURI));
     }
