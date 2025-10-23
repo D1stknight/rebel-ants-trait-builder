@@ -1,6 +1,6 @@
 // /api/proxy-img.js
-// Streams an image back to the browser. If the source is IPFS, try several gateways.
-// Accepts:  GET /api/proxy-img?u=<absolute-url-or-ipfs-url>
+// Returns { ok, dataUrl, contentType, size, from } for an image URL.
+// Works with http(s) and ipfs:// (multi-gateway fallback). Always JSON.
 
 const ALLOW = new Set([
   // IPFS gateways
@@ -17,6 +17,16 @@ const ALLOW = new Set([
   'assets.bueno.art',
 ]);
 
+const GATEWAYS = [
+  'https://nftstorage.link/ipfs/',
+  'https://cloudflare-ipfs.com/ipfs/',
+  'https://w3s.link/ipfs/',
+  'https://ipfs.io/ipfs/',
+  'https://gateway.pinata.cloud/ipfs/',
+  'https://ipfs.filebase.io/ipfs/',
+  'https://infura-ipfs.io/ipfs/',
+];
+
 function ipfsPath(u) {
   if (!u) return '';
   const s = String(u);
@@ -24,80 +34,48 @@ function ipfsPath(u) {
   const m = s.match(/\/ipfs\/([^?#]+)/i);
   return m ? m[1] : '';
 }
-
-function expandCandidates(u) {
-  if (!u) return [];
+function expand(u) {
   const p = ipfsPath(u);
-  if (p) {
-    // Try multiple IPFS gateways in order
-    return [
-      `https://nftstorage.link/ipfs/${p}`,
-      `https://cloudflare-ipfs.com/ipfs/${p}`,
-      `https://w3s.link/ipfs/${p}`,
-      `https://ipfs.io/ipfs/${p}`,
-      `https://gateway.pinata.cloud/ipfs/${p}`,
-      `https://ipfs.filebase.io/ipfs/${p}`,
-      `https://infura-ipfs.io/ipfs/${p}`,
-    ];
-  }
-  return [u];
+  return p ? GATEWAYS.map(g => g + p) : [u];
 }
-
-function isAllowedUrl(raw) {
+function isAllowed(raw) {
+  // ipfs:// and /ipfs/... are allowed (we’ll expand)
+  if (raw.startsWith('ipfs://') || /\/ipfs\/[^?#]+/i.test(raw)) return true;
   try {
     const u = new URL(raw);
     return ALLOW.has(u.hostname.toLowerCase());
-  } catch {
-    // allow ipfs:// and /ipfs/... too (handled above)
-    if (raw.startsWith('ipfs://')) return true;
-    if (/\/ipfs\/[^?#]+/i.test(raw)) return true;
-    return false;
-  }
+  } catch { return false; }
 }
-
-async function fetchWithTimeout(url, ms = 9000) {
+async function fetchWithTimeout(url, ms = 10000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const r = await fetch(url, {
+    return await fetch(url, {
       method: 'GET',
       headers: { accept: 'image/avif,image/webp,image/*;q=0.8,*/*;q=0.5' },
       redirect: 'follow',
       cache: 'no-store',
       signal: ctrl.signal,
     });
-    return r;
-  } finally {
-    clearTimeout(t);
-  }
+  } finally { clearTimeout(t); }
 }
 
 export default async function handler(req, res) {
   try {
     const raw = String(req.query.u || '').trim();
-    if (!raw) {
-      res.status(400).send('missing u');
-      return;
-    }
-    if (!isAllowedUrl(raw)) {
-      res.status(400).send('host not allowed');
-      return;
-    }
+    if (!raw) return res.status(400).json({ ok:false, error:'missing u' });
+    if (!isAllowed(raw)) return res.status(400).json({ ok:false, error:'host not allowed' });
 
-    const candidates = expandCandidates(raw);
-    let lastErr = 'fetch failed';
-
-    for (const url of candidates) {
+    let lastErr = 'failed';
+    for (const url of expand(raw)) {
       try {
-        const r = await fetchWithTimeout(url, 10000);
+        const r = await fetchWithTimeout(url);
         if (r && r.ok) {
-          const ct = r.headers.get('content-type') || 'application/octet-stream';
-          const buf = Buffer.from(await r.arrayBuffer());
-          res.status(200);
-          res.setHeader('content-type', ct);
-          res.setHeader('cache-control', 'no-store');
-          res.end(buf);
-          return;
+          const ct = (r.headers.get('content-type') || '').split(';')[0] || 'image/png';
+          const ab = await r.arrayBuffer();
+          const b64 = Buffer.from(ab).toString('base64');
+          const dataUrl = `data:${ct};base64,${b64}`;
+          return res.status(200).json({ ok:true, dataUrl, contentType: ct, size: ab.byteLength, from: url });
         } else {
           lastErr = `status ${r && r.status}`;
         }
@@ -105,9 +83,8 @@ export default async function handler(req, res) {
         lastErr = String(e && e.message || e);
       }
     }
-
-    res.status(502).send('proxy failed: ' + lastErr);
+    return res.status(502).json({ ok:false, error:'proxy failed: '+lastErr });
   } catch (e) {
-    res.status(500).send('proxy error: ' + String(e && e.message || e));
+    return res.status(500).json({ ok:false, error: String(e && e.message || e) });
   }
 }
