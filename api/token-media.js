@@ -1,21 +1,34 @@
-// api/token-media.js
-//
-// Resolve an NFT's image URL without Reservoir by reading tokenURI/uri on-chain
-// and then fetching the metadata (handles ipfs://, data:application/json, Bueno).
-//
-// Query:
-//   /api/token-media?contract=0x...&id=123[&chain=eth|ape]
-// Response JSON:
-//   { ok: true, chain: "eth"|"ape", tokenURI: "<url or data:json>", image: "<url-or-data-uri>" }
+// /api/token-media.js
+// Resolve an NFT's image URL without Reservoir by reading tokenURI/uri on-chain (server-side).
+// Supports ETH + ApeChain. Handles ipfs://, data:application/json, Bueno, 721 + 1155.
+// Query:  /api/token-media?contract=0x...&id=123[&chain=eth|ape]
+// Also accepts ?tokenId=123 or ?token=123
+// Response: { ok: boolean, chain: "eth"|"ape", tokenURI: string, image: string, error?: string }
 
-const ETH_RPC = process.env.ETH_RPC || 'https://cloudflare-eth.com';
-const APE_RPC = process.env.APECHAIN_RPC || 'https://rpc.apecoinchain.org';
+const ETH_RPCS = [
+  process.env.RA_ETH_RPC,
+  'https://ethereum.publicnode.com',
+  'https://eth.llamarpc.com',
+  'https://cloudflare-eth.com',
+].filter(Boolean);
 
-// --- tiny helpers ----------------------------------------------------------
-const pad64 = (hex) => hex.replace(/^0x/, '').padStart(64, '0').toLowerCase();
+const APE_RPCS = [
+  process.env.RA_APE_RPC,
+  'https://rpc.apecoinchain.org',
+].filter(Boolean);
+
+function json(res, status, obj) {
+  res.statusCode = status;
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify(obj));
+}
+
+const pad64 = (hex) => String(hex).replace(/^0x/, '').padStart(64, '0').toLowerCase();
 const toHex32 = (id) => '0x' + pad64(BigInt(String(id)).toString(16));
+const isAddr = v => /^0x[0-9a-fA-F]{40}$/.test(String(v||''));
+const isDec  = v => /^\d+$/.test(String(v||''));
 
-function ipfsToHttp(u) {
+const ipfsToHttp = (u) => {
   if (!u) return u;
   if (u.startsWith('ipfs://')) {
     let p = u.slice(7);
@@ -23,28 +36,68 @@ function ipfsToHttp(u) {
     return `https://nftstorage.link/ipfs/${p}`;
   }
   return u;
+};
+
+function parseDataJSON(u) {
+  try {
+    const m = String(u).match(/^data:application\/json(?:;charset=[^;,]*)?(;base64)?,(.*)$/i);
+    if (!m) return null;
+    const isB64 = !!m[1];
+    const payload = m[2];
+    const text = isB64 ? Buffer.from(payload, 'base64').toString('utf8')
+                       : decodeURIComponent(payload);
+    return JSON.parse(text);
+  } catch { return null; }
 }
 
-function timeout(ms) { return new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)); }
-
-async function fetchJSON(url, opt = {}, ms = 7000) {
-  const r = await Promise.race([
-    fetch(url, opt),
-    timeout(ms)
-  ]);
-  if (!r.ok) return null;
-  try { return await r.json(); } catch { return null; }
+async function fetchJSON(url, opt = {}, ms = 8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opt, signal: ctrl.signal });
+    if (!r.ok) return null;
+    return await r.json().catch(() => null);
+  } finally { clearTimeout(t); }
 }
 
-async function rpcCall(rpc, method, params, ms = 7000) {
-  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
-  const r = await Promise.race([
-    fetch(rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
-    timeout(ms)
-  ]);
-  const j = await r.json().catch(() => null);
-  if (j && j.result != null) return j.result;
-  throw new Error((j && (j.error?.message || j.error)) || 'rpc error');
+async function rpcCall(rpc, method, params, ms = 8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(rpc, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: ctrl.signal
+    });
+    const j = await r.json().catch(() => null);
+    if (j && j.result != null) return j.result;
+    throw new Error(j?.error?.message || ('rpc ' + r.status));
+  } finally { clearTimeout(t); }
+}
+
+async function tryMany(rpcs, fn) {
+  let lastErr = null;
+  for (const rpc of rpcs) {
+    try { return await fn(rpc); }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('all rpcs failed');
+}
+
+async function contractExists(rpcs, addr) {
+  try {
+    const code = await tryMany(rpcs, (rpc) => rpcCall(rpc, 'eth_getCode', [addr, 'latest']));
+    return code && code !== '0x';
+  } catch { return false; }
+}
+
+async function detectChain(addr, hint) {
+  const a = addr.toLowerCase();
+  if (hint === 'eth' || hint === 'ape') return hint;
+  if (await contractExists(ETH_RPCS, a)) return 'eth';
+  if (await contractExists(APE_RPCS, a)) return 'ape';
+  return '';
 }
 
 function decodeAbiString(callResult) {
@@ -60,132 +113,88 @@ function decodeAbiString(callResult) {
   return new TextDecoder('utf-8').decode(bytes);
 }
 
-async function contractExists(rpc, addr) {
-  try { return (await rpcCall(rpc, 'eth_getCode', [addr, 'latest'])) !== '0x'; }
-  catch { return false; }
+// 721 tokenURI(uint256)
+async function call721(rpcs, addr, tokenId) {
+  const data = '0xc87b56dd' + toHex32(tokenId).slice(2);
+  const out  = await tryMany(rpcs, (rpc) => rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']));
+  return decodeAbiString(out) || '';
 }
 
-async function detectChain(addr, hint) {
-  const a = addr.toLowerCase();
-  if (hint === 'eth' || hint === 'ape') return hint;
-  // prefer ETH if present
-  if (await contractExists(ETH_RPC, a)) return 'eth';
-  if (await contractExists(APE_RPC, a)) return 'ape';
-  return ''; // unknown
+// 1155 uri(uint256) with placeholders
+async function call1155(rpcs, addr, tokenId) {
+  const data = '0x0e89341c' + toHex32(tokenId).slice(2);
+  const out  = await tryMany(rpcs, (rpc) => rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']));
+  const tpl  = decodeAbiString(out) || '';
+  if (!tpl) return '';
+  const dec   = String(tokenId);
+  const hex   = BigInt(dec).toString(16);
+  const hex64 = pad64(hex);
+  return tpl
+    .replace(/\{id\}/gi, hex64)
+    .replace(/\{tokenId\}/gi, dec)
+    .replace(/\{idHex\}/gi, hex)
+    .replace(/\{id64\}/gi, hex64);
 }
 
-// Try ERC‑721 tokenURI
-async function tryTokenURI(rpc, addr, tokenId) {
-  const sig = '0xc87b56dd'; // keccak256("tokenURI(uint256)")
-  const data = sig + toHex32(tokenId).slice(2);
-  try {
-    const res = await rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']);
-    return decodeAbiString(res) || '';
-  } catch { return ''; }
-}
-
-// Try ERC‑1155 uri(uint256) with {id} placeholders
-async function tryUri1155(rpc, addr, tokenId) {
-  const sig = '0x0e89341c'; // keccak256("uri(uint256)")
-  const data = sig + toHex32(tokenId).slice(2);
-  try {
-    const res = await rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']);
-    const tpl = decodeAbiString(res) || '';
-    if (!tpl) return '';
-
-    // Replace common placeholders
-    const dec = String(tokenId);
-    const hex64 = pad64(BigInt(String(tokenId)).toString(16));
-    const hex   = BigInt(String(tokenId)).toString(16);
-
-    return tpl
-      .replace(/\{id\}/gi, hex64)
-      .replace(/\{tokenId\}/gi, dec)
-      .replace(/\{idHex\}/gi, hex)
-      .replace(/\{id64\}/gi, hex64);
-  } catch { return ''; }
-}
-
-// If metadata is inlined as data:application/json,...
-function parseDataJSON(u) {
-  try {
-    const m = String(u).match(/^data:application\/json(?:;charset=[^;,]*)?(;base64)?,(.*)$/i);
-    if (!m) return null;
-    const isB64 = !!m[1];
-    const payload = m[2];
-    const text = isB64 ? Buffer.from(payload, 'base64').toString('utf8')
-                       : decodeURIComponent(payload);
-    return JSON.parse(text);
-  } catch { return null; }
-}
-
-async function resolveImageFromMetadata(metaURL) {
+async function resolveImage(metaURL) {
   if (!metaURL) return '';
 
-  // data:application/json (inlined metadata)
+  // inlined metadata
   const inlined = parseDataJSON(metaURL);
   if (inlined) {
-    const img = inlined.image || inlined.image_url || inlined.image_original_url || inlined.image_data || '';
-    return img.startsWith('data:') ? img : ipfsToHttp(img);
+    const i = inlined.image || inlined.image_url || inlined.image_original_url || inlined.image_data || '';
+    if (!i) return '';
+    if (typeof i === 'string' && i.startsWith('<svg')) {
+      return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(i);
+    }
+    return i.startsWith('data:') ? i : ipfsToHttp(i);
   }
 
-  // Bueno / IPFS / HTTPS metadata
-  const url = ipfsToHttp(metaURL);
-  const meta = await fetchJSON(url, { cache: 'no-store' }, 7000) || {};
-
-  // common fields
-  let img = meta.image || meta.image_url || meta.image_original_url || meta.image_data || '';
-  if (!img) return '';
-
-  if (typeof img === 'string' && img.startsWith('<svg')) {
-    // inline as data: for svg
-    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(img);
+  // http/ipfs metadata
+  const url  = ipfsToHttp(metaURL);
+  const meta = await fetchJSON(url, { cache: 'no-store' }, 8000) || {};
+  let i = meta.image || meta.image_url || meta.image_original_url || meta.image_data || '';
+  if (!i) return '';
+  if (typeof i === 'string' && i.startsWith('<svg')) {
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(i);
   }
-  return img.startsWith('data:') ? img : ipfsToHttp(img);
+  return i.startsWith('data:') ? i : ipfsToHttp(i);
 }
 
-// --- main handler ----------------------------------------------------------
 export default async function handler(req, res) {
   try {
+    // accept id | tokenId | token
     const contract = String(req.query.contract || '').trim();
     const tokenId  = String(req.query.id || req.query.tokenId || req.query.token || '').trim();
     const hint     = (req.query.chain || '').toLowerCase();
 
-    if (!/^0x[0-9a-fA-F]{40}$/.test(contract) || !/^\d+$/.test(tokenId)) {
-      return res.status(400).json({ ok: false, error: 'bad params' });
+    if (!isAddr(contract) || !isDec(tokenId)) {
+      return json(res, 400, { ok: false, error: 'bad params' });
     }
 
     const chain = await detectChain(contract, hint);
-    if (!chain) return res.status(400).json({ ok: false, error: 'contract not found on ETH or ApeChain' });
+    if (!chain) return json(res, 404, { ok: false, error: 'contract not found on ETH or ApeChain' });
 
-    const rpc = chain === 'ape' ? APE_RPC : ETH_RPC;
+    const rpcs = (chain === 'eth') ? ETH_RPCS : APE_RPCS;
 
-    // 1) ERC‑721
-    let tokenURI = await Promise.race([ tryTokenURI(rpc, contract, tokenId), timeout(6500) ]).catch(() => '');
-    // 2) Fall back to ERC‑1155
-    if (!tokenURI) {
-      tokenURI = await Promise.race([ tryUri1155(rpc, contract, tokenId), timeout(6500) ]).catch(() => '');
-    }
+    // Try 721 then 1155
+    let tokenURI = '';
+    try { tokenURI = await call721(rpcs, contract, tokenId); } catch {}
+    if (!tokenURI) { try { tokenURI = await call1155(rpcs, contract, tokenId); } catch {} }
 
-    // 3) If still nothing, bail
-    if (!tokenURI) {
-      return res.status(200).json({ ok: false, chain, tokenURI: '', image: '' });
-    }
+    if (!tokenURI) return json(res, 200, { ok: false, chain, tokenURI: '', image: '' });
 
-    // If tokenURI itself is an image, use it; otherwise load metadata
     let image = '';
     if (/^data:image\//i.test(tokenURI) ||
         /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(tokenURI) ||
         tokenURI.startsWith('ipfs://')) {
       image = ipfsToHttp(tokenURI);
     } else {
-      image = await resolveImageFromMetadata(tokenURI);
+      image = await resolveImage(tokenURI);
     }
 
-    res.setHeader('cache-control', 'no-store');
-    return res.status(200).json({ ok: !!image, chain, tokenURI, image: image || '' });
+    return json(res, 200, { ok: !!image, chain, tokenURI, image: image || '' });
   } catch (e) {
-    // Avoid 502s: always return JSON
-    return res.status(200).json({ ok: false, error: String(e && e.message || e) });
+    return json(res, 200, { ok: false, error: String(e?.message || e) });
   }
 }
