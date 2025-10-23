@@ -133,31 +133,47 @@
     return 'eth';
   }
 
-  // tokenURI(addr, id) via RPC (ERC721 / ERC1155 style selector)
-  async function readTokenURI(chain, addr, tokenId) {
-    const key = `${chain}|${addr.toLowerCase()}|${tokenId}`;
-    if (_cache.tokenURI.has(key)) return _cache.tokenURI.get(key);
+ // tokenURI(addr, id) via RPC — tries ERC‑721 tokenURI, then ERC‑1155 uri with {id}
+async function readTokenURI(chain, addr, tokenId) {
+  const key = `${chain}|${addr.toLowerCase()}|${tokenId}`;
+  if (_cache.tokenURI.has(key)) return _cache.tokenURI.get(key);
 
-    const rpc  = (chain === 'ape') ? APE_RPC : ETH_RPC;
-    const sig  = '0xc87b56dd'; // keccak256("tokenURI(uint256)") first 4 bytes
-    const data = sig + toHex32(tokenId);
+  const rpc = (chain === 'ape') ? APE_RPC : ETH_RPC;
 
-    const result = await rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']);
-    if (!result || result === '0x') throw new Error('empty tokenURI result');
-
-    // ABI decode dynamic string: [offset][...][len][bytes...]
-    const hex = result.slice(2);
-    const ofs = parseInt(hex.slice(0, 64), 16) * 2;  // nibbles
+  // Helper to call a view that returns a string and ABI‑decode it
+  async function callString(selector /* 0x… 4‑byte */) {
+    const data = selector + toHex32(tokenId);
+    const out = await rpcCall(rpc, 'eth_call', [{ to: addr, data }, 'latest']);
+    if (!out || out === '0x') return '';
+    const hex = out.slice(2);
+    const ofs = parseInt(hex.slice(0, 64), 16) * 2;           // nibbles
     const len = parseInt(hex.slice(ofs, ofs + 64), 16) * 2;
     const strHex = hex.slice(ofs + 64, ofs + 64 + len);
-
-    // hex -> utf8
     const bytes = new Uint8Array(strHex.match(/.{1,2}/g).map(h => parseInt(h, 16)));
-    const url   = new TextDecoder('utf-8').decode(bytes);
-
-    _cache.tokenURI.set(key, url);
-    return url;
+    return new TextDecoder('utf-8').decode(bytes);
   }
+
+  // 1) ERC‑721: tokenURI(uint256)
+  let url = '';
+  try { url = await callString('0xc87b56dd'); } catch {}
+
+  // 2) ERC‑1155: uri(uint256) with {id} placeholder
+  if (!url) {
+    try {
+      url = await callString('0x0e89341c'); // keccak("uri(uint256)")
+      if (url) {
+        const id64 = toHex32(tokenId);     // 64‑char hex, lowercase, no 0x
+        url = url.replace(/\{id\}/gi, id64)
+                 .replace(/\{tokenId\}/gi, id64);
+      }
+    } catch {}
+  }
+
+  if (!url) throw new Error('empty tokenURI/uri result');
+
+  _cache.tokenURI.set(key, url);
+  return url;
+}
 
   // Read metadata JSON, from http(s) or data:application/json...
   async function loadMetadata(metaURL) {
