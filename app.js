@@ -52,62 +52,63 @@
   });
 })(); // end CONFIGG
 
-/* ======================================================================
-   Reservoir shim (browser) — use your server API instead of direct RPC
-   Intercepts calls to https://api.reservoir.tools/tokens/v7?... and returns
-   the same-shaped JSON by calling /api/token-media per token.
-   ====================================================================== */
+/* =========================================================
+   Reservoir hot‑swap (client): emulate /tokens/v7 using our
+   serverless /api/token-media so we avoid CORS and RPC flakiness.
+   ========================================================= */
 (() => {
   const ORIG_FETCH = window.fetch.bind(window);
-  const isReservoirTokens = (u) => /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
+  const isResTokens = (u) => /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
 
+  // Parse "0xabc…:123,0xdef…:7" → [{contract,tokenId}, …]
   function parseTokensParam(val) {
     const out = [];
     if (!val) return out;
-    for (const p of String(val).split(',')) {
-      const [addr, id] = p.split(':');
-      if (addr && id != null) out.push({ contract: addr.trim(), tokenId: String(id).trim() });
-    }
+    String(val).split(',').forEach(p => {
+      const [c, id] = p.split(':');
+      if (c && id != null) out.push({ contract: c.trim(), tokenId: String(id).trim() });
+    });
     return out;
-  }
-
-  // call our API for one token
-  async function getImageViaAPI(contract, tokenId) {
-    const u = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
-    const r = await fetch(u, { cache:'no-store' });
-    const j = await r.json().catch(()=>null);
-    if (j && j.ok && j.image) return j.image;
-    return ''; // keep shape even on failure
   }
 
   window.fetch = async function(input, init) {
     try {
       const url = (typeof input === 'string') ? input : (input?.url || '');
-      if (!url || !isReservoirTokens(url)) {
-        return ORIG_FETCH(input, init);
-      }
+      if (!url || !isResTokens(url)) return ORIG_FETCH(input, init);
 
-      const u      = new URL(url, location.origin);
-      const wanted = parseTokensParam(u.searchParams.get('tokens')); // "0x..:123,0x..:7"
+      const u = new URL(url, location.origin);
+      const wanted = parseTokensParam(u.searchParams.get('tokens'));
+      const results = [];
 
-      const tokens = await Promise.all(wanted.map(async ({ contract, tokenId }) => {
-        const image = await getImageViaAPI(contract, tokenId);
-        return {
+      for (const { contract, tokenId } of wanted) {
+        let image = '', err = '';
+        try {
+          const r = await ORIG_FETCH(
+            `/api/token-media?contract=${encodeURIComponent(contract)}&tokenId=${encodeURIComponent(tokenId)}`,
+            { cache: 'no-store' }
+          );
+          const j = await r.json().catch(()=>null);
+          if (j && j.ok) image = j.image || '';
+          else err = (j && j.error) || 'resolver error';
+        } catch (e) {
+          err = String(e);
+        }
+        results.push({
           token: {
             contract,
             tokenId: String(tokenId),
-            name:    `#${tokenId}`,
+            name: `#${tokenId}`,
             imageSmall: image,
-            image:      image,
+            image,
             imageLarge: image
-          }
-        };
-      }));
+          },
+          ...(err ? { error: err } : {})
+        });
+      }
 
-      const body = JSON.stringify({ tokens });
+      const body = JSON.stringify({ tokens: results });
       return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
     } catch (e) {
-      // last resort: original (will 503 if Reservoir is down)
       return ORIG_FETCH(input, init);
     }
   };
