@@ -52,64 +52,62 @@
   });
 })(); // end CONFIGG
 
-/* =========================================================
-   Reservoir hot‑swap (client): emulate /tokens/v7 using our
-   serverless /api/token-media so we avoid CORS and RPC flakiness.
-   ========================================================= */
+/* ======================================================================
+   Reservoir hot‑swap (server-backed)
+   Intercepts calls to https://api.reservoir.tools/tokens/v7 and answers by
+   calling our /api/token-media for each token (no browser RPC, no CORS issues).
+   ====================================================================== */
 (() => {
-  const ORIG_FETCH = window.fetch.bind(window);
-  const isResTokens = (u) => /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
+  const ORIG = window.fetch.bind(window);
+  const isRez = (u) => typeof u === 'string' && /\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
 
-  // Parse "0xabc…:123,0xdef…:7" → [{contract,tokenId}, …]
   function parseTokensParam(val) {
     const out = [];
     if (!val) return out;
-    String(val).split(',').forEach(p => {
-      const [c, id] = p.split(':');
-      if (c && id != null) out.push({ contract: c.trim(), tokenId: String(id).trim() });
-    });
+    for (const part of String(val).split(',')) {
+      const [contract, id] = part.split(':');
+      if (/^0x[0-9a-fA-F]{40}$/.test(contract || '') && /^\d+$/.test(id || '')) {
+        out.push({ contract, id: String(id) });
+      }
+    }
     return out;
   }
 
   window.fetch = async function(input, init) {
-    try {
-      const url = (typeof input === 'string') ? input : (input?.url || '');
-      if (!url || !isResTokens(url)) return ORIG_FETCH(input, init);
+    const url = (typeof input === 'string') ? input : (input && input.url) || '';
+    if (!isRez(url)) return ORIG(input, init);
 
+    try {
       const u = new URL(url, location.origin);
       const wanted = parseTokensParam(u.searchParams.get('tokens'));
       const results = [];
 
-      for (const { contract, tokenId } of wanted) {
-        let image = '', err = '';
+      for (const { contract, id } of wanted) {
+        let image = '';
         try {
-          const r = await ORIG_FETCH(
-            `/api/token-media?contract=${encodeURIComponent(contract)}&tokenId=${encodeURIComponent(tokenId)}`,
-            { cache: 'no-store' }
-          );
-          const j = await r.json().catch(()=>null);
-          if (j && j.ok) image = j.image || '';
-          else err = (j && j.error) || 'resolver error';
-        } catch (e) {
-          err = String(e);
-        }
+          const r = await fetch(`/api/token-media?contract=${contract}&id=${encodeURIComponent(id)}`, { cache: 'no-store' });
+          const j = await r.json().catch(() => null);
+          image = (j && j.image) ? j.image : '';
+        } catch {}
         results.push({
           token: {
             contract,
-            tokenId: String(tokenId),
-            name: `#${tokenId}`,
+            tokenId: String(id),
+            name: `#${id}`,
             imageSmall: image,
-            image,
+            image: image,
             imageLarge: image
-          },
-          ...(err ? { error: err } : {})
+          }
         });
       }
 
-      const body = JSON.stringify({ tokens: results });
-      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ tokens: results }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
     } catch (e) {
-      return ORIG_FETCH(input, init);
+      // Fallback to original if anything odd happens
+      return ORIG(input, init);
     }
   };
 })();
