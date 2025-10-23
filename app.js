@@ -7403,26 +7403,69 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
-// === CANDIDATES: resolve via server + proxy to DATA URL (ETH + Ape) ===
+// ---------- replace the whole reservoirCandidates with this ----------
+function __ipfsPath(u){
+  if (!u) return '';
+  const s = String(u);
+  if (s.startsWith('ipfs://')) return s.slice(7).replace(/^ipfs\//,'');
+  const m = s.match(/\/ipfs\/([^?#]+)/i);
+  return m ? m[1] : '';
+}
+
+function __expandIpfs(u){
+  const p = __ipfsPath(u);
+  if (!p) return u ? [u] : [];
+  const bases = [
+    'https://nftstorage.link/ipfs/',
+    'https://cloudflare-ipfs.com/ipfs/',
+    'https://w3s.link/ipfs/',
+    'https://ipfs.io/ipfs/',
+    'https://gateway.pinata.cloud/ipfs/'
+  ];
+  return bases.map(b => b + p);
+}
+
+// NEW: resolve image via our server (ETH + Ape), then return
+// a strong list of candidates (proxy data-URL first, then multi-gateway)
 async function reservoirCandidates(contract, tokenId, chainSlug){
   const params = new URLSearchParams({
     contract,
     id: String(tokenId),
-    // give the server a hint for Ape
-    chain: (chainSlug || '').toLowerCase().includes('ape') ? 'ape' : ''
+    chain: (String(chainSlug||'').toLowerCase().includes('ape') ? 'ape' : '')
   });
 
+  const out = new Set();
+
   try {
-    // 1) Ask our server which image to use
-    const meta = await (await fetch(`/api/token-media?${params.toString()}`, { cache:'no-store' })).json();
-    if (!meta || !meta.image) return [];
+    const j = await fetch(`/api/token-media?${params.toString()}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .catch(() => null);
 
-    // 2) Always fetch the bytes through OUR proxy so the browser never talks to IPFS directly
-    const prox = await (await fetch(`/api/proxy-img?u=${encodeURIComponent(meta.image)}`, { cache:'no-store' })).json();
-    if (!prox || !prox.ok || !prox.dataUrl) return [];
+    if (!j) return [];
 
-    // 3) Return a DATA URL – works everywhere and is CORS‑free
-    return [ prox.dataUrl ];
+    // 1) Try to prefetch via our proxy as a data URL (best for CORS)
+    if (j.image) {
+      try {
+        const prox = `/api/proxy-img?u=${encodeURIComponent(j.image)}`;
+        const t = await fetch(prox, { cache:'no-store' }).then(r => r.text());
+        const m = t.match(/^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/i);
+        if (m && m[0]) out.add(m[0]); // data URL goes first
+      } catch {}
+    }
+
+    // 2) Add multi-gateway HTTP candidates (works if some gateways are blocked)
+    if (j.image) __expandIpfs(j.image).forEach(u => out.add(u));
+
+    // 3) If tokenURI itself is a usable image, include it too (with IPFS expansion)
+    if (j.tokenURI && (
+      /^data:image\//i.test(j.tokenURI) ||
+      /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(j.tokenURI) ||
+      j.tokenURI.startsWith('ipfs://') || /\/ipfs\//i.test(j.tokenURI)
+    )){
+      __expandIpfs(j.tokenURI).forEach(u => out.add(u));
+    }
+
+    return Array.from(out);
   } catch {
     return [];
   }
