@@ -7604,8 +7604,16 @@ return true;
     const c = getCanvas(), f = window.fabric;
     if (!c || !f) { alert('Canvas not ready'); return; }
 
-   // 1) Ask our server route for the image/tokenURI (works for ETH + ApeChain)
+  // 1) Query Reservoir with the correct chain
 let urls = await reservoirCandidates(contract, tokenId, chain);
+
+// ApeChain often needs tokenURI → metadata fallback
+if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
+  try{
+    const u = await window.__fetchApechainImageURL(contract, tokenId);
+    if (u) urls = [u];
+  }catch(_){}
+}
 
 // If still nothing, try the server once more forcing a chain hint
 if (!urls || !urls.length) {
@@ -7619,15 +7627,8 @@ if (!urls || !urls.length) {
   } catch {}
 }
 
-// (optional legacy helper you had; safe to keep)
-if ((!urls || !urls.length) && String(chain).toLowerCase().includes('ape') && window.__fetchApechainImageURL){
-  try {
-    const u = await window.__fetchApechainImageURL(contract, tokenId);
-    if (u) urls = [u];
-  } catch {}
-}
-
-if (!urls || !urls.length) {
+// Guard: still nothing → bail
+if (!urls || !urls.length){
   alert('No image found for that token.');
   return;
 }
