@@ -7403,58 +7403,26 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
-// Extract the IPFS path (CID + optional path) from either ipfs://... or .../ipfs/...
-function __ipfsPath(u){
-  if (!u) return '';
-  const s = String(u);
-  if (s.startsWith('ipfs://')) return s.slice(7).replace(/^ipfs\//,'');
-  const m = s.match(/\/ipfs\/([^?#]+)/i);
-  return m ? m[1] : '';
-}
-
-// Expand a single ipfs URL or /ipfs/ URL into a list of HTTP gateway candidates
-function __expandIpfsCandidates(u){
-  const p = __ipfsPath(u);
-  if (!p) return u ? [u] : [];
-  const bases = [
-    'https://nftstorage.link/ipfs/',
-    'https://cloudflare-ipfs.com/ipfs/',
-    'https://w3s.link/ipfs/',
-    'https://ipfs.io/ipfs/',
-    'https://gateway.pinata.cloud/ipfs/'
-  ];
-  return bases.map(b => b + p);
-}
-
 /**
  * Replace your existing reservoirCandidates with this version.
  * It uses your /api/token-media route and returns a list of image URLs,
  * including multi-gateway IPFS fallbacks.
  */
-async function reservoirCandidates(contract, tokenId /*, chainSlug ignored here */){
-  const url = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
+// NEW: resolve image via our server (works for ETH + Ape) and proxy the bytes
+async function reservoirCandidates(contract, tokenId, chainSlug){
+  const params = new URLSearchParams({
+    contract,
+    id: String(tokenId),
+    // pass chain hint if we have it (helps the server choose ETH vs Ape)
+    chain: (chainSlug || '').toLowerCase().includes('ape') ? 'ape' : ''
+  });
   try {
-    const r = await fetch(url, { cache: 'no-store' });
-    const j = await r.json().catch(() => null) || {};
-
-    const out = new Set();
-
-    // primary image
-    for (const u of __expandIpfsCandidates(j && j.image)) out.add(u);
-
-    // tokenURI sometimes is itself an image; include it too
-    if (j && typeof j.tokenURI === 'string') {
-      const tu = j.tokenURI;
-      const looksLikeImg = /^data:image\//i.test(tu) ||
-                           /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(tu) ||
-                           tu.startsWith('ipfs://') || /\/ipfs\//i.test(tu);
-      if (looksLikeImg) {
-        for (const u of __expandIpfsCandidates(tu)) out.add(u);
-      }
-    }
-
-    // keep order stable; return as array
-    return Array.from(out);
+    const r = await fetch(`/api/token-media?${params.toString()}`, { cache: 'no-store' });
+    const j = await r.json().catch(()=>null);
+    if (!j || !j.image) return [];
+    // Always go through our proxy so the browser never hits the remote host directly
+    const prox = `/api/proxy-img?u=${encodeURIComponent(j.image)}`;
+    return [ prox ]; // single authoritative image URL
   } catch {
     return [];
   }
