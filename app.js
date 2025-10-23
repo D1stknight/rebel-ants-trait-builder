@@ -7403,35 +7403,58 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
-async function reservoirCandidates(contract, tokenId, chainSlug){
-  // Always hit our server route so ETH + ApeChain work uniformly
-  const chainHint = (String(chainSlug).toLowerCase().includes('ape') ? 'ape' : 'eth');
-  const q = `contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}&chain=${chainHint}`;
+// Extract the IPFS path (CID + optional path) from either ipfs://... or .../ipfs/...
+function __ipfsPath(u){
+  if (!u) return '';
+  const s = String(u);
+  if (s.startsWith('ipfs://')) return s.slice(7).replace(/^ipfs\//,'');
+  const m = s.match(/\/ipfs\/([^?#]+)/i);
+  return m ? m[1] : '';
+}
 
+// Expand a single ipfs URL or /ipfs/ URL into a list of HTTP gateway candidates
+function __expandIpfsCandidates(u){
+  const p = __ipfsPath(u);
+  if (!p) return u ? [u] : [];
+  const bases = [
+    'https://nftstorage.link/ipfs/',
+    'https://cloudflare-ipfs.com/ipfs/',
+    'https://w3s.link/ipfs/',
+    'https://ipfs.io/ipfs/',
+    'https://gateway.pinata.cloud/ipfs/'
+  ];
+  return bases.map(b => b + p);
+}
+
+/**
+ * Replace your existing reservoirCandidates with this version.
+ * It uses your /api/token-media route and returns a list of image URLs,
+ * including multi-gateway IPFS fallbacks.
+ */
+async function reservoirCandidates(contract, tokenId /*, chainSlug ignored here */){
+  const url = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
   try {
-    const r = await fetch(`/api/token-media?${q}`, { cache: 'no-store' });
-    const j = await r.json().catch(() => null);
-    if (!j || !j.image) return [];
+    const r = await fetch(url, { cache: 'no-store' });
+    const j = await r.json().catch(() => null) || {};
 
-    // Use the server proxy to convert to a data: URL (CORS/DNS‑proof)
-    try {
-      const pr = await fetch(`/api/proxy-img?u=${encodeURIComponent(j.image)}`, { cache: 'no-store' });
-      const pj = await pr.json().catch(() => null);
-      if (pj && pj.ok && pj.data) return [pj.data];  // return a data URL
-    } catch {}
+    const out = new Set();
 
-    // Fallback: return the raw URL(s)
-    const normalize = (u) => {
-      if (!u) return u;
-      if (u.startsWith('ipfs://')) {
-        let p = u.slice(7); if (p.startsWith('ipfs/')) p = p.slice(5);
-        return `https://nftstorage.link/ipfs/${p}`;
+    // primary image
+    for (const u of __expandIpfsCandidates(j && j.image)) out.add(u);
+
+    // tokenURI sometimes is itself an image; include it too
+    if (j && typeof j.tokenURI === 'string') {
+      const tu = j.tokenURI;
+      const looksLikeImg = /^data:image\//i.test(tu) ||
+                           /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(tu) ||
+                           tu.startsWith('ipfs://') || /\/ipfs\//i.test(tu);
+      if (looksLikeImg) {
+        for (const u of __expandIpfsCandidates(tu)) out.add(u);
       }
-      return u;
-    };
+    }
 
-    const urls = [ j.image, j.tokenURI ].filter(Boolean).map(normalize);
-    return urls;
+    // keep order stable; return as array
+    return Array.from(out);
   } catch {
     return [];
   }
