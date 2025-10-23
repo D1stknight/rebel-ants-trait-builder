@@ -7403,21 +7403,26 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
-// Always resolve via our server and get a DATA URL from /api/proxy-img
+// === CANDIDATES: resolve via server + proxy to DATA URL (ETH + Ape) ===
 async function reservoirCandidates(contract, tokenId, chainSlug){
   const params = new URLSearchParams({
     contract,
     id: String(tokenId),
+    // give the server a hint for Ape
     chain: (chainSlug || '').toLowerCase().includes('ape') ? 'ape' : ''
   });
+
   try {
+    // 1) Ask our server which image to use
     const meta = await (await fetch(`/api/token-media?${params.toString()}`, { cache:'no-store' })).json();
     if (!meta || !meta.image) return [];
 
+    // 2) Always fetch the bytes through OUR proxy so the browser never talks to IPFS directly
     const prox = await (await fetch(`/api/proxy-img?u=${encodeURIComponent(meta.image)}`, { cache:'no-store' })).json();
     if (!prox || !prox.ok || !prox.dataUrl) return [];
 
-    return [ prox.dataUrl ]; // DATA URL — no CORS issues, ready for Fabric
+    // 3) Return a DATA URL – works everywhere and is CORS‑free
+    return [ prox.dataUrl ];
   } catch {
     return [];
   }
