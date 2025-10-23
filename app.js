@@ -166,19 +166,37 @@ async function fileToDataURL(file){
 }
 
 async function fetchAsDataURL(url){
-  // Safety: block disallowed schemes *again* (defense-in-depth)
-  if (!isAllowedAssetURL(url)) throw new Error("Blocked URL scheme");
+  if (!url) throw new Error('no url');
+
+  // Allow data: URIs to pass straight through
+  const s = String(url);
+  if (s.startsWith('data:')) return s;
+
+  // Optional: keep your scheme guard if present
+  if (typeof isAllowedAssetURL === 'function' && !isAllowedAssetURL(s)) {
+    throw new Error('Blocked URL scheme');
+  }
+
+  // Use our server proxy for any cross‑origin URL to avoid CORS / 4xx / 5xx
+  const u = new URL(s, location.origin);
+  const sameOrigin = (u.origin === location.origin);
+  const target = sameOrigin ? u.toString()
+                            : `/api/proxy-img?u=${encodeURIComponent(u.toString())}`;
+
   const ac = new AbortController();
-  const t = setTimeout(()=>ac.abort(), 12000); // 12s timeout
-  try{
-    const r = await fetch(url, { mode:"cors", signal: ac.signal, cache:"no-store" });
-    if(!r.ok) throw new Error("Fetch failed");
-    const b = await r.blob();
-    return await new Promise((res, rej)=>{
+  const t  = setTimeout(() => ac.abort(), 15000); // 15s timeout
+
+  try {
+    const resp = await fetch(target, { cache: 'no-store', signal: ac.signal });
+    if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+    const blob = await resp.blob();
+
+    // Convert to data: URL so Fabric loads it without crossOrigin headaches
+    return await new Promise((resolve, reject) => {
       const fr = new FileReader();
-      fr.onload = ()=>res(fr.result);
-      fr.onerror = rej;
-      fr.readAsDataURL(b);
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
     });
   } finally {
     clearTimeout(t);
@@ -7393,15 +7411,42 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
   async function fetchAsDataURL(url){
-    const r = await fetch(url, { mode:'cors', cache:'no-store' });
-    if (!r.ok) throw new Error('fetch failed');
-    const b = await r.blob();
-    return await new Promise(res => {
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result);
-      fr.readAsDataURL(b);
-    });
+  if (!url) throw new Error('no url');
+
+  // Allow data: URIs to pass straight through
+  const s = String(url);
+  if (s.startsWith('data:')) return s;
+
+  // Optional: keep your scheme guard if present
+  if (typeof isAllowedAssetURL === 'function' && !isAllowedAssetURL(s)) {
+    throw new Error('Blocked URL scheme');
   }
+
+  // Use our server proxy for any cross‑origin URL to avoid CORS / 4xx / 5xx
+  const u = new URL(s, location.origin);
+  const sameOrigin = (u.origin === location.origin);
+  const target = sameOrigin ? u.toString()
+                            : `/api/proxy-img?u=${encodeURIComponent(u.toString())}`;
+
+  const ac = new AbortController();
+  const t  = setTimeout(() => ac.abort(), 15000); // 15s timeout
+
+  try {
+    const resp = await fetch(target, { cache: 'no-store', signal: ac.signal });
+    if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+    const blob = await resp.blob();
+
+    // Convert to data: URL so Fabric loads it without crossOrigin headaches
+    return await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 // ---------- replace the whole reservoirCandidates with this ----------
 function __ipfsPath(u){
