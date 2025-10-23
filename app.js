@@ -7404,40 +7404,34 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
 async function reservoirCandidates(contract, tokenId, chainSlug){
-  // Use our own server route so we avoid CORS and handle ETH + ApeChain uniformly
-  const qs = `contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`
-            + (chainSlug ? `&chain=${encodeURIComponent(
-                 String(chainSlug).toLowerCase().includes('ape') ? 'ape' : 'eth'
-               )}` : '');
+  // Always hit our server route so ETH + ApeChain work uniformly
+  const chainHint = (String(chainSlug).toLowerCase().includes('ape') ? 'ape' : 'eth');
+  const q = `contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}&chain=${chainHint}`;
 
   try {
-    const r = await fetch(`/api/token-media?${qs}`, { cache: 'no-store' });
+    const r = await fetch(`/api/token-media?${q}`, { cache: 'no-store' });
     const j = await r.json().catch(() => null);
-    const out = [];
+    if (!j || !j.image) return [];
 
-    const asHttp = (u) => {
+    // Use the server proxy to convert to a data: URL (CORS/DNS‑proof)
+    try {
+      const pr = await fetch(`/api/proxy-img?u=${encodeURIComponent(j.image)}`, { cache: 'no-store' });
+      const pj = await pr.json().catch(() => null);
+      if (pj && pj.ok && pj.data) return [pj.data];  // return a data URL
+    } catch {}
+
+    // Fallback: return the raw URL(s)
+    const normalize = (u) => {
       if (!u) return u;
       if (u.startsWith('ipfs://')) {
-        let p = u.slice(7);
-        if (p.startsWith('ipfs/')) p = p.slice(5);
+        let p = u.slice(7); if (p.startsWith('ipfs/')) p = p.slice(5);
         return `https://nftstorage.link/ipfs/${p}`;
-        // (we convert to http to improve load reliability)
       }
       return u;
     };
 
-    if (j && j.image) out.push(asHttp(j.image));
-
-    // If tokenURI itself looks image-like, try it as a secondary option
-    if (j && j.tokenURI && (
-      j.tokenURI.startsWith('ipfs://') ||
-      /^data:image\//i.test(j.tokenURI) ||
-      /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(j.tokenURI)
-    )) {
-      out.push(asHttp(j.tokenURI));
-    }
-
-    return out.filter(Boolean);
+    const urls = [ j.image, j.tokenURI ].filter(Boolean).map(normalize);
+    return urls;
   } catch {
     return [];
   }
@@ -7606,20 +7600,17 @@ if (!urls || !urls.length) {
     // 2) CORS‑safe path first (best for export)
     try { c.discardActiveObject(); } catch(_){}
     killOldBase(c);
-    for (const u of urls){
-      try{
-        const data = await fetchAsDataURL(u);
-        const img  = await loadViaDataURL(data);
-        if (img){
-          fitAndAddAsBase(img);
-          // ...after fitAndAddAsBase(...)
-annotateBase({ contract, chain, name: name || '' });
-// no automatic label here — user controls it from “Token ID Styles”
-return;
-
-        }
-      }catch(_){}
+for (const u of urls){
+  try{
+    const data = u.startsWith('data:') ? u : await fetchAsDataURL(u);
+    const img  = await loadViaDataURL(data);
+    if (img){
+      fitAndAddAsBase(img);
+      annotateBase({ contract, chain, name: name || '' });
+      return;
     }
+  }catch(_){}
+}
 
     // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
 const img = await loadViaNoCors(urls[0]);
