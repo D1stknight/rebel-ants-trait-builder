@@ -7403,7 +7403,7 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
-// Always resolve via our server and proxy through /api/proxy-img
+// Always resolve via our server and get a DATA URL from /api/proxy-img
 async function reservoirCandidates(contract, tokenId, chainSlug){
   const params = new URLSearchParams({
     contract,
@@ -7411,11 +7411,13 @@ async function reservoirCandidates(contract, tokenId, chainSlug){
     chain: (chainSlug || '').toLowerCase().includes('ape') ? 'ape' : ''
   });
   try {
-    const r = await fetch(`/api/token-media?${params.toString()}`, { cache: 'no-store' });
-    const j = await r.json().catch(()=>null);
-    if (!j || !j.image) return [];
-    // Hand the browser only our own domain; server handles gateway fallbacks
-    return [ `/api/proxy-img?u=${encodeURIComponent(j.image)}` ];
+    const meta = await (await fetch(`/api/token-media?${params.toString()}`, { cache:'no-store' })).json();
+    if (!meta || !meta.image) return [];
+
+    const prox = await (await fetch(`/api/proxy-img?u=${encodeURIComponent(meta.image)}`, { cache:'no-store' })).json();
+    if (!prox || !prox.ok || !prox.dataUrl) return [];
+
+    return [ prox.dataUrl ]; // DATA URL — no CORS issues, ready for Fabric
   } catch {
     return [];
   }
@@ -7586,7 +7588,7 @@ if (!urls || !urls.length) {
     killOldBase(c);
 for (const u of urls){
   try{
-    const data = u.startsWith('data:') ? u : await fetchAsDataURL(u);
+    const data = (typeof u === 'string' && u.startsWith('data:')) ? u : await fetchAsDataURL(u);
     const img  = await loadViaDataURL(data);
     if (img){
       fitAndAddAsBase(img);
