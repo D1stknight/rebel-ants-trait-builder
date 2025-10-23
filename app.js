@@ -53,61 +53,73 @@
 })(); // end CONFIGG
 
 /* ======================================================================
-   Reservoir hot‑swap (server-backed)
-   Intercepts calls to https://api.reservoir.tools/tokens/v7 and answers by
-   calling our /api/token-media for each token (no browser RPC, no CORS issues).
+   Reservoir hot‑swap → proxy to our server route (/api/token-media)
+   - Intercepts fetches to api.reservoir.tools/tokens/v7
+   - For each addr:id, calls /api/token-media (same origin, no CORS)
+   - Returns the same shape { tokens:[ { token:{ image,imageSmall,imageLarge,... } } ] }
    ====================================================================== */
 (() => {
-  const ORIG = window.fetch.bind(window);
-  const isRez = (u) => typeof u === 'string' && /\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(u);
+  const ORIG_FETCH = window.fetch.bind(window);
+
+  function isResTokens(u) {
+    if (!u) return false;
+    try { return /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(String(u)); }
+    catch { return false; }
+  }
 
   function parseTokensParam(val) {
     const out = [];
     if (!val) return out;
-    for (const part of String(val).split(',')) {
-      const [contract, id] = part.split(':');
-      if (/^0x[0-9a-fA-F]{40}$/.test(contract || '') && /^\d+$/.test(id || '')) {
-        out.push({ contract, id: String(id) });
-      }
-    }
+    String(val).split(',').forEach(p => {
+      const [addr, id] = p.split(':');
+      if (addr && id != null) out.push({ contract: addr.trim(), tokenId: String(id).trim() });
+    });
     return out;
   }
 
+  // Build the exact JSON shape the app expects back from Reservoir
+  function wrapToken(contract, tokenId, image) {
+    const img = image || '';
+    return {
+      token: {
+        contract,
+        tokenId: String(tokenId),
+        name: `#${tokenId}`,
+        imageSmall: img,
+        image: img,
+        imageLarge: img
+      }
+    };
+  }
+
   window.fetch = async function(input, init) {
-    const url = (typeof input === 'string') ? input : (input && input.url) || '';
-    if (!isRez(url)) return ORIG(input, init);
-
     try {
-      const u = new URL(url, location.origin);
-      const wanted = parseTokensParam(u.searchParams.get('tokens'));
-      const results = [];
-
-      for (const { contract, id } of wanted) {
-        let image = '';
-        try {
-          const r = await fetch(`/api/token-media?contract=${contract}&id=${encodeURIComponent(id)}`, { cache: 'no-store' });
-          const j = await r.json().catch(() => null);
-          image = (j && j.image) ? j.image : '';
-        } catch {}
-        results.push({
-          token: {
-            contract,
-            tokenId: String(id),
-            name: `#${id}`,
-            imageSmall: image,
-            image: image,
-            imageLarge: image
-          }
-        });
+      const url = (typeof input === 'string') ? input : (input && input.url) || '';
+      if (!isResTokens(url)) {
+        return ORIG_FETCH(input, init);
       }
 
-      return new Response(JSON.stringify({ tokens: results }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      });
-    } catch (e) {
-      // Fallback to original if anything odd happens
-      return ORIG(input, init);
+      const u = new URL(url, location.origin);
+      const wanted = parseTokensParam(u.searchParams.get('tokens')); // "0x..:123,0x..:7"
+
+      const results = await Promise.all(wanted.map(async ({ contract, tokenId }) => {
+        try {
+          const r = await fetch(
+            `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`,
+            { cache: 'no-store' }
+          );
+          const j = await r.json().catch(() => null);
+          return wrapToken(contract, tokenId, j && j.image || '');
+        } catch {
+          return wrapToken(contract, tokenId, '');
+        }
+      }));
+
+      const body = JSON.stringify({ tokens: results });
+      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    } catch {
+      // If anything fails here, fall back to the original fetch (may 502)
+      return ORIG_FETCH(input, init);
     }
   };
 })();
