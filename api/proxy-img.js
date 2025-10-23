@@ -1,39 +1,44 @@
 // /api/proxy-img.js
-// Fetch an image server-side and return a data: URL (base64) so the browser
-// never has to reach the remote host directly (solves CORS/DNS hiccups).
+// Fetch an image on the server and stream it back from our domain (same-origin).
+// Only allows common NFT gateways to avoid abuse.
+
+const ALLOW = new Set([
+  'nftstorage.link',
+  'ipfs.io',
+  'cloudflare-ipfs.com',
+  'gateway.pinata.cloud',
+  'assets.bueno.art',
+  'arweave.net',
+  'ipfs.filebase.io',
+  'infura-ipfs.io'
+]);
 
 export default async function handler(req, res) {
   try {
-    const url = String(req.query.u || '').trim();
-    if (!/^https?:\/\//i.test(url)) {
-      res.statusCode = 400;
-      res.setHeader('content-type', 'application/json');
-      return res.end(JSON.stringify({ ok: false, error: 'bad url' }));
+    const u = String(req.query.u || '').trim();
+    if (!u) return res.status(400).send('missing u');
+
+    let url;
+    try { url = new URL(u); } catch { return res.status(400).send('bad url'); }
+
+    if (!ALLOW.has(url.hostname)) {
+      return res.status(400).send('host not allowed');
     }
 
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 10000);
-    const r = await fetch(url, { signal: controller.signal, headers: { 'accept': '*/*' } }).catch(() => null);
-    clearTimeout(t);
+    const r = await fetch(url.toString(), {
+      headers: { 'user-agent': 'RebelAntsBuilder/1.0 (+https://builder.rebelants.io)' }
+    });
+    if (!r.ok) return res.status(502).send('upstream ' + r.status);
 
-    if (!r || !r.ok) {
-      res.statusCode = 502;
-      res.setHeader('content-type', 'application/json');
-      return res.end(JSON.stringify({ ok: false, error: 'fetch failed', status: r?.status || 0 }));
-    }
+    const type = r.headers.get('content-type') || '';
+    if (!type.startsWith('image/')) return res.status(415).send('not an image');
 
-    const ct = r.headers.get('content-type') || 'application/octet-stream';
-    const ab = await r.arrayBuffer();
-    const b64 = Buffer.from(ab).toString('base64');
-    const dataUrl = `data:${ct};base64,${b64}`;
-
-    res.statusCode = 200;
-    res.setHeader('cache-control', 'no-store');
-    res.setHeader('content-type', 'application/json');
-    return res.end(JSON.stringify({ ok: true, data: dataUrl }));
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.setHeader('content-type', type);
+    res.setHeader('cache-control', 'public, max-age=60');
+    res.setHeader('access-control-allow-origin', '*');
+    res.status(200).end(buf);
   } catch (e) {
-    res.statusCode = 200;
-    res.setHeader('content-type', 'application/json');
-    return res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }));
+    res.status(500).send('proxy error');
   }
 }
