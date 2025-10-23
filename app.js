@@ -7403,31 +7403,42 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
-  async function reservoirCandidates(contract, tokenId, chainSlug){
-  let rsSlug = (chainSlug||'').toLowerCase();
-  // standardize our internal slugs
-  if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
-  if (rsSlug === 'base') rsSlug = 'base';
-  if (rsSlug === 'ape' || rsSlug === 'apechain' || rsSlug === 'apecoinchain') rsSlug = 'apechain';
+ async function reservoirCandidates(contract, tokenId, chainSlug /* unused */) {
+  // Single authoritative source now: our server route
+  const url = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    const j = await r.json();
+    const out = [];
 
-  // choose correct host per chain (per Reservoir docs)
-  // https://nft.reservoir.tools/reference/supported-chains
-  const HOST = (
-    rsSlug === 'apechain'  ? 'https://api-apechain.reservoir.tools' :
-    rsSlug === 'base'      ? 'https://api-base.reservoir.tools'     :
-                             'https://api.reservoir.tools'           // ethereum default
-  );
+    const ipfsToHttp = (u) => {
+      if (!u) return u;
+      if (u.startsWith('ipfs://')) {
+        let p = u.slice(7);
+        if (p.startsWith('ipfs/')) p = p.slice(5);
+        return `https://nftstorage.link/ipfs/${p}`;
+      }
+      return u;
+    };
 
-  const url = `${HOST}/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&limit=1`;
-  const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
-  if (!r.ok) return [];
-  const j = await r.json();
-  const t = j?.tokens?.[0]?.token || {};
-  const m = t.media || {};
-  return [
-    m?.original?.url || m?.original?.mediaUrl,
-    t.imageLarge, t.image, t.imageUrl, t.imageSmall
-  ].filter(Boolean).map(normalizeUrl);
+    if (j && j.image) out.push(j.image);
+
+    // Optional: also try tokenURI if it looks like a direct image
+    if (
+      j && j.tokenURI &&
+      (
+        j.tokenURI.startsWith('ipfs://') ||
+        /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(j.tokenURI) ||
+        j.tokenURI.startsWith('data:image/')
+      )
+    ) {
+      out.push(ipfsToHttp(j.tokenURI));
+    }
+
+    return out.filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 function killOldBase(c){
