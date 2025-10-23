@@ -7318,7 +7318,7 @@ async function loadTokenFromCollection(tokenId, col){
   const x = (v || '').toString().toLowerCase().trim();
   if (x === '0x1'    || x === '1'    || x === 'eth' || x.includes('ether')) return 'ethereum';
   if (x === '0x2105' || x.includes('base'))                                 return 'base';
-  if (x === '0x8173' || x.includes('ape'))                                  return 'apecoin';
+  if (x === '0x8173' || x.includes('ape'))                                  return 'apechain';
   return x || 'ethereum';
 }
 
@@ -7403,42 +7403,54 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
- async function reservoirCandidates(contract, tokenId, chainSlug /* unused by server if absent */) {
-  const hint = (chainSlug || '').toLowerCase();
-  const chain =
-    hint.includes('ape')  ? 'ape'  :
-    hint.includes('base') ? 'base' :
-    (hint.includes('eth') || hint.includes('ether')) ? 'eth' : '';
+async function reservoirCandidates(contract, tokenId, chainSlug){
+  // Convert the UI chain into a tiny hint for the server: 'eth' | 'ape'
+  const hint = (() => {
+    const s = (chainSlug || '').toLowerCase();
+    if (s.includes('ape')) return 'ape';
+    if (s.includes('eth') || s.includes('ether')) return 'eth';
+    return '';
+  })();
+
+  // Expand ipfs:// or /ipfs/<cid> links to multiple gateways
+  function expandGateways(u){
+    if (!u) return [];
+    const out = [u];
+
+    // ipfs://CID/…  → add 3 gateways
+    if (u.startsWith('ipfs://')){
+      const p = u.slice(7).replace(/^ipfs\//,'');
+      out.push(
+        `https://ipfs.io/ipfs/${p}`,
+        `https://cloudflare-ipfs.com/ipfs/${p}`,
+        `https://nftstorage.link/ipfs/${p}`
+      );
+      return [...new Set(out)];
+    }
+
+    // https://host/ipfs/CID/…  → mirror across other gateways
+    const m = u.match(/^https?:\/\/[^/]+\/ipfs\/([^?#]+)(.*)$/i);
+    if (m){
+      const p = m[1], rest = m[2] || '';
+      out.push(
+        `https://ipfs.io/ipfs/${p}${rest}`,
+        `https://cloudflare-ipfs.com/ipfs/${p}${rest}`,
+        `https://nftstorage.link/ipfs/${p}${rest}`
+      );
+    }
+    return [...new Set(out)];
+  }
 
   const url =
-    `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}` +
-    (chain ? `&chain=${chain}` : '');
+    `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`
+    + (hint ? `&chain=${hint}` : '');
 
   try {
     const r = await fetch(url, { cache: 'no-store' });
     const j = await r.json();
-    const out = [];
-
-    const ipfsToHttp = (u) => {
-      if (!u) return u;
-      if (u.startsWith('ipfs://')) {
-        let p = u.slice(7);
-        if (p.startsWith('ipfs/')) p = p.slice(5);
-        return `https://nftstorage.link/ipfs/${p}`;
-      }
-      return u;
-    };
-
-    if (j && j.image) out.push(j.image);
-    if (
-      j && j.tokenURI &&
-      ( j.tokenURI.startsWith('ipfs://') ||
-        /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(j.tokenURI) ||
-        j.tokenURI.startsWith('data:image/') )
-    ) {
-      out.push(ipfsToHttp(j.tokenURI));
-    }
-
+    let out = [];
+    if (j?.image)    out = out.concat(expandGateways(j.image));
+    if (j?.tokenURI) out = out.concat(expandGateways(j.tokenURI));
     return out.filter(Boolean);
   } catch {
     return [];
