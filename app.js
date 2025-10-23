@@ -7403,26 +7403,19 @@ async function loadTokenFromCollection(tokenId, col){
     });
   }
 
-/**
- * Replace your existing reservoirCandidates with this version.
- * It uses your /api/token-media route and returns a list of image URLs,
- * including multi-gateway IPFS fallbacks.
- */
-// NEW: resolve image via our server (works for ETH + Ape) and proxy the bytes
+// Always resolve via our server and proxy through /api/proxy-img
 async function reservoirCandidates(contract, tokenId, chainSlug){
   const params = new URLSearchParams({
     contract,
     id: String(tokenId),
-    // pass chain hint if we have it (helps the server choose ETH vs Ape)
     chain: (chainSlug || '').toLowerCase().includes('ape') ? 'ape' : ''
   });
   try {
     const r = await fetch(`/api/token-media?${params.toString()}`, { cache: 'no-store' });
     const j = await r.json().catch(()=>null);
     if (!j || !j.image) return [];
-    // Always go through our proxy so the browser never hits the remote host directly
-    const prox = `/api/proxy-img?u=${encodeURIComponent(j.image)}`;
-    return [ prox ]; // single authoritative image URL
+    // Hand the browser only our own domain; server handles gateway fallbacks
+    return [ `/api/proxy-img?u=${encodeURIComponent(j.image)}` ];
   } catch {
     return [];
   }
