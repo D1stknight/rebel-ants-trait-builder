@@ -7404,59 +7404,45 @@ async function loadTokenFromCollection(tokenId, col){
   }
 
 async function reservoirCandidates(contract, tokenId, chainSlug){
-  // Convert the UI chain into a tiny hint for the server: 'eth' | 'ape'
-  const hint = (() => {
-    const s = (chainSlug || '').toLowerCase();
-    if (s.includes('ape')) return 'ape';
-    if (s.includes('eth') || s.includes('ether')) return 'eth';
-    return '';
-  })();
-
-  // Expand ipfs:// or /ipfs/<cid> links to multiple gateways
-  function expandGateways(u){
-    if (!u) return [];
-    const out = [u];
-
-    // ipfs://CID/…  → add 3 gateways
-    if (u.startsWith('ipfs://')){
-      const p = u.slice(7).replace(/^ipfs\//,'');
-      out.push(
-        `https://ipfs.io/ipfs/${p}`,
-        `https://cloudflare-ipfs.com/ipfs/${p}`,
-        `https://nftstorage.link/ipfs/${p}`
-      );
-      return [...new Set(out)];
-    }
-
-    // https://host/ipfs/CID/…  → mirror across other gateways
-    const m = u.match(/^https?:\/\/[^/]+\/ipfs\/([^?#]+)(.*)$/i);
-    if (m){
-      const p = m[1], rest = m[2] || '';
-      out.push(
-        `https://ipfs.io/ipfs/${p}${rest}`,
-        `https://cloudflare-ipfs.com/ipfs/${p}${rest}`,
-        `https://nftstorage.link/ipfs/${p}${rest}`
-      );
-    }
-    return [...new Set(out)];
-  }
-
-  const url =
-    `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`
-    + (hint ? `&chain=${hint}` : '');
+  // Use our own server route so we avoid CORS and handle ETH + ApeChain uniformly
+  const qs = `contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`
+            + (chainSlug ? `&chain=${encodeURIComponent(
+                 String(chainSlug).toLowerCase().includes('ape') ? 'ape' : 'eth'
+               )}` : '');
 
   try {
-    const r = await fetch(url, { cache: 'no-store' });
-    const j = await r.json();
-    let out = [];
-    if (j?.image)    out = out.concat(expandGateways(j.image));
-    if (j?.tokenURI) out = out.concat(expandGateways(j.tokenURI));
+    const r = await fetch(`/api/token-media?${qs}`, { cache: 'no-store' });
+    const j = await r.json().catch(() => null);
+    const out = [];
+
+    const asHttp = (u) => {
+      if (!u) return u;
+      if (u.startsWith('ipfs://')) {
+        let p = u.slice(7);
+        if (p.startsWith('ipfs/')) p = p.slice(5);
+        return `https://nftstorage.link/ipfs/${p}`;
+        // (we convert to http to improve load reliability)
+      }
+      return u;
+    };
+
+    if (j && j.image) out.push(asHttp(j.image));
+
+    // If tokenURI itself looks image-like, try it as a secondary option
+    if (j && j.tokenURI && (
+      j.tokenURI.startsWith('ipfs://') ||
+      /^data:image\//i.test(j.tokenURI) ||
+      /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(j.tokenURI)
+    )) {
+      out.push(asHttp(j.tokenURI));
+    }
+
     return out.filter(Boolean);
   } catch {
     return [];
   }
 }
-
+   
 function killOldBase(c){
   const objs = (c.getObjects() || []).slice();
   const cw = c.getWidth(), ch = c.getHeight();
@@ -7590,18 +7576,29 @@ return true;
     const c = getCanvas(), f = window.fabric;
     if (!c || !f) { alert('Canvas not ready'); return; }
 
-    // 1) Query Reservoir with the correct chain
-    let urls = await reservoirCandidates(contract, tokenId, chain);
+   // 1) Ask our server route for the image/tokenURI (works for ETH + ApeChain)
+let urls = await reservoirCandidates(contract, tokenId, chain);
 
-// ApeChain often needs tokenURI → metadata fallback
-if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
-  try{
-    const u = await window.__fetchApechainImageURL(contract, tokenId);
-    if (u) urls = [u];
-  }catch(_){}
+// If still nothing, try the server once more forcing a chain hint
+if (!urls || !urls.length) {
+  try {
+    const forced = await fetch(
+      `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}&chain=${(String(chain).toLowerCase().includes('ape') ? 'ape' : 'eth')}`,
+      { cache: 'no-store' }
+    ).then(r => r.json());
+    if (forced?.image) urls = [forced.image];
+  } catch {}
 }
 
-if (!urls || !urls.length){
+// (optional legacy helper you had; safe to keep)
+if ((!urls || !urls.length) && String(chain).toLowerCase().includes('ape') && window.__fetchApechainImageURL){
+  try {
+    const u = await window.__fetchApechainImageURL(contract, tokenId);
+    if (u) urls = [u];
+  } catch {}
+}
+
+if (!urls || !urls.length) {
   alert('No image found for that token.');
   return;
 }
