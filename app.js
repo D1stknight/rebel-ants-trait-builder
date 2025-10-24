@@ -19,30 +19,31 @@
     window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
   }
 
-  // overlay / ring image source
-  const qsWM = qs.get('wm');
-  let candidate = isAllowedAssetURL(qsWM) ? qsWM : "/assets/overlay.png?v=wm10";
-  const FALLBACK = "/overlay.png?v=wm10";
+ // overlay / ring image source
+const qsWM = qs.get('wm');
+const FALLBACK = "/assets/overlay.png?v=wm10";  // <- use the path that actually exists
+const candidate = isAllowedAssetURL(qsWM) ? qsWM : FALLBACK;
 
-  function validateAndExport(src){
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      window.WM_SRC = src;
-      window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src, ok:true } }));
-    };
-    img.onerror = () => {
-      if (src !== FALLBACK) {
-        validateAndExport(FALLBACK);
-      } else {
-        window.WM_SRC = FALLBACK;
-        window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src: FALLBACK, ok:false } }));
-      }
-    };
-    img.src = src + (src.includes("?") ? "&" : "?") + "t=" + Date.now();
-  }
+function validateAndExport(src){
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    window.WM_SRC = src;
+    window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail: { src, ok: true } }));
+  };
+  img.onerror = () => {
+    if (src !== FALLBACK) {
+      validateAndExport(FALLBACK);
+    } else {
+      window.WM_SRC = FALLBACK;
+      window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail: { src: FALLBACK, ok: false } }));
+    }
+  };
+  img.src = src;
+}
 
-  validateAndExport(candidate);
+// kick it off
+validateAndExport(candidate);
 
   // Export environment snapshot
   window.RA_ENV = Object.freeze({
