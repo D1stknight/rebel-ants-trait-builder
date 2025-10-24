@@ -145,10 +145,10 @@ async function call1155(rpcs, addr, tokenId) {
 async function resolveImage(metaURL) {
   if (!metaURL) return '';
 
-  // inlined metadata
+  // Inline data:application/json
   const inlined = parseDataJSON(metaURL);
   if (inlined) {
-    const i = inlined.image || inlined.image_url || inlined.image_original_url || inlined.image_data || '';
+    let i = inlined.image || inlined.image_url || inlined.image_original_url || inlined.image_data || '';
     if (!i) return '';
     if (typeof i === 'string' && i.startsWith('<svg')) {
       return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(i);
@@ -156,9 +156,32 @@ async function resolveImage(metaURL) {
     return i.startsWith('data:') ? i : ipfsToHttp(i);
   }
 
-  // http/ipfs metadata
-  const url  = ipfsToHttp(metaURL);
-  const meta = await fetchJSON(url, { cache: 'no-store' }, 8000) || {};
+  // Helper to extract ipfs path
+  const ipfsPath = (() => {
+    const s = String(metaURL);
+    if (s.startsWith('ipfs://')) return s.slice(7).replace(/^ipfs\//,'');
+    const m = s.match(/\/ipfs\/([^?#]+)/i);
+    return m ? m[1] : '';
+  })();
+
+  // Try multiple gateways for metadata JSON
+  const metaCandidates = ipfsPath
+    ? [
+        `https://nftstorage.link/ipfs/${ipfsPath}`,
+        `https://cloudflare-ipfs.com/ipfs/${ipfsPath}`,
+        `https://w3s.link/ipfs/${ipfsPath}`,
+        `https://ipfs.io/ipfs/${ipfsPath}`,
+        `https://gateway.pinata.cloud/ipfs/${ipfsPath}`
+      ]
+    : [ metaURL ];
+
+  let meta = null;
+  for (const u of metaCandidates) {
+    meta = await fetchJSON(u, { cache: 'no-store' }, 8000);
+    if (meta) break;
+  }
+  if (!meta) return '';
+
   let i = meta.image || meta.image_url || meta.image_original_url || meta.image_data || '';
   if (!i) return '';
   if (typeof i === 'string' && i.startsWith('<svg')) {
