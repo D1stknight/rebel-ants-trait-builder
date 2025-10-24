@@ -311,15 +311,23 @@ function raSafeClear(keepBg=true){
 // ——— Security helpers ———
 function isAllowedAssetURL(u){
   if (!u) return false;
-  // Hard-block dangerous schemes up front
-  if (/^\s*(javascript:|data:|blob:)/i.test(String(u))) return false;
-  try{
-    const url = new URL(u, location.origin);
-    // Allow: same-origin relative URLs, http(s)
-    return url.protocol === 'http:' || url.protocol === 'https:' || !/^[a-z][a-z0-9+\-.]*:/i.test(u);
-  }catch(_){
-    // If URL() fails, treat as a relative path (allowed) unless it *looks* like a scheme
-    return !/^[a-z][a-z0-9+\-.]*:/i.test(String(u));
+
+  const s = String(u || "");
+
+  // 1) Still block truly dangerous schemes
+  if (/^\s*(javascript:|file:)/i.test(s)) return false;
+
+  // 2) Explicitly allow our safe/expected cases
+  if (/^data:image\//i.test(s)) return true;  // allow data:image/... base64 (our proxy prefetch)
+  if (s.startsWith("/api/proxy-img?") || s.startsWith("/api/proxy-img2?")) return true; // allow our proxy endpoints
+
+  // 3) Allow http(s) and same-origin relative paths
+  try {
+    const url = new URL(s, location.origin);
+    return url.protocol === "http:" || url.protocol === "https:" || !/^[a-z][a-z0-9+\-.]*:/i.test(s);
+  } catch (_){
+    // Treat as relative unless it *looks* like a scheme
+    return !/^[a-z][a-z0-9+\-.]*:/i.test(s);
   }
 }
 
