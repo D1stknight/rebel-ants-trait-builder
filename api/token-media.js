@@ -54,10 +54,21 @@ async function fetchJSON(url, opt = {}, ms = 8000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const r = await fetch(url, { ...opt, signal: ctrl.signal });
-    if (!r.ok) return null;
-    return await r.json().catch(() => null);
-  } finally { clearTimeout(t); }
+    let r;
+    try {
+      r = await fetch(url, { ...opt, signal: ctrl.signal });
+    } catch (_) {
+      return null;                 // ← catch network/timeout errors and return null
+    }
+    if (!r || !r.ok) return null;  // non-200 → null
+    try {
+      return await r.json();
+    } catch {
+      return null;                 // bad JSON → null
+    }
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 async function rpcCall(rpc, method, params, ms = 8000) {
