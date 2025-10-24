@@ -19,30 +19,31 @@
     window.__APECHAIN_RPC = "https://rpc.apecoinchain.org";
   }
 
-  // overlay / ring image source
-  const qsWM = qs.get('wm');
-  let candidate = isAllowedAssetURL(qsWM) ? qsWM : "/assets/overlay.png?v=wm10";
-  const FALLBACK = "/overlay.png?v=wm10";
+ // overlay / ring image source
+const qsWM = qs.get('wm');
+const FALLBACK = "/assets/overlay.png?v=wm10";  // <- use the path that actually exists
+const candidate = isAllowedAssetURL(qsWM) ? qsWM : FALLBACK;
 
-  function validateAndExport(src){
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      window.WM_SRC = src;
-      window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src, ok:true } }));
-    };
-    img.onerror = () => {
-      if (src !== FALLBACK) {
-        validateAndExport(FALLBACK);
-      } else {
-        window.WM_SRC = FALLBACK;
-        window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail:{ src: FALLBACK, ok:false } }));
-      }
-    };
-    img.src = src + (src.includes("?") ? "&" : "?") + "t=" + Date.now();
-  }
+function validateAndExport(src){
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    window.WM_SRC = src;
+    window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail: { src, ok: true } }));
+  };
+  img.onerror = () => {
+    if (src !== FALLBACK) {
+      validateAndExport(FALLBACK);
+    } else {
+      window.WM_SRC = FALLBACK;
+      window.dispatchEvent(new CustomEvent('ra-wm-src-ready', { detail: { src: FALLBACK, ok: false } }));
+    }
+  };
+  img.src = src;
+}
 
-  validateAndExport(candidate);
+// kick it off
+validateAndExport(candidate);
 
   // Export environment snapshot
   window.RA_ENV = Object.freeze({
@@ -51,6 +52,78 @@
     apechainRPC: window.__APECHAIN_RPC
   });
 })(); // end CONFIGG
+
+/* ======================================================================
+   Reservoir hot‑swap → proxy to our server route (/api/token-media)
+   - Intercepts fetches to api.reservoir.tools/tokens/v7
+   - For each addr:id, calls /api/token-media (same origin, no CORS)
+   - Returns the same shape { tokens:[ { token:{ image,imageSmall,imageLarge,... } } ] }
+   ====================================================================== */
+(() => {
+  const ORIG_FETCH = window.fetch.bind(window);
+
+  function isResTokens(u) {
+    if (!u) return false;
+    try { return /:\/\/[^/]*reservoir\.tools\/tokens\/v7/i.test(String(u)); }
+    catch { return false; }
+  }
+
+  function parseTokensParam(val) {
+    const out = [];
+    if (!val) return out;
+    String(val).split(',').forEach(p => {
+      const [addr, id] = p.split(':');
+      if (addr && id != null) out.push({ contract: addr.trim(), tokenId: String(id).trim() });
+    });
+    return out;
+  }
+
+  // Build the exact JSON shape the app expects back from Reservoir
+  function wrapToken(contract, tokenId, image) {
+    const img = image || '';
+    return {
+      token: {
+        contract,
+        tokenId: String(tokenId),
+        name: `#${tokenId}`,
+        imageSmall: img,
+        image: img,
+        imageLarge: img
+      }
+    };
+  }
+
+  window.fetch = async function(input, init) {
+    try {
+      const url = (typeof input === 'string') ? input : (input && input.url) || '';
+      if (!isResTokens(url)) {
+        return ORIG_FETCH(input, init);
+      }
+
+      const u = new URL(url, location.origin);
+      const wanted = parseTokensParam(u.searchParams.get('tokens')); // "0x..:123,0x..:7"
+
+      const results = await Promise.all(wanted.map(async ({ contract, tokenId }) => {
+        try {
+          const r = await fetch(
+            `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`,
+            { cache: 'no-store' }
+          );
+          const j = await r.json().catch(() => null);
+          return wrapToken(contract, tokenId, j && j.image || '');
+        } catch {
+          return wrapToken(contract, tokenId, '');
+        }
+      }));
+
+      const body = JSON.stringify({ tokens: results });
+      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    } catch {
+      // If anything fails here, fall back to the original fetch (may 502)
+      return ORIG_FETCH(input, init);
+    }
+  };
+})();
 
   // ===============================
   //  FABRIC DEFAULTS
@@ -94,23 +167,14 @@ async function fileToDataURL(file){
 }
 
 async function fetchAsDataURL(url){
-  // Safety: block disallowed schemes *again* (defense-in-depth)
-  if (!isAllowedAssetURL(url)) throw new Error("Blocked URL scheme");
-  const ac = new AbortController();
-  const t = setTimeout(()=>ac.abort(), 12000); // 12s timeout
-  try{
-    const r = await fetch(url, { mode:"cors", signal: ac.signal, cache:"no-store" });
-    if(!r.ok) throw new Error("Fetch failed");
-    const b = await r.blob();
-    return await new Promise((res, rej)=>{
-      const fr = new FileReader();
-      fr.onload = ()=>res(fr.result);
-      fr.onerror = rej;
-      fr.readAsDataURL(b);
-    });
-  } finally {
-    clearTimeout(t);
-  }
+  const r = await fetch(url, { mode: 'cors', cache: 'no-store' });
+  if (!r.ok) throw new Error('fetch failed');
+  const b = await r.blob();
+  return await new Promise(res => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.readAsDataURL(b);
+  });
 }
 
 function normalize(u){
@@ -221,15 +285,23 @@ function raSafeClear(keepBg=true){
 // ——— Security helpers ———
 function isAllowedAssetURL(u){
   if (!u) return false;
-  // Hard-block dangerous schemes up front
-  if (/^\s*(javascript:|data:|blob:)/i.test(String(u))) return false;
-  try{
-    const url = new URL(u, location.origin);
-    // Allow: same-origin relative URLs, http(s)
-    return url.protocol === 'http:' || url.protocol === 'https:' || !/^[a-z][a-z0-9+\-.]*:/i.test(u);
-  }catch(_){
-    // If URL() fails, treat as a relative path (allowed) unless it *looks* like a scheme
-    return !/^[a-z][a-z0-9+\-.]*:/i.test(String(u));
+
+  const s = String(u || "");
+
+  // 1) Still block truly dangerous schemes
+  if (/^\s*(javascript:|file:)/i.test(s)) return false;
+
+  // 2) Explicitly allow our safe/expected cases
+  if (/^data:image\//i.test(s)) return true;  // allow data:image/... base64 (our proxy prefetch)
+  if (s.startsWith("/api/proxy-img?") || s.startsWith("/api/proxy-img2?")) return true; // allow our proxy endpoints
+
+  // 3) Allow http(s) and same-origin relative paths
+  try {
+    const url = new URL(s, location.origin);
+    return url.protocol === "http:" || url.protocol === "https:" || !/^[a-z][a-z0-9+\-.]*:/i.test(s);
+  } catch (_){
+    // Treat as relative unless it *looks* like a scheme
+    return !/^[a-z][a-z0-9+\-.]*:/i.test(s);
   }
 }
 
@@ -7246,7 +7318,7 @@ async function loadTokenFromCollection(tokenId, col){
   const x = (v || '').toString().toLowerCase().trim();
   if (x === '0x1'    || x === '1'    || x === 'eth' || x.includes('ether')) return 'ethereum';
   if (x === '0x2105' || x.includes('base'))                                 return 'base';
-  if (x === '0x8173' || x.includes('ape'))                                  return 'apecoin';
+  if (x === '0x8173' || x.includes('ape'))                                  return 'apechain';
   return x || 'ethereum';
 }
 
@@ -7320,44 +7392,60 @@ async function loadTokenFromCollection(tokenId, col){
     return u;
   }
 
-  async function fetchAsDataURL(url){
-    const r = await fetch(url, { mode:'cors', cache:'no-store' });
-    if (!r.ok) throw new Error('fetch failed');
-    const b = await r.blob();
-    return await new Promise(res => {
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result);
-      fr.readAsDataURL(b);
-    });
-  }
-
-  async function reservoirCandidates(contract, tokenId, chainSlug){
-  let rsSlug = (chainSlug||'').toLowerCase();
-  // standardize our internal slugs
-  if (rsSlug === 'eth' || rsSlug === 'ether' || rsSlug === 'ethereum') rsSlug = 'ethereum';
-  if (rsSlug === 'base') rsSlug = 'base';
-  if (rsSlug === 'ape' || rsSlug === 'apechain' || rsSlug === 'apecoinchain') rsSlug = 'apechain';
-
-  // choose correct host per chain (per Reservoir docs)
-  // https://nft.reservoir.tools/reference/supported-chains
-  const HOST = (
-    rsSlug === 'apechain'  ? 'https://api-apechain.reservoir.tools' :
-    rsSlug === 'base'      ? 'https://api-base.reservoir.tools'     :
-                             'https://api.reservoir.tools'           // ethereum default
-  );
-
-  const url = `${HOST}/tokens/v7?media=true&tokens=${encodeURIComponent(`${contract}:${tokenId}`)}&limit=1`;
-  const r = await fetch(url, { headers:{ accept:'application/json' }, cache:'no-store' });
-  if (!r.ok) return [];
-  const j = await r.json();
-  const t = j?.tokens?.[0]?.token || {};
-  const m = t.media || {};
-  return [
-    m?.original?.url || m?.original?.mediaUrl,
-    t.imageLarge, t.image, t.imageUrl, t.imageSmall
-  ].filter(Boolean).map(normalizeUrl);
+// Extract IPFS path (CID + optional path) from ipfs://… or …/ipfs/…
+function __ipfsPath(u){
+  if (!u) return '';
+  const s = String(u);
+  if (s.startsWith('ipfs://')) return s.slice(7).replace(/^ipfs\//,'');
+  const m = s.match(/\/ipfs\/([^?#]+)/i);
+  return m ? m[1] : '';
 }
 
+// Expand a single ipfs URL or /ipfs/ URL into a list of HTTP gateway candidates
+function __expandIpfsCandidates(u){
+  const p = __ipfsPath(u);
+  if (!p) return u ? [u] : [];
+  const bases = [
+    'https://nftstorage.link/ipfs/',
+    'https://cloudflare-ipfs.com/ipfs/',
+    'https://w3s.link/ipfs/',
+    'https://ipfs.io/ipfs/',
+    'https://gateway.pinata.cloud/ipfs/'
+  ];
+  return bases.map(b => b + p);
+}
+
+// === STABLE VERSION ===
+async function reservoirCandidates(contract, tokenId /* chain hint not required */){
+  const url = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    const j = await r.json().catch(() => null) || {};
+
+    const out = new Set();
+
+    // primary image
+    for (const u of __expandIpfsCandidates(j && j.image)) out.add(u);
+
+    // tokenURI sometimes is itself an image; include it too
+    if (j && typeof j.tokenURI === 'string') {
+      const tu = j.tokenURI;
+      const looksLikeImg =
+        /^data:image\//i.test(tu) ||
+        /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(tu) ||
+        tu.startsWith('ipfs://') || /\/ipfs\//i.test(tu);
+      if (looksLikeImg) {
+        for (const u of __expandIpfsCandidates(tu)) out.add(u);
+      }
+    }
+
+    // keep order stable; return as array
+    return Array.from(out);
+  } catch {
+    return [];
+  }
+}
+   
 function killOldBase(c){
   const objs = (c.getObjects() || []).slice();
   const cw = c.getWidth(), ch = c.getHeight();
@@ -7491,8 +7579,8 @@ return true;
     const c = getCanvas(), f = window.fabric;
     if (!c || !f) { alert('Canvas not ready'); return; }
 
-    // 1) Query Reservoir with the correct chain
-    let urls = await reservoirCandidates(contract, tokenId, chain);
+  // 1) Query Reservoir with the correct chain
+let urls = await reservoirCandidates(contract, tokenId, chain);
 
 // ApeChain often needs tokenURI → metadata fallback
 if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainImageURL){
@@ -7502,6 +7590,21 @@ if ((!urls || !urls.length) && chain === 'apechain' && window.__fetchApechainIma
   }catch(_){}
 }
 
+// If still nothing, try once more forcing a chain hint
+if (!urls || !urls.length) {
+  try {
+    const chainHint = (String(chain||'').toLowerCase().includes('ape') ? 'ape' : 'eth');
+    const forced = await fetch(
+      `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}&chain=${chainHint}`,
+      { cache: 'no-store' }
+    ).then(r => r.json());
+    if (forced && forced.image) {
+      urls = [ `/api/proxy-img?u=${encodeURIComponent(forced.image)}` ];
+    }
+  } catch {}
+}
+
+// Guard: still nothing → bail
 if (!urls || !urls.length){
   alert('No image found for that token.');
   return;
@@ -7510,20 +7613,17 @@ if (!urls || !urls.length){
     // 2) CORS‑safe path first (best for export)
     try { c.discardActiveObject(); } catch(_){}
     killOldBase(c);
-    for (const u of urls){
-      try{
-        const data = await fetchAsDataURL(u);
-        const img  = await loadViaDataURL(data);
-        if (img){
-          fitAndAddAsBase(img);
-          // ...after fitAndAddAsBase(...)
-annotateBase({ contract, chain, name: name || '' });
-// no automatic label here — user controls it from “Token ID Styles”
-return;
-
-        }
-      }catch(_){}
+for (const u of urls){
+  try{
+    const data = (typeof u === 'string' && u.startsWith('data:')) ? u : await fetchAsDataURL(u);
+    const img  = await loadViaDataURL(data);
+    if (img){
+      fitAndAddAsBase(img);
+      annotateBase({ contract, chain, name: name || '' });
+      return;
     }
+  }catch(_){}
+}
 
     // 3) Fallback: view‑only (no‑CORS) so it still shows in Admin
 const img = await loadViaNoCors(urls[0]);
