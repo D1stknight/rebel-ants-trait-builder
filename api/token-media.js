@@ -190,14 +190,20 @@ export default async function handler(req, res) {
 
     if (!tokenURI) return json(res, 200, { ok: false, chain, tokenURI: '', image: '' });
 
-    let image = '';
-    if (/^data:image\//i.test(tokenURI) ||
-        /^https?:\/\/.+\.(png|jpg|jpeg|gif|webp|svg)(\?|#|$)/i.test(tokenURI) ||
-        tokenURI.startsWith('ipfs://')) {
-      image = ipfsToHttp(tokenURI);
-    } else {
-      image = await resolveImage(tokenURI);
-    }
+   // Prefer resolving metadata first unless tokenURI is clearly an image by extension/data:
+let image = '';
+if (/^data:image\//i.test(tokenURI) ||
+    /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(tokenURI)) {
+  image = tokenURI;
+} else {
+  // Try to read metadata (handles ipfs:// and Bueno)
+  image = await resolveImage(tokenURI);
+
+  // As a last resort, treat tokenURI itself as the image (some contracts point directly to an image)
+  if (!image && (/^ipfs:\/\//i.test(tokenURI) || /^https?:\/\//i.test(tokenURI))) {
+    image = ipfsToHttp(tokenURI);
+  }
+}
 
     return json(res, 200, { ok: !!image, chain, tokenURI, image: image || '' });
   } catch (e) {
