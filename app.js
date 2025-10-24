@@ -7392,7 +7392,7 @@ async function loadTokenFromCollection(tokenId, col){
     return u;
   }
 
-// ---------- replace the whole reservoirCandidates with this ----------
+// Extract IPFS path (CID + optional path) from ipfs://… or …/ipfs/…
 function __ipfsPath(u){
   if (!u) return '';
   const s = String(u);
@@ -7401,7 +7401,8 @@ function __ipfsPath(u){
   return m ? m[1] : '';
 }
 
-function __expandIpfs(u){
+// Expand a single ipfs URL or /ipfs/ URL into a list of HTTP gateway candidates
+function __expandIpfsCandidates(u){
   const p = __ipfsPath(u);
   if (!p) return u ? [u] : [];
   const bases = [
@@ -7414,24 +7415,32 @@ function __expandIpfs(u){
   return bases.map(b => b + p);
 }
 
-// Resolve image via our server (ETH + Ape) and always return a single proxied URL
-async function reservoirCandidates(contract, tokenId, chainSlug) {
-  const params = new URLSearchParams({
-    contract,
-    id: String(tokenId),
-    // chain hint helps the server choose RPCs (eth vs ape)
-    chain: (String(chainSlug||'').toLowerCase().includes('ape') ? 'ape' : '')
-  });
-
+// === STABLE VERSION ===
+async function reservoirCandidates(contract, tokenId /* chain hint not required */){
+  const url = `/api/token-media?contract=${encodeURIComponent(contract)}&id=${encodeURIComponent(tokenId)}`;
   try {
-    const r = await fetch(`/api/token-media?${params.toString()}`, { cache: 'no-store' });
-    const j = await r.json().catch(() => null);
+    const r = await fetch(url, { cache: 'no-store' });
+    const j = await r.json().catch(() => null) || {};
 
-    if (!j || !j.image) return [];
+    const out = new Set();
 
-    // Always go through our proxy to avoid CORS and gateway quirks
-    const proxied = `/api/proxy-img?u=${encodeURIComponent(j.image)}`;
-    return [proxied];
+    // primary image
+    for (const u of __expandIpfsCandidates(j && j.image)) out.add(u);
+
+    // tokenURI sometimes is itself an image; include it too
+    if (j && typeof j.tokenURI === 'string') {
+      const tu = j.tokenURI;
+      const looksLikeImg =
+        /^data:image\//i.test(tu) ||
+        /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(tu) ||
+        tu.startsWith('ipfs://') || /\/ipfs\//i.test(tu);
+      if (looksLikeImg) {
+        for (const u of __expandIpfsCandidates(tu)) out.add(u);
+      }
+    }
+
+    // keep order stable; return as array
+    return Array.from(out);
   } catch {
     return [];
   }
