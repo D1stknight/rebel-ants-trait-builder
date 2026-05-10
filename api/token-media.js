@@ -30,12 +30,13 @@ const isDec  = v => /^\d+$/.test(String(v||''));
 
 const ipfsToHttp = (u) => {
   if (!u) return u;
-  if (u.startsWith('ipfs://')) {
-    let p = u.slice(7);
-    if (p.startsWith('ipfs/')) p = p.slice(5);
-    return `https://nftstorage.link/ipfs/${p}`;
-  }
-  return u;
+  // Use our dedicated Pinata gateway by default. The frontend has its own
+  // fallback chain in case this gateway has issues for a specific request.
+  let s = String(u);
+  if (s.startsWith('ipfs://ipfs/')) s = s.slice('ipfs://ipfs/'.length);
+  else if (s.startsWith('ipfs://')) s = s.slice('ipfs://'.length);
+  else return u;
+  return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/' + s;
 };
 
 function parseDataJSON(u) {
@@ -176,14 +177,28 @@ async function resolveImage(metaURL) {
   })();
 
   // Try multiple gateways for metadata JSON
-  const metaCandidates = ipfsPath
-    ? [
-        `https://nftstorage.link/ipfs/${ipfsPath}`,
-        `https://cloudflare-ipfs.com/ipfs/${ipfsPath}`,
-        `https://w3s.link/ipfs/${ipfsPath}`,
-        `https://ipfs.io/ipfs/${ipfsPath}`,
-        `https://gateway.pinata.cloud/ipfs/${ipfsPath}`
-      ]
+  const RA_DEDICATED_GW = 'https://brown-ready-shark-280.mypinata.cloud';
+  // For each gateway we try BOTH the bare path AND the path with .json appended,
+  // because some collections (after migrating to Pinata) have files named '1.json' not '1'.
+  const metaCandidates = (() => {
+    const gateways = [
+      RA_DEDICATED_GW,
+      'https://nftstorage.link',
+      'https://cloudflare-ipfs.com',
+      'https://w3s.link',
+      'https://ipfs.io',
+      'https://gateway.pinata.cloud'
+    ];
+    const out = [];
+    for (const gw of gateways) {
+      out.push(gw + '/ipfs/' + ipfsPath);
+      // Only add .json variant if path does not already have an extension
+      if (!/\.[a-z0-9]{2,5}$/i.test(ipfsPath)) {
+        out.push(gw + '/ipfs/' + ipfsPath + '.json');
+      }
+    }
+    return out;
+  })();
     : [ metaURL ];
 
   let meta = null;
