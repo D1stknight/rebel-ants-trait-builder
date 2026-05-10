@@ -1,23 +1,8 @@
 // ============================================================================
 // 23-settings-api-4.js
-// Original app.js lines 4847-4985 (139 lines)
+// Original app.js lines 4862-4985 (124 lines)
 // ============================================================================
 
-
-    wireCanvasFollows(STATE);
-
-    // If admin panel is on screen, wire it; keep trying until it appears.
-    const mo = new MutationObserver(()=> wireAdmin(STATE));
-    mo.observe(document.documentElement, { childList:true, subtree:true });
-    wireAdmin(STATE);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once:true });
-  } else {
-    boot();
-  }
-})();
 
 
 (() => {

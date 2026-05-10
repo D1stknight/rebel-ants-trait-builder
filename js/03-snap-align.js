@@ -1,9 +1,8 @@
 // ============================================================================
 // 03-snap-align.js
-// Original app.js lines 849-1431 (583 lines)
+// Original app.js lines 850-1431 (582 lines)
 // ============================================================================
 
-})();
 
 /* -------- Base image: load by token (multi-collection) -------- */
 safeAddListener("loadToken","click", async ()=>{

@@ -1,9 +1,8 @@
 // ============================================================================
 // 56-footer-rename.js
-// Original app.js lines 10722-10762 (41 lines)
+// Original app.js lines 10723-10762 (40 lines)
 // ============================================================================
 
-})();
 
 // ===== Runtime title + header rename (no need to edit index.html) =====
 (() => {

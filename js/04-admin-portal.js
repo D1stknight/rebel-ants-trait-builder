@@ -3,6 +3,55 @@
 // Original app.js lines 1432-1530 (99 lines)
 // ============================================================================
 
+// --- HOISTED FORWARD-REF: renderPublishedShelf ---
+// Originally defined later in app.js but used by this file's IIFE at script-load time.
+// Duplicated here so it's available before this file's IIFE runs. The original
+// definition still exists in its original file and will harmlessly overwrite this
+// one when that file loads (function declarations don't error on redeclaration).
+function renderPublishedShelf(){
+  function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
+  function ensureShelf(){
+    if ($("ra2Shelf")) return true;
+    const h3 = Array.from(document.querySelectorAll('h3')).find(h => (h.textContent||'').trim().toLowerCase()==='overlays');
+    const card = h3 ? h3.parentNode : null; if (!card) return false;
+    const wrap = document.createElement('div'); wrap.id='ra2Shelf'; wrap.style.marginTop='8px';
+    wrap.innerHTML = `
+      <div style="font-weight:600;opacity:.85;margin-bottom:6px">Published Overlays</div>
+      <div id="ra2ShelfGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-height:240px;overflow:auto;"></div>
+    `;
+    card.appendChild(wrap); return true;
+  }
+  function addToCanvas(src){ addOverlayToCanvas(src,false); }
+  function draw(){
+    if (!ensureShelf()) { setTimeout(draw,300); return; }
+    const grid=$("ra2ShelfGrid"); if (!grid) return;
+    grid.innerHTML='';
+    getShelf().forEach(item=>{
+      const tile = document.createElement('div');
+      tile.style.cssText = 'position:relative;border:1px solid #333;border-radius:8px;padding:6px;background:#111;text-align:center;cursor:pointer;';
+
+      const frame = document.createElement('div');
+      frame.style.cssText = 'height:80px;display:flex;align-items:center;justify-content:center;';
+      const img = document.createElement('img');
+      img.src = item.dataURL;
+      img.alt = item.name || '';
+      img.style.cssText = 'max-width:100%;max-height:80px;';
+      frame.appendChild(img);
+
+      const cap = document.createElement('div');
+      cap.style.cssText = 'font-size:11px;opacity:.85;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      cap.textContent = item.name || '';
+
+      tile.appendChild(frame);
+      tile.appendChild(cap);
+      tile.addEventListener('click', ()=> addToCanvas(item.dataURL));
+      grid.appendChild(tile);
+    });
+  }
+  draw();
+}
+// --- END HOISTED FORWARD-REF ---
+
 
 /* -------- ADMIN PORTAL (toggle with ?admin=1) -------- */
 (function adminDock(){

@@ -1,6 +1,6 @@
 // ============================================================================
 // 47-blue-buttons.js
-// Original app.js lines 10015-10079 (65 lines)
+// Original app.js lines 10015-10088 (74 lines)
 // ============================================================================
 
 
@@ -68,3 +68,12 @@
     let raf = 0;
     return ()=> { if (raf) return; raf = requestAnimationFrame(()=>{ raf=0; apply(); }); };
   })();
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run, { once:true });
+  } else {
+    run();
+  }
+
+  new MutationObserver(run).observe(RIGHT, { childList:true, subtree:true });
+})();

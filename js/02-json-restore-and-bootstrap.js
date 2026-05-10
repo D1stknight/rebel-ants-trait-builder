@@ -1,6 +1,6 @@
 // ============================================================================
 // 02-json-restore-and-bootstrap.js
-// Original app.js lines 623-848 (226 lines)
+// Original app.js lines 623-849 (227 lines)
 // ============================================================================
 
 
@@ -229,3 +229,4 @@ renderOverlayGrid();
     if (!c) return setTimeout(wait, 120);
     patch(c);
   })();
+})();

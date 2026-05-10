@@ -1,6 +1,6 @@
 // ============================================================================
 // 26-click-zoom-buttons.js
-// Original app.js lines 5318-5461 (144 lines)
+// Original app.js lines 5318-5481 (164 lines)
 // ============================================================================
 
 
@@ -147,3 +147,23 @@
       btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); toggleTool(); setBtnText(toolOn?'Click Zoom: On':'Click Zoom: Off'); });
       holder.appendChild(btn);
     })();
+
+    // Keyboard shortcut: press “Z” to toggle tool
+    document.addEventListener('keydown', (e)=>{
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (e.key.toLowerCase() === 'z' && !e.metaKey && !e.ctrlKey && tag!=='input' && tag!=='textarea' && tag!=='select' && !e.target?.isContentEditable){
+        e.preventDefault();
+        toggleTool();
+        setBtnText(toolOn ? 'Click Zoom: On' : 'Click Zoom: Off');
+      }
+    }, true);
+
+    // Expose minimal API if you ever want to control it elsewhere
+    window.raClickZoom = {
+      on: ()=>toolOn,
+      setAnchor: (x,y)=>{ lastAnchor = new fabric.Point(x,y); },
+      clearAnchor: ()=>{ lastAnchor = null; },
+      enable: enableTool, disable: disableTool, toggle: toggleTool
+    };
+  });
+})();

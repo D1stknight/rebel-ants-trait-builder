@@ -1,6 +1,6 @@
 // ============================================================================
 // 41-ipad-sticky-layout.js
-// Original app.js lines 8676-9025 (350 lines)
+// Original app.js lines 8676-9123 (448 lines)
 // ============================================================================
 
 
@@ -353,3 +353,101 @@
     function resetSession(){ dismissedSession = false; }
     return { evaluate:evaluate, hide:hide, show:show, resetSession:resetSession };
   })();
+
+  function evaluateRotateHint(){
+    __ROTATE_HINT.evaluate();
+  }
+
+  /* ---------- Apply Entire Layout ---------- */
+  function applyAll(){
+    if (SNAP.applied) return;
+    disableMobileCSS();
+    unfixCanvasCard();
+    injectCSS();
+    var ok = applyStructure();
+    if (!ok){ retry(); return; }
+    applyDimensions(false);
+    // Add transitions after first paint to avoid initial animation flash
+    requestAnimationFrame(function(){ applyDimensions(true); });
+    SNAP.applied = true;
+    window.addEventListener('resize', scheduleResize, { passive:true });
+    window.addEventListener('orientationchange', orientationHandler, { passive:true });
+    evaluateRotateHint();
+  }
+
+  function retry(){
+    var attempts = 0;
+    var iv = setInterval(function(){
+      if (attempts++ > 40){ clearInterval(iv); return; }
+      var ok = applyStructure();
+      if (ok){
+        applyDimensions(false);
+        requestAnimationFrame(function(){ applyDimensions(true); });
+        SNAP.applied = true;
+        window.addEventListener('resize', scheduleResize, { passive:true });
+        window.addEventListener('orientationchange', orientationHandler, { passive:true });
+        evaluateRotateHint();
+        clearInterval(iv);
+      }
+    }, 150);
+  }
+
+  /* ---------- Revert ---------- */
+  function revertAll(){
+    if (!SNAP.applied) return;
+    window.removeEventListener('resize', scheduleResize);
+    window.removeEventListener('orientationchange', orientationHandler);
+
+    if (SNAP.stage){
+      if (SNAP.stageStyle === '') SNAP.stage.removeAttribute('style'); else SNAP.stage.setAttribute('style', SNAP.stageStyle);
+      SNAP.stage.removeAttribute('data-ipad-mid');
+      SNAP.stage.classList.remove('ipad-scroll-fade');
+    }
+    if (SNAP.left){
+      if (SNAP.leftStyle === '') SNAP.left.removeAttribute('style'); else SNAP.left.setAttribute('style', SNAP.leftStyle);
+      SNAP.left.removeAttribute('data-ipad-side');
+    }
+    if (SNAP.right){
+      if (SNAP.rightStyle === '') SNAP.right.removeAttribute('style'); else SNAP.right.setAttribute('style', SNAP.rightStyle);
+      SNAP.right.removeAttribute('data-ipad-side');
+    }
+    if (SNAP.parent){
+      SNAP.parent.classList.remove('ipad-flex-host', SNAP.animClass);
+      if (SNAP.parentStyle === '') SNAP.parent.removeAttribute('style'); else SNAP.parent.setAttribute('style', SNAP.parentStyle);
+    }
+    if (SNAP.canvasCard){
+      if (SNAP.canvasCardStyle === '') SNAP.canvasCard.removeAttribute('style'); else SNAP.canvasCard.setAttribute('style', SNAP.canvasCardStyle);
+    }
+    restoreMobileCSS();
+    SNAP.applied = false;
+  }
+
+  /* ---------- Debug ---------- */
+  function debug(){
+    var info = computeProfile();
+    console.table([{
+      width: info.w,
+      height: info.h,
+      portrait: info.isPortrait,
+      sideBase: info.cfg.sideBase,
+      midMin: info.cfg.midMin,
+      stickyTop: info.cfg.stickyTop,
+      applied: SNAP.applied
+    }]);
+    return { SNAP: SNAP, profile: info };
+  }
+
+  /* ---------- Public API ---------- */
+  window.ipadLayoutApply = function(){ if (!SNAP.applied) applyAll(); };
+  window.ipadLayoutRevert = revertAll;
+  window.ipadLayoutDebug = debug;
+  window.ipadRotateHintShow = function(){ __ROTATE_HINT.show(); };
+  window.ipadRotateHintHide = function(){ __ROTATE_HINT.hide(); };
+
+  /* ---------- Kickoff ---------- */
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', applyAll, { once:true });
+  } else {
+    applyAll();
+  }
+})();

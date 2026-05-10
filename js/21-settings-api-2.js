@@ -1,29 +1,8 @@
 // ============================================================================
 // 21-settings-api-2.js
-// Original app.js lines 4625-4700 (76 lines)
+// Original app.js lines 4646-4710 (65 lines)
 // ============================================================================
 
-
-    [op, sz].forEach(el => el && el.addEventListener('input', debounced));
-    [on, tok, up].forEach(el => el && el.addEventListener('change', debounced));
-
-    op.__wmSyncBound = sz && (sz.__wmSyncBound = true);
-    if (on)  on.__wmSyncBound  = true;
-    if (tok) tok.__wmSyncBound = true;
-    if (up)  up.__wmSyncBound  = true;
-  }
-
-  // Keep waiting for the admin controls to appear, then wire them once
-  const mo = new MutationObserver(wireAdminSaveOnce);
-  mo.observe(document.documentElement, { childList: true, subtree: true });
-
-  // Load settings for everyone on page open
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', loadFromServerAndApply, { once: true });
-  } else {
-    loadFromServerAndApply();
-  }
-})();
 
 /* ==========================================================
    RA_WM_FOLLOW_EVENTS_v1 — paste below the v3 block
@@ -79,3 +58,13 @@
     if (applyToCanvas(latest)) return;
     if (++tries < maxTries) setTimeout(tick, 500);
   })();
+
+  // 3) Follow canvas changes: apply whenever something is added/modified
+  function wire(){
+    const c = C(); if (!c || c.__raWmFollow) { if (!c) setTimeout(wire, 150); return; }
+    c.__raWmFollow = true;
+    c.on('object:added',    ()=> applyToCanvas(latest));
+    c.on('object:modified', ()=> applyToCanvas(latest));
+  }
+  wire();
+})();

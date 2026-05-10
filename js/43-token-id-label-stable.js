@@ -1,6 +1,6 @@
 // ============================================================================
 // 43-token-id-label-stable.js
-// Original app.js lines 9298-9590 (293 lines)
+// Original app.js lines 9298-9593 (296 lines)
 // ============================================================================
 
 
@@ -296,3 +296,6 @@
       setTimeout(check, 30);
     };
   })();
+
+  log('Token ID Stable V2 patch initialized.');
+})();

@@ -1,18 +1,8 @@
 // ============================================================================
 // 22-settings-api-3.js
-// Original app.js lines 4701-4846 (146 lines)
+// Original app.js lines 4711-4861 (151 lines)
 // ============================================================================
 
-
-  // 3) Follow canvas changes: apply whenever something is added/modified
-  function wire(){
-    const c = C(); if (!c || c.__raWmFollow) { if (!c) setTimeout(wire, 150); return; }
-    c.__raWmFollow = true;
-    c.on('object:added',    ()=> applyToCanvas(latest));
-    c.on('object:modified', ()=> applyToCanvas(latest));
-  }
-  wire();
-})();
 
 
 (() => {
@@ -149,3 +139,18 @@
       if (wm) { applyToWM(STATE.val); return; }
       if (tries < 60) setTimeout(()=>waitWm(tries+1), 250);
     })();
+
+    wireCanvasFollows(STATE);
+
+    // If admin panel is on screen, wire it; keep trying until it appears.
+    const mo = new MutationObserver(()=> wireAdmin(STATE));
+    mo.observe(document.documentElement, { childList:true, subtree:true });
+    wireAdmin(STATE);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once:true });
+  } else {
+    boot();
+  }
+})();

@@ -1,28 +1,8 @@
 // ============================================================================
 // 27-canvas-controls-layout.js
-// Original app.js lines 5462-5553 (92 lines)
+// Original app.js lines 5482-5553 (72 lines)
 // ============================================================================
 
-
-    // Keyboard shortcut: press “Z” to toggle tool
-    document.addEventListener('keydown', (e)=>{
-      const tag = (e.target && e.target.tagName || '').toLowerCase();
-      if (e.key.toLowerCase() === 'z' && !e.metaKey && !e.ctrlKey && tag!=='input' && tag!=='textarea' && tag!=='select' && !e.target?.isContentEditable){
-        e.preventDefault();
-        toggleTool();
-        setBtnText(toolOn ? 'Click Zoom: On' : 'Click Zoom: Off');
-      }
-    }, true);
-
-    // Expose minimal API if you ever want to control it elsewhere
-    window.raClickZoom = {
-      on: ()=>toolOn,
-      setAnchor: (x,y)=>{ lastAnchor = new fabric.Point(x,y); },
-      clearAnchor: ()=>{ lastAnchor = null; },
-      enable: enableTool, disable: disableTool, toggle: toggleTool
-    };
-  });
-})();
 
 /* === RA_CANVAS_CONTROLS_LAYOUT_v1 — put Reset + Click Zoom on their own line === */
 (() => {

@@ -1,6 +1,6 @@
 // ============================================================================
 // 20-settings-api-1.js
-// Original app.js lines 4522-4624 (103 lines)
+// Original app.js lines 4522-4645 (124 lines)
 // ============================================================================
 
 
@@ -106,3 +106,24 @@
         }, 250);
       };
     })();
+
+    [op, sz].forEach(el => el && el.addEventListener('input', debounced));
+    [on, tok, up].forEach(el => el && el.addEventListener('change', debounced));
+
+    op.__wmSyncBound = sz && (sz.__wmSyncBound = true);
+    if (on)  on.__wmSyncBound  = true;
+    if (tok) tok.__wmSyncBound = true;
+    if (up)  up.__wmSyncBound  = true;
+  }
+
+  // Keep waiting for the admin controls to appear, then wire them once
+  const mo = new MutationObserver(wireAdminSaveOnce);
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Load settings for everyone on page open
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadFromServerAndApply, { once: true });
+  } else {
+    loadFromServerAndApply();
+  }
+})();

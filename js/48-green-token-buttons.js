@@ -1,17 +1,8 @@
 // ============================================================================
 // 48-green-token-buttons.js
-// Original app.js lines 10080-10125 (46 lines)
+// Original app.js lines 10089-10125 (37 lines)
 // ============================================================================
 
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', run, { once:true });
-  } else {
-    run();
-  }
-
-  new MutationObserver(run).observe(RIGHT, { childList:true, subtree:true });
-})();
 
 /* =========================================================
    RA GREEN TOKEN BUTTONS v1 — tag "Delete Token ID" & "Load Token ID"

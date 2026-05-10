@@ -3,6 +3,34 @@
 // Original app.js lines 1-126 (126 lines)
 // ============================================================================
 
+// --- HOISTED FORWARD-REF: isAllowedAssetURL ---
+// Originally defined later in app.js but used by this file's IIFE at script-load time.
+// Duplicated here so it's available before this file's IIFE runs. The original
+// definition still exists in its original file and will harmlessly overwrite this
+// one when that file loads (function declarations don't error on redeclaration).
+function isAllowedAssetURL(u){
+  if (!u) return false;
+
+  const s = String(u || "");
+
+  // 1) Still block truly dangerous schemes
+  if (/^\s*(javascript:|file:)/i.test(s)) return false;
+
+  // 2) Explicitly allow our safe/expected cases
+  if (/^data:image\//i.test(s)) return true;  // allow data:image/... base64 (our proxy prefetch)
+  if (s.startsWith("/api/proxy-img?") || s.startsWith("/api/proxy-img2?")) return true; // allow our proxy endpoints
+
+  // 3) Allow http(s) and same-origin relative paths
+  try {
+    const url = new URL(s, location.origin);
+    return url.protocol === "http:" || url.protocol === "https:" || !/^[a-z][a-z0-9+\-.]*:/i.test(s);
+  } catch (_){
+    // Treat as relative unless it *looks* like a scheme
+    return !/^[a-z][a-z0-9+\-.]*:/i.test(s);
+  }
+}
+// --- END HOISTED FORWARD-REF ---
+
 ;
 /* ===============================
    CONFIG (Phase 2 safe minimal)
