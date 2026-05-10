@@ -4,18 +4,18 @@
 // ============================================================================
 
 
-/* ==================== RA_AI_QUOTE_v1 â ââ¨ Inspire meâ (motivational quotes) ====================
+/* ==================== RA_AI_QUOTE_v1 — “✨ Inspire me” (motivational quotes) ====================
    What this adds:
-   â¢ A button ââ¨ Inspire meâ near your Custom Text controls
-   â¢ Each click adds (or replaces) a motivational quote on the canvas
-   â¢ Quotes are varied and avoid recent repeats (remembers 40 recent in localStorage)
-   â¢ Text is centered, wrapped to 80% of canvas width, with a readable outline
-   â¢ Uses your existing text controls (font, size, color, stroke) after insertion
+   • A button “✨ Inspire me” near your Custom Text controls
+   • Each click adds (or replaces) a motivational quote on the canvas
+   • Quotes are varied and avoid recent repeats (remembers 40 recent in localStorage)
+   • Text is centered, wrapped to 80% of canvas width, with a readable outline
+   • Uses your existing text controls (font, size, color, stroke) after insertion
    ============================================================================================== */
 (() => {
   const RECENT_KEY = 'ra_ai_quotes_recent_v1';
 
-  // âââ Small helpers âââ
+  // ——— Small helpers ———
   const $  = (sel, r=document) => r.querySelector(sel);
   const $$ = (sel, r=document) => Array.from(r.querySelectorAll(sel));
 
@@ -39,12 +39,9 @@
   // Calls our serverless endpoint backed by Claude Haiku 4.5. Returns a string
   // on success or null on any failure (caller falls back to template generator).
   async function fetchAiQuote() {
-    // 8-second timeout: Haiku usually responds in <2s, but if it stalls we'd rather
-    // fall back than freeze the user's click.
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
     try {
-      // Send the recent quotes so the API can pass them as anti-repeat hints to the model.
       const recent = (typeof getRecent === 'function') ? getRecent() : [];
       const r = await fetch('/api/inspire', {
         method: 'POST',
@@ -55,7 +52,6 @@
       if (!r.ok) return null;
       const j = await r.json();
       const q = (j && typeof j.quote === 'string') ? j.quote.trim() : null;
-      // Defensive: reject empty, way-too-long, or weirdly-formatted responses.
       if (!q || q.length < 3 || q.length > 140) return null;
       return q;
     } catch (_) {
@@ -65,7 +61,7 @@
     }
   }
 
-  // âââ Quote generator (lightweight, but varied) âââ
+  // ——— Quote generator (lightweight, but varied) ———
   const COMMANDS = [
     "Keep going", "Stay hungry", "Trust the process", "Outwork yesterday",
     "Start before you're ready", "Consistency compounds", "Progress over perfection",
@@ -88,7 +84,7 @@
     "make room for greatness", "keep it moving", "focus and finish",
     "make today count", "finish strong", "do one more rep"
   ];
-  const SEPS = [" â ", " Â· ", " â ", ": "]; // weighted toward emâdash
+  const SEPS = [" — ", " · ", " — ", ": "]; // weighted toward em‑dash
 
   function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
@@ -100,7 +96,7 @@
     return attempt < 60 ? makeQuote(attempt+1) : q;
   }
 
-  // âââ Drop (or replace) quote on Fabric canvas âââ
+  // ——— Drop (or replace) quote on Fabric canvas ———
   async function addOrReplaceQuote(){
     const c = window.canvas;
     if (!c || !window.fabric) { alert('Canvas not ready'); return; }
@@ -151,7 +147,7 @@
     pushRecent(quote);
   }
 
-  // âââ Inject the ââ¨ Inspire meâ button into your existing UI âââ
+  // ——— Inject the “✨ Inspire me” button into your existing UI ———
   function injectButton(){
     if (document.getElementById('raAiQuoteBtn')) return;
 
@@ -166,7 +162,7 @@
 
     const btn = document.createElement('button');
     btn.id = 'raAiQuoteBtn';
-    btn.textContent = 'â¨ Inspire me';
+    btn.textContent = '✨ Inspire me';
     btn.className = 'btn';
     btn.style.marginLeft = '8px';
     btn.style.cursor = 'pointer';
