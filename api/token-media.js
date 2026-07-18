@@ -14,7 +14,10 @@ const ETH_RPCS = [
 
 const APE_RPCS = [
   process.env.RA_APE_RPC,
-  'https://rpc.apecoinchain.org',
+  // rpc.apecoinchain.org is dead (connection refused as of 2026-07). Caldera is
+  // ApeChain's canonical RPC host; rpc.apechain.com is the official alias.
+  'https://apechain.calderachain.xyz/http',
+  'https://rpc.apechain.com/http',
 ].filter(Boolean);
 
 function json(res, status, obj) {
