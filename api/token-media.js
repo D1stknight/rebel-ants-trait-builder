@@ -232,11 +232,21 @@ async function resolveImage(metaURL) {
     return out;
   })();
 
-  let meta = null;
-  for (const u of metaCandidates) {
-    meta = await fetchJSON(u, { cache: 'no-store' }, 8000);
-    if (meta) break;
-  }
+  // Race all candidates in parallel; resolve with the first gateway that
+  // returns valid JSON. Worst case is one timeout window (~8s) instead of
+  // candidates x 8s serially.
+  const meta = await new Promise((resolve) => {
+    let pending = metaCandidates.length;
+    let done = false;
+    if (!pending) return resolve(null);
+    const settle = (m) => {
+      if (!done && m) { done = true; resolve(m); return; }
+      if (--pending === 0 && !done) resolve(null);
+    };
+    for (const u of metaCandidates) {
+      fetchJSON(u, { cache: 'no-store' }, 8000).then(settle).catch(() => settle(null));
+    }
+  });
   if (!meta) return '';
 
   let i = meta.image || meta.image_url || meta.image_original_url || meta.image_data || '';
@@ -257,7 +267,8 @@ async function openseaImage(chain, contract, tokenId) {
   const url = 'https://api.opensea.io/api/v2/chain/' + slug + '/contract/' + contract + '/nfts/' + tokenId;
   const data = await fetchJSON(url, { headers: { 'X-API-KEY': key, accept: 'application/json' } }, 8000);
   if (!data || !data.nft) return '';
-  return data.nft.display_image_url || data.nft.image_url || '';
+  // image_url is the original asset; display_image_url is a resized preview (~500px)
+  return data.nft.image_url || data.nft.display_image_url || '';
 }
 
 export default async function handler(req, res) {

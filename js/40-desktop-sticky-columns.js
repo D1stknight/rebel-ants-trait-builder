@@ -235,7 +235,8 @@ function killOldBase(c){
     const c = getCanvas(); if (!c) return false;
     img.set({ originX:'center', originY:'center' });
     const cw=c.getWidth(), ch=c.getHeight();
-    const sc = Math.min(cw/(img.width||cw), ch/(img.height||ch), 1);
+    // Fill the canvas at any size (scale up or down; square art => exact fill)
+    const sc = Math.min(cw/(img.width||cw), ch/(img.height||ch));
     if (Number.isFinite(sc) && sc>0) img.scale(sc);
     img.left = cw/2; img.top = ch/2; img.setCoords();
 
@@ -253,6 +254,28 @@ return true;
 
 
   }
+
+  // Re-fit the base image whenever the canvas size changes (e.g. 700 -> 500/900),
+  // so the token always fills the canvas at the selected size.
+  (function watchCanvasSizeForBaseRefit(){
+    let lastW = 0, lastH = 0;
+    setInterval(() => {
+      try {
+        const c = getCanvas(); if (!c) return;
+        const cw = c.getWidth(), ch = c.getHeight();
+        if (!cw || !ch) return;
+        if (cw === lastW && ch === lastH) return;
+        lastW = cw; lastH = ch;
+        const base = (c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+        if (!base) return;
+        const sc = Math.min(cw/(base.width||cw), ch/(base.height||ch));
+        if (Number.isFinite(sc) && sc > 0) base.scale(sc);
+        base.set({ originX: 'center', originY: 'center', left: cw/2, top: ch/2 });
+        base.setCoords();
+        c.requestRenderAll && c.requestRenderAll();
+      } catch(_){}
+    }, 500);
+  })();
 
   function annotateBase(meta){
     const c = getCanvas(); if (!c) return;
