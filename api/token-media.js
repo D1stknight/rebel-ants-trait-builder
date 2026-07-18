@@ -219,6 +219,19 @@ async function resolveImage(metaURL) {
   return i.startsWith('data:') ? i : ipfsToHttp(i);
 }
 
+// Marketplace fallback: when IPFS metadata is unreachable (unpinned friend
+// collections), ask OpenSea for the token and use their cached CDN image.
+// Requires OPENSEA_API_KEY env var; silently skipped if not set.
+async function openseaImage(chain, contract, tokenId) {
+  const key = process.env.OPENSEA_API_KEY;
+  if (!key) return '';
+  const slug = (chain === 'ape') ? 'ape_chain' : 'ethereum';
+  const url = 'https://api.opensea.io/api/v2/chain/' + slug + '/contract/' + contract + '/nfts/' + tokenId;
+  const data = await fetchJSON(url, { headers: { 'X-API-KEY': key, accept: 'application/json' } }, 8000);
+  if (!data || !data.nft) return '';
+  return data.nft.display_image_url || data.nft.image_url || '';
+}
+
 export default async function handler(req, res) {
   try {
     // accept id | tokenId | token
@@ -250,6 +263,11 @@ if (/^data:image\//i.test(tokenURI) ||
 } else {
   // Try to read metadata (handles ipfs:// and Bueno)
   image = await resolveImage(tokenURI);
+
+  // Marketplace fallback: unpinned IPFS content that OpenSea has cached
+  if (!image) {
+    try { image = await openseaImage(chain, contract, tokenId); } catch {}
+  }
 
   // As a last resort, treat tokenURI itself as the image (some contracts point directly to an image)
   if (!image && (/^ipfs:\/\//i.test(tokenURI) || /^https?:\/\//i.test(tokenURI))) {
