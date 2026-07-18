@@ -42,6 +42,34 @@ const ipfsToHttp = (u) => {
   return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/' + s;
 };
 
+// Resolve an ipfs:// URL to the first gateway that actually serves it.
+// The dedicated Pinata gateway is fastest for our own pins but returns 403
+// for CIDs not pinned in our account (e.g. friend collections), so we
+// verify with a HEAD request and fall through to public gateways.
+async function pickWorkingIpfsUrl(u) {
+  if (!u || !/^ipfs:\/\//i.test(String(u))) return u;
+  const s = String(u).replace(/^ipfs:\/\/(ipfs\/)?/i, '');
+  const gws = [
+    'https://brown-ready-shark-280.mypinata.cloud',
+    'https://ipfs.io',
+    'https://gateway.pinata.cloud',
+    'https://cloudflare-ipfs.com',
+    'https://w3s.link',
+    'https://nftstorage.link',
+  ];
+  for (const gw of gws) {
+    const url = gw + '/ipfs/' + s;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(url, { method: 'HEAD', signal: ctrl.signal });
+      clearTimeout(t);
+      if (r.ok) return url;
+    } catch {}
+  }
+  return ipfsToHttp(u);
+}
+
 function parseDataJSON(u) {
   try {
     const m = String(u).match(/^data:application\/json(?:;charset=[^;,]*)?(;base64)?,(.*)$/i);
@@ -216,7 +244,7 @@ async function resolveImage(metaURL) {
   if (typeof i === 'string' && i.startsWith('<svg')) {
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(i);
   }
-  return i.startsWith('data:') ? i : ipfsToHttp(i);
+  return i.startsWith('data:') ? i : await pickWorkingIpfsUrl(i);
 }
 
 // Marketplace fallback: when IPFS metadata is unreachable (unpinned friend
@@ -271,7 +299,7 @@ if (/^data:image\//i.test(tokenURI) ||
 
   // As a last resort, treat tokenURI itself as the image (some contracts point directly to an image)
   if (!image && (/^ipfs:\/\//i.test(tokenURI) || /^https?:\/\//i.test(tokenURI))) {
-    image = ipfsToHttp(tokenURI);
+    image = await pickWorkingIpfsUrl(tokenURI);
   }
 }
 
