@@ -181,6 +181,7 @@ async function resolveImage(metaURL) {
   // For each gateway we try BOTH the bare path AND the path with .json appended,
   // because some collections (after migrating to Pinata) have files named '1.json' not '1'.
   const metaCandidates = (() => {
+    if (!ipfsPath) return [ metaURL ];
     const gateways = [
       RA_DEDICATED_GW,
       'https://nftstorage.link',
@@ -199,7 +200,6 @@ async function resolveImage(metaURL) {
     }
     return out;
   })();
-    : [ metaURL ];
 
   let meta = null;
   for (const u of metaCandidates) {
