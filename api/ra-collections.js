@@ -63,7 +63,7 @@ function seedList(){
   // Safe defaults you can edit later in the admin box
   return [
     { name:'Rebel Ants',          address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chainId:'0x1',    tag:'rebel'  },
-    { name:'Saints of LA',        address:'0xb9b8c62590Bd0aa759331A1F6Cae4c9a1a7c8E1e', chainId:'0x1',    tag:'friend' },
+    { name:'Saints of LA',        address:'0x7caB6c0E4DC14b995901F5D672Cdcc8469CC459D', chainId:'0x1',    tag:'friend' },
     { name:'Chumpz (ApeChain)',   address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chainId:'0x8173', tag:'friend',
       rpcUrl:'https://apechain.calderachain.xyz/http' } // public RPC from ApeChain docs
   ];
