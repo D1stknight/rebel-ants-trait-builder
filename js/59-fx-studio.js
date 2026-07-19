@@ -400,7 +400,14 @@
   // ---------------- UI ----------------
   function injectUI(){
     if (document.getElementById('raFxPanel')) return true;
-    const anim = document.getElementById('raAnimUnifiedV2Panel');
+    // Anchor: the Export card (the old Unified Animate panel this used to
+    // anchor on was removed when FX Studio replaced it).
+    let anim = document.getElementById('raAnimUnifiedV2Panel');
+    if (!anim) {
+      const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong'));
+      const h = hs.find(x => /^\s*export\s*$/i.test(x.textContent || ''));
+      anim = h ? (h.closest('section') || h.parentElement) : null;
+    }
     if (!anim) return false;
     const panel = document.createElement('div');
     panel.id = 'raFxPanel';
