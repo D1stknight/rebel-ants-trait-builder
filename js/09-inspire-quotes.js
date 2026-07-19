@@ -38,15 +38,32 @@
   // ============================================================================
   // Calls our serverless endpoint backed by Claude Haiku 4.5. Returns a string
   // on success or null on any failure (caller falls back to template generator).
+  // Snapshot of the loaded NFT base (downscaled) so quotes can riff on the
+  // actual artwork on the board. Null when no base / canvas tainted.
+  function baseSnapshot(){
+    const c = window.canvas; if (!c) return null;
+    const base = (c.getObjects && c.getObjects() || []).find(o => o && o._isBase && !o._isBgRect);
+    if (!base) return null;
+    const el = base._originalElement || (base.getElement && base.getElement());
+    if (!el) return null;
+    try {
+      const S = 512;
+      const t = document.createElement('canvas'); t.width = S; t.height = S;
+      t.getContext('2d').drawImage(el, 0, 0, S, S);
+      return t.toDataURL('image/jpeg', 0.8);
+    } catch(_) { return null; }
+  }
+
   async function fetchAiQuote() {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const timer = setTimeout(() => ctrl.abort(), 15000);
     try {
       const recent = (typeof getRecent === 'function') ? getRecent() : [];
+      const image = baseSnapshot();
       const r = await fetch('/api/inspire', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recent: recent.slice(-10) }),
+        body: JSON.stringify({ recent: recent.slice(-10), ...(image ? { image } : {}) }),
         signal: ctrl.signal
       });
       if (!r.ok) return null;
@@ -61,40 +78,7 @@
     }
   }
 
-  // ——— Quote generator (lightweight, but varied) ———
-  const COMMANDS = [
-    "Keep going", "Stay hungry", "Trust the process", "Outwork yesterday",
-    "Start before you're ready", "Consistency compounds", "Progress over perfection",
-    "Ship it", "Make it simple", "Play the long game", "No zero days",
-    "Bet on yourself", "Stay curious", "Do the hard things", "Win the morning",
-    "Keep showing up", "Build in public", "One brick at a time", "Move with purpose",
-    "Be relentlessly resourceful", "Protect your momentum", "Take the stairs",
-    "Create then iterate", "Make it a habit", "Focus beats talent",
-    "Earn it daily", "Start now", "Prove it", "Own your time", "Small steps, big moves"
-  ];
-  const TAILS = [
-    "small steps add up", "momentum beats perfect", "discipline is freedom",
-    "tiny wins compound", "results love consistency", "courage over comfort",
-    "1% better every day", "clarity comes from action", "done beats perfect",
-    "practice makes progress", "keep the promise to yourself", "get uncomfortable",
-    "dreams need deadlines", "start messy", "execute loudly",
-    "be patient and persistent", "aim for better, not easy", "work the plan",
-    "prove it with work", "show up for yourself", "stack your wins",
-    "build the streak", "trust your future self", "act like it matters",
-    "make room for greatness", "keep it moving", "focus and finish",
-    "make today count", "finish strong", "do one more rep"
-  ];
-  const SEPS = [" — ", " · ", " — ", ": "]; // weighted toward em‑dash
-
-  function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
-
-  function makeQuote(attempt=0){
-    const q = `${pick(COMMANDS)}${pick(SEPS)}${pick(TAILS)}.`;
-    const recent = getRecent();
-    if (!recent.includes(q)) return q;
-    // Try a few times to avoid an immediate repeat
-    return attempt < 60 ? makeQuote(attempt+1) : q;
-  }
+  // (Template quote generator removed: quotes are AI-generated only.)
 
   // ——— Drop (or replace) quote on Fabric canvas ———
   async function addOrReplaceQuote(){
@@ -103,8 +87,8 @@
 
     // Phase 2: try AI-generated quote first; fall back to template generator on any failure.
     let quote = null;
-    try { quote = await fetchAiQuote(); } catch (_) { /* swallow; fall back below */ }
-    if (!quote) quote = makeQuote();
+    try { quote = await fetchAiQuote(); } catch (_) { /* handled below */ }
+    if (!quote) { alert('Inspire is unavailable right now - try again in a moment.'); return; }
     const cw = c.getWidth(), ch = c.getHeight();
     const width = Math.round(cw * 0.84);
 
