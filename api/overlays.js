@@ -1,5 +1,6 @@
 // api/overlays.js  (CommonJS, Vercel serverless)
 const { kvGet, kvSet, kvDel } = require('./_lib/redisAdapter'); // adjust path if needed
+const { isAdminRequest } = require('./_lib/adminAuth');
 
 const IDS_KEY = 'ra:overlays:ids';
 const itemKey = (id) => `ra:overlay:${id}`;
@@ -53,8 +54,8 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, overlays });
     }
 
-    // admin-protected below
-    if (!adminKey || adminKey !== process.env.RA_ADMIN_KEY) {
+    // admin-protected below: signed-in admin commander OR legacy ?admin=key
+    if (!isAdminRequest(req)) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 

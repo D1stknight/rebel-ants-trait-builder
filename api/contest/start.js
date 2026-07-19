@@ -12,8 +12,10 @@ function readJSON(req) {
 
 module.exports = async (req, res) => {
   try {
-    const admin = (req.query.admin || req.headers['x-admin'] || '').trim();
-    if (!admin || admin !== process.env.RA_ADMIN_KEY) {
+    const { isAdminRequest } = require('../_lib/adminAuth');
+    const hdr = String(req.headers['x-admin'] || '').trim();
+    const legacyHdr = !!(process.env.RA_ADMIN_KEY && hdr && hdr === process.env.RA_ADMIN_KEY);
+    if (!legacyHdr && !isAdminRequest(req)) {
       res.status(401).json({ ok:false, error:'unauthorized' }); return;
     }
 

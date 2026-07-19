@@ -14,7 +14,10 @@ const ETH_RPCS = [
 
 const APE_RPCS = [
   process.env.RA_APE_RPC,
-  'https://rpc.apecoinchain.org',
+  // rpc.apecoinchain.org is dead (connection refused as of 2026-07). Caldera is
+  // ApeChain's canonical RPC host; rpc.apechain.com is the official alias.
+  'https://apechain.calderachain.xyz/http',
+  'https://rpc.apechain.com/http',
 ].filter(Boolean);
 
 function json(res, status, obj) {
@@ -30,13 +33,42 @@ const isDec  = v => /^\d+$/.test(String(v||''));
 
 const ipfsToHttp = (u) => {
   if (!u) return u;
-  if (u.startsWith('ipfs://')) {
-    let p = u.slice(7);
-    if (p.startsWith('ipfs/')) p = p.slice(5);
-    return `https://nftstorage.link/ipfs/${p}`;
-  }
-  return u;
+  // Use our dedicated Pinata gateway by default. The frontend has its own
+  // fallback chain in case this gateway has issues for a specific request.
+  let s = String(u);
+  if (s.startsWith('ipfs://ipfs/')) s = s.slice('ipfs://ipfs/'.length);
+  else if (s.startsWith('ipfs://')) s = s.slice('ipfs://'.length);
+  else return u;
+  return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/' + s;
 };
+
+// Resolve an ipfs:// URL to the first gateway that actually serves it.
+// The dedicated Pinata gateway is fastest for our own pins but returns 403
+// for CIDs not pinned in our account (e.g. friend collections), so we
+// verify with a HEAD request and fall through to public gateways.
+async function pickWorkingIpfsUrl(u) {
+  if (!u || !/^ipfs:\/\//i.test(String(u))) return u;
+  const s = String(u).replace(/^ipfs:\/\/(ipfs\/)?/i, '');
+  const gws = [
+    'https://brown-ready-shark-280.mypinata.cloud',
+    'https://ipfs.io',
+    'https://gateway.pinata.cloud',
+    'https://cloudflare-ipfs.com',
+    'https://w3s.link',
+    'https://nftstorage.link',
+  ];
+  for (const gw of gws) {
+    const url = gw + '/ipfs/' + s;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(url, { method: 'HEAD', signal: ctrl.signal });
+      clearTimeout(t);
+      if (r.ok) return url;
+    } catch {}
+  }
+  return ipfsToHttp(u);
+}
 
 function parseDataJSON(u) {
   try {
@@ -176,21 +208,45 @@ async function resolveImage(metaURL) {
   })();
 
   // Try multiple gateways for metadata JSON
-  const metaCandidates = ipfsPath
-    ? [
-        `https://nftstorage.link/ipfs/${ipfsPath}`,
-        `https://cloudflare-ipfs.com/ipfs/${ipfsPath}`,
-        `https://w3s.link/ipfs/${ipfsPath}`,
-        `https://ipfs.io/ipfs/${ipfsPath}`,
-        `https://gateway.pinata.cloud/ipfs/${ipfsPath}`
-      ]
-    : [ metaURL ];
+  const RA_DEDICATED_GW = 'https://brown-ready-shark-280.mypinata.cloud';
+  // For each gateway we try BOTH the bare path AND the path with .json appended,
+  // because some collections (after migrating to Pinata) have files named '1.json' not '1'.
+  const metaCandidates = (() => {
+    if (!ipfsPath) return [ metaURL ];
+    const gateways = [
+      RA_DEDICATED_GW,
+      'https://nftstorage.link',
+      'https://cloudflare-ipfs.com',
+      'https://w3s.link',
+      'https://ipfs.io',
+      'https://gateway.pinata.cloud'
+    ];
+    const out = [];
+    for (const gw of gateways) {
+      out.push(gw + '/ipfs/' + ipfsPath);
+      // Only add .json variant if path does not already have an extension
+      if (!/\.[a-z0-9]{2,5}$/i.test(ipfsPath)) {
+        out.push(gw + '/ipfs/' + ipfsPath + '.json');
+      }
+    }
+    return out;
+  })();
 
-  let meta = null;
-  for (const u of metaCandidates) {
-    meta = await fetchJSON(u, { cache: 'no-store' }, 8000);
-    if (meta) break;
-  }
+  // Race all candidates in parallel; resolve with the first gateway that
+  // returns valid JSON. Worst case is one timeout window (~8s) instead of
+  // candidates x 8s serially.
+  const meta = await new Promise((resolve) => {
+    let pending = metaCandidates.length;
+    let done = false;
+    if (!pending) return resolve(null);
+    const settle = (m) => {
+      if (!done && m) { done = true; resolve(m); return; }
+      if (--pending === 0 && !done) resolve(null);
+    };
+    for (const u of metaCandidates) {
+      fetchJSON(u, { cache: 'no-store' }, 8000).then(settle).catch(() => settle(null));
+    }
+  });
   if (!meta) return '';
 
   let i = meta.image || meta.image_url || meta.image_original_url || meta.image_data || '';
@@ -198,7 +254,21 @@ async function resolveImage(metaURL) {
   if (typeof i === 'string' && i.startsWith('<svg')) {
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(i);
   }
-  return i.startsWith('data:') ? i : ipfsToHttp(i);
+  return i.startsWith('data:') ? i : await pickWorkingIpfsUrl(i);
+}
+
+// Marketplace fallback: when IPFS metadata is unreachable (unpinned friend
+// collections), ask OpenSea for the token and use their cached CDN image.
+// Requires OPENSEA_API_KEY env var; silently skipped if not set.
+async function openseaImage(chain, contract, tokenId) {
+  const key = process.env.OPENSEA_API_KEY;
+  if (!key) return '';
+  const slug = (chain === 'ape') ? 'ape_chain' : 'ethereum';
+  const url = 'https://api.opensea.io/api/v2/chain/' + slug + '/contract/' + contract + '/nfts/' + tokenId;
+  const data = await fetchJSON(url, { headers: { 'X-API-KEY': key, accept: 'application/json' } }, 8000);
+  if (!data || !data.nft) return '';
+  // image_url is the original asset; display_image_url is a resized preview (~500px)
+  return data.nft.image_url || data.nft.display_image_url || '';
 }
 
 export default async function handler(req, res) {
@@ -233,9 +303,14 @@ if (/^data:image\//i.test(tokenURI) ||
   // Try to read metadata (handles ipfs:// and Bueno)
   image = await resolveImage(tokenURI);
 
+  // Marketplace fallback: unpinned IPFS content that OpenSea has cached
+  if (!image) {
+    try { image = await openseaImage(chain, contract, tokenId); } catch {}
+  }
+
   // As a last resort, treat tokenURI itself as the image (some contracts point directly to an image)
   if (!image && (/^ipfs:\/\//i.test(tokenURI) || /^https?:\/\//i.test(tokenURI))) {
-    image = ipfsToHttp(tokenURI);
+    image = await pickWorkingIpfsUrl(tokenURI);
   }
 }
 

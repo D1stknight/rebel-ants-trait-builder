@@ -17,8 +17,10 @@ async function readJSON(req){
 export default async function handler(req, res){
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  const admin = String((new URL(req.url, 'http://x')).searchParams.get('admin') || '');
-  if (!admin || admin !== process.env.RA_ADMIN_KEY) {
+  const { isAdminRequest } = require('../_lib/adminAuth');
+  const hdr = String(req.headers['x-admin'] || '').trim();
+  const legacyHdr = !!(process.env.RA_ADMIN_KEY && hdr && hdr === process.env.RA_ADMIN_KEY);
+  if (!legacyHdr && !isAdminRequest(req)) {
     return res.status(401).json({ ok:false, error:'unauthorized' });
   }
 

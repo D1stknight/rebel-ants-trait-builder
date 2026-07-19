@@ -1,0 +1,214 @@
+// ============================================================================
+// 61-signon.js — Commander Sign-in (Phase 4b)
+// ============================================================================
+// Same Commander Name + PIN accounts as the Playground. Session is an
+// HttpOnly signed cookie issued by /api/auth/sign-in. Exposes
+// window.raSession (null | {name, displayName, balance, costPerGen, billing})
+// and fires 'ra-auth-change' on document when it changes.
+// ============================================================================
+;(() => {
+  if (window.__RA_SIGNON_V1__) return;
+  window.__RA_SIGNON_V1__ = true;
+  window.raSession = null;
+
+  const emit = () => { try { document.dispatchEvent(new CustomEvent('ra-auth-change', { detail: window.raSession })); } catch(_){} };
+
+  async function refreshMe(){
+    try {
+      const j = await fetch('/api/auth/me', { cache: 'no-store' }).then(r => r.json());
+      window.raSession = (j && j.ok && j.signedIn)
+        ? { name: j.name, displayName: j.displayName || j.name, balance: j.balance, costPerGen: j.costPerGen, billing: !!j.billing, playerId: j.playerId, isAdmin: !!j.isAdmin }
+        : null;
+      if (j && j.ok && !j.signedIn) window.__raSignonAvailable = true;
+    } catch(_) { window.raSession = null; }
+    emit();
+    render();
+  }
+  window.raRefreshSession = refreshMe;
+
+  // Self-styled card (matches the Wallet card look) with its own
+  // collapsible header. Returns the BODY element that render() fills.
+  function card(){
+    let body = document.getElementById('raSignonBody');
+    if (body) return body;
+    let anchor = document.getElementById('ra-wallet-mini');
+    if (!anchor) {
+      const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,b'));
+      const w = hs.find(x => /^\s*wallet\b/i.test(x.textContent || ''));
+      anchor = w ? (w.closest('section') || w.closest('.card') || w.parentElement) : null;
+    }
+    const wrap = document.createElement('div');
+    wrap.id = 'raSignonCard';
+    wrap.innerHTML = [
+      '<div class="panel" style="margin:12px 0;padding:10px;border-radius:8px;background:#121317;border:1px solid rgba(255,255,255,.08);color:#e6e6e6;font-size:12px;line-height:1.4;">',
+      '<div style="display:flex;align-items:center;justify-content:space-between;">',
+      '<strong id="raSignonTitle" style="font-size:13px;cursor:pointer;user-select:none;" title="Click to collapse/expand">Commander <span id="raSignonCaret" style="opacity:.6;font-size:11px;">&#9662;</span></strong>',
+      '</div>',
+      '<div id="raSignonBody" style="margin-top:8px;"></div>',
+      '</div>'
+    ].join('');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
+    else document.body.appendChild(wrap);
+
+    const bodyEl = wrap.querySelector('#raSignonBody');
+    const caret = wrap.querySelector('#raSignonCaret');
+    const KEY = 'ra_signon_collapsed';
+    const apply = (c) => { bodyEl.style.display = c ? 'none' : ''; caret.innerHTML = c ? '&#9656;' : '&#9662;'; };
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(KEY) === '1'; } catch(_){}
+    apply(collapsed);
+    wrap.querySelector('#raSignonTitle').addEventListener('click', () => {
+      collapsed = !collapsed;
+      try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch(_){}
+      apply(collapsed);
+    });
+    return bodyEl;
+  }
+
+  function render(){
+    const el = card();
+    const s = window.raSession;
+    if (s) {
+      const bal = (s.balance == null) ? '' :
+        '<div style="opacity:.85;margin-top:4px;">Balance: <b>' + Number(s.balance).toLocaleString() + '</b> $REBEL</div>';
+      el.innerHTML = [
+        '<div>Signed in as <b>' + escapeHtml(s.displayName || s.name) + '</b></div>',
+        bal,
+        '<button id="raSignOut" class="btn" style="margin-top:8px;">Sign out</button>'
+      ].join('');
+      el.querySelector('#raSignOut').onclick = async () => {
+        try { await fetch('/api/auth/sign-out', { method: 'POST' }); } catch(_){}
+        window.raSession = null; emit(); render();
+      };
+      renderShop(el);
+    } else {
+      el.innerHTML = [
+        '<div style="opacity:.6;font-size:12px;margin:0 0 8px;">Sign in with the same name + PIN as the Playground.</div>',
+        '<input id="raSiName" type="text" placeholder="Commander name" autocomplete="username" ',
+        ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:6px;" />',
+        '<input id="raSiPin" type="password" placeholder="PIN" autocomplete="current-password" ',
+        ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:8px;" />',
+        '<button id="raSiBtn" class="btn" style="width:100%;">Sign in</button>',
+        '<div id="raSiStatus" style="margin-top:6px;font-size:12px;opacity:.75;"></div>'
+      ].join('');
+      const status = el.querySelector('#raSiStatus');
+      const doSignIn = async () => {
+        const name = el.querySelector('#raSiName').value.trim();
+        const pin = el.querySelector('#raSiPin').value.trim();
+        if (!name || !pin) { status.textContent = 'Enter name and PIN.'; return; }
+        status.textContent = 'Signing in...';
+        try {
+          const r = await fetch('/api/auth/sign-in', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, pin })
+          });
+          const j = await r.json().catch(() => null);
+          if (r.ok && j && j.ok) { status.textContent = ''; refreshMe(); }
+          else status.textContent = ({
+            commander_not_found: 'Commander name not found.',
+            incorrect_pin: 'Incorrect PIN.',
+            no_pin_set: 'No PIN set for this name.',
+            signon_not_configured: 'Sign-on not configured yet (server env).',
+            kv_not_configured: 'Server storage not configured.'
+          })[j && j.error] || ('Failed: ' + ((j && j.error) || r.status));
+        } catch (e) { status.textContent = 'Network error.'; }
+      };
+      el.querySelector('#raSiBtn').onclick = doSignIn;
+      el.querySelector('#raSiPin').addEventListener('keydown', e => { if (e.key === 'Enter') doSignIn(); });
+    }
+  }
+  // ---------- Buy $REBEL with APE ----------
+  async function renderShop(card){
+    let info = null;
+    try { info = await fetch('/api/shop/packages', { cache:'no-store' }).then(r => r.json()); } catch(_){}
+    if (!info || !info.ok || !info.enabled || !window.raSession) return;
+    const box = document.createElement('div');
+    box.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.1);';
+    box.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">Buy $REBEL with APE</div>' +
+      info.packages.map(p =>
+        '<button class="btn raApePkg" data-id="' + p.id + '" style="width:100%;margin-bottom:6px;text-align:left;">' +
+        escapeHtml(p.name) + ' - ' + escapeHtml(p.ape) + ' APE -> ' + Number(p.rebel).toLocaleString() + ' $REBEL</button>'
+      ).join('') +
+      '<div id="raApeStatus" style="font-size:12px;opacity:.75;min-height:16px;"></div>';
+    card.appendChild(box);
+    const status = box.querySelector('#raApeStatus');
+    box.querySelectorAll('.raApePkg').forEach(btn => {
+      btn.onclick = () => buyPackage(info, info.packages.find(p => p.id === btn.getAttribute('data-id')), status);
+    });
+  }
+
+  async function buyPackage(info, pkg, status){
+    const eth = window.ethereum;
+    if (!eth) { status.textContent = 'No wallet found. Install MetaMask.'; return; }
+    try {
+      status.textContent = 'Connecting wallet...';
+      const accounts = await eth.request({ method: 'eth_requestAccounts' });
+      const from = accounts && accounts[0];
+      if (!from) { status.textContent = 'No account.'; return; }
+      // Ensure ApeChain
+      try {
+        await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: info.chainId }] });
+      } catch (e) {
+        if (e && (e.code === 4902 || /unrecognized|not added/i.test(String(e.message)))) {
+          await eth.request({ method: 'wallet_addEthereumChain', params: [{
+            chainId: info.chainId, chainName: info.chainName,
+            rpcUrls: [info.rpcUrl], nativeCurrency: info.currency
+          }]});
+        } else throw e;
+      }
+      // Pre-check APE balance so "not enough funds" is communicated clearly
+      // instead of a confusing wallet error or silent cancel.
+      try {
+        const balHex = await eth.request({ method: 'eth_getBalance', params: [from, 'latest'] });
+        const bal = BigInt(balHex || '0x0');
+        const need = BigInt(pkg.apeWei) + 10000000000000000n; // + ~0.01 APE gas buffer
+        if (bal < need) {
+          const fmt = (wei) => (Number(wei / 1000000000000000n) / 1000).toFixed(3);
+          status.textContent = 'Not enough APE: this package costs ' + pkg.ape +
+            ' APE (+gas), your wallet has ' + fmt(bal) + ' APE on ApeChain.';
+          return;
+        }
+      } catch(_){ /* balance check best-effort */ }
+      status.textContent = 'Confirm the ' + pkg.ape + ' APE payment in your wallet...';
+      const txHash = await eth.request({ method: 'eth_sendTransaction', params: [{
+        from, to: info.treasury, value: '0x' + BigInt(pkg.apeWei).toString(16)
+      }]});
+      status.textContent = 'Payment sent. Waiting for confirmation...';
+      // Poll redeem until confirmed (up to ~2 min)
+      for (let i = 0; i < 24; i++){
+        await new Promise(r => setTimeout(r, 5000));
+        let j = null;
+        try {
+          j = await fetch('/api/shop/redeem-ape', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txHash, packageId: pkg.id })
+          }).then(r => r.json());
+        } catch(_){}
+        if (j && j.ok) {
+          status.textContent = 'Credited ' + Number(j.credited).toLocaleString() + ' $REBEL!';
+          refreshMe();
+          return;
+        }
+        if (j && !j.pending && j.error && j.error !== 'tx_not_found_yet' && j.error !== 'awaiting_confirmation') {
+          status.textContent = 'Redeem failed: ' + j.error + ' (tx ' + txHash.slice(0, 10) + '...)';
+          return;
+        }
+        status.textContent = 'Waiting for confirmation... (' + (i + 1) + ')';
+      }
+      status.textContent = 'Still pending. Your tx: ' + txHash + ' - reload later; credit is automatic once confirmed and redeemed.';
+    } catch (e) {
+      status.textContent = (e && e.code === 4001)
+        ? 'Payment cancelled in the wallet - nothing was charged.'
+        : ('Payment failed: ' + (e && e.message || e).toString().slice(0, 80));
+    }
+  }
+
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    if (document.getElementById('raSignonCard') || card()) { clearInterval(t); refreshMe(); }
+    if (tries > 60) clearInterval(t);
+  }, 300);
+})();
