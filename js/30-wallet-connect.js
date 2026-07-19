@@ -14,7 +14,7 @@
   box.innerHTML = `
     <div class="panel" style="margin:12px 0;padding:10px;border-radius:8px;background:#121317;border:1px solid rgba(255,255,255,.08);color:#e6e6e6;font-size:12px;line-height:1.4;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <strong style="font-size:13px;">Wallet</strong>
+        <strong style="font-size:13px;cursor:pointer;user-select:none;" id="raW_title" title="Click to collapse/expand">Wallet <span id="raW_caret" style="opacity:.6;font-size:11px;">&#9662;</span></strong>
         <div style="display:flex;gap:6px;align-items:center;">
           <button id="raW_refresh"   class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;display:none;">Refresh</button>
           <button id="raW_disconnect"class="btn" style="padding:6px 10px;border:1px solid rgba(255,255,255,.12);background:#1c1f26;border-radius:6px;color:#fff;cursor:pointer;display:none;">Disconnect</button>
@@ -57,6 +57,35 @@
   const addrEl     = qs('#raW_addr',       box);
   const chainEl    = qs('#raW_chain',      box);
   const hintEl     = qs('#raW_hint',       box);
+
+  // Collapsible: click the Wallet title to hide/show the card body.
+  // Remembers the choice; header buttons stay usable while collapsed.
+  const COLLAPSE_KEY = 'ra_wallet_collapsed';
+  function applyCollapsed(collapsed){
+    ['#raW_row1', '#raW_actions', '#raW_out'].forEach(sel => {
+      const el = qs(sel, box);
+      if (el) el.dataset.raKeepHidden = collapsed ? '1' : '';
+    });
+    box.classList.toggle('ra-wallet-collapsed', collapsed);
+    const caret = qs('#raW_caret', box);
+    if (caret) caret.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+    // Hide only what is currently visible; connect/refresh logic re-shows
+    // sections later, so a CSS rule does the persistent hiding.
+  }
+  if (!document.getElementById('raWalletCollapseCss')) {
+    const st = document.createElement('style');
+    st.id = 'raWalletCollapseCss';
+    st.textContent = '#ra-wallet-mini.ra-wallet-collapsed #raW_row1,#ra-wallet-mini.ra-wallet-collapsed #raW_actions,#ra-wallet-mini.ra-wallet-collapsed #raW_out{display:none !important;}';
+    document.head.appendChild(st);
+  }
+  let walletCollapsed = false;
+  try { walletCollapsed = localStorage.getItem(COLLAPSE_KEY) === '1'; } catch(_){}
+  applyCollapsed(walletCollapsed);
+  qs('#raW_title', box).addEventListener('click', () => {
+    walletCollapsed = !walletCollapsed;
+    try { localStorage.setItem(COLLAPSE_KEY, walletCollapsed ? '1' : '0'); } catch(_){}
+    applyCollapsed(walletCollapsed);
+  });
 
   // --- State
   window.RA_WALLET_STATE = { connected:false, address:null, chainId:null, provider:null };
