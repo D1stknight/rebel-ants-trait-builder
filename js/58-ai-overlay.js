@@ -29,11 +29,20 @@
     const el = base._originalElement || (base.getElement && base.getElement());
     if (!el) return null;
     try {
+      // Cap the snapshot: full-resolution PNG of large partner art exceeds
+      // Vercel's ~4.5MB request cap (HTTP 413 before the function runs).
+      // 1024px is plenty for the model's reference.
+      const natW = el.naturalWidth || el.width || 1024;
+      const natH = el.naturalHeight || el.height || 1024;
+      const MAX = 1024;
+      const sc = Math.min(1, MAX / Math.max(natW, natH));
       const t = document.createElement('canvas');
-      t.width = el.naturalWidth || el.width || 1024;
-      t.height = el.naturalHeight || el.height || 1024;
+      t.width = Math.max(1, Math.round(natW * sc));
+      t.height = Math.max(1, Math.round(natH * sc));
       t.getContext('2d').drawImage(el, 0, 0, t.width, t.height);
-      return t.toDataURL('image/png');
+      let out = t.toDataURL('image/png');
+      if (out.length > 3500000) out = t.toDataURL('image/jpeg', 0.85);
+      return out;
     } catch (e) {
       return 'TAINTED';
     }
