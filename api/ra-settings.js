@@ -32,6 +32,8 @@ const token =
     }
 
     if (req.method === 'POST') {
+      const { isAdminRequest } = require('./_lib/adminAuth');
+      if (!isAdminRequest(req)) return res.status(401).json({ ok:false, error:'unauthorized' });
       // Read JSON body safely
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
