@@ -111,10 +111,16 @@
     if (sec.className) box.className = sec.className;
     box.style.marginTop = '14px';
     box.innerHTML = [
-      '<div style="font-weight:700;font-size:16px;margin-bottom:8px;">AI Overlay <span style="opacity:.55;font-weight:400;font-size:12px;">(admin preview)</span></div>',
+      '<div style="font-weight:700;font-size:16px;margin-bottom:8px;">\ud83d\udc1c Ant-thony\u2019s Workshop <span style="opacity:.55;font-weight:400;font-size:12px;">(admin preview)</span></div>',
       '<input id="raAiOverlayPrompt" type="text" placeholder="e.g. gm coffee mug held in the ant\'s own hands" ',
       ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:8px;" />',
       '<button id="raAiOverlayBtn" class="btn" style="width:100%;">Generate AI Overlay</button>',
+      '<div style="display:flex;gap:6px;margin-top:8px;">',
+      '<button id="raAnthonyIdea" class="btn" style="flex:1;font-size:12px;">\ud83d\udca1 Gimme an idea</button>',
+      '<button id="raAnthonyRoast" class="btn" style="flex:1;font-size:12px;">\ud83d\udd25 Roast it</button>',
+      '<button id="raAnthonyShare" class="btn" style="flex:1;font-size:12px;">\ud83d\udce4 Post to Discord</button>',
+      '</div>',
+      '<div id="raAnthonySpeech" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.04);font-size:13px;line-height:1.35;"><span style="opacity:.6;">Ant-thony:</span> <span id="raAnthonySpeechText"></span></div>',
       '<div id="raAiOverlayStatus" style="margin-top:6px;font-size:12px;opacity:.7;"></div>',
       (isAdmin && window.raSession && window.raSession.isAdmin) ? [
         '<div style="font-weight:600;margin:10px 0 4px;font-size:13px;">AI Pricing <span style="opacity:.5;font-weight:400;font-size:11px;">(admin)</span></div>',
@@ -148,6 +154,65 @@
     const btn = document.getElementById('raAiOverlayBtn');
     const status = document.getElementById('raAiOverlayStatus');
 
+    // ---- Ant-thony ----
+    function anthonySay(t){
+      const box2 = document.getElementById('raAnthonySpeech');
+      const txt = document.getElementById('raAnthonySpeechText');
+      if (box2 && txt) { txt.textContent = t; box2.style.display = ''; }
+    }
+    function canvasSnapshot(){
+      const c = getCanvas(); if (!c) return null;
+      try {
+        const side = Math.max(c.getWidth(), c.getHeight()) || 700;
+        const mult = Math.min(1, 1024 / side);
+        let out = c.toDataURL({ format: 'png', multiplier: mult });
+        if (out.length > 3500000) out = c.toDataURL({ format: 'jpeg', quality: 0.85, multiplier: mult });
+        return out;
+      } catch (_) { return null; }
+    }
+    async function anthonyCall(payload){
+      const r = await fetch('/api/anthony', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      return await r.json().catch(() => null);
+    }
+    const ideaBtn = document.getElementById('raAnthonyIdea');
+    if (ideaBtn) ideaBtn.addEventListener('click', async () => {
+      ideaBtn.disabled = true; anthonySay('...thinking with all six legs...');
+      try {
+        const img = baseToDataURL();
+        const j = await anthonyCall({ mode: 'idea', image: (img && img !== 'TAINTED') ? img : undefined });
+        if (j && j.ok) {
+          anthonySay(j.say || 'Try this one.');
+          if (j.prompt) {
+            const pi = document.getElementById('raAiOverlayPrompt');
+            if (pi) pi.value = j.prompt;
+          }
+        } else anthonySay('My antennae are jammed - try me again in a sec.');
+      } finally { ideaBtn.disabled = false; }
+    });
+    const roastBtn = document.getElementById('raAnthonyRoast');
+    if (roastBtn) roastBtn.addEventListener('click', async () => {
+      roastBtn.disabled = true; anthonySay('...oh, you want the SMOKE? One sec...');
+      try {
+        const snap = canvasSnapshot();
+        const j = await anthonyCall({ mode: 'roast', image: snap || undefined });
+        anthonySay(j && j.ok ? j.text : 'Roast machine broke. You got lucky.');
+      } finally { roastBtn.disabled = false; }
+    });
+    const shareBtn = document.getElementById('raAnthonyShare');
+    if (shareBtn) shareBtn.addEventListener('click', async () => {
+      shareBtn.disabled = true; const prevT = shareBtn.textContent; shareBtn.textContent = 'Posting...';
+      try {
+        const snap = canvasSnapshot();
+        if (!snap) { anthonySay('Nothing on the canvas to show off yet.'); return; }
+        const r = await fetch('/api/share-discord', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: snap }) });
+        const j = await r.json().catch(() => null);
+        if (j && j.ok) anthonySay('Posted to the colony. Go collect your flowers. \ud83d\udc1c');
+        else if (j && j.error === 'not_configured') anthonySay('Discord sharing is not wired up yet - tell the boss to add the webhook.');
+        else if (j && j.error === 'sign_in_required') anthonySay('Sign in as a commander first, then we post.');
+        else anthonySay('Discord is not answering the door: ' + ((j && j.error) || 'unknown'));
+      } finally { shareBtn.disabled = false; shareBtn.textContent = prevT; }
+    });
+
     btn.addEventListener('click', async () => {
       const src = baseToDataURL();
       if (!src) { status.textContent = 'Load an NFT or upload a base image first.'; return; }
@@ -155,7 +220,7 @@
       const prompt = (document.getElementById('raAiOverlayPrompt').value || '').trim();
       btn.disabled = true;
       const prev = btn.textContent;
-      btn.textContent = 'Generating (can take up to a minute)...';
+      btn.textContent = 'Ant-thony is cooking (up to a minute)...';
       status.textContent = '';
       try {
         const r = await fetch('/api/generate-overlay', {
@@ -166,7 +231,7 @@
         const j = await r.json().catch(() => null);
         if (r.ok && j && j.ok && j.imageB64) {
           addOverlayFromURL('data:image/png;base64,' + j.imageB64);
-          status.textContent = 'Done. Saved to your shelf below.' + (j.charged ? (' Charged ' + j.charged + ' $REBEL.') : '');
+          status.textContent = 'Hot off the mandibles - saved to your shelf.' + (j.charged ? (' Charged ' + j.charged + ' $REBEL.') : '');
           refreshShelf();
           try { window.raRefreshSession && window.raRefreshSession(); } catch(_){}
         } else if (j && j.error === 'sign_in_required') {
