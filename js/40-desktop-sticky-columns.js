@@ -105,7 +105,7 @@
 
   function normalizeUrl(u){
     if (!u) return null;
-    if (u.startsWith('ipfs://')) return 'https://cloudflare-ipfs.com/ipfs/' + u.replace('ipfs://','').replace(/^ipfs\//,'');
+    if (u.startsWith('ipfs://')) return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/' + u.replace('ipfs://','').replace(/^ipfs\//,'');
     if (u.startsWith('ar://'))   return 'https://arweave.net/' + u.replace('ar://','');
     return u;
   }
@@ -123,10 +123,10 @@ function __ipfsPath(u){
 function __expandIpfsCandidates(u){
   const p = __ipfsPath(u);
   if (!p) return u ? [u] : [];
+  // Dead public gateways removed (cloudflare-ipfs shut down; nftstorage
+  // unreliable). Dedicated Pinata gateway first, generic survivors after.
   const bases = [
-    'https://nftstorage.link/ipfs/',
-    'https://cloudflare-ipfs.com/ipfs/',
-    'https://w3s.link/ipfs/',
+    'https://brown-ready-shark-280.mypinata.cloud/ipfs/',
     'https://ipfs.io/ipfs/',
     'https://gateway.pinata.cloud/ipfs/'
   ];

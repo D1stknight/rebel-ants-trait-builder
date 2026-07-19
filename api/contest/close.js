@@ -7,10 +7,10 @@ export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    const provided = String(req.query.admin || req.headers['x-admin'] || '');
-    const secret   = String(process.env.RA_ADMIN_KEY || '');
-
-    if (!secret || !provided || provided !== secret) {
+    const { isAdminRequest } = require('../_lib/adminAuth');
+    const hdr = String(req.headers['x-admin'] || '').trim();
+    const legacyHdr = !!(process.env.RA_ADMIN_KEY && hdr && hdr === process.env.RA_ADMIN_KEY);
+    if (!legacyHdr && !isAdminRequest(req)) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 

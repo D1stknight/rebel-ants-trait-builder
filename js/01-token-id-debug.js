@@ -59,7 +59,7 @@ async function fetchAsDataURL(url){
 function normalize(u){
   if (!u) return null;
   if (u.startsWith("ipfs://"))
-    return "https://cloudflare-ipfs.com/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
+    return "https://brown-ready-shark-280.mypinata.cloud/ipfs/"+u.replace("ipfs://","").replace(/^ipfs\//,"");
   if (u.startsWith("ar://"))
     return "https://arweave.net/"+u.replace("ar://","");
   return u;

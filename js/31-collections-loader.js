@@ -297,7 +297,7 @@ function normalizeMetadataUrl(uri) {
   
   // Handle IPFS
   if (uri.startsWith('ipfs://')) {
-    return 'https://cloudflare-ipfs.com/ipfs/' + uri.replace('ipfs://', '').replace(/^ipfs\//, '');
+    return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/' + uri.replace('ipfs://', '').replace(/^ipfs\//, '');
   }
   
   // Handle Arweave

@@ -25,8 +25,8 @@
 
   function ipfsToHttp(u){
     if (!u) return u;
-    if (u.startsWith('ipfs://ipfs/')) return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(12);
-    if (u.startsWith('ipfs://'))      return 'https://cloudflare-ipfs.com/ipfs/'+u.slice(7);
+    if (u.startsWith('ipfs://ipfs/')) return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/'+u.slice(12);
+    if (u.startsWith('ipfs://'))      return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/'+u.slice(7);
     return u;
   }
 
