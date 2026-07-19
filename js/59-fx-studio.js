@@ -15,7 +15,7 @@
   const getCanvas = () => (window.canvas && window.canvas.lowerCanvasEl) ? window.canvas : null;
 
   // ---------------- Presets: [effect]: strength 0..1 ----------------
-  const FX_KEYS = ['glitch','rgb','scan','crt','shake','glow','embers','smoke','rain','shimmer','holo','neon','pixel','wave','zoom','spin','vig'];
+  const FX_KEYS = ['glitch','rgb','scan','crt','shake','glow','embers','smoke','rain','shimmer','holo','neon','pixel','wave','zoom','spin','vig','duo','kaleido','fish','grain','poster','strobe'];
   const PRESETS = [
     { id:'cyber_glitch', name:'Cyber Glitch',   fx:{ glitch:.8, rgb:.6, shake:.25, scan:.3 } },
     { id:'retro_vhs',    name:'Retro VHS',      fx:{ scan:.85, crt:.55, rgb:.3, shake:.08 } },
@@ -28,7 +28,23 @@
     { id:'earthquake',   name:'Earthquake',     fx:{ shake:.9, glitch:.3 } },
     { id:'dreamy',       name:'Dreamy Drift',   fx:{ zoom:.55, smoke:.3, glow:.4 } },
     { id:'pixel_riot',   name:'Pixel Riot',     fx:{ pixel:.7, glitch:.45 } },
-    { id:'slow_flex',    name:'Slow Flex',      fx:{ zoom:.6, spin:.2, vig:.3 } }
+    { id:'slow_flex',    name:'Slow Flex',      fx:{ zoom:.6, spin:.2, vig:.3 } },
+    { id:'matrix',       name:'Matrix Rain',    fx:{ duo:.85, rain:.7, scan:.4 },              duo:[[0.05,0.9,0.25],[0.0,0.08,0.02]] },
+    { id:'bloodmoon',    name:'Bloodmoon',      fx:{ duo:.8, vig:.5, smoke:.3 },               duo:[[1.0,0.25,0.15],[0.08,0.0,0.02]] },
+    { id:'arctic',       name:'Arctic Ice',     fx:{ duo:.6, shimmer:.4, glow:.35 },           duo:[[0.75,0.95,1.0],[0.05,0.15,0.3]] },
+    { id:'sepia_film',   name:'Sepia Film',     fx:{ duo:.75, grain:.6, vig:.45, crt:.2 },     duo:[[0.95,0.82,0.6],[0.15,0.09,0.04]] },
+    { id:'golden_hour',  name:'Golden Hour',    fx:{ duo:.5, glow:.5, vig:.25 },               duo:[[1.0,0.85,0.55],[0.25,0.1,0.05]] },
+    { id:'toxic',        name:'Toxic Ooze',     fx:{ duo:.7, wave:.4, smoke:.35 },             duo:[[0.6,1.0,0.2],[0.2,0.0,0.35]] },
+    { id:'film_noir',    name:'Film Noir',      fx:{ duo:.9, grain:.5, vig:.55, rain:.25 },    duo:[[0.95,0.95,0.95],[0.03,0.03,0.05]] },
+    { id:'kaleido_trip', name:'Kaleido Trip',   fx:{ kaleido:.85, spin:.3, rgb:.35 } },
+    { id:'fisheye',      name:'Fisheye Bounce', fx:{ fish:.7, zoom:.3 } },
+    { id:'strobe_rave',  name:'Strobe Rave',    fx:{ strobe:.6, rgb:.5, shake:.3 } },
+    { id:'poster_pop',   name:'Posterized Pop', fx:{ poster:.7, neon:.5 } },
+    { id:'arcade_8bit',  name:'8-Bit Arcade',   fx:{ pixel:.6, poster:.6, scan:.35 } },
+    { id:'cursed_vhs',   name:'Cursed VHS',     fx:{ crt:.5, scan:.7, glitch:.5, grain:.5, duo:.3 }, duo:[[0.8,0.9,0.85],[0.05,0.02,0.08]] },
+    { id:'ghost_signal', name:'Ghost Signal',   fx:{ holo:.7, smoke:.4, strobe:.2, rgb:.2 } },
+    { id:'magma',        name:'Magma Core',     fx:{ embers:.8, duo:.45, shimmer:.4 },         duo:[[1.0,0.5,0.1],[0.15,0.0,0.0]] },
+    { id:'starfield',    name:'Deep Space',     fx:{ embers:.7, duo:.6, vig:.5 },              duo:[[0.7,0.85,1.0],[0.0,0.02,0.08]] }
   ];
 
   // ---------------- Shaders ----------------
@@ -41,7 +57,8 @@
   uniform sampler2D uTex;
   uniform float uT;         // seconds * speed
   uniform vec2  uRes;
-  uniform float uFx[17];    // strengths, order = FX_KEYS
+  uniform float uFx[23];    // strengths, order = FX_KEYS
+  uniform vec3 uDuoA; uniform vec3 uDuoB;
   in vec2 vUv; out vec4 outC;
 
   float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
@@ -55,7 +72,8 @@
     float gGlitch=uFx[0], gRgb=uFx[1], gScan=uFx[2], gCrt=uFx[3], gShake=uFx[4],
           gGlow=uFx[5], gEmb=uFx[6], gSmoke=uFx[7], gRain=uFx[8], gShim=uFx[9],
           gHolo=uFx[10], gNeon=uFx[11], gPix=uFx[12], gWave=uFx[13], gZoom=uFx[14],
-          gSpin=uFx[15], gVig=uFx[16];
+          gSpin=uFx[15], gVig=uFx[16], gDuo=uFx[17], gKal=uFx[18], gFish=uFx[19],
+          gGrain=uFx[20], gPoster=uFx[21], gStrobe=uFx[22];
     vec2 uv = vUv;
     float t = uT;
 
@@ -69,6 +87,23 @@
       float a = 0.06*gSpin*sin(t*0.5);
       vec2 p = uv-0.5; float ca=cos(a), sa=sin(a);
       uv = vec2(ca*p.x - sa*p.y, sa*p.x + ca*p.y)+0.5;
+    }
+    // --- kaleidoscope ---
+    if (gKal > 0.){
+      vec2 p = uv - 0.5;
+      float seg = 6.2831853/6.0;
+      float a = atan(p.y, p.x);
+      float r = length(p);
+      a = mod(a, seg); a = abs(a - seg*0.5);
+      vec2 kuv = vec2(cos(a), sin(a))*r + 0.5;
+      uv = mix(uv, kuv, gKal);
+    }
+    // --- fisheye pulse ---
+    if (gFish > 0.){
+      vec2 p = uv*2.-1.;
+      float k = gFish*0.35*(0.5+0.5*sin(t*1.3));
+      p *= 1.0 - k*dot(p,p)*0.5;
+      uv = p*0.5+0.5;
     }
     // --- CRT barrel ---
     if (gCrt > 0.){
@@ -169,6 +204,26 @@
       float s = fbm(uvc*3.0 + vec2(t*0.15, -t*0.1));
       col = mix(col, col*0.6 + vec3(0.5,0.5,0.55)*0.5, gSmoke*0.5*s);
     }
+    // --- posterize ---
+    if (gPoster > 0.){
+      float levels = mix(12.0, 4.0, gPoster);
+      col = floor(col*levels)/levels;
+    }
+    // --- film grain ---
+    if (gGrain > 0.){
+      col += gGrain*0.12*(hash(uvc*uRes + fract(t)*137.0)-.5);
+    }
+    // --- duotone color grade ---
+    if (gDuo > 0.){
+      float luma = dot(col, vec3(.299,.587,.114));
+      col = mix(col, mix(uDuoB, uDuoA, luma), gDuo);
+    }
+    // --- strobe ---
+    if (gStrobe > 0.){
+      float fl = step(0.72, noise(vec2(t*10.0, 5.5)));
+      col *= 1.0 + gStrobe*0.8*fl;
+      col *= 1.0 - gStrobe*0.25*step(0.85, noise(vec2(t*13.0, 8.8)));
+    }
     // --- vignette ---
     if (gVig > 0.){
       vec2 p = uvc*2.-1.;
@@ -180,7 +235,7 @@
   }`;
 
   // ---------------- WebGL setup ----------------
-  let gl=null, prog=null, tex=null, overlay=null, uT=null, uRes=null, uFxLoc=null;
+  let gl=null, prog=null, tex=null, overlay=null, uT=null, uRes=null, uFxLoc=null, uDuoA=null, uDuoB=null;
   function initGL(w, h){
     overlay = document.createElement('canvas');
     overlay.id = 'raFxOverlay';
@@ -214,17 +269,22 @@
     uT   = gl.getUniformLocation(prog, 'uT');
     uRes = gl.getUniformLocation(prog, 'uRes');
     uFxLoc = gl.getUniformLocation(prog, 'uFx');
+    uDuoA = gl.getUniformLocation(prog, 'uDuoA');
+    uDuoB = gl.getUniformLocation(prog, 'uDuoB');
     gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
     return true;
   }
 
   // ---------------- Runtime state ----------------
   let running=false, raf=0, t0=0;
-  function currentFxArray(){
+  function currentPreset(){
     const presetId = document.getElementById('raFxPreset')?.value;
-    const p = PRESETS.find(x => x.id === presetId) || PRESETS[0];
+    return PRESETS.find(x => x.id === presetId) || PRESETS[0];
+  }
+  function currentFxArray(){
+    const p = currentPreset();
     const master = parseFloat(document.getElementById('raFxMaster')?.value || '1');
-    return FX_KEYS.map(k => (p.fx[k] || 0) * master);
+    return FX_KEYS.map(k => Math.min(1.5, (p.fx[k] || 0) * master));
   }
   function frame(now){
     if (!running) return;
@@ -243,6 +303,9 @@
     gl.uniform1f(uT, tt);
     gl.uniform2f(uRes, overlay.width, overlay.height);
     gl.uniform1fv(uFxLoc, currentFxArray());
+    const duo = currentPreset().duo || [[1,1,1],[0,0,0]];
+    gl.uniform3f(uDuoA, duo[0][0], duo[0][1], duo[0][2]);
+    gl.uniform3f(uDuoB, duo[1][0], duo[1][1], duo[1][2]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     raf = requestAnimationFrame(frame);
   }
