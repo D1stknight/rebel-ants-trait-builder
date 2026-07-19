@@ -110,6 +110,21 @@
       '<div id="raAiShelf" style="display:flex;gap:8px;flex-wrap:wrap;max-height:140px;overflow:auto;"></div>'
     ].join('');
     sec.parentNode.insertBefore(box, sec.nextSibling);
+    box.style.flex = '0 0 auto';
+
+    // Layout guard: the right column is a scrolling flex container, and the
+    // Published Overlays section is its only child with overflow:auto, so
+    // flexbox collapses it to ~22px once total content exceeds the viewport.
+    // Pin its flex-shrink so it keeps natural height (column scrolls instead).
+    const pinPublished = () => {
+      const p = document.getElementById('ra-live-overlays-sec');
+      if (p && p.style.flex !== '0 0 auto') p.style.flex = '0 0 auto';
+      return !!p;
+    };
+    if (!pinPublished()) {
+      let n = 0;
+      const pt = setInterval(() => { if (pinPublished() || ++n > 60) clearInterval(pt); }, 500);
+    }
 
     const btn = document.getElementById('raAiOverlayBtn');
     const status = document.getElementById('raAiOverlayStatus');
