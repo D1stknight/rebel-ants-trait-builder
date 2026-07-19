@@ -314,6 +314,13 @@ if (/^data:image\//i.test(tokenURI) ||
   }
 }
 
+    // Foreign-CID images (e.g. Saints of LA) fail on our dedicated Pinata
+    // gateway, which only serves our own pins. Route anything ipfs-flavored
+    // through /api/proxy-img, which tries dedicated + public gateways
+    // server-side and streams whichever works.
+    if (image && (/^ipfs:\/\//i.test(image) || /\/ipfs\//i.test(image))) {
+      image = '/api/proxy-img?u=' + encodeURIComponent(image);
+    }
     return json(res, 200, { ok: !!image, chain, tokenURI, image: image || '' });
   } catch (e) {
     return json(res, 200, { ok: false, error: String(e?.message || e) });
