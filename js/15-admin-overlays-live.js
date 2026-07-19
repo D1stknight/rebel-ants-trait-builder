@@ -15,6 +15,10 @@
   window.__RA_ADMIN_OVERLAYS_LIVE_V2__ = true;
 
   const KEY = 'ra2_published';
+  // DISABLED: this module rebuilt the legacy localStorage 'Published Overlays'
+  // grid inside the Overlays card, duplicating items now that the server-backed
+  // live shelf (js/52) is the single source of truth.
+  return;
   const isAdmin = /\badmin=1\b/i.test(location.search);
 
   const $  = (s, r=document) => r.querySelector(s);

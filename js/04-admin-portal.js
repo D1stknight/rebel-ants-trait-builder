@@ -9,6 +9,12 @@
 // definition still exists in its original file and will harmlessly overwrite this
 // one when that file loads (function declarations don't error on redeclaration).
 function renderPublishedShelf(){
+  // Legacy localStorage shelf, superseded by the server-backed
+  // "Published Overlays (live)" grid (js/52). Rendering it caused published
+  // items to appear twice. One-time cleanup of the old storage, then no-op.
+  try { localStorage.removeItem('ra2_published'); } catch(_){}
+  return;
+
   function getShelf(){ try{ return JSON.parse((localStorage||sessionStorage).getItem('ra2_published')||'[]'); }catch(_){ return []; } }
   function ensureShelf(){
     if ($("ra2Shelf")) return true;
@@ -171,7 +177,6 @@ function renderPublishedShelf(){
         setMsg('Publishing...');
         publishToServer(item).then(rr => {
           if (rr.ok) {
-            const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
             setMsg(`Published: ${item.name}`);
             try { window.raReloadLiveOverlays && window.raReloadLiveOverlays(); } catch(_){}
           } else {
