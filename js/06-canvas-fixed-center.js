@@ -32,10 +32,6 @@
     const card = getCanvasCard();
     if (!card) { setTimeout(install, 180); return; }
     if (card.__raFixedCenterApplied) return;
-    // Don't snapshot the ghost until layout has settled: measuring the card
-    // mid-load produced a collapsed ghost (the thin-strip canvas bug that
-    // needed refreshes). Retry until the card has a sane width.
-    if ((card.offsetWidth || 0) < 200) { setTimeout(install, 250); return; }
     card.__raFixedCenterApplied = true;
 
     // Respect mobile disable

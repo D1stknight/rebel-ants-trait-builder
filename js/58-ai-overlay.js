@@ -222,7 +222,17 @@
     const box = document.getElementById('raAiOverlayBox');
     if (allowed()) {
       if (!box) injectUI();
-      else { box.style.display = ''; refreshShelf(); }
+      else {
+        box.style.display = '';
+        refreshShelf();
+        // On ?admin=1 the card injects before the session arrives, so the
+        // session-gated pricing editor was skipped. Rebuild once we know
+        // this is an admin commander.
+        if (window.raSession && window.raSession.isAdmin && !document.getElementById('raAiCostInput')) {
+          box.remove();
+          injectUI();
+        }
+      }
       updateCostLabel();
     }
     else if (box) box.style.display = 'none';
