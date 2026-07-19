@@ -195,6 +195,19 @@ async function resolveTokenMedia(contract, tokenId, col) {
   const slug = col.slug || chainSlugFromId(col.chainId) || 'ethereum';
   const tokenKey = `${contract}:${tokenId}`;
   
+  // Step 0: our server resolver - reads tokenURI on-chain server-side and
+  // returns a /api/proxy-img URL, so foreign-CID collections (Saints of LA)
+  // work regardless of which gateways the browser can reach.
+  try {
+    const chainParam = ({ 1: 'eth', 33139: 'ape' })[Number(col.chainId)] ||
+      (/ape/i.test(String(col.chain || col.chainId || '')) ? 'ape' : 'eth');
+    const r0 = await fetch('/api/token-media?contract=' + contract + '&id=' + encodeURIComponent(tokenId) + '&chain=' + chainParam, { cache: 'no-store' });
+    if (r0.ok) {
+      const j0 = await r0.json();
+      if (j0 && j0.ok && j0.image) return j0.image;
+    }
+  } catch (err) { console.warn('token-media lookup failed:', err); }
+
   // Step A: Try Reservoir first
   const reservoirUrl = `https://api.reservoir.tools/tokens/v7?tokens=${encodeURIComponent(tokenKey)}&chain=${encodeURIComponent(slug)}&includeAttributes=false&limit=1`;
   
@@ -297,7 +310,7 @@ function normalizeMetadataUrl(uri) {
   
   // Handle IPFS
   if (uri.startsWith('ipfs://')) {
-    return 'https://brown-ready-shark-280.mypinata.cloud/ipfs/' + uri.replace('ipfs://', '').replace(/^ipfs\//, '');
+    return 'https://gateway.pinata.cloud/ipfs/' + uri.replace('ipfs://', '').replace(/^ipfs\//, '');
   }
   
   // Handle Arweave
