@@ -26,6 +26,17 @@ const { resolveByPlayerId, debit, credit, billingConfigured } = require('./_lib/
 
 const OPENAI_URL = 'https://api.openai.com/v1/images/edits';
 const LIST_KEY = 'ra:ai-overlays';
+const AI_COST_KEY = 'ra:settings:aiCost';
+
+// Cost is admin-adjustable at runtime (KV), env var as fallback default.
+async function currentAiCost(){
+  try {
+    const v = await kvGet(AI_COST_KEY);
+    const n = parseInt(v, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  } catch(_){}
+  return Math.max(0, parseInt(process.env.REBEL_COST_PER_GEN || '25', 10) || 0);
+}
 const MAX_SAVED = 200;
 
 module.exports = async (req, res) => {
@@ -44,7 +55,7 @@ module.exports = async (req, res) => {
   // frontend admin-gated). Secret set -> sign-in required. SERVICE_API_KEY
   // also set + cost > 0 -> each generation debits the central economy ledger.
   const SIGNON_ON = !!process.env.NAME_SESSION_SECRET;
-  const COST = Math.max(0, parseInt(process.env.REBEL_COST_PER_GEN || '25', 10) || 0);
+  const COST = await currentAiCost();
   let playerId = null, billedUser = null, idem = null;
   if (SIGNON_ON) {
     playerId = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
@@ -56,16 +67,16 @@ module.exports = async (req, res) => {
         return res.status(402).json({ ok: false, error: 'insufficient_points', balance: billedUser.balance, cost: COST });
       }
       idem = 'aiov-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-      const d = await debit({ userId: billedUser.userId, amount: COST, type: 'ai_overlay',
-        reason: 'AI overlay generation', idempotencyKey: idem, metadata: { playerId } });
+      const d = await debit({ userId: billedUser.userId, amount: COST, type: 'game_spend',
+        reason: 'AI overlay generation', idempotencyKey: idem, metadata: { playerId, feature: 'ai_overlay' } });
       if (!d.ok) return res.status(502).json({ ok: false, error: 'debit_failed' });
     }
   }
   const refundIfBilled = async (why) => {
     if (!billedUser) return;
     try {
-      await credit({ userId: billedUser.userId, amount: COST, type: 'ai_overlay_refund',
-        reason: 'Refund: generation failed (' + why + ')', idempotencyKey: idem + '-refund' });
+      await credit({ userId: billedUser.userId, amount: COST, type: 'refund',
+        reason: 'Refund: AI overlay generation failed (' + why + ')', idempotencyKey: idem + '-refund' });
     } catch (e) { console.error('[gen-overlay] refund failed', e && e.message); }
   };
 

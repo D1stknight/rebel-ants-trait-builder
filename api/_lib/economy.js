@@ -20,13 +20,17 @@ async function resolveByPlayerId(playerId){
   } catch { return null; }
 }
 async function move(kind, args){
+  // Economy Core enforces type enums: debit accepts game_spend|spend,
+  // credit accepts game_reward|refund|earn|claim_code. Unknown types are
+  // rejected (this caused debit_failed with custom types like ai_overlay).
+  const defType = (kind === 'debit') ? 'game_spend' : 'game_reward';
   try {
     const r = await fetch(ECONOMY_BASE_URL + '/api/internal/' + kind, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({
         userId: args.userId,
         amount: Math.max(0, Math.floor(args.amount)),
-        type: args.type || 'game_spend',
+        type: args.type || defType,
         source: 'trait-builder',
         reason: args.reason,
         metadata: args.metadata,
@@ -34,7 +38,10 @@ async function move(kind, args){
       })
     });
     const j = await r.json().catch(() => null);
-    if (!r.ok || !j || !j.ok) return { ok: false, error: (j && j.error) || ('HTTP ' + r.status) };
+    if (!r.ok || !j || !j.ok) {
+      console.error('[economy] ' + kind + ' failed', r.status, (j && j.error) || '');
+      return { ok: false, error: (j && j.error) || ('HTTP ' + r.status) };
+    }
     return { ok: true, balance: Number(j.balance != null ? j.balance : NaN) };
   } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 }

@@ -70,7 +70,7 @@ module.exports = async (req, res) => {
   // Mark used BEFORE credit to close the double-spend race; roll back if credit fails.
   await kvSet(usedKey, { playerId, packageId, ts: Date.now() });
   const c = await credit({
-    userId: user.userId, amount: pkg.rebel, type: 'ape_purchase',
+    userId: user.userId, amount: pkg.rebel, type: 'earn',
     reason: 'APE package ' + pkg.name + ' (' + pkg.ape + ' APE)',
     idempotencyKey: 'apetx-' + txHash,
     metadata: { txHash, packageId, playerId }

@@ -107,6 +107,15 @@
       ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:8px;" />',
       '<button id="raAiOverlayBtn" class="btn" style="width:100%;">Generate AI Overlay</button>',
       '<div id="raAiOverlayStatus" style="margin-top:6px;font-size:12px;opacity:.7;"></div>',
+      (window.raSession && window.raSession.isAdmin) || isAdmin ? [
+        '<div style="font-weight:600;margin:10px 0 4px;font-size:13px;">AI Pricing <span style="opacity:.5;font-weight:400;font-size:11px;">(admin)</span></div>',
+        '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">',
+        '<input id="raAiCostInput" type="number" min="0" max="100000" style="width:90px;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px;" />',
+        '<span style="font-size:12px;opacity:.7;">$REBEL per generation</span>',
+        '<button id="raAiCostSave" class="btn" style="padding:6px 10px;">Save</button>',
+        '</div>',
+        '<div id="raAiCostStatus" style="font-size:11px;opacity:.7;margin-bottom:6px;"></div>'
+      ].join('') : '',
       '<div style="font-weight:600;margin:10px 0 6px;font-size:13px;">Saved generations</div>',
       '<div id="raAiShelf" style="display:flex;gap:8px;flex-wrap:wrap;max-height:140px;overflow:auto;"></div>'
     ].join('');
@@ -167,6 +176,31 @@
     });
 
     refreshShelf();
+
+    // Admin pricing editor wiring (present only for admins)
+    const costInput = document.getElementById('raAiCostInput');
+    const costSave = document.getElementById('raAiCostSave');
+    const costStatus = document.getElementById('raAiCostStatus');
+    if (costInput && costSave) {
+      fetch('/api/ai-settings', { cache: 'no-store' }).then(r => r.json()).then(j => {
+        if (j && j.ok) { costInput.value = j.costPerGen; costStatus.textContent = 'Current: ' + j.costPerGen + ' (' + j.source + ')'; }
+      }).catch(() => {});
+      costSave.addEventListener('click', async () => {
+        const n = parseInt(costInput.value, 10);
+        if (!Number.isFinite(n) || n < 0) { costStatus.textContent = 'Enter a valid number.'; return; }
+        costSave.disabled = true;
+        try {
+          const r = await fetch('/api/ai-settings', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ costPerGen: n })
+          });
+          const j = await r.json().catch(() => null);
+          costStatus.textContent = (r.ok && j && j.ok) ? ('Saved: ' + j.costPerGen + ' $REBEL - live immediately.') : ('Failed: ' + ((j && j.error) || r.status));
+          if (r.ok && j && j.ok) { try { window.raRefreshSession && window.raRefreshSession(); } catch(_){} }
+        } catch (e) { costStatus.textContent = 'Failed: network'; }
+        costSave.disabled = false;
+      });
+    }
   }
 
   function allowed(){ return isAdmin || !!window.raSession; }
