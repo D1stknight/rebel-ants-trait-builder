@@ -107,7 +107,7 @@
       ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:8px;" />',
       '<button id="raAiOverlayBtn" class="btn" style="width:100%;">Generate AI Overlay</button>',
       '<div id="raAiOverlayStatus" style="margin-top:6px;font-size:12px;opacity:.7;"></div>',
-      (window.raSession && window.raSession.isAdmin) ? [
+      (isAdmin && window.raSession && window.raSession.isAdmin) ? [
         '<div style="font-weight:600;margin:10px 0 4px;font-size:13px;">AI Pricing <span style="opacity:.5;font-weight:400;font-size:11px;">(admin)</span></div>',
         '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">',
         '<input id="raAiCostInput" type="number" min="0" max="100000" style="width:90px;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px;" />',
@@ -228,7 +228,7 @@
         // On ?admin=1 the card injects before the session arrives, so the
         // session-gated pricing editor was skipped. Rebuild once we know
         // this is an admin commander.
-        if (window.raSession && window.raSession.isAdmin && !document.getElementById('raAiCostInput')) {
+        if (isAdmin && window.raSession && window.raSession.isAdmin && !document.getElementById('raAiCostInput')) {
           box.remove();
           injectUI();
         }
