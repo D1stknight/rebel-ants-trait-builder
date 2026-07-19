@@ -147,8 +147,13 @@
         const j = await r.json().catch(() => null);
         if (r.ok && j && j.ok && j.imageB64) {
           addOverlayFromURL('data:image/png;base64,' + j.imageB64);
-          status.textContent = 'Done. Saved to your shelf below.';
+          status.textContent = 'Done. Saved to your shelf below.' + (j.charged ? (' Charged ' + j.charged + ' $REBEL.') : '');
           refreshShelf();
+          try { window.raRefreshSession && window.raRefreshSession(); } catch(_){}
+        } else if (j && j.error === 'sign_in_required') {
+          status.textContent = 'Sign in as a Commander first (left panel).';
+        } else if (j && j.error === 'insufficient_points') {
+          status.textContent = 'Not enough $REBEL: need ' + j.cost + ', you have ' + j.balance + '.';
         } else {
           status.textContent = 'Failed: ' + ((j && j.error) || ('HTTP ' + r.status));
         }
@@ -163,10 +168,26 @@
     refreshShelf();
   }
 
+  function allowed(){ return isAdmin || !!window.raSession; }
+  function updateCostLabel(){
+    const el = document.getElementById('raAiCost');
+    if (!el) return;
+    const s = window.raSession;
+    if (s && s.billing && s.costPerGen > 0) el.textContent = s.costPerGen + ' $REBEL per generation';
+    else if (isAdmin) el.textContent = '(admin preview)';
+    else el.textContent = '';
+  }
+  function syncVisibility(){
+    const box = document.getElementById('raAiOverlayBox');
+    if (allowed()) { if (!box) injectUI(); else box.style.display = ''; updateCostLabel(); }
+    else if (box) box.style.display = 'none';
+  }
+  document.addEventListener('ra-auth-change', syncVisibility);
   let tries = 0;
   const t = setInterval(() => {
     tries++;
-    injectUI();
-    if (document.getElementById('raAiOverlayBox') || tries > 40) clearInterval(t);
+    if (allowed()) injectUI();
+    updateCostLabel();
+    if (document.getElementById('raAiOverlayBox') || tries > 60) clearInterval(t);
   }, 250);
 })();

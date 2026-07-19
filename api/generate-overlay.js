@@ -21,6 +21,8 @@
 
 const { kvGet, kvSet } = require('./_lib/redisAdapter');
 const { put } = require('@vercel/blob');
+const { verifyNameSession, readCookie, NAME_SESSION_COOKIE } = require('./_lib/nameSession');
+const { resolveByPlayerId, debit, credit, billingConfigured } = require('./_lib/economy');
 
 const OPENAI_URL = 'https://api.openai.com/v1/images/edits';
 const LIST_KEY = 'ra:ai-overlays';
@@ -36,6 +38,36 @@ module.exports = async (req, res) => {
     console.error('[gen-overlay] OPENAI_API_KEY not set');
     return res.status(503).json({ ok: false, error: 'not_configured' });
   }
+
+  // ---- Phase 4b: sign-in + $REBEL billing ----
+  // Rollout-safe: no NAME_SESSION_SECRET -> behaves as before (open endpoint,
+  // frontend admin-gated). Secret set -> sign-in required. SERVICE_API_KEY
+  // also set + cost > 0 -> each generation debits the central economy ledger.
+  const SIGNON_ON = !!process.env.NAME_SESSION_SECRET;
+  const COST = Math.max(0, parseInt(process.env.REBEL_COST_PER_GEN || '25', 10) || 0);
+  let playerId = null, billedUser = null, idem = null;
+  if (SIGNON_ON) {
+    playerId = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
+    if (!playerId) return res.status(401).json({ ok: false, error: 'sign_in_required' });
+    if (billingConfigured() && COST > 0) {
+      billedUser = await resolveByPlayerId(playerId);
+      if (!billedUser) return res.status(502).json({ ok: false, error: 'economy_unreachable' });
+      if (billedUser.balance < COST) {
+        return res.status(402).json({ ok: false, error: 'insufficient_points', balance: billedUser.balance, cost: COST });
+      }
+      idem = 'aiov-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      const d = await debit({ userId: billedUser.userId, amount: COST, type: 'ai_overlay',
+        reason: 'AI overlay generation', idempotencyKey: idem, metadata: { playerId } });
+      if (!d.ok) return res.status(502).json({ ok: false, error: 'debit_failed' });
+    }
+  }
+  const refundIfBilled = async (why) => {
+    if (!billedUser) return;
+    try {
+      await credit({ userId: billedUser.userId, amount: COST, type: 'ai_overlay_refund',
+        reason: 'Refund: generation failed (' + why + ')', idempotencyKey: idem + '-refund' });
+    } catch (e) { console.error('[gen-overlay] refund failed', e && e.message); }
+  };
 
   let body = {};
   try { body = (typeof req.body === 'string') ? JSON.parse(req.body) : (req.body || {}); }
@@ -96,11 +128,12 @@ module.exports = async (req, res) => {
     if (!r.ok) {
       const errText = await r.text().catch(() => '');
       console.error('[gen-overlay] openai non-2xx', r.status, errText.slice(0, 300));
+      await refundIfBilled('upstream ' + r.status);
       return res.status(502).json({ ok: false, error: 'upstream_failed', status: r.status });
     }
     const data = await r.json();
     const b64 = data && data.data && data.data[0] && data.data[0].b64_json;
-    if (!b64) return res.status(502).json({ ok: false, error: 'malformed_response' });
+    if (!b64) { await refundIfBilled('malformed response'); return res.status(502).json({ ok: false, error: 'malformed_response' }); }
 
     // Persist to Blob + KV so paid generations aren't lost. Failures here are
     // non-fatal: the user still gets the image back.
@@ -120,10 +153,13 @@ module.exports = async (req, res) => {
     }
 
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ ok: true, imageB64: b64, ...(saved || {}) });
+    const charged = billedUser ? COST : 0;
+    const newBalance = billedUser ? (billedUser.balance - COST) : null;
+    return res.status(200).json({ ok: true, imageB64: b64, charged, newBalance, ...(saved || {}) });
   } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ ok: false, error: 'upstream_timeout' });
+    if (e.name === 'AbortError') { await refundIfBilled('timeout'); return res.status(504).json({ ok: false, error: 'upstream_timeout' }); }
     console.error('[gen-overlay] unexpected', e && e.message);
+    await refundIfBilled('internal error');
     return res.status(500).json({ ok: false, error: 'internal' });
   } finally {
     clearTimeout(timer);
