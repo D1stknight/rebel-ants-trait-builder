@@ -20,8 +20,11 @@ module.exports = async (req, res) => {
   const hook = process.env.DISCORD_WEBHOOK_URL;
   if (!hook) return res.status(200).json({ ok: false, error: 'not_configured' });
 
-  const name = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
-  if (!name) return res.status(401).json({ ok: false, error: 'sign_in_required' });
+  const rawName = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
+  if (!rawName) return res.status(401).json({ ok: false, error: 'sign_in_required' });
+  // Session ids carry an internal "name:" prefix - display name only.
+  const bare = String(rawName).replace(/^name:/i, '');
+  const name = bare.charAt(0).toUpperCase() + bare.slice(1);
 
   let body;
   try { body = await readJSON(req); } catch (e) { return res.status(400).json({ ok: false, error: String(e.message || e) }); }
@@ -36,11 +39,43 @@ module.exports = async (req, res) => {
     '**' + name + '** walked into my Workshop and left with THIS. Respect. 🐜',
     'The colony grows stronger - new drip by **' + name + '**.'
   ];
-  const content = lines[Math.floor(Math.random() * lines.length)];
+  let content = lines[Math.floor(Math.random() * lines.length)];
+
+  // Ant-Thony reviews the piece right in the post (best effort; skipped on
+  // any failure so sharing never blocks on the model).
+  const akey = process.env.ANTHROPIC_API_KEY;
+  if (akey) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      const ar = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': akey, 'anthropic-version': '2023-06-01' },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 200,
+          system: 'You are Ant-Thony, the wise-cracking ant mascot of the Rebel Ants NFT community. Witty, cheeky, playful roasts - never mean-spirited, PG-13. Short and punchy with ant/bug flavor and at most one emoji.',
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: m[1].toLowerCase(), data: m[2] } },
+            { type: 'text', text: 'A community member just made this in the overlay builder and is sharing it with the colony. Give ONE short sentence: a playful roast or hype reaction to something specific you can see. No preamble.' }
+          ] }]
+        })
+      });
+      clearTimeout(timer);
+      const aj = await ar.json().catch(() => null);
+      const line = aj && (aj.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
+      if (ar.ok && line) content += '\n> ' + line.slice(0, 280);
+    } catch (_) {}
+  }
 
   try {
     const form = new FormData();
-    form.append('payload_json', JSON.stringify({ username: 'Ant-Thony', content }));
+    form.append('payload_json', JSON.stringify({
+      username: 'Ant-Thony',
+      avatar_url: 'https://builder.rebelants.io/assets/apple-touch-icon.png',
+      content
+    }));
     const ext = /jpeg/i.test(m[1]) ? 'jpg' : 'png';
     form.append('files[0]', new Blob([buf], { type: m[1] }), 'workshop-' + Date.now() + '.' + ext);
     const r = await fetch(hook, { method: 'POST', body: form });
