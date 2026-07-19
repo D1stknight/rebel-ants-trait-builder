@@ -264,14 +264,16 @@ function loadTrimmedCanvas(url) {
         const id = btn.getAttribute('data-id');
         if (!id || !confirm('Delete this overlay from the live shelf for everyone?')) return;
         let key = '';
-        try { key = localStorage.getItem('ra2_admin_key') || ''; } catch(_){}
-        if (!key) {
-          key = prompt('Admin key (RA_ADMIN_KEY):') || '';
-          if (!key) return;
-          try { localStorage.setItem('ra2_admin_key', key); } catch(_){}
+        if (!(window.raSession && window.raSession.isAdmin)) {
+          try { key = localStorage.getItem('ra2_admin_key') || ''; } catch(_){}
+          if (!key) {
+            key = prompt('Admin key (RA_ADMIN_KEY):') || '';
+            if (!key) return;
+            try { localStorage.setItem('ra2_admin_key', key); } catch(_){}
+          }
         }
         try {
-          const r = await fetch('/api/overlays?id=' + encodeURIComponent(id) + '&admin=' + encodeURIComponent(key), { method: 'DELETE' });
+          const r = await fetch('/api/overlays?id=' + encodeURIComponent(id) + (key ? ('&admin=' + encodeURIComponent(key)) : ''), { method: 'DELETE' });
           if (r.status === 401) {
             try { localStorage.removeItem('ra2_admin_key'); } catch(_){}
             alert('Wrong admin key (cleared) - click x again.');

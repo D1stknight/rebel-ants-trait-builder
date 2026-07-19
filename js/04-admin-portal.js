@@ -76,15 +76,19 @@ function renderPublishedShelf(){
   // Publish to the SERVER shelf (api/overlays -> Redis) so everyone sees it.
   // Requires the RA_ADMIN_KEY; prompted once and cached in localStorage.
   async function publishToServer(item){
+    // Signed-in admin commanders pass via session cookie (no key needed);
+    // otherwise fall back to the legacy admin key prompt.
     let key = '';
-    try { key = localStorage.getItem('ra2_admin_key') || ''; } catch(_){}
-    if (!key) {
-      key = prompt('Admin key (RA_ADMIN_KEY) to publish to the live shelf:') || '';
-      if (!key) return { ok:false, error:'no key' };
-      try { localStorage.setItem('ra2_admin_key', key); } catch(_){}
+    if (!(window.raSession && window.raSession.isAdmin)) {
+      try { key = localStorage.getItem('ra2_admin_key') || ''; } catch(_){}
+      if (!key) {
+        key = prompt('Admin key (RA_ADMIN_KEY) to publish to the live shelf:') || '';
+        if (!key) return { ok:false, error:'no key' };
+        try { localStorage.setItem('ra2_admin_key', key); } catch(_){}
+      }
     }
     try {
-      const r = await fetch('/api/overlays?mode=append&admin=' + encodeURIComponent(key), {
+      const r = await fetch('/api/overlays?mode=append' + (key ? ('&admin=' + encodeURIComponent(key)) : ''), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ overlays: [{ name: item.name, dataURL: item.dataURL }] })

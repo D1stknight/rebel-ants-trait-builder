@@ -3,6 +3,7 @@
 // DELETE ?id=...  -> { ok:true } (removes KV entry + Blob file)
 const { kvGet, kvSet } = require('./_lib/redisAdapter');
 const { del } = require('@vercel/blob');
+const { isAdminRequest } = require('./_lib/adminAuth');
 
 const LIST_KEY = 'ra:ai-overlays';
 
@@ -14,6 +15,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, items: list });
     }
     if (req.method === 'DELETE') {
+      if (!isAdminRequest(req)) return res.status(401).json({ ok:false, error:'unauthorized' });
       const id = String((req.query && req.query.id) || '').trim();
       if (!id) return res.status(400).json({ ok: false, error: 'id_required' });
       let list = await kvGet(LIST_KEY);

@@ -171,11 +171,17 @@
   function allowed(){ return isAdmin || !!window.raSession; }
   function updateCostLabel(){
     const el = document.getElementById('raAiCost');
-    if (!el) return;
+    const btn = document.getElementById('raAiOverlayBtn');
     const s = window.raSession;
-    if (s && s.billing && s.costPerGen > 0) el.textContent = s.costPerGen + ' $REBEL per generation';
-    else if (isAdmin) el.textContent = '(admin preview)';
-    else el.textContent = '';
+    const billed = s && s.billing && s.costPerGen > 0;
+    if (el) {
+      if (billed) el.textContent = s.costPerGen + ' $REBEL per generation';
+      else if (isAdmin) el.textContent = '(admin preview)';
+      else el.textContent = '';
+    }
+    if (btn && !btn.disabled) {
+      btn.textContent = billed ? ('Generate AI Overlay (' + s.costPerGen + ' $REBEL)') : 'Generate AI Overlay';
+    }
   }
   function syncVisibility(){
     const box = document.getElementById('raAiOverlayBox');

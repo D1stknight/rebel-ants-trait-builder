@@ -8,6 +8,8 @@
 // GET  -> { ok:true, collections:[...] }
 // POST -> body: { collections:[{name,address,chainId,tag,rpcUrl?}, ...] }
 
+const { isAdminRequest } = require('./_lib/adminAuth');
+
 module.exports = async (req, res) => {
   const url =
     process.env.UPSTASH_REDIS_REST_URL ||
@@ -37,6 +39,9 @@ module.exports = async (req, res) => {
     }
 
     if (req.method === 'POST') {
+      if (!isAdminRequest(req)) {
+        return res.status(401).json({ ok:false, error:'unauthorized' });
+      }
       // Read body safely
       const chunks = [];
       for await (const c of req) chunks.push(c);
