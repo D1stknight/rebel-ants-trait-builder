@@ -1,27 +1,24 @@
 // ============================================================================
 // 58-ai-overlay.js — Phase 4a: AI Overlay (MVP, admin-gated)
 // ============================================================================
-// Adds an "AI Overlay" mini-panel to the Overlays card. Sends the current base
-// image to /api/generate-overlay and drops the returned transparent PNG onto
-// the canvas as a normal selectable overlay.
-//
-// MVP gating: only visible with ?admin=1 (same gate as the other admin UI)
-// while generation is free. Phase 4b moves this behind commander sign-in +
-// Rebel Economy points/APE packages.
+// Standalone "AI Overlay" card inserted AFTER the Overlays card (v1 appended
+// inside it, which squished the admin publish shelf). Includes a saved-
+// generations shelf backed by /api/ai-overlays (Vercel Blob + KV) so paid
+// generations persist until deleted.
 // ============================================================================
 ;(() => {
-  if (window.__RA_AI_OVERLAY_V1__) return;
-  window.__RA_AI_OVERLAY_V1__ = true;
+  if (window.__RA_AI_OVERLAY_V2__) return;
+  window.__RA_AI_OVERLAY_V2__ = true;
 
   const isAdmin = /\badmin=1\b/i.test(location.search);
   if (!isAdmin) return; // MVP: admin only while free
 
   const getCanvas = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
-  function findOverlaysCard(){
+  function findOverlaysSection(){
     const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong'));
     const h = hs.find(x => /^\s*overlays\s*$/i.test(x.textContent || ''));
-    return h ? (h.closest('section,.card,div') || h.parentElement) : null;
+    return h ? (h.closest('section') || h.closest('.card') || h.parentElement) : null;
   }
 
   function baseToDataURL(){
@@ -37,15 +34,14 @@
       t.getContext('2d').drawImage(el, 0, 0, t.width, t.height);
       return t.toDataURL('image/png');
     } catch (e) {
-      // Tainted canvas (no-CORS fallback path) — cannot serialize
       return 'TAINTED';
     }
   }
 
-  function addOverlayFromB64(b64){
+  function addOverlayFromURL(src){
     const c = getCanvas(); if (!c || !window.fabric) return;
-    const dataURL = 'data:image/png;base64,' + b64;
-    fabric.Image.fromURL(dataURL, (img) => {
+    const opts = src.startsWith('data:') ? {} : { crossOrigin: 'anonymous' };
+    fabric.Image.fromURL(src, (img) => {
       if (!img) return;
       const cw = c.getWidth(), ch = c.getHeight();
       const target = Math.min(cw, ch) * 0.6;
@@ -60,24 +56,60 @@
       c.add(img);
       try { c.setActiveObject(img); } catch(_){}
       c.requestRenderAll && c.requestRenderAll();
-    });
+    }, opts);
+  }
+
+  async function refreshShelf(){
+    const shelf = document.getElementById('raAiShelf');
+    if (!shelf) return;
+    let items = [];
+    try {
+      const j = await fetch('/api/ai-overlays', { cache: 'no-store' }).then(r => r.json());
+      items = (j && j.items) || [];
+    } catch(_){}
+    if (!items.length) { shelf.innerHTML = '<div style="opacity:.5;font-size:12px;">No saved generations yet.</div>'; return; }
+    shelf.innerHTML = '';
+    for (const it of items) {
+      const cell = document.createElement('div');
+      cell.style.cssText = 'position:relative;width:56px;height:56px;flex:0 0 auto;';
+      cell.title = it.prompt || '';
+      const img = document.createElement('img');
+      img.src = it.url;
+      img.style.cssText = 'width:100%;height:100%;object-fit:contain;border:1px solid rgba(255,255,255,.15);border-radius:8px;cursor:pointer;background:rgba(255,255,255,.04);';
+      img.addEventListener('click', () => addOverlayFromURL(it.url));
+      const x = document.createElement('button');
+      x.textContent = 'x';
+      x.style.cssText = 'position:absolute;top:-6px;right:-6px;width:18px;height:18px;line-height:14px;padding:0;font-size:11px;border-radius:50%;border:1px solid rgba(255,255,255,.3);background:#7f1d1d;color:#fff;cursor:pointer;';
+      x.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this saved generation?')) return;
+        try { await fetch('/api/ai-overlays?id=' + encodeURIComponent(it.id), { method: 'DELETE' }); } catch(_){}
+        refreshShelf();
+      });
+      cell.appendChild(img); cell.appendChild(x);
+      shelf.appendChild(cell);
+    }
   }
 
   function injectUI(){
-    const card = findOverlaysCard();
-    if (!card || document.getElementById('raAiOverlayBox')) return;
+    const sec = findOverlaysSection();
+    if (!sec || document.getElementById('raAiOverlayBox')) return;
 
-    const box = document.createElement('div');
+    // Standalone sibling card so we never disturb the Overlays card's layout.
+    const box = document.createElement(sec.tagName || 'section');
     box.id = 'raAiOverlayBox';
-    box.style.cssText = 'margin-top:10px;padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;';
+    if (sec.className) box.className = sec.className;
+    box.style.marginTop = '14px';
     box.innerHTML = [
-      '<div style="font-weight:600;margin-bottom:6px;">AI Overlay <span style="opacity:.55;font-weight:400;font-size:12px;">(admin preview)</span></div>',
-      '<input id="raAiOverlayPrompt" type="text" placeholder="e.g. katana + red aura" ',
+      '<div style="font-weight:700;font-size:16px;margin-bottom:8px;">AI Overlay <span style="opacity:.55;font-weight:400;font-size:12px;">(admin preview)</span></div>',
+      '<input id="raAiOverlayPrompt" type="text" placeholder="e.g. gm coffee mug held in the ant\'s own hands" ',
       ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:8px;" />',
       '<button id="raAiOverlayBtn" class="btn" style="width:100%;">Generate AI Overlay</button>',
-      '<div id="raAiOverlayStatus" style="margin-top:6px;font-size:12px;opacity:.7;"></div>'
+      '<div id="raAiOverlayStatus" style="margin-top:6px;font-size:12px;opacity:.7;"></div>',
+      '<div style="font-weight:600;margin:10px 0 6px;font-size:13px;">Saved generations</div>',
+      '<div id="raAiShelf" style="display:flex;gap:8px;flex-wrap:wrap;max-height:140px;overflow:auto;"></div>'
     ].join('');
-    card.appendChild(box);
+    sec.parentNode.insertBefore(box, sec.nextSibling);
 
     const btn = document.getElementById('raAiOverlayBtn');
     const status = document.getElementById('raAiOverlayStatus');
@@ -86,7 +118,6 @@
       const src = baseToDataURL();
       if (!src) { status.textContent = 'Load an NFT or upload a base image first.'; return; }
       if (src === 'TAINTED') { status.textContent = 'This base image blocks export (CORS). Reload the token and try again.'; return; }
-
       const prompt = (document.getElementById('raAiOverlayPrompt').value || '').trim();
       btn.disabled = true;
       const prev = btn.textContent;
@@ -100,8 +131,9 @@
         });
         const j = await r.json().catch(() => null);
         if (r.ok && j && j.ok && j.imageB64) {
-          addOverlayFromB64(j.imageB64);
-          status.textContent = 'Done. Drag/scale it like any overlay.';
+          addOverlayFromURL('data:image/png;base64,' + j.imageB64);
+          status.textContent = 'Done. Saved to your shelf below.';
+          refreshShelf();
         } else {
           status.textContent = 'Failed: ' + ((j && j.error) || ('HTTP ' + r.status));
         }
@@ -112,9 +144,10 @@
         btn.textContent = prev;
       }
     });
+
+    refreshShelf();
   }
 
-  // The Overlays card renders on load; retry briefly until it exists.
   let tries = 0;
   const t = setInterval(() => {
     tries++;
