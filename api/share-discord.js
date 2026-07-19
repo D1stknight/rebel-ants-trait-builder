@@ -30,8 +30,13 @@ module.exports = async (req, res) => {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   const channelId = process.env.DISCORD_SHARE_CHANNEL_ID;
   const hook = process.env.DISCORD_WEBHOOK_URL;
-  const useBot = !!(botToken && channelId);
-  if (!useBot && !hook) return res.status(200).json({ ok: false, error: 'not_configured' });
+  // Preferred: the economy-core bridge posts through the REAL bot account
+  // (token stays in exactly one app). Same service credentials as the ledger.
+  const ecoBase = (process.env.ECONOMY_BASE_URL || '').replace(/\/$/, '');
+  const svcKey = process.env.SERVICE_API_KEY;
+  const useBridge = !!(ecoBase && svcKey && channelId);
+  const useBot = !useBridge && !!(botToken && channelId);
+  if (!useBridge && !useBot && !hook) return res.status(200).json({ ok: false, error: 'not_configured' });
 
   const rawName = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
   if (!rawName) return res.status(401).json({ ok: false, error: 'sign_in_required' });
@@ -84,6 +89,25 @@ module.exports = async (req, res) => {
     const form = new FormData();
     const ext = /jpeg/i.test(m[1]) ? 'jpg' : 'png';
     const filename = 'workshop-' + Date.now() + '.' + ext;
+
+    if (useBridge) {
+      const r = await fetch(ecoBase + '/api/internal/anthony-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + svcKey },
+        body: JSON.stringify({
+          channelId,
+          content,
+          imageBase64: m[2],
+          imageType: m[1].toLowerCase(),
+          filename
+        })
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || j.ok === false) {
+        return res.status(200).json({ ok: false, error: (j && (j.error + (j.detail ? ' ' + j.detail : ''))) || ('bridge ' + r.status) });
+      }
+      return res.status(200).json({ ok: true, via: 'anthony' });
+    }
 
     if (useBot) {
       // The real Ant-Thony: bot-token REST post (no username/avatar overrides
