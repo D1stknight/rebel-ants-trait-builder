@@ -29,10 +29,15 @@
   function card(){
     let el = document.getElementById('raSignonCard');
     if (el) return el;
-    // Place after the Wallet card in the left column
-    const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,b'));
-    const w = hs.find(x => /^\s*wallet\s*$/i.test(x.textContent || ''));
-    const anchor = w ? (w.closest('section') || w.closest('.card') || w.parentElement) : null;
+    // Place after the Wallet card in the left column. Anchor by the wallet
+    // box id first (its title text now includes a collapse caret, so exact
+    // text matching broke); loose heading match as fallback.
+    let anchor = document.getElementById('ra-wallet-mini');
+    if (!anchor) {
+      const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,b'));
+      const w = hs.find(x => /^\s*wallet\b/i.test(x.textContent || ''));
+      anchor = w ? (w.closest('section') || w.closest('.card') || w.parentElement) : null;
+    }
     el = document.createElement(anchor ? anchor.tagName : 'section');
     if (anchor && anchor.className) el.className = anchor.className;
     el.id = 'raSignonCard';
