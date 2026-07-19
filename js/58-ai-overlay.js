@@ -11,7 +11,8 @@
   window.__RA_AI_OVERLAY_V2__ = true;
 
   const isAdmin = /\badmin=1\b/i.test(location.search);
-  if (!isAdmin) return; // MVP: admin only while free
+  // Visible to admins always; to everyone else once signed in as a Commander.
+  // (Server enforces sign-in + billing regardless of what the UI shows.)
 
   const getCanvas = () => (window.canvas && window.canvas.upperCanvasEl) ? window.canvas : null;
 
