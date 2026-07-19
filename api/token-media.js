@@ -314,11 +314,14 @@ if (/^data:image\//i.test(tokenURI) ||
   }
 }
 
-    // Foreign-CID images (e.g. Saints of LA) fail on our dedicated Pinata
-    // gateway, which only serves our own pins. Route anything ipfs-flavored
-    // through /api/proxy-img, which tries dedicated + public gateways
-    // server-side and streams whichever works.
-    if (image && (/^ipfs:\/\//i.test(image) || /\/ipfs\//i.test(image))) {
+    // Route every external image through /api/proxy-img. Two reasons:
+    // - ipfs: the dedicated gateway only serves our own pins, so foreign
+    //   CIDs (Saints of LA) need the proxy's gateway chain;
+    // - plain http(s): partner hosts (e.g. Genuine Undead's gufiles.art)
+    //   often send no CORS headers, so a crossOrigin canvas load fails
+    //   silently in the browser. The proxy fetches server-side and replies
+    //   with permissive CORS, making any partner's hosting work.
+    if (image && !/^data:/i.test(image) && !image.startsWith('/api/')) {
       image = '/api/proxy-img?u=' + encodeURIComponent(image);
     }
     return json(res, 200, { ok: !!image, chain, tokenURI, image: image || '' });
