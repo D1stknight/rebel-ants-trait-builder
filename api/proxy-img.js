@@ -23,12 +23,12 @@ export default async function handler(req, res) {
     const candidates = [];
     const p = ipfsPath(raw);
     if (p) {
+      // Dedicated gateway first (fast for our own pins; foreign CIDs fall
+      // through to public gateways). Dead gateways removed.
       const bases = [
-        'https://nftstorage.link/ipfs/',
-        'https://cloudflare-ipfs.com/ipfs/',
-        'https://w3s.link/ipfs/',
-        'https://ipfs.io/ipfs/',
-        'https://gateway.pinata.cloud/ipfs/'
+        'https://brown-ready-shark-280.mypinata.cloud/ipfs/',
+        'https://gateway.pinata.cloud/ipfs/',
+        'https://ipfs.io/ipfs/'
       ];
       for (const b of bases) candidates.push(b + p);
     } else {
@@ -80,12 +80,12 @@ export default async function handler(req, res) {
     const candidates = [];
     const p = ipfsPath(raw);
     if (p) {
+      // Dedicated gateway first (fast for our own pins; foreign CIDs fall
+      // through to public gateways). Dead gateways removed.
       const bases = [
-        'https://nftstorage.link/ipfs/',
-        'https://cloudflare-ipfs.com/ipfs/',
-        'https://w3s.link/ipfs/',
-        'https://ipfs.io/ipfs/',
-        'https://gateway.pinata.cloud/ipfs/'
+        'https://brown-ready-shark-280.mypinata.cloud/ipfs/',
+        'https://gateway.pinata.cloud/ipfs/',
+        'https://ipfs.io/ipfs/'
       ];
       for (const b of bases) candidates.push(b + p);
     } else {
