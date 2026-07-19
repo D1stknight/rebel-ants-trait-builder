@@ -38,11 +38,16 @@ async function move(kind, args){
       })
     });
     const j = await r.json().catch(() => null);
-    if (!r.ok || !j || !j.ok) {
-      console.error('[economy] ' + kind + ' failed', r.status, (j && j.error) || '');
+    // IMPORTANT: unlike /resolve, the debit/credit responses do NOT include
+    // an ok flag. Success = HTTP 2xx with a JSON body (and no explicit
+    // ok:false). Requiring j.ok here caused successful debits to be
+    // reported as debit_failed - charging the user with no generation.
+    if (!r.ok || !j || j.ok === false) {
+      console.error('[economy] ' + kind + ' failed', r.status, (j && (j.error || JSON.stringify(j).slice(0, 200))) || '');
       return { ok: false, error: (j && j.error) || ('HTTP ' + r.status) };
     }
-    return { ok: true, balance: Number(j.balance != null ? j.balance : NaN) };
+    const bal = (j.balance != null) ? j.balance : j.newBalance;
+    return { ok: true, balance: Number(bal != null ? bal : NaN) };
   } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 }
 const debit  = (args) => move('debit',  args);
