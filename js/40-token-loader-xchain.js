@@ -21,14 +21,14 @@
   const KNOWN = {
     // name (lowercase) : { address, chain }
     'rebel ants':   { address:'0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221', chain:'ethereum' },
-    'saints of la': { address:'0xbEd2470deD2519c13EaaF3Bd970015ef404d3D20', chain:'ethereum' },
+    'saints of la': { address:'0xb9b8c62590bd0aa759331a1f6cae4c9a1a7c8e1e', chain:'ethereum' }, // Saints of LA | Ascension (post-migration)
     'chumpz':       { address:'0xa9a1d086623475595a02991664742e4a1cbafcb8', chain:'apechain' }
   };
 
   // Quick map: contract → chain
   const CONTRACT_FOR = {
     '0x96c1469c1c76e3bb0e37c23a830d0eea6bcf9221': 'ethereum',
-    '0xbed2470ded2519c13eaaf3bd970015ef404d3d20': 'ethereum',
+    '0xb9b8c62590bd0aa759331a1f6cae4c9a1a7c8e1e': 'ethereum',
     '0xa9a1d086623475595a02991664742e4a1cbafcb8': 'apechain'
   };
 
@@ -382,10 +382,16 @@ if (img){
   // ---------- wire once (capture phase). We only hijack when we know the contract+chain. ----------
   function looksLikeLoadByToken(node){
     if (!node) return false;
-    const btn = node.id && /loadbytoken|loadtoken/i.test(node.id);
+    // The collections-card button (#loadByToken / "Load by Token") belongs
+    // to the registry-driven collections loader, which resolves through the
+    // server and honors the admin Collections editor. Hijacking it here made
+    // editor changes irrelevant (this file's KNOWN map won every click).
+    if (node.id && /loadbytoken/i.test(node.id)) return false;
+    const t0 = (node.textContent || '').toLowerCase().replace(/\s+/g,' ');
+    if (/load[^a-z]*by[^a-z]*token/.test(t0)) return false;
+    const btn = node.id && /loadtoken/i.test(node.id);
     if (btn) return true;
-    const t = (node.textContent || '').toLowerCase().replace(/\s+/g,' ');
-    return /load[^a-z]*by[^a-z]*token|load[^a-z]*token[^a-z]*id/.test(t);
+    return /load[^a-z]*token[^a-z]*id/.test(t0);
   }
 
  // Helper: find the Token ID Styles card so we can skip hijacking inside it
