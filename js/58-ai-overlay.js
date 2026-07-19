@@ -185,7 +185,11 @@
   }
   function syncVisibility(){
     const box = document.getElementById('raAiOverlayBox');
-    if (allowed()) { if (!box) injectUI(); else box.style.display = ''; updateCostLabel(); }
+    if (allowed()) {
+      if (!box) injectUI();
+      else { box.style.display = ''; refreshShelf(); }
+      updateCostLabel();
+    }
     else if (box) box.style.display = 'none';
   }
   document.addEventListener('ra-auth-change', syncVisibility);

@@ -135,6 +135,19 @@
           }]});
         } else throw e;
       }
+      // Pre-check APE balance so "not enough funds" is communicated clearly
+      // instead of a confusing wallet error or silent cancel.
+      try {
+        const balHex = await eth.request({ method: 'eth_getBalance', params: [from, 'latest'] });
+        const bal = BigInt(balHex || '0x0');
+        const need = BigInt(pkg.apeWei) + 10000000000000000n; // + ~0.01 APE gas buffer
+        if (bal < need) {
+          const fmt = (wei) => (Number(wei / 1000000000000000n) / 1000).toFixed(3);
+          status.textContent = 'Not enough APE: this package costs ' + pkg.ape +
+            ' APE (+gas), your wallet has ' + fmt(bal) + ' APE on ApeChain.';
+          return;
+        }
+      } catch(_){ /* balance check best-effort */ }
       status.textContent = 'Confirm the ' + pkg.ape + ' APE payment in your wallet...';
       const txHash = await eth.request({ method: 'eth_sendTransaction', params: [{
         from, to: info.treasury, value: '0x' + BigInt(pkg.apeWei).toString(16)
@@ -163,7 +176,9 @@
       }
       status.textContent = 'Still pending. Your tx: ' + txHash + ' - reload later; credit is automatic once confirmed and redeemed.';
     } catch (e) {
-      status.textContent = (e && e.code === 4001) ? 'Cancelled.' : ('Payment failed: ' + (e && e.message || e).toString().slice(0, 80));
+      status.textContent = (e && e.code === 4001)
+        ? 'Payment cancelled in the wallet - nothing was charged.'
+        : ('Payment failed: ' + (e && e.message || e).toString().slice(0, 80));
     }
   }
 

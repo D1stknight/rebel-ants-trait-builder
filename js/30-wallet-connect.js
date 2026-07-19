@@ -168,13 +168,24 @@ if (typeof CONNECTING !== 'undefined') CONNECTING = true;
       }
     }catch(_){ out.textContent='Refresh failed.'; }
   }
-  function disconnect(){
-    // Soft disconnect: clear our UI/state. For a full revoke, user disconnects in wallet UI.
+  async function disconnect(){
+    // Real disconnect where supported: revoke the site's eth_accounts
+    // permission (MetaMask supports wallet_revokePermissions). Falls back to
+    // a soft app-side disconnect on wallets that don't support it.
+    let revoked = false;
+    try {
+      if (window.ethereum && window.ethereum.request) {
+        await window.ethereum.request({ method: 'wallet_revokePermissions', params: [{ eth_accounts: {} }] });
+        revoked = true;
+      }
+    } catch(_){ /* wallet does not support revoke - soft disconnect below */ }
 
     window.RA_HOLDER_STATE = { checked: false, hasRebel: false, hasFriend: false, matches: [] };
     window.__raWMForce = null; // Remove any holder-based overlay override
-    
-    setDisconnected('Disconnected in app. (Use the wallet menu to fully disconnect this site.)');
+
+    setDisconnected(revoked
+      ? 'Disconnected. This site\'s wallet permission was revoked.'
+      : 'Disconnected in app. (Your wallet doesn\'t support site revoke - use the wallet menu for a full disconnect.)');
 
     try { 
       document.dispatchEvent(new CustomEvent('ra-holder-update', { detail: window.RA_HOLDER_STATE })); 

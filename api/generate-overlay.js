@@ -142,11 +142,13 @@ module.exports = async (req, res) => {
       const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
       const png = Buffer.from(b64, 'base64');
       const blob = await put('ai-overlays/' + id + '.png', png, { access: 'public', contentType: 'image/png' });
-      let list = await kvGet(LIST_KEY);
+      // Per-commander shelf when signed in; legacy global shelf otherwise.
+      const shelfKey = playerId ? (LIST_KEY + ':' + playerId) : LIST_KEY;
+      let list = await kvGet(shelfKey);
       if (!Array.isArray(list)) list = [];
       list.unshift({ id, url: blob.url, prompt: userIdea, ts: Date.now() });
       if (list.length > MAX_SAVED) list = list.slice(0, MAX_SAVED);
-      await kvSet(LIST_KEY, list);
+      await kvSet(shelfKey, list);
       saved = { id, url: blob.url };
     } catch (e) {
       console.error('[gen-overlay] persist failed (non-fatal)', e && e.message);
