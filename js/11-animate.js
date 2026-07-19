@@ -51,10 +51,14 @@
 
   /* -------------------- PRESETS (unchanged) -------------------- */
   const PRESETS = [
-    { id:'cam_kb_in_ur', name:'KB in ↗', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:+0.06}},
-    { id:'cam_kb_in_dl', name:'KB in ↙', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:-0.06}},
-    { id:'cam_kb_in_ul', name:'KB in ↖', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:+0.06}},
-    { id:'cam_kb_in_dr', name:'KB in ↘', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:-0.06}},
+    // Arrow convention: the arrow is the direction the IMAGE visibly drifts
+    // (same as the Pan presets). Positive x shifts content right, positive y
+    // shifts content down. Previous values used camera-motion semantics, so
+    // 'KB in ↗' visibly drifted ↙ - names and motion now agree.
+    { id:'cam_kb_in_ur', name:'KB in ↗', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:-0.06}},
+    { id:'cam_kb_in_dl', name:'KB in ↙', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:+0.06}},
+    { id:'cam_kb_in_ul', name:'KB in ↖', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:-0.06,y:-0.06}},
+    { id:'cam_kb_in_dr', name:'KB in ↘', kind:'camera', ease:'ioSine', from:{z:1,x:0,y:0}, to:{z:1.18,x:+0.06,y:+0.06}},
     { id:'cam_kb_out',   name:'KB out',   kind:'camera', ease:'ioSine', from:{z:1.15,x:0,y:0}, to:{z:1.00,x:0,y:0}},
     { id:'cam_pan_up',   name:'Pan up',   kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:0.06}, to:{z:1,x:0,y:-0.06}},
     { id:'cam_pan_down', name:'Pan down', kind:'camera', ease:'ioQuad', from:{z:1,x:0,y:-0.06},to:{z:1,x:0,y:0.06}},

@@ -67,6 +67,33 @@ function renderPublishedShelf(){
   function setShelf(arr){ try{ (localStorage||sessionStorage).setItem('ra2_published', JSON.stringify(arr||[])); }catch(_){} }
   function setMsg(t){ const el=$("ra2Msg"); if (el) el.textContent=t||''; }
 
+  // Publish to the SERVER shelf (api/overlays -> Redis) so everyone sees it.
+  // Requires the RA_ADMIN_KEY; prompted once and cached in localStorage.
+  async function publishToServer(item){
+    let key = '';
+    try { key = localStorage.getItem('ra2_admin_key') || ''; } catch(_){}
+    if (!key) {
+      key = prompt('Admin key (RA_ADMIN_KEY) to publish to the live shelf:') || '';
+      if (!key) return { ok:false, error:'no key' };
+      try { localStorage.setItem('ra2_admin_key', key); } catch(_){}
+    }
+    try {
+      const r = await fetch('/api/overlays?mode=append&admin=' + encodeURIComponent(key), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ overlays: [{ name: item.name, dataURL: item.dataURL }] })
+      });
+      if (r.status === 401) {
+        try { localStorage.removeItem('ra2_admin_key'); } catch(_){}
+        return { ok:false, error:'wrong admin key (cleared - click Publish again)' };
+      }
+      const j = await r.json().catch(() => null);
+      return (r.ok && j && j.ok) ? { ok:true } : { ok:false, error:(j && j.error) || ('HTTP ' + r.status) };
+    } catch (e) {
+      return { ok:false, error:(e && e.message) || 'network' };
+    }
+  }
+
   const dock = document.createElement('div');
   dock.id = 'raAdminDock2';
   dock.style.cssText = 'position:fixed;right:16px;bottom:16px;width:300px;background:#0e0f13;border:1px solid #2a2a2e;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.45);color:#e7e7ea;font:13px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:999999';
@@ -141,8 +168,17 @@ function renderPublishedShelf(){
       const act=btn.getAttribute("data-act");
       if (act==="del"){ tile.remove(); return; }
       if (act==="publish"){
-        const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
-        setMsg(`Published: ${item.name}`); setTimeout(()=>setMsg(''), 800);
+        setMsg('Publishing...');
+        publishToServer(item).then(rr => {
+          if (rr.ok) {
+            const arr=getShelf(); arr.push({ name:item.name, dataURL:item.dataURL }); setShelf(arr);
+            setMsg(`Published: ${item.name}`);
+            try { window.raReloadLiveOverlays && window.raReloadLiveOverlays(); } catch(_){}
+          } else {
+            setMsg('Publish failed: ' + rr.error);
+          }
+          setTimeout(()=>setMsg(''), 2500);
+        });
       }
       if (act==="add"){ addOverlayToCanvas(item.dataURL,false); setMsg(`Added: ${item.name}`); setTimeout(()=>setMsg(''), 800); }
     });
