@@ -45,8 +45,10 @@
     ghost.setAttribute('aria-hidden','true');
     ghost.style.visibility = 'hidden';
     ghost.style.pointerEvents = 'none';
-    ghost.style.width  = card.offsetWidth + 'px';
-    ghost.style.height = card.offsetHeight + 'px';
+    // Seed with a sane minimum: measuring mid-load can read 0, and a
+    // zero-width ghost poisons every later measurement.
+    ghost.style.width  = Math.max(card.offsetWidth || 0, 300) + 'px';
+    ghost.style.height = Math.max(card.offsetHeight || 0, 300) + 'px';
 
     // Insert ghost just before card so layout stays
     card.parentNode.insertBefore(ghost, card);
@@ -83,10 +85,14 @@
     setTimeout(requestPlace, 1800);
 
     function updateGhostSize(){
-      // Keep ghost dimension synced in case card interior changed
+      // Keep ghost dimension synced in case card interior changed.
+      // Skip degenerate measurements (mid-load / hidden) - syncing a
+      // near-zero size creates a self-perpetuating 0px loop.
       try {
-        ghost.style.width  = card.offsetWidth + 'px';
-        ghost.style.height = card.offsetHeight + 'px';
+        if ((card.offsetWidth || 0) >= 100) {
+          ghost.style.width  = card.offsetWidth + 'px';
+          ghost.style.height = card.offsetHeight + 'px';
+        }
       } catch(_) {}
     }
 
@@ -114,6 +120,16 @@
         left = Math.round(gRect.left);
       }
 
+      // Degenerate ghost (0/near-0): clear our inline constraints so the
+      // card reflows naturally from CSS, and try again on the next place().
+      // Writing gRect.width here when it was 0 is exactly what produced the
+      // stuck thin-strip canvas.
+      if (!gRect.width || gRect.width < 100) {
+        card.style.width = '';
+        card.style.height = '';
+        updateGhostSize();
+        return;
+      }
       card.style.top  = top  + 'px';
       card.style.left = left + 'px';
       card.style.width = gRect.width + 'px';
