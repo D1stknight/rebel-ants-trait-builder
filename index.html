@@ -6,6 +6,15 @@
 <title>Rebel Ants — Overlay Builder (v23u)</title>
 <link rel="stylesheet" href="styles.css"/>
 <style>
+/* Branded backdrop (assets/builder-bg.jpg). Panels keep their own dark
+   backgrounds on top; the dark overlay keeps side areas readable. */
+body{
+  background:
+    linear-gradient(rgba(7,7,12,.55), rgba(7,7,12,.78)),
+    url('assets/builder-bg.jpg') center top / cover no-repeat fixed,
+    #07070c;
+}
+
 @font-face { font-family: 'Noto Sans JP'; src: url(url('/assets/fonts/rebelants-font-1.ttf')) format('truetype'); font-weight: 100 900; font-style: normal; font-display: swap; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
@@ -81,7 +90,7 @@ window.__WM_IMG__ = "/assets/watermark-hires.png";
   <aside class="panel left">
     <div class="brand">
       <div class="logo">🐜</div>
-      <div class="title">Rebel Ants Builder</div>
+      <div class="title">Rebel Ants Builder 2.0</div>
     </div>
 
     <section class="card">

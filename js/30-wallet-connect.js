@@ -36,8 +36,15 @@
     </div>
   `;
   const leftCol = qs('#left, .left, .sidebar, .panels, .controls, .col-left');
-  (leftCol && leftCol.firstChild) ? leftCol.insertBefore(box, leftCol.firstChild)
-                                  : document.body.insertBefore(box, document.body.firstChild);
+  // Insert BELOW the brand header so "Rebel Ants Builder 2.0" stays on top.
+  const brandEl = leftCol && leftCol.querySelector('.brand');
+  if (brandEl && brandEl.parentNode === leftCol) {
+    leftCol.insertBefore(box, brandEl.nextSibling);
+  } else if (leftCol && leftCol.firstChild) {
+    leftCol.insertBefore(box, leftCol.firstChild);
+  } else {
+    document.body.insertBefore(box, document.body.firstChild);
+  }
 
   // --- Els
   const btnConnect = qs('#raW_connect',    box);
