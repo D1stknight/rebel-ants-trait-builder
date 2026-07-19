@@ -26,25 +26,43 @@
   }
   window.raRefreshSession = refreshMe;
 
+  // Self-styled card (matches the Wallet card look) with its own
+  // collapsible header. Returns the BODY element that render() fills.
   function card(){
-    let el = document.getElementById('raSignonCard');
-    if (el) return el;
-    // Place after the Wallet card in the left column. Anchor by the wallet
-    // box id first (its title text now includes a collapse caret, so exact
-    // text matching broke); loose heading match as fallback.
+    let body = document.getElementById('raSignonBody');
+    if (body) return body;
     let anchor = document.getElementById('ra-wallet-mini');
     if (!anchor) {
       const hs = Array.from(document.querySelectorAll('h2,h3,h4,strong,b'));
       const w = hs.find(x => /^\s*wallet\b/i.test(x.textContent || ''));
       anchor = w ? (w.closest('section') || w.closest('.card') || w.parentElement) : null;
     }
-    el = document.createElement(anchor ? anchor.tagName : 'section');
-    if (anchor && anchor.className) el.className = anchor.className;
-    el.id = 'raSignonCard';
-    el.style.marginTop = '14px';
-    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(el, anchor.nextSibling);
-    else document.body.appendChild(el);
-    return el;
+    const wrap = document.createElement('div');
+    wrap.id = 'raSignonCard';
+    wrap.innerHTML = [
+      '<div class="panel" style="margin:12px 0;padding:10px;border-radius:8px;background:#121317;border:1px solid rgba(255,255,255,.08);color:#e6e6e6;font-size:12px;line-height:1.4;">',
+      '<div style="display:flex;align-items:center;justify-content:space-between;">',
+      '<strong id="raSignonTitle" style="font-size:13px;cursor:pointer;user-select:none;" title="Click to collapse/expand">Commander <span id="raSignonCaret" style="opacity:.6;font-size:11px;">&#9662;</span></strong>',
+      '</div>',
+      '<div id="raSignonBody" style="margin-top:8px;"></div>',
+      '</div>'
+    ].join('');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
+    else document.body.appendChild(wrap);
+
+    const bodyEl = wrap.querySelector('#raSignonBody');
+    const caret = wrap.querySelector('#raSignonCaret');
+    const KEY = 'ra_signon_collapsed';
+    const apply = (c) => { bodyEl.style.display = c ? 'none' : ''; caret.innerHTML = c ? '&#9656;' : '&#9662;'; };
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(KEY) === '1'; } catch(_){}
+    apply(collapsed);
+    wrap.querySelector('#raSignonTitle').addEventListener('click', () => {
+      collapsed = !collapsed;
+      try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch(_){}
+      apply(collapsed);
+    });
+    return bodyEl;
   }
 
   function render(){
@@ -54,8 +72,7 @@
       const bal = (s.balance == null) ? '' :
         '<div style="opacity:.85;margin-top:4px;">Balance: <b>' + Number(s.balance).toLocaleString() + '</b> $REBEL</div>';
       el.innerHTML = [
-        '<div style="font-weight:700;font-size:15px;">Commander</div>',
-        '<div style="margin-top:6px;">Signed in as <b>' + escapeHtml(s.displayName || s.name) + '</b></div>',
+        '<div>Signed in as <b>' + escapeHtml(s.displayName || s.name) + '</b></div>',
         bal,
         '<button id="raSignOut" class="btn" style="margin-top:8px;">Sign out</button>'
       ].join('');
@@ -66,8 +83,7 @@
       renderShop(el);
     } else {
       el.innerHTML = [
-        '<div style="font-weight:700;font-size:15px;">Commander Sign-in</div>',
-        '<div style="opacity:.6;font-size:12px;margin:4px 0 8px;">Same name + PIN as the Playground.</div>',
+        '<div style="opacity:.6;font-size:12px;margin:0 0 8px;">Sign in with the same name + PIN as the Playground.</div>',
         '<input id="raSiName" type="text" placeholder="Commander name" autocomplete="username" ',
         ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:6px;" />',
         '<input id="raSiPin" type="password" placeholder="PIN" autocomplete="current-password" ',
