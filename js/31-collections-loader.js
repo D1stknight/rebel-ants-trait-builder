@@ -392,11 +392,18 @@ async function loadTokenFromCollection(tokenId, col){
     const maxW = c.getWidth(), maxH = c.getHeight();
     const scale = Math.min(maxW / base.width, maxH / base.height);
 
-    base.set({
-      scaleX: scale, scaleY: scale,
-      left: (maxW - base.width * scale) / 2,
-      top:  (maxH - base.height * scale) / 2
-    });
+    base.set({ scaleX: scale, scaleY: scale });
+    // loadBaseImage places the base with originX/Y 'center'. Top-left math
+    // here put the image's CENTER at the corner offset, cropping friend
+    // collections into the top-left corner. Match the object's origin.
+    if (base.originX === 'center' || base.originY === 'center') {
+      base.set({ left: maxW / 2, top: maxH / 2 });
+    } else {
+      base.set({
+        left: (maxW - base.width * scale) / 2,
+        top:  (maxH - base.height * scale) / 2
+      });
+    }
     base.setCoords();
     try{ c.requestRenderAll(); }catch(_){}
   }
