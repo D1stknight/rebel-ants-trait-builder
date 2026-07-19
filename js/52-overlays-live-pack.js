@@ -230,23 +230,56 @@ function loadTrimmedCanvas(url) {
       return;
     }
 
+    const isAdmin = /\badmin=1\b/i.test(location.search);
     grid.innerHTML = list.map(o => {
       const src  = o.url || o.dataURL;
       const name = o.name || 'overlay';
+      const delBtn = (isAdmin && o.id)
+        ? `<button class="ra-ov-del" data-id="${escAttr(o.id)}" title="Delete from live shelf"
+                  style="position:absolute;top:2px;right:2px;width:18px;height:18px;line-height:14px;padding:0;font-size:11px;border-radius:50%;border:1px solid rgba(255,255,255,.3);background:#7f1d1d;color:#fff;cursor:pointer;z-index:2;">x</button>`
+        : '';
       return `
-        <button class="ra-ov" title="${escAttr(name)}"
-                style="appearance:none;border:0;background:none;padding:0;margin:0;cursor:pointer;">
-          <img src="${escAttr(src)}" alt="${escAttr(name)}"
-               style="width:100%;aspect-ratio:1/1;object-fit:contain;background:#0a0f14;border-radius:8px;display:block">
-          <div style="font-size:11px;margin-top:4px;opacity:.9;color:#cfd8ee;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            ${escHtml(name)}
-          </div>
-        </button>`;
+        <div style="position:relative;">
+          ${delBtn}
+          <button class="ra-ov" title="${escAttr(name)}"
+                  style="appearance:none;border:0;background:none;padding:0;margin:0;cursor:pointer;width:100%;">
+            <img src="${escAttr(src)}" alt="${escAttr(name)}"
+                 style="width:100%;aspect-ratio:1/1;object-fit:contain;background:#0a0f14;border-radius:8px;display:block">
+            <div style="font-size:11px;margin-top:4px;opacity:.9;color:#cfd8ee;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              ${escHtml(name)}
+            </div>
+          </button>
+        </div>`;
     }).join('');
 
     // click -> add to canvas (centered & scaled)
     grid.querySelectorAll('.ra-ov img').forEach(img => {
       img.addEventListener('click', () => addToCanvas(img.src, img.alt));
+    });
+
+    // admin: delete from the server shelf (DELETE /api/overlays?id=...&admin=key)
+    grid.querySelectorAll('.ra-ov-del').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.getAttribute('data-id');
+        if (!id || !confirm('Delete this overlay from the live shelf for everyone?')) return;
+        let key = '';
+        try { key = localStorage.getItem('ra2_admin_key') || ''; } catch(_){}
+        if (!key) {
+          key = prompt('Admin key (RA_ADMIN_KEY):') || '';
+          if (!key) return;
+          try { localStorage.setItem('ra2_admin_key', key); } catch(_){}
+        }
+        try {
+          const r = await fetch('/api/overlays?id=' + encodeURIComponent(id) + '&admin=' + encodeURIComponent(key), { method: 'DELETE' });
+          if (r.status === 401) {
+            try { localStorage.removeItem('ra2_admin_key'); } catch(_){}
+            alert('Wrong admin key (cleared) - click x again.');
+            return;
+          }
+          window.raReloadLiveOverlays && window.raReloadLiveOverlays();
+        } catch(_){ alert('Delete failed (network).'); }
+      });
     });
   }
 
