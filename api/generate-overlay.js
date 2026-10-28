@@ -23,6 +23,7 @@ const { kvGet, kvSet } = require('./_lib/redisAdapter');
 const { put } = require('@vercel/blob');
 const { verifyNameSession, readCookie, NAME_SESSION_COOKIE } = require('./_lib/nameSession');
 const { resolveByPlayerId, debit, credit, billingConfigured } = require('./_lib/economy');
+const { rebelIdentity, rebelUser, badgeEvent, awardedOf, easternHour } = require('./_lib/rebel');
 
 const OPENAI_URL = 'https://api.openai.com/v1/images/edits';
 const LIST_KEY = 'ra:ai-overlays';
@@ -59,9 +60,18 @@ module.exports = async (req, res) => {
   let playerId = null, billedUser = null, idem = null;
   if (SIGNON_ON) {
     playerId = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
+    // Shared Rebel sign-in (Discord): playerId "rebel:<economy userId>",
+    // already resolved against the economy by its session token.
+    let rebelWho = null;
+    if (!playerId) {
+      rebelWho = await rebelIdentity(req);
+      if (rebelWho && rebelWho.via === 'discord') playerId = rebelWho.playerId;
+    }
     if (!playerId) return res.status(401).json({ ok: false, error: 'sign_in_required' });
     if (billingConfigured() && COST > 0) {
-      billedUser = await resolveByPlayerId(playerId);
+      billedUser = rebelWho
+        ? { userId: rebelWho.userId, displayName: rebelWho.displayName, balance: Number(rebelWho.balance || 0) }
+        : await resolveByPlayerId(playerId);
       if (!billedUser) return res.status(502).json({ ok: false, error: 'economy_unreachable' });
       if (billedUser.balance < COST) {
         return res.status(402).json({ ok: false, error: 'insufficient_points', balance: billedUser.balance, cost: COST });
@@ -165,10 +175,24 @@ module.exports = async (req, res) => {
       console.error('[gen-overlay] persist failed (non-fatal)', e && e.message);
     }
 
+    // Badges (best-effort, after the overlay really exists): AI overlays made,
+    // different days, overlays today; a secret for the midnight hour (Eastern).
+    let awarded = [];
+    try {
+      const badgeUserId = billedUser ? billedUser.userId : ((await rebelUser(req)) || {}).userId;
+      if (badgeUserId) {
+        const award = easternHour() === 0 ? ['buildsecret.night'] : [];
+        awarded = awardedOf(await badgeEvent(badgeUserId, {
+          award,
+          counters: [{ key: 'ai', op: 'add' }, { key: 'aidays', op: 'dayCount' }, { key: 'aiday', op: 'dayAdd' }]
+        }));
+      }
+    } catch (_) { awarded = []; }
+
     res.setHeader('Cache-Control', 'no-store');
     const charged = billedUser ? COST : 0;
     const newBalance = billedUser ? (billedUser.balance - COST) : null;
-    return res.status(200).json({ ok: true, imageB64: b64, charged, newBalance, ...(saved || {}) });
+    return res.status(200).json({ ok: true, imageB64: b64, charged, newBalance, ...(saved || {}), awarded });
   } catch (e) {
     if (e.name === 'AbortError') { await refundIfBilled('timeout'); return res.status(504).json({ ok: false, error: 'upstream_timeout' }); }
     console.error('[gen-overlay] unexpected', e && e.message);

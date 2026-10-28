@@ -271,6 +271,30 @@ async function openseaImage(chain, contract, tokenId) {
   return data.nft.image_url || data.nft.display_image_url || '';
 }
 
+// One economy call per player+token per warm instance (re-loads skip it).
+const _seenTokens = new Set();
+async function tokenBadges(req, contract, tokenId){
+  try {
+    const rebel = require('./_lib/rebel');
+    if (!rebel.badgesOn()) return [];
+    const raw = String((req.headers && req.headers.cookie) || '');
+    if (!/(?:^|;\s*)(ra_name_session|poker_session)=/.test(raw)) return []; // signed out: no network
+    const u = await rebel.rebelUser(req);
+    if (!u || !u.userId) return [];
+    const c = String(contract).toLowerCase();
+    const seen = u.userId + ':' + c + ':' + tokenId;
+    if (_seenTokens.has(seen)) return [];
+    const counters = [{ key: 'collections', op: 'distinct', item: c }];
+    const item = c + ':' + tokenId;
+    if (rebel.isRebelAntsContract(c) && item.length <= 64) counters.push({ key: 'ants', op: 'distinct', item });
+    const out = await rebel.badgeEvent(u.userId, { counters });
+    if (!out) return [];
+    if (_seenTokens.size > 5000) _seenTokens.clear();
+    _seenTokens.add(seen);
+    return rebel.awardedOf(out);
+  } catch { return []; }
+}
+
 export default async function handler(req, res) {
   try {
     // accept id | tokenId | token
@@ -324,7 +348,11 @@ if (/^data:image\//i.test(tokenURI) ||
     if (image && !/^data:/i.test(image) && !image.startsWith('/api/')) {
       image = '/api/proxy-img?u=' + encodeURIComponent(image);
     }
-    return json(res, 200, { ok: !!image, chain, tokenURI, image: image || '' });
+    // Badges (best-effort, signed-in players only, after the token loaded):
+    // different Rebel Ants dressed up + different collections loaded.
+    let awarded = [];
+    if (image) awarded = await tokenBadges(req, contract, tokenId);
+    return json(res, 200, { ok: !!image, chain, tokenURI, image: image || '', awarded });
   } catch (e) {
     return json(res, 200, { ok: false, error: String(e?.message || e) });
   }

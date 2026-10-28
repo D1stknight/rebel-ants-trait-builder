@@ -1,5 +1,5 @@
 // api/contest/contest.js
-import { getActiveContestId, getContestMeta, listEntries } from '../_lib/redisAdapter';
+import { getActiveContestId, getContestMeta, listEntries, publicEntry } from '../_lib/redisAdapter';
 
 export const config = { runtime: 'nodejs' };
 
@@ -14,7 +14,7 @@ export default async function handler(_req, res) {
       getContestMeta(id),
       listEntries(id, 50),
     ]);
-    res.status(200).json({ ok: true, active: true, id, meta, entries });
+    res.status(200).json({ ok: true, active: true, id, meta, entries: (entries || []).map(publicEntry) });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }

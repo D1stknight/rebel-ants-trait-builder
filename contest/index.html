@@ -8,7 +8,10 @@
 </head>
 <body class="page">
   <header class="c-head">
-  <h1 id="cTitle">Rebel Ants Contest Page</h1>
+  <div class="c-titleRow">
+    <h1 id="cTitle">Rebel Ants Contest Page</h1>
+    <a id="raBadgesLink" class="c-badges" href="/?badges=1">🏅 Badges</a>
+  </div>
   <p id="cPrompt" class="muted">Share your best overlay combo!</p>
   <p id="cCountdown" class="muted"></p>
   <div id="chips" class="chips"></div>
@@ -25,7 +28,7 @@
           <ul>
             <li>Make your combo in the <a href="/">Overlay Builder</a>.</li>
             <li>Click <b>Submit to Contest</b> inside the builder (we snapshot your canvas).</li>
-            <li>Choose a display name and optional caption. No wallet needed.</li>
+            <li>Sign in first (Discord or Commander name + PIN) so the entry is yours, then add an optional caption. No wallet needed.</li>
           </ul>
         </div>
         <div>
@@ -72,6 +75,7 @@
   <section id="board" class="board" aria-live="polite"></section>
 
   <script src="/contest/contest.js" defer></script>
+  <script src="/js/63-badges.js" defer></script>
 
 <footer id="ra-footer" class="ra-footer">
   <nav>

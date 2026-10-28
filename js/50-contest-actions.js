@@ -41,8 +41,14 @@
           alert('Canvas not ready. Try again in a second.'); return;
         }
 
-        const name    = prompt('Display name (shown on leaderboard):', '') || 'Anonymous';
-        const caption = prompt('Caption (optional):', '') || '';
+        // Entries need a signed-in player (Commander name + PIN or Discord) so
+        // the entry and any badges go to the right person. The leaderboard
+        // shows the signed-in name.
+        const signInMsg = 'Sign in first (Commander card in the left panel: Discord or Commander name + PIN) so your entry - and any badges - are yours.';
+        if (!window.raSession) { alert(signInMsg); return; }
+        const name    = window.raSession.displayName || window.raSession.name || '';
+        const caption = prompt('Caption (optional):', '');
+        if (caption === null) return; // cancelled
         const imageDataUrl = canvas.toDataURL('image/png');
 
         const r = await fetch('/api/contest/entry', {
@@ -51,9 +57,10 @@
           body: JSON.stringify({ name, caption, imageDataUrl })
         });
         const j = await r.json();
+        if (j && j.error === 'sign_in_required') { alert(signInMsg); return; }
         if (!r.ok || !j.ok) throw new Error(j.error || 'Upload failed');
 
-        alert('Submitted! Open the contest page to see your entry.');
+        alert('Submitted as ' + (name || 'you') + '! Open the contest page to see your entry.');
       } catch (e) {
         alert('Submit failed: ' + (e && e.message || e));
       }

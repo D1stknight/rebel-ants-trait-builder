@@ -4,6 +4,7 @@ export const config = { runtime: 'nodejs' };
 import crypto from 'crypto';
 import { put } from '@vercel/blob';
 import { getActiveContestId, saveEntry } from '../_lib/redisAdapter';
+import { rebelUser, badgeEvent, awardedOf } from '../_lib/rebel';
 
 // read whole request body as Buffer (Node stream)
 function readBuffer(req) {
@@ -36,6 +37,14 @@ export default async function handler(req, res) {
     const contestId = await getActiveContestId();
     if (!contestId) {
       res.status(400).json({ ok: false, error: 'no active contest' });
+      return;
+    }
+
+    // Entries need a signed-in player (Commander name + PIN or Discord) so
+    // the entry - and any badges - belong to the right person.
+    const who = await rebelUser(req);
+    if (!who) {
+      res.status(401).json({ ok: false, error: 'sign_in_required', message: 'Sign in first (Commander card, left panel) so your entry is yours.' });
       return;
     }
 
@@ -92,9 +101,14 @@ export default async function handler(req, res) {
 
     // save entry
     const id = crypto.randomUUID();
+    // The leaderboard shows the signed-in display name (not a typed one).
+    name = String(who.displayName || who.name || name || 'Anonymous').slice(0, 48);
     const entry = {
       id,
       name,
+      displayName: name,
+      playerId: who.playerId,
+      userId: who.userId || null,
       caption,
       url: imageUrl,      // keep for compatibility
       imageUrl,           // explicit
@@ -103,7 +117,13 @@ export default async function handler(req, res) {
     };
     await saveEntry(contestId, entry);
 
-    res.status(200).json({ ok: true, id, url: imageUrl });
+    // Badges (best-effort, after the entry is saved): different contests entered.
+    let awarded = [];
+    if (who.userId) {
+      try { awarded = awardedOf(await badgeEvent(who.userId, { counters: [{ key: 'entries', op: 'distinct', item: String(contestId).slice(0, 64) }] })); } catch { awarded = []; }
+    }
+
+    res.status(200).json({ ok: true, id, url: imageUrl, awarded });
   } catch (e) {
     console.error('[entry]', e);
     res.status(500).json({ ok: false, error: String(e?.message || e) });

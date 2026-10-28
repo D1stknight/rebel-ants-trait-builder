@@ -13,6 +13,13 @@ body.page{
 h1{ margin:0 0 6px 0; font-weight:700; font-size:22px; }
 .muted{ color:var(--muted); }
 .c-head{ max-width:1100px; margin:0 auto 14px; }
+.c-titleRow{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.c-titleRow h1{ flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
+.c-badges{
+  flex:0 0 auto; font-size:12px; padding:6px 12px; border:1px solid var(--line);
+  background:#0e1523; border-radius:999px; color:#cfd8ee; text-decoration:none; white-space:nowrap;
+}
+.c-badges:hover{ border-color:rgba(255,255,255,.22); color:#e8eefc; }
 
 /* Leader chips (top–10 by score) */
 .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }

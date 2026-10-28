@@ -3,7 +3,9 @@
 // ============================================================================
 // Same Commander Name + PIN accounts as the Playground. Session is an
 // HttpOnly signed cookie issued by /api/auth/sign-in. Exposes
-// window.raSession (null | {name, displayName, balance, costPerGen, billing})
+// window.raSession (null | {name, displayName, balance, costPerGen, billing,
+// playerId, isAdmin, via:'name'|'discord', userId}). "Sign in with Discord"
+// uses the shared Rebel sign-in (economy.rebelants.io, poker_session cookie).
 // and fires 'ra-auth-change' on document when it changes.
 // ============================================================================
 ;(() => {
@@ -16,8 +18,9 @@
   async function refreshMe(){
     try {
       const j = await fetch('/api/auth/me', { cache: 'no-store' }).then(r => r.json());
+      if (j && j.economyUrl) window.__raEconomyUrl = String(j.economyUrl).replace(/\/+$/, '');
       window.raSession = (j && j.ok && j.signedIn)
-        ? { name: j.name, displayName: j.displayName || j.name, balance: j.balance, costPerGen: j.costPerGen, billing: !!j.billing, playerId: j.playerId, isAdmin: !!j.isAdmin }
+        ? { name: j.name, displayName: j.displayName || j.name, balance: j.balance, costPerGen: j.costPerGen, billing: !!j.billing, playerId: j.playerId, isAdmin: !!j.isAdmin, via: j.via || 'name', userId: j.userId || null }
         : null;
       if (j && j.ok && !j.signedIn) window.__raSignonAvailable = true;
     } catch(_) { window.raSession = null; }
@@ -25,6 +28,31 @@
     render();
   }
   window.raRefreshSession = refreshMe;
+
+  // ---------- Shared Rebel sign-in (Discord, via the economy) ----------
+  // The economy's Discord login comes back here with ?auth=ok (or
+  // ?auth=cancelled|misconfigured|state|...). Show a short note and tidy the
+  // param out of the address bar.
+  let authNote = '';
+  try {
+    const u = new URL(location.href);
+    const a = u.searchParams.get('auth');
+    if (a) {
+      authNote = (a === 'ok') ? '' : ({
+        cancelled: 'Discord sign-in was cancelled.',
+        misconfigured: 'Discord sign-in is not switched on yet.'
+      })[a] || 'Discord sign-in did not finish - please try again.';
+      u.searchParams.delete('auth');
+      history.replaceState(null, '', u.pathname + (u.searchParams.toString() ? '?' + u.searchParams.toString() : '') + u.hash);
+    }
+  } catch(_){}
+  function discordLogin(){
+    const eco = window.__raEconomyUrl || 'https://economy.rebelants.io';
+    let back = location.href;
+    try { const u = new URL(location.href); u.searchParams.delete('auth'); back = u.toString(); } catch(_){}
+    location.href = eco + '/api/auth/discord/login?next=' + encodeURIComponent(back);
+  }
+  window.raDiscordLogin = discordLogin;
 
   // Self-styled card (matches the Wallet card look) with its own
   // collapsible header. Returns the BODY element that render() fills.
@@ -72,7 +100,7 @@
       const bal = (s.balance == null) ? '' :
         '<div style="opacity:.85;margin-top:4px;">Balance: <b>' + Number(s.balance).toLocaleString() + '</b> $REBEL</div>';
       el.innerHTML = [
-        '<div>Signed in as <b>' + escapeHtml(s.displayName || s.name) + '</b></div>',
+        '<div>Signed in as <b>' + escapeHtml(s.displayName || s.name) + '</b>' + (s.via === 'discord' ? ' <span style="opacity:.6;">(Discord)</span>' : '') + '</div>',
         bal,
         '<button id="raSignOut" class="btn" style="margin-top:8px;">Sign out</button>'
       ].join('');
@@ -83,7 +111,9 @@
       renderShop(el);
     } else {
       el.innerHTML = [
-        '<div style="opacity:.6;font-size:12px;margin:0 0 8px;">Sign in with the same name + PIN as the Playground.</div>',
+        '<button id="raSiDiscord" class="btn" style="width:100%;margin-bottom:8px;">Sign in with Discord</button>',
+        authNote ? '<div style="margin:0 0 8px;font-size:12px;color:#fca5a5;">' + escapeHtml(authNote) + '</div>' : '',
+        '<div style="opacity:.6;font-size:12px;margin:0 0 8px;">Or sign in with the same Commander name + PIN as the Playground.</div>',
         '<input id="raSiName" type="text" placeholder="Commander name" autocomplete="username" ',
         ' style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:8px;margin-bottom:6px;" />',
         '<input id="raSiPin" type="password" placeholder="PIN" autocomplete="current-password" ',
@@ -114,6 +144,7 @@
         } catch (e) { status.textContent = 'Network error.'; }
       };
       el.querySelector('#raSiBtn').onclick = doSignIn;
+      el.querySelector('#raSiDiscord').onclick = discordLogin;
       el.querySelector('#raSiPin').addEventListener('keydown', e => { if (e.key === 'Enter') doSignIn(); });
     }
   }

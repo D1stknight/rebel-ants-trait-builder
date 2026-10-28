@@ -38,6 +38,8 @@
     }
     .entryRow .meta .score { margin-top:2px; opacity:.8; }
     .entryRow .actions button { padding:6px 10px; }
+    select { padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.18); background:#121722; color:#e8eefc; width:100%; }
+    #winBadges div { margin-top:4px; }
   </style>
 </head>
 <body class="page">
@@ -119,6 +121,22 @@
       <button id="entriesRefresh" style="align-self:flex-end;height:38px;">Refresh</button>
     </div>
     <div id="entriesBox"></div>
+  </section>
+
+  <!-- Confirm winners (1st / 2nd / 3rd) -->
+  <section class="panel">
+    <h3>Confirm Winners</h3>
+    <div class="muted" style="font-size:13px;">Pick 1st, 2nd and 3rd from the leaderboard (highest score first). Confirming saves the winners and hands out the
+      <b>Podium Finish</b> badge to places 1&ndash;3 (and a contest win for 1st) to entries made while signed in. One confirm per contest &mdash; it can't be undone.</div>
+    <div class="row">
+      <label>1st place<select id="win1"></select></label>
+      <label>2nd place<select id="win2"></select></label>
+      <label>3rd place<select id="win3"></select></label>
+    </div>
+    <button id="winRefresh">Reload leaderboard</button>
+    <button id="winConfirm">Confirm winners</button>
+    <span id="winMsg" class="muted tight"></span>
+    <div id="winBadges" class="muted tight" style="font-size:13px;"></div>
   </section>
 
   <!-- Active contest status -->
@@ -267,7 +285,7 @@
     refreshEntries();
   }
 
-  function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+  function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 
   async function refreshEntries(){
     if (!entriesBox) return;
@@ -494,6 +512,45 @@
     });
   }
 }
+
+  /* ---------- Confirm winners ---------- */
+  const winSel = [ $('#win1'), $('#win2'), $('#win3') ];
+  const winMsg = $('#winMsg'), winBadges = $('#winBadges');
+  let winContestId = null;
+  async function loadLeaderboard(){
+    const r = await j('/api/contest/leaderboard');
+    const items = (r.status === 200 && r.json && Array.isArray(r.json.items)) ? r.json.items : [];
+    winContestId = (r.json && r.json.id) || null;
+    const opts = '<option value="">&mdash; none &mdash;</option>' + items.map(e =>
+      '<option value="' + esc(e.id) + '">' + esc(e.name || 'Anonymous') + ' &middot; score ' + (e.score|0) + (e.signedIn ? '' : ' (not signed in)') + '</option>'
+    ).join('');
+    winSel.forEach((sel, i) => { sel.innerHTML = opts; if (items[i]) sel.value = items[i].id; });
+    if (!winContestId) show(winMsg, 'No active contest.', false); else clear(winMsg);
+  }
+  $('#winRefresh').onclick = loadLeaderboard;
+  $('#winConfirm').onclick = async () => {
+    clear(winMsg); winBadges.textContent = '';
+    const places = winSel.map((sel, i) => ({ place: i + 1, entryId: sel.value })).filter(p => p.entryId);
+    if (!places.length) return show(winMsg, 'Pick at least 1st place.', false);
+    if (new Set(places.map(p => p.entryId)).size !== places.length) return show(winMsg, 'Each entry can only take one place.', false);
+    if (!confirm('Confirm these winners? This hands out badges and cannot be undone.')) return;
+    const k = (adm.value || '').trim();
+    $('#winConfirm').disabled = true;
+    const r = await j('/api/contest/confirm-winners' + (k ? '?admin=' + encodeURIComponent(k) : ''), {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ contestId: winContestId, places })
+    });
+    $('#winConfirm').disabled = false;
+    if (r.status === 200 && r.json && r.json.ok) {
+      show(winMsg, (r.json.alreadyConfirmed ? 'Already confirmed - retried any missing badges ✓' : 'Winners confirmed ✓'), true);
+      const label = { awarded:'badge sent', already_awarded:'badge already sent', not_signed_in:'entered signed out - no badge', economy_unavailable:'badge not sent (economy unavailable) - confirm again later to retry' };
+      winBadges.innerHTML = (r.json.badges || []).map(b => '<div>#' + b.place + ': ' + esc(label[b.status] || b.status) + '</div>').join('');
+    } else {
+      const why = { already_confirmed:'This contest already has confirmed winners.', admin_not_configured:'Set RA_ADMIN_KEY or RA_ADMIN_NAMES first.', unauthorized:'Admin key not accepted.' };
+      show(winMsg, 'Confirm failed: ' + ((r.json && (why[r.json.error] || r.json.error)) || r.raw || r.status), false);
+    }
+  };
+  loadLeaderboard();
 
   // Initial status load
   refresh();
