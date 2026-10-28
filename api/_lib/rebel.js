@@ -186,11 +186,19 @@ function easternHour(d = new Date()){
   } catch { return -1; }
 }
 
+// POST /api/internal/shop-ticket -> a 2-minute link that opens the Rebel points shop signed in
+// as this player (the same shop as every Rebel app). null when it can't be made.
+async function shopTicket(userId, back){
+  if (!userId) return null;
+  const out = await call('/api/internal/shop-ticket', { method: 'POST', key: badgesKey() || process.env.SERVICE_API_KEY || '', body: { userId, return: back } });
+  return out && out.status === 200 && out.json && out.json.ok && out.json.url ? String(out.json.url) : null;
+}
+
 const isRebelAntsContract = (c) => REBEL_ANTS_CONTRACTS.includes(String(c || '').toLowerCase());
 
 module.exports = {
   ECONOMY_SESSION_COOKIE, REBEL_ANTS_CONTRACTS, economyBase, badgesOn,
   rebelIdentity, rebelUser, badgeEvent, readBadges, awardedOf, badgesFor,
-  userIdForPlayerId, signinBadge,
+  userIdForPlayerId, signinBadge, shopTicket,
   easternHour, isRebelAntsContract, withTimeout
 };

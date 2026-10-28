@@ -148,90 +148,27 @@
       el.querySelector('#raSiPin').addEventListener('keydown', e => { if (e.key === 'Enter') doSignIn(); });
     }
   }
-  // ---------- Buy $REBEL with APE ----------
-  async function renderShop(card){
-    let info = null;
-    try { info = await fetch('/api/shop/packages', { cache:'no-store' }).then(r => r.json()); } catch(_){}
-    if (!info || !info.ok || !info.enabled || !window.raSession) return;
+  // ---------- Buy Rebel Points: the one Rebel shop (same as every Rebel app) ----------
+  // Packs by card, in APE or in ETH, in the Rebel points shop, opened in a new tab signed in as this
+  // player (/api/shop/open). Coming back to this tab reads the balance again.
+  let shopOpened = false;
+  document.addEventListener('visibilitychange', () => {
+    if (shopOpened && document.visibilityState === 'visible') { shopOpened = false; refreshMe(); }
+  });
+  function renderShop(card){
+    if (!window.raSession) return;
     const box = document.createElement('div');
     box.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.1);';
-    box.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">Buy $REBEL with APE</div>' +
-      info.packages.map(p =>
-        '<button class="btn raApePkg" data-id="' + p.id + '" style="width:100%;margin-bottom:6px;text-align:left;">' +
-        escapeHtml(p.name) + ' - ' + escapeHtml(p.ape) + ' APE -> ' + Number(p.rebel).toLocaleString() + ' $REBEL</button>'
-      ).join('') +
-      '<div id="raApeStatus" style="font-size:12px;opacity:.75;min-height:16px;"></div>';
+    const back = location.pathname + location.search;
+    box.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">Buy Rebel Points</div>' +
+      '<div style="font-size:12px;opacity:.75;margin-bottom:8px;">Packs by card, in APE or in ETH, in the Rebel Ants shop (the same one as the Playground and The Underground).</div>' +
+      '<a class="btn primary" id="raShopOpen" target="_blank" rel="opener" href="/api/shop/open?return=' + encodeURIComponent(back) + '" style="display:block;text-align:center;text-decoration:none;">Open the points shop</a>' +
+      '<div id="raShopStatus" style="font-size:12px;opacity:.75;min-height:16px;margin-top:6px;"></div>';
     card.appendChild(box);
-    const status = box.querySelector('#raApeStatus');
-    box.querySelectorAll('.raApePkg').forEach(btn => {
-      btn.onclick = () => buyPackage(info, info.packages.find(p => p.id === btn.getAttribute('data-id')), status);
+    box.querySelector('#raShopOpen').addEventListener('click', () => {
+      shopOpened = true;
+      box.querySelector('#raShopStatus').textContent = 'The shop opened in a new tab. Your balance updates when you come back.';
     });
-  }
-
-  async function buyPackage(info, pkg, status){
-    const eth = window.ethereum;
-    if (!eth) { status.textContent = 'No wallet found. Install MetaMask.'; return; }
-    try {
-      status.textContent = 'Connecting wallet...';
-      const accounts = await eth.request({ method: 'eth_requestAccounts' });
-      const from = accounts && accounts[0];
-      if (!from) { status.textContent = 'No account.'; return; }
-      // Ensure ApeChain
-      try {
-        await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: info.chainId }] });
-      } catch (e) {
-        if (e && (e.code === 4902 || /unrecognized|not added/i.test(String(e.message)))) {
-          await eth.request({ method: 'wallet_addEthereumChain', params: [{
-            chainId: info.chainId, chainName: info.chainName,
-            rpcUrls: [info.rpcUrl], nativeCurrency: info.currency
-          }]});
-        } else throw e;
-      }
-      // Pre-check APE balance so "not enough funds" is communicated clearly
-      // instead of a confusing wallet error or silent cancel.
-      try {
-        const balHex = await eth.request({ method: 'eth_getBalance', params: [from, 'latest'] });
-        const bal = BigInt(balHex || '0x0');
-        const need = BigInt(pkg.apeWei) + 10000000000000000n; // + ~0.01 APE gas buffer
-        if (bal < need) {
-          const fmt = (wei) => (Number(wei / 1000000000000000n) / 1000).toFixed(3);
-          status.textContent = 'Not enough APE: this package costs ' + pkg.ape +
-            ' APE (+gas), your wallet has ' + fmt(bal) + ' APE on ApeChain.';
-          return;
-        }
-      } catch(_){ /* balance check best-effort */ }
-      status.textContent = 'Confirm the ' + pkg.ape + ' APE payment in your wallet...';
-      const txHash = await eth.request({ method: 'eth_sendTransaction', params: [{
-        from, to: info.treasury, value: '0x' + BigInt(pkg.apeWei).toString(16)
-      }]});
-      status.textContent = 'Payment sent. Waiting for confirmation...';
-      // Poll redeem until confirmed (up to ~2 min)
-      for (let i = 0; i < 24; i++){
-        await new Promise(r => setTimeout(r, 5000));
-        let j = null;
-        try {
-          j = await fetch('/api/shop/redeem-ape', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ txHash, packageId: pkg.id })
-          }).then(r => r.json());
-        } catch(_){}
-        if (j && j.ok) {
-          status.textContent = 'Credited ' + Number(j.credited).toLocaleString() + ' $REBEL!';
-          refreshMe();
-          return;
-        }
-        if (j && !j.pending && j.error && j.error !== 'tx_not_found_yet' && j.error !== 'awaiting_confirmation') {
-          status.textContent = 'Redeem failed: ' + j.error + ' (tx ' + txHash.slice(0, 10) + '...)';
-          return;
-        }
-        status.textContent = 'Waiting for confirmation... (' + (i + 1) + ')';
-      }
-      status.textContent = 'Still pending. Your tx: ' + txHash + ' - reload later; credit is automatic once confirmed and redeemed.';
-    } catch (e) {
-      status.textContent = (e && e.code === 4001)
-        ? 'Payment cancelled in the wallet - nothing was charged.'
-        : ('Payment failed: ' + (e && e.message || e).toString().slice(0, 80));
-    }
   }
 
   function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
