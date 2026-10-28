@@ -7,6 +7,7 @@
 
 import { getActiveContestId, getContestMeta, listEntries } from '../_lib/redisAdapter';
 import { isAdminRequest } from '../_lib/adminAuth';
+import { badgeEvent, awardedOf } from '../_lib/rebel';
 
 const PERSONA =
   'You are Ant-Thony, the wise-cracking ant mascot of the Rebel Ants NFT ' +
@@ -67,9 +68,9 @@ export default async function handler(req, res) {
       const e = entries[(v.entry || 0) - 1] || {};
       return { entry: v.entry, name: e.name || 'Anonymous', url: e.url || e.imageUrl || '', roast: String(v.roast || ''), score: Number(v.score) || 0 };
     });
-    const finalists = (verdict.finalists || []).map(n => {
+    const finalists = (verdict.finalists || []).slice(0, 3).map(n => {
       const e = entries[(n || 0) - 1] || {};
-      return { entry: n, name: e.name || 'Anonymous' };
+      return { entry: n, name: e.name || 'Anonymous', entryId: e.id || null, userId: e.userId || null };
     });
     const closing = String(verdict.closing || '');
 
@@ -97,7 +98,23 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ ok: true, contest: { id, name: (meta && meta.name) || '' }, count: entries.length, truncated: all.length > entries.length, reviews, finalists, closing, posted });
+    // "Ant-Thony's Pick" badge for each finalist - only for the real verdict
+    // (Judge + post), not the private preview run. Best-effort; signed-in
+    // entries only. Awarding twice is harmless (a badge is earned once).
+    const finalistBadges = [];
+    if (body.post) {
+      const seen = new Set();
+      for (const f of finalists) {
+        if (!f.userId || seen.has(f.userId)) continue;
+        seen.add(f.userId);
+        let awarded = [];
+        try { awarded = awardedOf(await badgeEvent(f.userId, { award: ['contest.finalist'], context: { contestId: id } })); } catch (_) {}
+        finalistBadges.push({ entryId: f.entryId, name: f.name, awarded });
+      }
+    }
+    const publicFinalists = finalists.map(({ userId, ...f }) => f);
+
+    return res.status(200).json({ ok: true, contest: { id, name: (meta && meta.name) || '' }, count: entries.length, truncated: all.length > entries.length, reviews, finalists: publicFinalists, closing, posted, finalistBadges });
   } catch (e) {
     return res.status(200).json({ ok: false, error: String((e && e.message) || e) });
   }

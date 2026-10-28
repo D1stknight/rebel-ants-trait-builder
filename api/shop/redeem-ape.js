@@ -5,6 +5,7 @@
 const { kvGet, kvSet } = require('../_lib/redisAdapter');
 const { verifyNameSession, readCookie, NAME_SESSION_COOKIE } = require('../_lib/nameSession');
 const { resolveByPlayerId, credit, billingConfigured } = require('../_lib/economy');
+const { rebelIdentity } = require('../_lib/rebel');
 
 const RPCS = [process.env.RA_APE_RPC, 'https://apechain.calderachain.xyz/http', 'https://rpc.apechain.com/http'].filter(Boolean);
 
@@ -36,7 +37,10 @@ async function getPackages(){
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ ok:false, error:'method_not_allowed' }); }
-  const playerId = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
+  let playerId = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
+  // Shared Rebel sign-in (Discord): already resolved to an economy userId.
+  const rebelWho = playerId ? null : await rebelIdentity(req);
+  if (rebelWho && rebelWho.via === 'discord') playerId = rebelWho.playerId;
   if (!playerId) return res.status(401).json({ ok:false, error:'sign_in_required' });
   if (!billingConfigured()) return res.status(503).json({ ok:false, error:'economy_not_configured' });
   const treasury = (process.env.RA_TREASURY_ADDRESS || '').trim().toLowerCase();
@@ -64,7 +68,8 @@ module.exports = async (req, res) => {
   if (!receipt) return res.status(200).json({ ok:false, pending:true, error:'awaiting_confirmation' });
   if (receipt.status !== '0x1') return res.status(400).json({ ok:false, error:'tx_failed' });
 
-  const user = await resolveByPlayerId(playerId);
+  // Never resolveByPlayerId for "rebel:<id>" (that would create a new account).
+  const user = rebelWho ? { userId: rebelWho.userId, balance: Number(rebelWho.balance || 0) } : await resolveByPlayerId(playerId);
   if (!user) return res.status(502).json({ ok:false, error:'economy_unreachable' });
 
   // Mark used BEFORE credit to close the double-spend race; roll back if credit fails.

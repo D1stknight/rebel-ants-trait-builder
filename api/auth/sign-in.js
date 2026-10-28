@@ -4,6 +4,7 @@
 // different Upstash database than this project's KV (e.g. the Playground's).
 const { createHash } = require('crypto');
 const { signNameSession, nameSessionSetCookie } = require('../_lib/nameSession');
+const { userIdForPlayerId, signinBadge, badgesOn } = require('../_lib/rebel');
 
 const KV_URL = process.env.COMMANDER_KV_REST_API_URL || process.env.KV_REST_API_URL || process.env.KV_URL;
 const KV_TOKEN = process.env.COMMANDER_KV_REST_API_TOKEN || process.env.KV_REST_API_TOKEN || process.env.KV_REST_TOKEN;
@@ -40,5 +41,10 @@ module.exports = async (req, res) => {
   const displayName = (await kvGetRaw('ra:commander:player:name:' + name)) || raw;
   const token = signNameSession('name:' + name);
   if (token) res.setHeader('Set-Cookie', nameSessionSetCookie(token));
-  return res.status(200).json({ ok:true, name, playerId: 'name:' + name, displayName });
+  // Badge (best-effort, never blocks sign-in): "Commander on Deck"
+  let awarded = [];
+  if (badgesOn()) {
+    try { awarded = await signinBadge(await userIdForPlayerId('name:' + name)); } catch(_){}
+  }
+  return res.status(200).json({ ok:true, name, playerId: 'name:' + name, displayName, awarded });
 };

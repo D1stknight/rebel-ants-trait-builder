@@ -5,18 +5,24 @@ const { kvGet, kvSet } = require('./_lib/redisAdapter');
 const { del } = require('@vercel/blob');
 const { isAdminRequest } = require('./_lib/adminAuth');
 const { verifyNameSession, readCookie, NAME_SESSION_COOKIE } = require('./_lib/nameSession');
+const { rebelIdentity } = require('./_lib/rebel');
 
 const LIST_KEY = 'ra:ai-overlays';
 // Signed-in commanders get their own shelf; signed-out falls back to the
 // legacy global shelf (admin-managed).
-const shelfKeyFor = (req) => {
-  const pid = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
+// Discord players (shared Rebel sign-in) are keyed "rebel:<economy userId>".
+const shelfKeyFor = async (req) => {
+  let pid = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
+  if (!pid) {
+    const who = await rebelIdentity(req);
+    if (who && who.via === 'discord') pid = who.playerId;
+  }
   return { key: pid ? (LIST_KEY + ':' + pid) : LIST_KEY, owner: !!pid };
 };
 
 module.exports = async (req, res) => {
   try {
-    const shelf = shelfKeyFor(req);
+    const shelf = await shelfKeyFor(req);
     if (req.method === 'GET') {
       let list = await kvGet(shelf.key);
       if (!Array.isArray(list)) list = [];

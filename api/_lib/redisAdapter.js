@@ -70,6 +70,10 @@ async function saveEntry(contestId, entry) {
     url: entry.url || entry.imageUrl || '',     // prefer url if provided
     imageUrl: entry.imageUrl || entry.url || '',// ensure imageUrl is set
     ts: entry.ts || Date.now(),
+    // who entered (signed-in player); kept server-side, see publicEntry()
+    ...(entry.playerId ? { playerId: String(entry.playerId) } : {}),
+    ...(entry.userId ? { userId: String(entry.userId) } : {}),
+    ...(entry.displayName ? { displayName: String(entry.displayName) } : {}),
     votes: entry.votes || {},                   // emoji -> count
     score: typeof entry.score === 'number'
       ? entry.score
@@ -129,10 +133,17 @@ async function addVote(contestId, eid, emoji) {
   return e.votes;
 }
 
+// Entry as shown to the public: without who-entered ids (sign-in names).
+function publicEntry(e) {
+  if (!e || typeof e !== 'object') return e;
+  const { playerId, userId, ...rest } = e;
+  return { ...rest, signedIn: !!playerId };
+}
+
 module.exports = {
   // low-level (kept for compatibility)
   kvGet, kvSet, kvDel, kvSetNX,
   // contest
   getActiveContestId, getContestMeta, setActiveContest,
-  saveEntry, getEntry, listEntries, addVote
+  saveEntry, getEntry, listEntries, addVote, publicEntry
 };

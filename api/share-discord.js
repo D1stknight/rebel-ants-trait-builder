@@ -14,6 +14,7 @@
 // Requires a signed-in commander. POST { image: dataURL }
 
 const { verifyNameSession, readCookie, NAME_SESSION_COOKIE } = require('./_lib/nameSession');
+const { rebelIdentity, badgesFor } = require('./_lib/rebel');
 
 function readJSON(req) {
   return new Promise((resolve, reject) => {
@@ -39,9 +40,16 @@ module.exports = async (req, res) => {
   if (!useBridge && !useBot && !hook) return res.status(200).json({ ok: false, error: 'not_configured' });
 
   const rawName = verifyNameSession(readCookie(req, NAME_SESSION_COOKIE));
-  if (!rawName) return res.status(401).json({ ok: false, error: 'sign_in_required' });
-  const bare = String(rawName).replace(/^name:/i, '');
+  // Shared Rebel sign-in (Discord): use the economy display name.
+  const rebelWho = rawName ? null : await rebelIdentity(req);
+  if (!rawName && !(rebelWho && rebelWho.via === 'discord')) return res.status(401).json({ ok: false, error: 'sign_in_required' });
+  const bare = rawName ? String(rawName).replace(/^name:/i, '') : String(rebelWho.displayName || 'A Rebel').replace(/[*_`~|>@<]/g, '').slice(0, 40);
   const name = bare.charAt(0).toUpperCase() + bare.slice(1);
+  // Badges (best-effort, only after the post went out): creations shared.
+  const shared = async (payload) => {
+    const awarded = await badgesFor(req, { counters: [{ key: 'shares', op: 'add' }] });
+    return res.status(200).json({ ...payload, awarded });
+  };
 
   let body;
   try { body = await readJSON(req); } catch (e) { return res.status(400).json({ ok: false, error: String(e.message || e) }); }
@@ -106,7 +114,7 @@ module.exports = async (req, res) => {
       if (!r.ok || !j || j.ok === false) {
         return res.status(200).json({ ok: false, error: (j && (j.error + (j.detail ? ' ' + j.detail : ''))) || ('bridge ' + r.status) });
       }
-      return res.status(200).json({ ok: true, via: 'anthony' });
+      return shared({ ok: true, via: 'anthony' });
     }
 
     if (useBot) {
@@ -127,7 +135,7 @@ module.exports = async (req, res) => {
         const t = await r.text().catch(() => '');
         return res.status(200).json({ ok: false, error: 'discord ' + r.status + ' ' + t.slice(0, 140) });
       }
-      return res.status(200).json({ ok: true, via: 'bot' });
+      return shared({ ok: true, via: 'bot' });
     }
 
     // Fallback: webhook pseudo-user
@@ -142,7 +150,7 @@ module.exports = async (req, res) => {
       const t = await r.text().catch(() => '');
       return res.status(200).json({ ok: false, error: 'discord ' + r.status + ' ' + t.slice(0, 140) });
     }
-    return res.status(200).json({ ok: true, via: 'webhook' });
+    return shared({ ok: true, via: 'webhook' });
   } catch (e) {
     return res.status(200).json({ ok: false, error: String((e && e.message) || e) });
   }

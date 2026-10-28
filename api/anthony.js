@@ -6,6 +6,8 @@
 //  roast -> { ok, text }
 // Free to call (no $REBEL debit) - engagement feature; generation still bills.
 
+const { badgesFor } = require('./_lib/rebel');
+
 const PERSONA =
   "You are Ant-Thony, the wise-cracking ant mascot of the Rebel Ants NFT " +
   "community (an army of rebel ants). You are witty, a little cheeky, and love " +
@@ -78,7 +80,9 @@ module.exports = async (req, res) => {
       } catch (_) {}
       return res.status(200).json({ ok: true, say: text, prompt: '' });
     }
-    return res.status(200).json({ ok: true, text });
+    // Secret badge (best-effort, signed-in players): asked for a roast of a creation.
+    const awarded = imgBlock ? await badgesFor(req, { award: ['buildsecret.roast'] }) : [];
+    return res.status(200).json({ ok: true, text, awarded });
   } catch (e) {
     return res.status(200).json({ ok: false, error: String((e && e.message) || e) });
   }
