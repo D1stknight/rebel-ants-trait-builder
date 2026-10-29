@@ -1,91 +1,104 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Rebel Ants Contest Page</title>
+  <title>Overlay Contest · Rebel Ants</title>
+  <meta name="description" content="Vote for the best Rebel Ants overlay. Ant-Thony judges every entry."/>
+  <meta property="og:title" content="Rebel Ants Overlay Contest"/>
+  <meta property="og:image" content="/assets/og-image.jpg"/>
+  <link rel="icon" href="/assets/favicon-32.png" sizes="32x32"/>
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png"/>
   <link rel="stylesheet" href="/contest/contest.css">
 </head>
-<body class="page">
-  <header class="c-head">
-  <div class="c-titleRow">
-    <h1 id="cTitle">Rebel Ants Contest Page</h1>
-    <a id="raBadgesLink" class="c-badges" href="/?badges=1">🏅 Badges</a>
-  </div>
-  <p id="cPrompt" class="muted">Share your best overlay combo!</p>
-  <p id="cCountdown" class="muted"></p>
-  <div id="chips" class="chips"></div>
-</header>
+<body class="page ct">
+  <nav class="ct-top">
+    <a class="ct-brand" href="/"><span class="ct-dot" aria-hidden="true"></span>REBEL ANTS <b>BUILDER</b></a>
+    <div class="ct-topLinks">
+      <a id="raBadgesLink" class="ct-pill" href="/?badges=1">🏅 Badges</a>
+      <a class="ct-pill ct-pill-hot" href="/">Make an entry →</a>
+    </div>
+  </nav>
 
-  <!-- How it works / explainer -->
-<section class="explain" aria-labelledby="how-title">
-  <details id="howitworks" class="c-card" open>
-    <summary id="how-title">How the contest works</summary>
-    <div class="body">
-      <div class="grid">
-        <div>
-          <h3>1) Create & submit</h3>
-          <ul>
-            <li>Make your combo in the <a href="/">Overlay Builder</a>.</li>
-            <li>Click <b>Submit to Contest</b> inside the builder (we snapshot your canvas).</li>
-            <li>Sign in first (Discord or Commander name + PIN) so the entry is yours, then add an optional caption. No wallet needed.</li>
-          </ul>
-        </div>
-        <div>
-          <h3>2) Vote</h3>
-          <ul>
-            <li>Use the reaction bar under each entry: 👍 ❤️ 🔥 😂 😮</li>
-            <li>Each emoji click = <b>1 point</b>. One click per emoji per device/browser.</li>
-            <li>You can give up to <b>5 points</b> to a single entry (one per emoji).</li>
-            <li><b>Score</b> is the sum of all emoji points from everyone.</li>
-          </ul>
-        </div>
-        <div>
-          <h3>3) Timing</h3>
-          <ul>
-            <li>The countdown shows how long is left. When it hits 0, voting stops.</li>
-            <li>Length varies by round (hours or days).</li>
-          </ul>
-        </div>
-        <div>
-          <h3>4) Winners</h3>
-          <ul>
-            <li>Highest score wins; ties may be broken at our discretion (or co‑winners).</li>
-            <li>Prizes vary (crypto, NFTs, merch) or sometimes bragging rights.</li>
-          </ul>
-        </div>
-        <div>
-          <h3>5) Share</h3>
-          <ul>
-            <li>Use the <b>X Share</b> button on a card to post with a voting link.</li>
-          </ul>
-        </div>
-        <div>
-          <h3>6) Fair play</h3>
-          <ul>
-            <li>We limit duplicate reactions and monitor for abuse.</li>
-            <li>See our <a href="/contest/rules.html">Rules</a> & <a href="/contest/moderation.html">Moderation</a>.</li>
-          </ul>
+  <main class="ct-wrap">
+    <!-- Hero: status, title, prompt, countdown -->
+    <header class="ct-hero" id="hero">
+      <div class="ct-status" id="cStatus"><span class="ct-live"></span><span id="cStatusText">Loading…</span></div>
+      <h1 id="cTitle">Overlay Contest</h1>
+      <p id="cPrompt" class="ct-prompt"></p>
+      <div class="ct-clock" id="cClock" hidden>
+        <div><b id="cD">0</b><span>days</span></div>
+        <div><b id="cH">00</b><span>hours</span></div>
+        <div><b id="cM">00</b><span>min</span></div>
+        <div><b id="cS">00</b><span>sec</span></div>
+      </div>
+      <p id="cCountdown" class="ct-sub"></p>
+      <div class="ct-stats" id="cStats"></div>
+      <div class="ct-cta" id="cCta">
+        <a class="ct-btn" href="/">Build your overlay</a>
+        <a class="ct-btn ct-ghost" href="#entries">See the entries</a>
+      </div>
+    </header>
+
+    <!-- Ant-Thony's verdict (after he judges) -->
+    <section id="verdict" class="ct-verdict" hidden></section>
+
+    <!-- Winners podium (after winners are confirmed) -->
+    <section id="podium" class="ct-section" hidden>
+      <h2 class="ct-h2">Winners</h2>
+      <div class="ct-podium" id="podiumRow"></div>
+    </section>
+
+    <!-- Leaderboard -->
+    <section id="leaders" class="ct-section" hidden>
+      <h2 class="ct-h2">Leaderboard</h2>
+      <ol class="ct-leaders" id="chips"></ol>
+    </section>
+
+    <!-- Entries -->
+    <section id="entries" class="ct-section">
+      <div class="ct-entriesHead">
+        <h2 class="ct-h2">Entries <span id="cCount" class="ct-count"></span></h2>
+        <div class="ct-sort" role="group" aria-label="Sort entries">
+          <button type="button" data-sort="top" class="on">Top</button>
+          <button type="button" data-sort="new">Newest</button>
         </div>
       </div>
-    </div>
-  </details>
-</section>
-  
-  <section id="board" class="board" aria-live="polite"></section>
+      <p class="ct-hint" id="cHint">Tap a reaction to give 1 point. One of each per entry.</p>
+      <div id="board" class="ct-board" aria-live="polite"></div>
+      <div id="empty" class="ct-empty" hidden></div>
+    </section>
+
+    <!-- How it works -->
+    <section class="ct-section">
+      <details class="ct-how" id="howitworks">
+        <summary>How the contest works</summary>
+        <div class="ct-howGrid">
+          <div><h3>1 · Create</h3><p>Make your combo in the <a href="/">Overlay Builder</a>, sign in (Discord or Commander name + PIN), then press <b>Submit to Contest</b>. Add a caption if you like. No wallet needed.</p></div>
+          <div><h3>2 · React</h3><p>Each reaction (👍 ❤️ 🔥 😂 😮) is <b>1 point</b>. You can give an entry up to 5, one of each. Score is everyone's reactions added up.</p></div>
+          <div><h3>3 · Ant-Thony judges</h3><p>When the clock hits zero, voting closes and Ant-Thony reviews every entry, picks his finalists and posts his verdict in Discord.</p></div>
+          <div><h3>4 · Winners</h3><p>The top entries win. Prizes are $REBEL Points, NFTs, merch or bragging rights, and change by round.</p></div>
+          <div><h3>5 · Share</h3><p>Use <b>Share</b> on a card to post it on X with a link people can vote from.</p></div>
+          <div><h3>6 · Fair play</h3><p>Repeat reactions are blocked and we watch for abuse. See the <a href="/contest/rules.html">Rules</a> and <a href="/contest/moderation.html">Moderation</a>.</p></div>
+        </div>
+        <p class="ct-fine">$REBEL Points are internal Rebel Ants ecosystem loyalty points. They are not cryptocurrency, not cash, not an investment, not transferable, and not redeemable for cash.</p>
+      </details>
+    </section>
+  </main>
+
+  <div class="ct-toast" id="toast" role="status" aria-live="polite"></div>
+
+  <footer id="ra-footer" class="ra-footer ct-foot">
+    <nav>
+      <a href="/contest/rules.html">Contest Rules</a>
+      <a href="/contest/privacy.html">Privacy</a>
+      <a href="/contest/terms.html">Terms</a>
+      <a href="/contest/moderation.html">Moderation</a>
+    </nav>
+    <small>© Rebel Ants LLC</small>
+  </footer>
 
   <script src="/contest/contest.js" defer></script>
   <script src="/js/63-badges.js" defer></script>
-
-<footer id="ra-footer" class="ra-footer">
-  <nav>
-    <a href="/contest/rules.html">Contest Rules</a>
-    <a href="/contest/privacy.html">Privacy</a>
-    <a href="/contest/terms.html">Terms</a>
-    <a href="/contest/moderation.html">Moderation</a>
-  </nav>
-  <small>© Rebel Ants LLC</small>
-</footer>
-  
 </body>
 </html>

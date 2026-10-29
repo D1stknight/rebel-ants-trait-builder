@@ -1,5 +1,5 @@
 // api/contest/close.js
-import { getActiveContestId, kvDel } from '../_lib/redisAdapter';
+import { getActiveContestId, kvDel, kvSet } from '../_lib/redisAdapter';
 
 export const config = { runtime: 'nodejs' };
 
@@ -19,7 +19,8 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, closed: false, reason: 'no active contest' });
     }
 
-    // mark no active contest
+    // mark no active contest; keep it as the last contest so its page shows the results
+    await kvSet('ra:contest:last', { id });
     await kvDel('ra:contest:active');
 
     return res.status(200).json({ ok: true, closed: true, id });
