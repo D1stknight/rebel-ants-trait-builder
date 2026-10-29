@@ -9,7 +9,7 @@ export default async function handler(req, res) {
 
     const { isAdminRequest } = require('../_lib/adminAuth');
     const hdr = String(req.headers['x-admin'] || '').trim();
-    const legacyHdr = !!(process.env.RA_ADMIN_KEY && hdr && hdr === process.env.RA_ADMIN_KEY);
+    const legacyHdr = !!(process.env.ALLOW_TYPED_ADMIN_KEY === 'true' && process.env.RA_ADMIN_KEY && hdr && hdr === process.env.RA_ADMIN_KEY);
     if (!legacyHdr && !isAdminRequest(req)) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }

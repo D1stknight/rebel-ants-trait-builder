@@ -30,7 +30,7 @@ module.exports = async (req, res) => {
   const legacyKey = process.env.RA_ADMIN_KEY || '';
   if (!namesSet && !legacyKey) return res.status(503).json({ ok: false, error: 'admin_not_configured' });
   const hdr = String(req.headers['x-admin'] || '').trim();
-  const legacyHdr = !!(legacyKey && hdr && hdr === legacyKey);
+  const legacyHdr = !!(process.env.ALLOW_TYPED_ADMIN_KEY === 'true' && legacyKey && hdr && hdr === legacyKey);
   if (!legacyHdr && !isAdminRequest(req)) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
   try {

@@ -267,7 +267,7 @@ function loadTrimmedCanvas(url) {
         if (!(window.raSession && window.raSession.isAdmin)) {
           try { key = localStorage.getItem('ra2_admin_key') || ''; } catch(_){}
           if (!key) {
-            key = prompt('Admin key (RA_ADMIN_KEY):') || '';
+            alert('Open the Builder admin from the Rebel Console (economy.rebelants.io/admin, Apps \u2192 The Builder \u00b7 admin mode). It signs you in for 8 hours.');
             if (!key) return;
             try { localStorage.setItem('ra2_admin_key', key); } catch(_){}
           }
