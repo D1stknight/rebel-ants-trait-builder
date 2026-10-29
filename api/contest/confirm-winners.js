@@ -100,7 +100,9 @@ module.exports = async (req, res) => {
       badges.push({ place: p.place, entryId: p.entryId, status: 'awarded', awarded: awardedOf(out) });
     }
 
-    return res.status(200).json({ ok: true, contestId, winners, alreadyConfirmed: retry, badges });
+    // the Rebel Console gives points prizes, so admins get the winners' Rebel account ids (not stored)
+    const withAccounts = winners.map(w => ({ ...w, userId: (entries[w.entryId] && entries[w.entryId].userId) || null }));
+    return res.status(200).json({ ok: true, contestId, winners: withAccounts, alreadyConfirmed: retry, badges });
   } catch (e) {
     console.error('[confirm-winners]', e);
     return res.status(500).json({ ok: false, error: String((e && e.message) || e) });
