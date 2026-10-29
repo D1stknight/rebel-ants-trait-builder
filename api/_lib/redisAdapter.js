@@ -133,6 +133,18 @@ async function addVote(contestId, eid, emoji) {
   return e.votes;
 }
 
+// Set only if missing, with an expiry (seconds). true when this call set it.
+async function kvSetNXEx(key, value, seconds) {
+  const payload = typeof value === 'string' ? value : JSON.stringify(value);
+  const r = await fetch(`${KV_URL}/set/${encodeURIComponent(key)}?nx=1&ex=${Math.max(1, seconds | 0)}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${KV_TOKEN}`, 'Content-Type': 'text/plain' },
+    body: payload
+  });
+  const j = await r.json().catch(() => ({}));
+  return j && j.result === 'OK';
+}
+
 // Entry as shown to the public: without who-entered ids (sign-in names).
 function publicEntry(e) {
   if (!e || typeof e !== 'object') return e;
@@ -142,7 +154,7 @@ function publicEntry(e) {
 
 module.exports = {
   // low-level (kept for compatibility)
-  kvGet, kvSet, kvDel, kvSetNX,
+  kvGet, kvSet, kvDel, kvSetNX, kvSetNXEx,
   // contest
   getActiveContestId, getContestMeta, setActiveContest,
   saveEntry, getEntry, listEntries, addVote, publicEntry

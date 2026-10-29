@@ -1,5 +1,14 @@
 {
   "rewrites": [
-    { "source": "/overlays.json", "destination": "/api/overlays" }
+    {
+      "source": "/overlays.json",
+      "destination": "/api/overlays"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/contest-end",
+      "schedule": "5 * * * *"
+    }
   ]
 }
